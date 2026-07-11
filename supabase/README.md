@@ -1,4 +1,4 @@
-# Supabase — Veyra
+# Supabase — Innvil
 
 Phase 3 database foundation. Migrations live in `migrations/` and run in filename
 order.

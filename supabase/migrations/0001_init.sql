@@ -1,5 +1,5 @@
 -- =============================================================================
--- Veyra — Phase 3 foundation schema
+-- Innvil — Phase 3 foundation schema
 -- Multi-tenant, bring-your-own-provider SMM panel maker.
 -- Every operational row is scoped to a panel; RLS (0002_rls.sql) enforces access.
 -- Money is numeric(12,4); balances change ONLY via apply_balance_change().

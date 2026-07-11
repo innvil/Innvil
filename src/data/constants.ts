@@ -38,7 +38,7 @@ export const PANEL_STATUSES: Record<PanelStatus, {
   },
   suspended: {
     label: "Suspended",
-    description: "Panel is offline. Panel owner must contact Veyra support to restore.",
+    description: "Panel is offline. Panel owner must contact Innvil support to restore.",
     customerCanBrowse: false,
     customerCanOrder: false,
     tone: "danger",
@@ -65,12 +65,12 @@ export const panels: Array<{
   ordersToday: number;
   theme: string;
 }> = [
-  { id: "novaboost", name: "NovaBoost", subdomain: "novaboost.veyra.app", domain: null, status: "live", ordersToday: 214.6, theme: "Obsidian Gold" },
-  { id: "pulsesmm", name: "PulseSMM", subdomain: "pulsesmm.veyra.app", domain: "pulsesmm.com", status: "live", ordersToday: 88.2, theme: "Violet Night" },
-  { id: "draft", name: "Untitled Panel", subdomain: "draft-3f2a.veyra.app", domain: null, status: "draft", ordersToday: 0, theme: "—" },
-  { id: "inactive-demo", name: "GrowSocials", subdomain: "growsocials.veyra.app", domain: "growsocials.com", status: "inactive", ordersToday: 0, theme: "Neon Slate" },
-  { id: "suspended-demo", name: "QuickFollowers", subdomain: "quickfollowers.veyra.app", domain: null, status: "suspended", ordersToday: 0, theme: "Ivory Minimal" },
-  { id: "maintenance-demo", name: "SMMPro", subdomain: "smmpro.veyra.app", domain: "smmpro.io", status: "maintenance", ordersToday: 0, theme: "Obsidian Gold" },
+  { id: "novaboost", name: "NovaBoost", subdomain: "novaboost.innvil.app", domain: null, status: "live", ordersToday: 214.6, theme: "Obsidian Gold" },
+  { id: "pulsesmm", name: "PulseSMM", subdomain: "pulsesmm.innvil.app", domain: "pulsesmm.com", status: "live", ordersToday: 88.2, theme: "Violet Night" },
+  { id: "draft", name: "Untitled Panel", subdomain: "draft-3f2a.innvil.app", domain: null, status: "draft", ordersToday: 0, theme: "—" },
+  { id: "inactive-demo", name: "GrowSocials", subdomain: "growsocials.innvil.app", domain: "growsocials.com", status: "inactive", ordersToday: 0, theme: "Neon Slate" },
+  { id: "suspended-demo", name: "QuickFollowers", subdomain: "quickfollowers.innvil.app", domain: null, status: "suspended", ordersToday: 0, theme: "Ivory Minimal" },
+  { id: "maintenance-demo", name: "SMMPro", subdomain: "smmpro.innvil.app", domain: "smmpro.io", status: "maintenance", ordersToday: 0, theme: "Obsidian Gold" },
 ];
 
 export const revenueData = [

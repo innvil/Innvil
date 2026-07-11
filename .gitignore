@@ -47,3 +47,5 @@ coverage/
 CLAUDE_PROGRESS.txt
 panel-preview.jsx
 .env.local
+.vercel
+.env*

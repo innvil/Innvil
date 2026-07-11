@@ -35,7 +35,7 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
           <div className="w-7 h-7 rounded-md fp-gold-bg flex items-center justify-center">
             <Gauge size={15} color="#0A0B0F" />
           </div>
-          <span className="fp-display text-lg tracking-wide">Veyra</span>
+          <span className="fp-display text-lg tracking-wide">Innvil</span>
         </div>
         <nav className="hidden md:flex items-center gap-8 text-sm fp-text-dim">
           <a href="#how" className="hover:fp-text">How it works</a>
@@ -68,7 +68,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
               <span className="fp-grad-text">white-label SMM panel.</span>
             </h1>
             <p className="fp-text-dim text-base mt-6 max-w-md leading-relaxed">
-              Veyra is a no-code panel maker. Create as many independent SMM panels as you
+              Innvil is a no-code panel maker. Create as many independent SMM panels as you
               want, each with its own subdomain, storefront, customer dashboard, and wallet —
               yours to brand, price, and grow.
             </p>
@@ -116,7 +116,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Provider automation</p>
         <h2 className="fp-display text-3xl mb-4">Import a thousand services in one click.</h2>
         <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
-          Connect your SMM provider and Veyra pulls the entire catalog, prices it with your
+          Connect your SMM provider and Innvil pulls the entire catalog, prices it with your
           markup, and organizes it for you — the busywork that eats a launch, done in seconds.
         </p>
         <div className="grid md:grid-cols-3 gap-6">
@@ -149,7 +149,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
               provider charges you. You price as high above it as the market allows — never below.
             </p>
             <p className="fp-text-dim text-sm leading-relaxed">
-              Veyra doesn&apos;t sell SMM services or act as your provider — we build and host
+              Innvil doesn&apos;t sell SMM services or act as your provider — we build and host
               the panel. The floor simply travels with whatever price your own provider gives you.
             </p>
           </div>
@@ -178,7 +178,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
 
       <footer className="border-t fp-line-soft">
         <div className="max-w-6xl mx-auto px-6 py-10 flex flex-wrap items-center justify-between gap-4 fp-text-faint text-xs">
-          <span>© 2026 Veyra — the SMM panel maker.</span>
+          <span>© 2026 Innvil — the SMM panel maker.</span>
           <div className="flex items-center gap-5">
             <a href="/terms" className="hover:fp-text">Terms</a>
             <a href="/privacy" className="hover:fp-text">Privacy</a>
@@ -244,7 +244,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
           <div className="w-7 h-7 rounded-md fp-gold-bg flex items-center justify-center">
             <Gauge size={15} color="#0A0B0F" />
           </div>
-          <span className="fp-display text-lg">Veyra</span>
+          <span className="fp-display text-lg">Innvil</span>
         </div>
         <div className="flex fp-panel-raised rounded-lg p-1 mb-6">
           <button
@@ -306,7 +306,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
           {busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
         </button>
         <p className="fp-text-faint text-xs text-center mt-5">
-          {mode === "login" ? "New to Veyra?" : "Already have an account?"}{" "}
+          {mode === "login" ? "New to Innvil?" : "Already have an account?"}{" "}
           <button onClick={() => switchMode(mode === "login" ? "signup" : "login")} className="fp-gold">
             {mode === "login" ? "Sign up" : "Log in"}
           </button>
@@ -336,7 +336,7 @@ function AppSidebar({ section, setSection }: { section: string; setSection: (s: 
         <div className="w-7 h-7 rounded-md fp-gold-bg flex items-center justify-center">
           <Gauge size={15} color="#0A0B0F" />
         </div>
-        <span className="fp-display text-lg">Veyra</span>
+        <span className="fp-display text-lg">Innvil</span>
       </div>
       <nav className="space-y-1 flex-1">
         {items.map((it) => (
@@ -405,7 +405,7 @@ function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Panels created" value={loading ? "—" : String(panels.length)} />
         <StatCard label="Orders today (all panels)" value="$0.00" tone="gold" />
-        <StatCard label="Veyra balance" value="$0.00" />
+        <StatCard label="Innvil balance" value="$0.00" />
         <StatCard label="Commission due in 24h" value="$0.00" />
       </div>
       <div className="grid md:grid-cols-3 gap-6">
@@ -724,7 +724,7 @@ function Billing({ onAddFunds }: { onAddFunds: () => void }) {
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <Wallet size={16} className="fp-gold" />
-            <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Veyra balance</p>
+            <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Innvil balance</p>
           </div>
           <span className="fp-text-faint text-xs fp-mono">Funds commission across ALL your panels</span>
         </div>
@@ -787,7 +787,7 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
         {step === "amount" && (
           <>
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Add funds</p>
-            <h3 className="fp-display text-xl mb-6">Top up your Veyra balance</h3>
+            <h3 className="fp-display text-xl mb-6">Top up your Innvil balance</h3>
             <label className="fp-text-dim text-xs fp-mono uppercase">Amount (USD)</label>
             <div className="flex items-center gap-2 mt-2 mb-5">
               <span className="fp-display text-2xl fp-gold">$</span>
@@ -875,8 +875,8 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/* --- Veyra App Shell wrapper --- */
-export function VeyraApp({ setWorld, initialSection }: {
+/* --- Innvil App Shell wrapper --- */
+export function InnvilApp({ setWorld, initialSection }: {
   setWorld: (w: string) => void;
   initialSection?: string;
 }) {
@@ -987,7 +987,7 @@ export function SuperAdmin() {
   const tabs = [
     { k: "analytics", label: "Analytics", icon: Activity },
     { k: "platform", label: "Platform pages", icon: FileText },
-    { k: "branding", label: "Veyra branding", icon: Palette },
+    { k: "branding", label: "Innvil branding", icon: Palette },
     { k: "panels", label: "Panel management", icon: LayoutGrid },
     { k: "users", label: "User management", icon: Users },
     { k: "payments", label: "Payments & commission", icon: CreditCard },
@@ -1022,7 +1022,7 @@ export function SuperAdmin() {
 
       <div className="flex-1">
         <div className="flex items-center justify-between px-8 py-5 border-b fp-line-soft">
-          <p className="fp-display text-xl">Veyra · Super Admin</p>
+          <p className="fp-display text-xl">Innvil · Super Admin</p>
           <Pill tone="violet" icon={Lock}>Restricted access</Pill>
         </div>
 
@@ -1053,9 +1053,9 @@ export function SuperAdmin() {
           )}
 
           {tab === "branding" && (
-            <Card title="Veyra platform branding" icon={Palette}>
+            <Card title="Innvil platform branding" icon={Palette}>
               <p className="fp-text-dim text-sm mb-4">
-                Logo, color palette, typography, and transactional email/notification templates for the Veyra
+                Logo, color palette, typography, and transactional email/notification templates for the Innvil
                 brand itself — separate from any individual panel&apos;s branding.
               </p>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -1070,7 +1070,7 @@ export function SuperAdmin() {
           )}
 
           {tab === "panels" && (
-            <Card title="Every panel on Veyra" icon={LayoutGrid}>
+            <Card title="Every panel on Innvil" icon={LayoutGrid}>
               <div className="mb-4 p-3 rounded-lg bg-[rgba(139,127,255,0.08)] border border-[rgba(139,127,255,0.2)]">
                 <p className="text-xs fp-violet">
                   <Lock size={11} className="inline mr-1" />
@@ -1137,9 +1137,9 @@ export function SuperAdmin() {
 
           {tab === "payments" && (
             <div className="space-y-6">
-              <Card title="Veyra top-up gateways" icon={CreditCard}>
+              <Card title="Innvil top-up gateways" icon={CreditCard}>
                 <p className="fp-text-dim text-sm mb-4">
-                  These are the ONLY gateways panel owners use to top up their Veyra balance.
+                  These are the ONLY gateways panel owners use to top up their Innvil balance.
                   Distinct from the gateways panel owners configure for their own customers.
                 </p>
                 <div className="grid sm:grid-cols-3 gap-3">

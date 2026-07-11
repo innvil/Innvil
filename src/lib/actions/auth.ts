@@ -23,7 +23,7 @@ export async function signInAction(
   return { ok: true };
 }
 
-/** Register a new account. Defaults to the panel_owner role for the Veyra app. */
+/** Register a new account. Defaults to the panel_owner role for the Innvil app. */
 export async function signUpAction(
   email: string,
   password: string,

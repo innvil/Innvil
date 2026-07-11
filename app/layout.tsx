@@ -23,12 +23,12 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Veyra — The SMM Panel Maker",
+  title: "Innvil — The SMM Panel Maker",
   description: "Launch your own white-label SMM panel. Create as many independent panels as you want, each with its own subdomain, storefront, customer dashboard, and wallet. 5% commission only — no monthly rent.",
   keywords: ["SMM panel", "social media marketing", "panel maker", "white-label", "no-code"],
-  authors: [{ name: "Veyra" }],
+  authors: [{ name: "Innvil" }],
   openGraph: {
-    title: "Veyra — The SMM Panel Maker",
+    title: "Innvil — The SMM Panel Maker",
     description: "Launch your own white-label SMM panel. 5% commission only.",
     type: "website",
   },

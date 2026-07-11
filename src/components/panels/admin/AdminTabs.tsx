@@ -135,7 +135,7 @@ export function StatusTab({
           <div className="fp-gold-soft-bg border border-[rgba(201,165,116,0.2)] rounded-xl p-4">
             <p className="text-sm fp-gold font-medium">When to use Inactive Mode</p>
             <p className="text-xs fp-text-dim mt-1 leading-relaxed">
-              Perfect when your Veyra balance is low but you want to keep your panel visible
+              Perfect when your Innvil balance is low but you want to keep your panel visible
               to customers. They can see your services, add funds, and orders will resume automatically
               once you top up.
             </p>
@@ -177,7 +177,7 @@ export function StatusTab({
         </div>
         <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
           <p className="text-xs text-red-400 leading-relaxed">
-            Suspended panels require contact with Veyra support for restoration.
+            Suspended panels require contact with Innvil support for restoration.
             This status is typically applied for terms of service violations.
           </p>
         </div>
@@ -1053,7 +1053,7 @@ export function FloorTab() {
         <p className="fp-text-dim text-sm leading-relaxed">
           Each service&apos;s minimum price is set automatically to what your connected provider charges.
           You can raise prices freely — the floor prevents pricing any service at a loss, even by accident.
-          Customers never see this floor, provider cost, or Veyra&apos;s commission — only their price.
+          Customers never see this floor, provider cost, or Innvil&apos;s commission — only their price.
         </p>
       </Card>
     </div>
@@ -1316,8 +1316,8 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
       <Card title="Payment gateways" icon={CreditCard}>
         <p className="fp-text-dim text-sm mb-5">
           Bring your own gateway — connect the account <b>you</b> already have. When a
-          customer&apos;s deposit confirms, the gateway notifies Veyra and the wallet updates
-          automatically. Configured by you, billed to you; Veyra never touches these funds.
+          customer&apos;s deposit confirms, the gateway notifies Innvil and the wallet updates
+          automatically. Configured by you, billed to you; Innvil never touches these funds.
         </p>
 
         {meta === null ? (
@@ -1452,7 +1452,7 @@ export function NotificationsTab() {
   return (
     <div className="grid md:grid-cols-2 gap-6">
       <Card title="Owner notifications" icon={Bell}>
-        {["Low Veyra balance", "New order", "Failed order", "Provider error", "New customer", "New ticket"].map((f, i) => (
+        {["Low Innvil balance", "New order", "Failed order", "Provider error", "New customer", "New ticket"].map((f, i) => (
           <div key={f} className="flex justify-between text-sm py-2 border-b fp-line-soft last:border-0">{f}<Toggle on={i < 4} /></div>
         ))}
       </Card>

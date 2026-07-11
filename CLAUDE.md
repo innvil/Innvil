@@ -1,8 +1,8 @@
-# Veyra — Project Documentation
+# Innvil — Project Documentation
 
 ## Overview
 
-Veyra is a **no-code SMM (Social Media Marketing) panel maker** built with Next.js + Supabase + Vercel. Users create independent, white-label SMM panels with their own subdomain, storefront, customer dashboard, and wallet. Veyra charges a **5% commission only** on completed orders — no monthly rent, no setup fees.
+Innvil is a **no-code SMM (Social Media Marketing) panel maker** built with Next.js + Supabase + Vercel. Users create independent, white-label SMM panels with their own subdomain, storefront, customer dashboard, and wallet. Innvil charges a **5% commission only** on completed orders — no monthly rent, no setup fees.
 
 ---
 
@@ -29,7 +29,7 @@ Veyra is a **no-code SMM (Social Media Marketing) panel maker** built with Next.
 
 | Term | Definition |
 |------|------------|
-| **Veyra** | The platform itself — the panel maker |
+| **Innvil** | The platform itself — the panel maker |
 | **Panel** | A white-label SMM storefront created by a user |
 | **Panel Owner** | A user who creates and manages a panel |
 | **Customer** | End user who registers on a panel to order SMM services |
@@ -37,7 +37,7 @@ Veyra is a **no-code SMM (Social Media Marketing) panel maker** built with Next.
 | **Floor/Price Floor** | Minimum price enforced by the provider — panel owners cannot price below it |
 | **Markup** | The percentage added above the provider's floor price |
 | **Live Panel** | A customer-facing panel storefront |
-| **Super Admin** | Veyra platform administrator — never visible to panel owners or customers |
+| **Super Admin** | Innvil platform administrator — never visible to panel owners or customers |
 
 ---
 
@@ -70,7 +70,7 @@ Veyra is a **no-code SMM (Social Media Marketing) panel maker** built with Next.
 ## Architecture
 
 ```
-veyra/
+innvil/
 ├── app/                    # Next.js App Router
 │   ├── page.tsx           # Root — REAL auth-driven (signed out→public/login,
 │   │                      #   signed in→dashboard). Dev switcher at /?preview=1
@@ -81,7 +81,7 @@ veyra/
 ├── src/
 │   ├── components/        # Reusable UI components
 │   │   ├── ui/            # Base components (Card, Toggle, Pill, etc.)
-│   │   ├── panels/        # Veyra app, Super Admin (index.tsx)
+│   │   ├── panels/        # Innvil app, Super Admin (index.tsx)
 │   │   │   └── admin/     # Panel Owner admin: PanelAdmin shell, AdminTabs, CustomerDrawer
 │   │   │                  # (Categories merged into the Services "Catalog" tab)
 │   │   └── customer/      # Customer-facing experience (Phase 1)
@@ -120,7 +120,7 @@ veyra/
 | `draft` | No | No | Panel is being set up. Not visible to customers. |
 | `live` | Yes | Yes | Fully operational. |
 | `inactive` | Yes | No | Browsable, login, dashboard, history, wallet balance, deposits. No new orders. |
-| `suspended` | No | No | Offline. Panel owner must contact Veyra support. |
+| `suspended` | No | No | Offline. Panel owner must contact Innvil support. |
 | `maintenance` | No | No | Temporarily offline. Auto-returns to previous status. |
 
 ---
@@ -196,8 +196,8 @@ Redesign the customer-facing experience to be significantly simpler and faster t
 
 ### Landing Pages
 
-- Veyra landing page is dedicated to selling the platform ("Create your own SMM Panel").
-- Every panel has its own independent customer landing page focused on **Create Account** and **Log In**, with no Veyra branding.
+- Innvil landing page is dedicated to selling the platform ("Create your own SMM Panel").
+- Every panel has its own independent customer landing page focused on **Create Account** and **Log In**, with no Innvil branding.
 
 ### Platform Organization
 
@@ -394,7 +394,7 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
   Super Admin / Panel Owner / Customer / Staff. Role-gated route wiring pending.
 - ◐ Migrate admin/customer UI off mock data onto the DB (data-access layer) —
   DONE for panels: `src/lib/actions/panels.ts` (listPanels/createPanel/
-  updatePanelStatus); VeyraApp loads real panels; DashboardHome + MyPanels
+  updatePanelStatus); InnvilApp loads real panels; DashboardHome + MyPanels
   render them (with empty/loading states); CreatePanelWizard creates real panels;
   a real panel (UUID) now loads into PanelAdmin. Remaining: services/orders/
   customers/etc. tabs still on mock.
@@ -415,7 +415,7 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
 ### Phase 4: Business Logic — Operational Admin Dashboard (SocPanel-style)
 
 > This phase turns the preview admin tabs into a real bring-your-own-provider
-> control panel. Veyra never sells SMM services directly — each panel owner
+> control panel. Innvil never sells SMM services directly — each panel owner
 > connects their own provider(s); we pull services, forward orders, and sync
 > statuses. **All provider API calls happen server-side (route handlers / edge
 > functions) so api keys are never exposed to the frontend.** Provider logic lives
@@ -524,9 +524,9 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
 ### Phase 4.x: Automation Add-on ("Automator") — PAID feature (NOTED, not built)
 
 > Port the working system at `C:\Users\My PC\SMM-automator` (Next.js + Supabase)
-> INTO Veyra as a **paid add-on** a panel owner can buy/enable. Also a strong
+> INTO Innvil as a **paid add-on** a panel owner can buy/enable. Also a strong
 > landing-page ad / SEO section. **Keep the reference project's logic**; only
-> re-skin it to Veyra's design system (obsidian/gold/violet) — its own design
+> re-skin it to Innvil's design system (obsidian/gold/violet) — its own design
 > is intentionally basic (built for the owner's internal use). The preview
 > `AutomationTab` already has an "Automator add-on" placeholder to grow into.
 
@@ -561,9 +561,9 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
    (`pdfjs-dist`/`pdf-parse`); if it's heavy, ship csv/xlsx/docx first. Flatten the
    file to text, then run the same smart link detection.
 
-**Veyra integration shape:**
+**Innvil integration shape:**
 - Gate behind an add-on flag on the panel (e.g. `panels.settings.automation` or a
-  subscription row); Veyra can charge for it (revenue beyond the 5%).
+  subscription row); Innvil can charge for it (revenue beyond the 5%).
 - Customer side: a "Mass / Auto Order" surface in the customer dashboard (link
   blob + file upload + smart detection), only when the panel has the add-on.
 - Owner side: configure service presets per platform/tier + comment pools (grow

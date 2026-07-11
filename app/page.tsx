@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/src/lib/supabase/client";
-import { PublicLanding, AuthScreen, VeyraApp } from "@/src/components/panels";
+import { PublicLanding, AuthScreen, InnvilApp } from "@/src/components/panels";
 import PreviewSwitcher from "./PreviewSwitcher";
 
 /* =========================================================
@@ -37,5 +37,5 @@ export default function Home() {
   if (view === "loading") return <div className="fp-root min-h-screen fp-grid-bg" />;
   if (view === "public") return <PublicLanding setWorld={setWorld} />;
   if (view === "auth") return <AuthScreen setWorld={setWorld} />;
-  return <VeyraApp setWorld={setWorld} initialSection="home" />;
+  return <InnvilApp setWorld={setWorld} initialSection="home" />;
 }

@@ -1,5 +1,5 @@
 -- =============================================================================
--- Veyra — provider_categories hierarchy
+-- Innvil — provider_categories hierarchy
 -- Adds a self-referential parent_id so categories can nest two levels:
 --   platform category (parent_id NULL, e.g. "Instagram Services")
 --     └─ sub-category (parent_id = platform, e.g. "Followers")

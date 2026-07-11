@@ -1,4 +1,4 @@
-# Veyra — Phase 3 + 4 Implementation Plan
+# Innvil — Phase 3 + 4 Implementation Plan
 
 > Plan only — nothing here is built yet. This is the sequence for turning the
 > current mock-data preview into a real, SocPanel-style operational admin

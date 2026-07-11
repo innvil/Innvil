@@ -4,7 +4,7 @@ import { useState } from "react";
 import {
   PublicLanding,
   AuthScreen,
-  VeyraApp,
+  InnvilApp,
   SuperAdmin,
 } from "@/src/components/panels";
 import { CustomerPanel } from "@/src/components/customer";
@@ -19,12 +19,12 @@ export default function PreviewSwitcher() {
   const [world, setWorld] = useState("public");
 
   const worlds = [
-    { k: "public", label: "Veyra · Public site" },
-    { k: "auth", label: "Veyra · Login/Signup" },
-    { k: "home", label: "Veyra · Dashboard home" },
-    { k: "panels", label: "Veyra · My Panels" },
-    { k: "create", label: "Veyra · Create Panel" },
-    { k: "billing", label: "Veyra · Billing" },
+    { k: "public", label: "Innvil · Public site" },
+    { k: "auth", label: "Innvil · Login/Signup" },
+    { k: "home", label: "Innvil · Dashboard home" },
+    { k: "panels", label: "Innvil · My Panels" },
+    { k: "create", label: "Innvil · Create Panel" },
+    { k: "billing", label: "Innvil · Billing" },
     { k: "live", label: "Created panel · Customer-facing (mock)" },
     { k: "admin", label: "Super Admin (you) — separate" },
   ];
@@ -34,7 +34,7 @@ export default function PreviewSwitcher() {
       {world === "public" && <PublicLanding setWorld={setWorld} />}
       {world === "auth" && <AuthScreen setWorld={setWorld} />}
       {(world === "home" || world === "panels" || world === "create" || world === "billing") && (
-        <VeyraApp key={world} setWorld={setWorld} initialSection={world} />
+        <InnvilApp key={world} setWorld={setWorld} initialSection={world} />
       )}
       {world === "live" && <CustomerPanel previewControls />}
       {world === "admin" && <SuperAdmin />}

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — Veyra",
-  description: "How Veyra collects, uses, and protects your information.",
+  title: "Privacy Policy — Innvil",
+  description: "How Innvil collects, uses, and protects your information.",
 };
 
 /* Placeholders to fill in after business registration:
@@ -16,23 +16,23 @@ export default function PrivacyPage() {
   return (
     <div className="fp-root min-h-screen fp-grid-bg">
       <div className="max-w-3xl mx-auto px-6 py-16">
-        <Link href="/" className="fp-text-faint text-sm hover:fp-text">← Back to Veyra</Link>
+        <Link href="/" className="fp-text-faint text-sm hover:fp-text">← Back to Innvil</Link>
 
         <h1 className="fp-display text-4xl mt-8 mb-2">Privacy Policy</h1>
         <p className="fp-text-faint text-sm mb-10">Last updated: {UPDATED}</p>
 
         <p className="fp-text-dim text-sm leading-relaxed mb-4">
-          This Privacy Policy explains how [COMPANY] (&quot;Veyra,&quot; &quot;we,&quot; &quot;us&quot;)
-          collects, uses, shares, and protects personal information when you use the Veyra platform,
+          This Privacy Policy explains how [COMPANY] (&quot;Innvil,&quot; &quot;we,&quot; &quot;us&quot;)
+          collects, uses, shares, and protects personal information when you use the Innvil platform,
           websites, dashboards, and APIs (the &quot;Platform&quot;). By using the Platform, you agree to
           this Policy.
         </p>
 
         <h2 className="fp-display text-xl mt-10 mb-3">1. Our role</h2>
         <p className="fp-text-dim text-sm leading-relaxed mb-4">
-          Veyra is the controller of personal information about Panel Owners and visitors to our own
+          Innvil is the controller of personal information about Panel Owners and visitors to our own
           website. For information that a Panel Owner&apos;s Customers submit on that Panel Owner&apos;s
-          panel, the <strong>Panel Owner is the controller</strong> of that information and Veyra acts as
+          panel, the <strong>Panel Owner is the controller</strong> of that information and Innvil acts as
           a <strong>processor</strong> that stores and processes it on the Panel Owner&apos;s behalf.
           Panel Owners are responsible for providing their own privacy notice to their Customers.
         </p>
@@ -132,7 +132,7 @@ export default function PrivacyPage() {
         </p>
 
         <div className="border-t fp-line-soft pt-6 flex items-center justify-between fp-text-faint text-xs">
-          <span>© 2026 Veyra</span>
+          <span>© 2026 Innvil</span>
           <Link href="/terms" className="hover:fp-text">Terms of Service →</Link>
         </div>
       </div>
