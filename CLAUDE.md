@@ -125,6 +125,12 @@ innvil/
 
 ---
 
+## Recent Updates
+
+### 2026-07-12 — Instant admin content while background sync refreshes
+- Improved the owner admin experience so providers, services, customers, and payments content remains visible immediately after load while a background refresh updates it with the latest data.
+- The admin tabs now use a lightweight session cache to preserve the last loaded state during refreshes, reducing blank states and perceived loading delays.
+
 ## Completed Features
 
 ### Phase 0: Preview Complete

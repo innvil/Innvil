@@ -1,0 +1,1693 @@
+# Innvil - Project Progress Log
+# This file is local and should NOT be committed (see .gitignore)
+# (Renamed Ledgerline → Veyra → **Innvil** on 2026-07-09; older entries below keep
+#  the old names as a historical record.)
+
+---
+
+## Session: Admin tab refresh UX — show cached content immediately
+
+### Date: 2026-07-12
+- Improved the panel-owner admin experience so providers, services, customers, and payments data stays visible immediately after load while a background refresh updates it with the latest values.
+- Added a lightweight session-storage cache in the admin tabs to preserve the last loaded state across refreshes and reduce blank/Loading states during syncs.
+- Verified the app builds successfully after the change.
+
+---
+
+## Session: Rebrand → Innvil, product vision, README, PR
+
+### Date: 2026-07-09
+- **Rebrand Veyra → Innvil** across all source/config/docs (package.json +
+  lock → `innvil` @ v0.2.0, layout metadata, panels/index.tsx incl. `InnvilApp`,
+  AdminTabs, constants mock subdomains → *.innvil.app, legal pages, migrations
+  headers, launch.json `innvil-dev`, tailwind/globals comments). Chain:
+  Ledgerline → Veyra → Innvil.
+- **README.md** added (product-first: "infrastructure for launching & scaling
+  digital service businesses"; SMM = first vertical).
+- **Long-term vision** recorded (see Claude memory [[innvil-product-vision]]):
+  not a panel builder — a modular business OS; SMM is the initial market; expand
+  into automation/analytics/CRM/payments/AI/billing/subscriptions/marketplaces;
+  Shopify/Stripe-style default infra. Prioritize platform-strengthening,
+  composable features.
+- **Version-tag protocol** (per user notes): bump package.json per change; before
+  committing, tell the user + give the exact commit/push commands incl. the tag.
+  See [[innvil-commit-protocol]].
+- **Cron moved to Supabase** (user): `vercel.json` intentionally emptied to `{}` —
+  do NOT re-add the Vercel cron. Sync is scheduled in Supabase (migrations 0006 &
+  0007, added by the user). The `app/api/cron/sync-orders` route still exists as
+  the callable endpoint.
+
+### Pending agenda (NOT yet built — ask before starting)
+- Configurable panel **currency** (well-known currencies, not just USD) +
+  customer **Add-Funds method chooser** grouped by category (Crypto / Card /
+  E-wallet incl. GCash/Maya), dropdown where relevant. (Requested; only money.ts
+  read so far — nothing built.)
+- **Resend email forwarder** via webhook (need setup instructions + endpoint).
+- **Binance Pay** (Binance merchant) payment adapter — important to the user
+  (a reason they registered the business).
+
+---
+
+## Session: Multi-gateway payments (adapter architecture) — Razorpay + Stripe + Cryptomus
+
+### Date: 2026-07-09
+Clarified model: bring-your-own gateway PER PANEL; the available catalog reflects
+what any owner could have (India-focused too), not what the operator has. Built a
+pluggable adapter system so gateways are easy to add.
+- `src/lib/payments/adapters/`: `types.ts` (GatewayAdapter: fields, createCheckout,
+  extractOrderId, verifyWebhook), `index.ts` (registry + GATEWAY_CATALOG incl.
+  coming-soon entries), adapters `cryptomus.ts` (ported), `razorpay.ts`
+  (Payment Links + HMAC webhook), `stripe.ts` (Checkout Session + signed webhook).
+- No migration: secrets stored as an ENCRYPTED JSON blob in the existing
+  `api_key_enc` (reusing set/get_gateway_key); public fields in `config` jsonb.
+  `getGatewayContext(panelId, gateway)` decrypts secrets server-side (+ Cryptomus
+  back-compat for old bare-key rows).
+- `src/lib/payments/webhook-handler.ts`: shared handler (adapter extracts our
+  payment id → load panel secrets → adapter verifies → idempotent claim → credit).
+  Routes: `app/api/webhooks/[gateway]/route.ts` (dynamic) + `cryptomus/route.ts`
+  (static, back-compat) both delegate to it.
+- `src/lib/actions/payments.ts` rewritten generic: `getPaymentsMeta` (catalog +
+  per-gateway fields + connected), `connectGateway(panelId, gateway, values)`
+  (splits secret/public by adapter fields; blank secret keeps existing),
+  `disconnectGateway`, `createDeposit(panelId, amount, gateway?)` (picks the
+  panel's active gateway, routes via adapter), `listDeposits`.
+- PaymentsTab rewritten to the FULL catalog: Cryptomus/Razorpay/Stripe connectable
+  (dynamic fields from the adapter), PayPal/PayU/Cashfree/Paytm/NOWPayments/Coinbase
+  shown as "coming soon". Owner webhook-setup help shows the real {APP_URL}.
+
+UNTESTED (I can't run/verify here): each gateway needs the owner's real account +
+a public webhook URL. Razorpay/Stripe owners must add the webhook endpoint in their
+dashboard (Cryptomus is per-invoice, auto). KNOWN LIMITATION: wallets are
+single-currency/USD-oriented — Razorpay charges INR; proper per-panel currency is a
+follow-up. Customer Add-funds still uses the panel's first gateway (a multi-gateway
+chooser on the storefront is a small follow-up).
+
+Next in sequence: PayPal, then PayU/Cashfree/Paytm (each = one adapter + webhook).
+
+---
+
+## Session: Rebrand — Ledgerline → Veyra
+
+### Date: 2026-07-09
+User requested a complete rebrand: pick a significantly better name (original,
+premium, futuristic, timeless, not SMM-specific, ecosystem-ready, low collision)
+and execute it end-to-end. Chosen name: **Veyra** (coined from Latin *verus* =
+"true"; modern flagship-SaaS "V" sound; abstract enough for a broad software
+ecosystem; trust/truth is an ideal core value for a money-moving platform).
+
+Renamed "Ledgerline"→"Veyra" (and `ledgerline`→`veyra`, `LedgerlineApp`→`VeyraApp`)
+across: package.json + package-lock.json, app/layout.tsx (metadata/OG title),
+app/page.tsx, app/PreviewSwitcher.tsx, app/globals.css + tailwind.config.ts
+(token comments), .claude/launch.json (veyra-dev), src/components/panels/index.tsx
+(all brand text + VeyraApp), src/components/panels/admin/AdminTabs.tsx,
+src/data/constants.ts (mock subdomains → *.veyra.app), src/lib/actions/auth.ts,
+CLAUDE.md, PHASE_3_4_PLAN.md, supabase/README.md + migration header comments.
+
+Intentionally NOT changed (functional/DB-safe, or out of scope):
+- No DB identifiers/tables renamed (nothing was branded there).
+- Storefront cookie constant `ll-store-auth` kept (opaque; renaming logs out live
+  sessions; not user-visible).
+- `panel-preview.jsx` (frozen, gitignored design reference) left as-is.
+- Older CLAUDE_PROGRESS entries left as historical record.
+- The working directory folder name is still `Ledgerline` (rename manually if
+  wanted; the app doesn't depend on it).
+
+---
+
+## Session: §4 order-status sync (cron) — orders auto-progress + auto-refund
+
+### Date: 2026-07-09
+Orders now move Processing → Completed/Partial/Canceled/Refunded on their own by
+polling the provider; the unfilled part is auto-refunded.
+- `src/lib/orders/sync.ts`: `mapProviderStatus` (free-text → OrderStatus),
+  `syncPanelOrders(admin, panelId)` — loads OPEN orders (pending/processing/
+  in_progress) with a provider_order_id, groups by provider, batch `getMultiStatus`
+  (chunk 100), then for each changed order ATOMICALLY claims the transition
+  (`update ... .in("status", OPEN).select()` so overlapping runs can't double-act),
+  and on partial/canceled/refunded refunds the unfilled portion
+  (`charge * remains/quantity`, refunded = full) via apply_balance_change('refund').
+  Writes order_status_history. `syncAllOpenOrders()` iterates panels.
+- `app/api/cron/sync-orders/route.ts` (GET, CRON_SECRET-gated; open when unset so
+  you can hit it in a browser locally to force a sync) + `vercel.json` cron
+  `*/10 * * * *`.
+- `syncOrdersNow(panelId)` owner action (orders.ts) for on-demand sync (to wire
+  into the §5 Orders UI).
+- Env: added CRON_SECRET (optional).
+
+Terminal states (completed/partial/canceled/refunded/failed) are left alone.
+Customer dashboard already maps these statuses for display. Manual per-order
+retry/cancel/refill deferred to §5 (admin Orders page).
+
+Next: §5 Admin Orders page (owner sees every order + status history + provider
+response + a "Sync now" button + retry/cancel/refill).
+
+---
+
+## Session: §7 — Cryptomus crypto deposits (auto-credit on confirmation)
+
+### Date: 2026-07-09
+Fully-automatic crypto funding: customer deposits → Cryptomus confirms on-chain →
+webhook auto-credits the wallet (no owner approval, no SQL). Owner brings their own
+Cryptomus merchant (like providers).
+
+- MIGRATION `supabase/migrations/0005_payment_gateways.sql` (RUN IT): table
+  `panel_payment_gateways` (per-panel, encrypted `api_key_enc`) + `set_gateway_key`/
+  `get_gateway_key` pgcrypto RPCs + RLS + revoke, mirroring providers. Reuses
+  PROVIDER_KEY_SECRET. Uses the existing `payments` table for deposits.
+- `src/lib/payments/cryptomus.ts`: merchant API client — `createInvoice`,
+  `getPaymentInfo`, `isPaidStatus`, `verifyWebhookSign` (md5(base64(phpJson)+key);
+  PHP-slash-escaped). `src/lib/payments/index.ts`: `getCryptomusCredentials`
+  (service-role decrypt; never returned to client).
+- `src/lib/actions/payments.ts`: owner `getGateway`/`connectGateway`/
+  `disconnectGateway` (stores merchant id + encrypted key); customer
+  `createDeposit(panelId, amount)` (insert `payments` pending → Cryptomus invoice →
+  returns checkout URL) + `listDeposits`.
+- `app/api/webhooks/cryptomus/route.ts`: on IPN → find payment by order_id →
+  CONFIRM via getPaymentInfo (authoritative; sign check is best-effort) → atomic
+  claim pending→completed (idempotent) → `apply_balance_change('deposit')`. Answers
+  200 (handled/ignored) / 500 (retry).
+- UI: PaymentsTab (owner) → connect/update/disconnect Cryptomus (merchant id + key,
+  autofill-off, connected badge). Customer Wallet → real **Add funds** (amount +
+  quick chips → createDeposit → redirect to checkout) + real deposit history.
+  Storefront/page.tsx fetch `listDeposits`; CustomerDashboard got `onDeposit` prop.
+
+REQUIRES: `NEXT_PUBLIC_APP_URL` set to the public origin (used for the callback +
+return URLs). Webhooks need a PUBLIC url — works in prod/preview; on localhost use
+the Cryptomus sandbox or a tunnel (ngrok). Owner also needs a Cryptomus merchant
+account + Payment API key.
+
+Next: order-status sync cron (§4) so orders auto-progress; §5 admin Orders page.
+
+---
+
+## Session: §6 Users & Balance — owner funds customers (MVP wallet path)
+
+### Date: 2026-07-09
+Unblocks the order loop: a new customer starts at $0 and there's no gateway yet, so
+the owner needs a way to credit them without SQL.
+- NEW `src/lib/actions/customers.ts`: `listPanelCustomers(panelId)` (real
+  customer_accounts + email via auth.admin.getUserById + order count/spend from
+  orders), `adjustCustomerBalance(id, amount, reason)` (apply_balance_change
+  `manual_adjust`, owner as p_admin; refuses to go below 0), `setCustomerStatus`
+  (ban/unban/restrict). Owner-authorized via getAuthedAdmin + ownsPanel.
+- `AdminTabs.tsx` CustomersTab rewritten from mock → real: table (Customer/Balance/
+  Orders/Spent/Status) with inline **Credit +/Debit −** (amount + reason) and
+  **Ban/Unban** per row; loading/empty states; guards non-UUID (mock) panels.
+  Dropped the mock `customers` import; `onView`/CustomerDrawer left for a later
+  rich profile (not triggered now).
+
+Now the full loop works from the UI: owner Credits a customer → customer places an
+order (charge → provider → track). Next candidates: §5 admin Orders page (owner
+visibility/retry/refund), §4 status sync cron, or customer self-serve deposits (§7).
+
+---
+
+## Session: Fixes — storefront crash, unknown-platform key, orphaned re-categorize
+
+### Date: 2026-07-09
+Three fixes after the previous session:
+- **Storefront crash** `ReferenceError: platformMeta is not defined`: NewOrder had
+  `platformMeta` in its prop TYPE but not in the destructure. Added it. (Grouping
+  wasn't touched — this was purely the missing destructure.)
+- **Bluesky (and any unknown platform) had no logo option + didn't group on the
+  customer side**: `detectPlatform` returned `key: null` for non-known platforms,
+  so `services.platform` was null. Now it returns a stable slug key
+  (`slugPlatform(label)`), so unknown platforms get a real key (→ customer platform
+  button + owner logo editor work). `listCatalog` also falls back to
+  `slugPlatform(name)` for a platform group's key so the **Logo** button shows for
+  existing services that predate the fix (no re-import needed).
+- **Services stuck "Uncategorized"**: `recategorizeServices` (a) skipped rows with
+  a null `provider_id` (e.g. after a provider was deleted) and (b) keyed categories
+  by provider, so an orphaned service couldn't match the existing provider-scoped
+  category and could leave `subId` undefined → `category_id` never updated → stuck.
+  Rewrote it to key categories **by NAME (panel-scoped)** and process ALL services:
+  orphans now consolidate into the real platform category, leftover duplicates end
+  up empty and are cleaned up. Categories created by re-organize now have a null
+  provider_id (column is nullable). Clicking **Re-organize** reliably fixes the
+  stragglers (and sets their `platform` key so they also appear on the customer
+  side). Requires a dev-server restart to pick up the server-action change.
+
+Categorization grouping/labels are unchanged — detectPlatform's label + guessSub­
+category are identical; only the previously-null `platform` KEY column now gets a
+value. So re-organizing won't move correctly-categorized services.
+
+---
+
+## Session: Custom platforms/logos, per-category delete, dynamic customer platforms + service dropdown
+
+### Date: 2026-07-09
+Follow-ups on the live catalog + customer flow.
+
+Platform logos (owner-editable, no migration — stored in `panels.settings.platforms`):
+- `PlatformIcons.tsx` generalized: `PlatformGlyph`/`PlatformButton` take a string
+  platform + optional `pathOverride`; exported `GLYPH_PATHS`; neutral ring
+  fallback for unknown platforms. Added built-in **LinkedIn + Bluesky** glyphs so
+  they work out of the box.
+- `services.ts`: `setPanelPlatformIcon(panelId, key, icon, label?)` writes
+  `settings.platforms[key]`; `readPlatformMeta()` reads it; `listCatalog` now
+  returns each platform group's `platformKey` + resolved `icon`.
+- `storefront.ts`: `getStorefrontPlatforms(panelId)` → the platforms map for the
+  customer side (service-role read).
+
+Admin catalog (ServicesTab):
+- Per-category **Delete** button on BOTH the platform header and each sub-category
+  (replaces the old per-sub select-all checkbox) → `deleteCategory(id)` removes the
+  category + child categories + all their services (id-less/legacy groups fall back
+  to `bulkDeleteServices`). Global "Select all services" + per-row checkboxes stay.
+- Platform header shows the logo + a **Logo** editor (paste a monochrome SVG path
+  `d`; live preview; clear to remove) → setPanelPlatformIcon.
+
+Customer side (NewOrder / CustomerDashboard / Storefront):
+- Platform buttons are now **derived from available services** — platforms with no
+  services are hidden; owner-added platforms appear with their custom logo + label
+  (`platformMeta` threaded storefront → dashboard → NewOrder; also used for the
+  favorites/recent/order-row glyphs).
+- After choosing a service the list **collapses into a dropdown** showing the pick;
+  clicking it reopens the list to choose another in the same category.
+
+No migration needed (uses panels.settings JSON). NOTE: guest landing showcase still
+groups unknown platforms under "Other" (marketing page; the real ordering flow in
+the dashboard handles them fully).
+
+---
+
+## Session: §4 order pipeline + real customer dashboard on the storefront
+
+### Date: 2026-07-09
+Wired the polished customer dashboard onto the REAL storefront and built order
+placement (the empty-storefront complaint #3 + Phase 4 §4).
+
+Backend — `src/lib/actions/orders.ts` (NEW, storefront session):
+- `placeOrder({panelId, serviceId(uuid), link, quantity, runs?, interval?})`:
+  auth (storefront user) → panel must be `live` → active customer_account →
+  service belongs to panel & active → validate link + qty (min/max) → price from
+  sell_rate (per 1k), compute provider_cost/profit → insert order (pending) →
+  `apply_balance_change(-charge, 'order', ref_order)` (atomic; refunds via delete
+  if the debit fails) → forward to provider `addOrder` server-side → on success
+  store provider_order_id + status 'processing'; on provider error/exception
+  REFUND (`apply_balance_change(+charge,'refund')`) + status 'refunded'. Never
+  exposes cost/profit/keys. Writes order_status_history at each step. Unmapped
+  service → stays 'pending' for manual routing.
+- `listCustomerOrders(panelId)` → the signed-in customer's orders (newest first),
+  joined to service name; customer-safe fields only.
+
+UI — made the customer components data-source-agnostic (defaults = mock so the
+`/?preview=1` switcher still works):
+- `CustomerService` gained optional `uuid?` (real DB id carrier).
+- `NewOrder`: new `services` prop + async `onPlaceOrder` handler; real orders
+  require a link; shows placing/placed/error states; drip runs/interval passed
+  through. useMemo deps now include `services`.
+- `CustomerDashboard`: new props brandName/services/orders/walletBalance/deposits/
+  tickets/recentIds/email/onPlaceOrder/onAddFunds (all optional, mock defaults);
+  replaced hardcoded "NovaBoost" + all mock reads; OrderRows takes `services`;
+  empty states for no deposits / no tickets.
+- `app/p/[subdomain]/page.tsx`: also fetches `listCustomerOrders` (signed-in only)
+  and passes `initialOrders`.
+- `Storefront.tsx`: signed-in view now renders the REAL `CustomerDashboard` fed by
+  live data — maps StorefrontService→CustomerService (localId as numeric id, uuid
+  carried; unknown platforms render a blank glyph), maps order rows + statuses +
+  dates, derives Recently-Ordered, and wires `onPlaceOrder`→placeOrder→
+  router.refresh(). Removed the old "Ordering opens soon" placeholder.
+
+Not yet done (follow-ups): wallet funding/deposits (§7) — Add Funds still routes to
+the wallet tab, deposits empty; tickets tab empty (real ticket system later); API
+tab still shows a mock key; order status polling/cron (§4 sync) + admin Orders
+(§5). Services have no refill/cancel/drip columns yet, so those preview flags
+default off. NOTE: no capability columns means drip toggle never shows for real
+services until we store dripfeed on import.
+
+---
+
+## Session: Reliable catalog "Select all" + delete-all + owner-login autofill
+
+### Date: 2026-07-09
+User: (a) owner login form still autofilled their saved email; (b) catalog
+"delete all" only removed part of the services (e.g. ~500, then ~250, then ~80),
+and with 2 left it deleted only 1.
+
+Root causes:
+- There was NO global select-all in the catalog — only per-sub-category
+  select-all. So "delete all" = deleting one sub-category at a time; the "2 left,
+  deleted 1" case = the two remaining services sat in DIFFERENT sub-categories.
+- Large `.in(ids)` filters (hundreds of UUIDs) can exceed the request URL length
+  and get truncated/rejected, so a big selection deleted only part — and the
+  action reported the INTENDED count, not the rows actually removed.
+
+Fixes:
+- `services.ts`: added `chunkIds()` (size 100). `authorizeServiceIds`,
+  `bulkSetServiceStatus`, `bulkDeleteServices`, `bulkSetMarkup` now chunk every
+  `.in()` select/update/delete. `bulkDeleteServices` uses `.delete().in(chunk)
+  .select("id")` and sums the ACTUAL deleted rows for the reported count.
+- `AdminTabs.tsx` (ServicesTab): new derived `allServiceIds` (flattened across all
+  platforms/subs, independent of which groups are expanded) + `allSelected` +
+  `toggleSelectAll`; added a "Select all services (N)" master checkbox above the
+  catalog tree. With it, the bulk bar's Delete/Enable/Disable/Markup act on the
+  whole catalog in one go.
+- `panels/index.tsx` AuthScreen (owner login): email/password inputs now
+  autoComplete off/new-password + data-lpignore/data-1p-ignore/data-form-type
+  (matches the provider-form fix). Customer storefront auth keeps normal
+  autocomplete (good UX for real customers).
+
+---
+
+## Session: Independent owner/customer sessions + provider-form autofill fix
+
+### Date: 2026-07-09
+User reported (on localhost): (a) the browser autofills their saved email into the
+provider "API URL" field; (b) "Add provider" errors with "Not authorized for this
+panel"; (c) the real storefront's signed-in view is a bare placeholder, not the
+full customer dashboard we built.
+
+Diagnosed (b): owner login (AuthScreen) and customer login (`/p/[subdomain]`) both
+call the SAME supabase.auth on ONE origin → a single session cookie. Signing up on
+the storefront REPLACED the owner session with a customer, so the owner-side
+server action ran as the customer (who doesn't own the panel) → "Not authorized".
+Production is unaffected (storefront is a separate domain → cookies scoped per
+domain); this is a localhost-only collision.
+
+Chosen fix this session: give the storefront its own session cookie namespace so
+both logins coexist in one browser.
+- NEW `src/lib/supabase/constants.ts`: `STOREFRONT_COOKIE_NAME = "ll-store-auth"`
+  + `isStorefrontPath()` (`/p/*`).
+- `server.ts` / `client.ts`: `createClient(cookieName?)` now optionally namespaces
+  the session via `cookieOptions.name`; added `createStorefrontClient()`.
+- `middleware.ts` (updateSession): refreshes the storefront cookie on `/p/*`,
+  the owner cookie everywhere else.
+- `customer-auth.ts`: all customer auth + getCustomerAccount now use
+  `createStorefrontClient()` (owner actions/auth.ts unchanged → default cookie).
+- storefront.ts unaffected (service-role reads, no session).
+- Requires a dev-server restart (middleware + client changes).
+
+Autofill fix (a): provider form inputs (ProvidersTab) got `autoComplete`
+off/new-password, `data-lpignore`/`data-1p-ignore`, `data-form-type="other"`,
+and API URL `type="url"`.
+
+(c) is deferred: wiring the full CustomerDashboard (branding/services/wallet) onto
+the real storefront is the next step, and pairs with §4 order pipeline. The
+polished dashboard is still mock-only (hardcoded "NovaBoost", mock
+services/orders/wallet) and renders only in `/?preview=1`.
+
+---
+
+## Session: Root goes REAL (auth-driven; preview switcher → dev-only)
+
+### Date: 2026-07-07
+User asked why the app is still "preview mode" (bottom world-switcher visible) and
+chose to make it real. Done:
+- `app/page.tsx` rewritten as an auth-driven root: on mount checks
+  supabase.auth.getUser() → signed in = LedgerlineApp (owner dashboard), signed
+  out = PublicLanding; AuthScreen in between. NO preview bar. setWorld(...) from
+  the existing components is bridged to real views (public/auth/app). Logout
+  (AppTopbar) → public.
+- The old world-switcher moved to `app/PreviewSwitcher.tsx` (kept for dev),
+  reachable ONLY at `/?preview=1`. Dropped its redundant inline <style> (globals.css
+  already has the tokens + fp-* classes; I'd added --bg-noise/--bg-grid there).
+- Mock customer view + Super Admin now live only in the preview switcher; the real
+  customer storefront is `/p/[subdomain]`. (Real super-admin route = later.)
+
+### Also this session (bugfixes)
+- PanelAdmin Status tab now PERSISTS status via updatePanelStatus (was local-only,
+  reverted to draft on refresh). "View live panel" → real `/p/${subdomain}` (new tab).
+
+---
+
+## Session: Customer storefront goes REAL (browse + panel-scoped auth)
+
+### Date: 2026-07-07
+Started the "customer storefront real" track (MVP piece A). This is the first REAL
+customer-facing route, separate from the preview world-switcher.
+
+Files created:
+- `src/lib/actions/storefront.ts` ("use server", PUBLIC via service role, safe
+  fields only): getPublicPanel(subdomain) → {id,name,subdomain,customDomain,status,
+  theme}; getStorefrontServices(panelId) → StorefrontService[] (id, localId, name,
+  platform, category, price=sell_rate, min, max, description; NO cost/markup/profit).
+- `src/lib/actions/customer-auth.ts` ("use server"): customerSignUp/SignIn/SignOut
+  (panel-scoped — creates auth user + ensureProfile('customer') +
+  customer_accounts upsert on (panel_id,user_id)); getCustomerAccount(panelId) →
+  {id,email,balance,status}.
+- `app/p/[subdomain]/page.tsx` (server): resolve panel; not-found + offline screens
+  (draft/suspended/maintenance); generateMetadata for SEO; renders Storefront with
+  services + the visitor's account.
+- `app/p/[subdomain]/Storefront.tsx` (client): on-brand (reuses fp-* tokens +
+  PlatformIcons). Guest = landing (branding, hero, platform showcase grouped by
+  platform, benefits, auth card wired to customer auth) → router.refresh() on
+  success. Signed-in = header w/ wallet balance + logout + (disabled) Add funds,
+  welcome, service browse. Inactive-mode banner. Ordering deferred to §4.
+- globals.css: added --bg-noise/--bg-grid (were only in the preview's inline style;
+  real routes need them).
+
+No new migration (uses panels/services/customer_accounts/profiles).
+Routing: path-based /p/[subdomain] now; production subdomain→/p rewrite via
+middleware later.
+- PanelAdmin "View live panel" now links to `/p/${panel.subdomain}` (new tab) —
+  the panel's REAL storefront — instead of setWorld("live") (mock NovaBoost preview).
+- FIX: PanelAdmin Status tab dropdown only set local state (reverted to draft on
+  refresh). Now `changeStatus` persists via updatePanelStatus (optimistic +
+  rollback). (MyPanels cards already persisted; this was the in-admin Status tab.)
+
+### Verify (user)
+After login as a panel owner, note your panel's subdomain (My Panels), then visit
+`/p/<subdomain>` in the browser → real storefront with that panel's real services;
+Create account → creates a customer_account (check Supabase) → signed-in browse
+with wallet $0.00.
+
+### Next (MVP path)
+§4 order pipeline: place order from the storefront (charge wallet via
+apply_balance_change → forward to provider addOrder → track) + admin Orders (§5);
+then wallet funding (§7 manual deposit) + Users/Balance (§6).
+
+---
+
+## Session: NOTE — Automation Add-on plan (from SMM-automator reference)
+
+### Date: 2026-07-07
+User pointed at their working automation project `C:\Users\My PC\SMM-automator`
+(Next.js + Supabase) and wants it ported INTO Ledgerline as a PAID add-on
+("Automator"), re-skinned to our design, plus a landing ad/SEO block. For now:
+NOTE ONLY — added as Phase 4.x in CLAUDE.md (didn't build).
+
+Explored the reference and captured its logic to retain (see CLAUDE.md Phase 4.x):
+- Manual mass order: paste links → per-link platform auto-detect from URL host
+  (`app/api/orders/route.ts` detectPlatformFromLink) → 1 tracked order/link.
+- `lib/place-order.ts` submitOrderForLink: enabled service_presets per
+  (platform, tier=priority|regular) map service_type→provider service id + qty;
+  IG Reel-only views; duplicate-skip; comment pools (pull N unused, mark used);
+  forward via lib/smm-panel placePanelOrder; orders table w/ services_ordered JSON.
+- Comment pools uploaded as CSV (papaparse) → comment_pools/comment_pool_items.
+- Optional full-auto: watched_accounts + cron/poll-x auto-order new X posts.
+- Background via Next after().
+
+Two enhancements the user asked for when we port it:
+1. SMART LINK DETECTION — current logic only splits on \r?\n|, . Make it detect
+   links pasted as ONE blob with no separators. Recipe recorded in CLAUDE.md:
+   split BEFORE each https?:// and keep URL-shaped parts.
+2. FILE UPLOAD to extract links: csv (papaparse), xlsx (SheetJS), docx (mammoth),
+   pdf if feasible (pdfjs/pdf-parse) → flatten to text → smart-detect.
+
+Integration: gate behind a per-panel add-on flag (chargeable); customer "Mass/Auto
+Order" surface; owner presets+pools config (grow AutomationTab); reuse
+src/lib/providers; landing SEO block. NOT built yet — sits after core §4 orders.
+
+---
+
+## Session: §3 catalog bulk actions
+
+### Date: 2026-07-07
+Backend (services.ts): authorizeServiceIds(admin,user,ids) gate (filters to ids on
+panels the user owns), then bulkSetServiceStatus(ids,status),
+bulkDeleteServices(ids), bulkSetMarkup(ids,kind,value) (groups by provider_rate,
+recomputes sell per group). All service-role + code authz.
+UI (ServicesTab): selection Set; checkbox on each service row; checkbox on each
+sub-category header (select all in that category); a gold bulk bar appears when
+>0 selected → Enable / Disable / Set markup (inline kind+value → Apply) / Delete
+(confirm) / Clear. Reuses the same msg banner + refresh.
+§3 now effectively complete (bulk category-move + sync-selected left as later
+nice-to-haves).
+FIX (same session): bulk selection handler was named `toggleSel`, colliding with
+the import picker's `toggleSel` (both in ServicesTab) → compile error
+"toggleSel is defined multiple times". Renamed the bulk one to `toggleRowSel`.
+
+---
+
+## Session: REVERT first-token detection (it produced countries as platforms)
+
+### Date: 2026-07-07
+The previous "first meaningful token = platform" approach was wrong: SMM names
+often start with a country/quality prefix ("USA Instagram Followers"), so the
+first token became a COUNTRY ("Usa") instead of the platform. Reverted to the
+ORIGINAL logic and only kept the unknown-platform fallback:
+- detectPlatform now: (1) guessPlatformKey(name) — known platform matched ANYWHERE
+  in the name (original behavior; leading prefixes don't matter) → clean label;
+  (2) ONLY if no known platform, derive an unknown one from the first token that
+  isn't a service type, quality descriptor, OR country (new COUNTRY_STOPWORDS set:
+  usa/uk/brazil/turkish/arab/… + nationalities/regions).
+- Kept: X keyword \btweets?\b (so "Bluesky Retweet" ≠ Twitter), Title-case for
+  unknown platforms (bluesky/BlueSky collapse), + the added known platforms
+  (LinkedIn, Twitch, Discord, Reddit, Pinterest, Snapchat, Threads, SoundCloud,
+  Kick, Rumble).
+Net: "USA Instagram Followers" → Instagram; "Bluesky Retweet"/"Bluesky Followers"
+→ Bluesky; "LinkedIn …" → LinkedIn; countries never become categories.
+USER ACTION: click Re-organize again to re-derive existing services correctly.
+
+### (still valid from this session) per-panel local service IDs
+
+### Date: 2026-07-07
+
+### Bug fixes — categorization
+- "Bluesky Retweet" was going to X/Twitter because the platform regex matched
+  "tweet" inside "retweet". Fixes:
+  - X keyword: /twitter|tweet|\bx\b/ → /twitter|\btweets?\b|\bx\b/ (won't match "retweet").
+  - Replaced whole-name keyword scan with detectPlatform(name): strips
+    [brackets]/(parens), then walks tokens — first KNOWN-platform token wins; else
+    the first non-service, non-descriptor token is the platform. So a descriptor
+    keyword can't hijack the platform, and all of a platform's services group
+    together. matchKnownPlatformToken tests single tokens.
+  - tidyPlatform now always Title-cases unknown platforms so casing variants
+    (bluesky/BlueSky) collapse into ONE category.
+
+### New — per-panel local service IDs (§2/§5 foundation)
+- Migration `0004_service_local_id.sql`: services.local_id int, backfilled per
+  panel by creation order, unique(panel_id, local_id). **User must run 0004.**
+- importServices assigns the next local_id per panel (max+1 sequential) — the
+  panel's OWN service IDs (1,2,3…), separate from provider_service_id (kept for
+  internal routing). ServiceRow/ServiceVM gained local_id/localId.
+- Catalog row now shows "ID {localId} · prov #{providerServiceId} · …".
+
+USER ACTION: run 0004, then Re-organize (fixes existing platform mis-groups).
+New imports get local IDs; existing rows were backfilled by the migration.
+
+---
+
+## Session: Make Re-organize near-instant (batched)
+
+### Date: 2026-07-07
+recategorizeServices was slow: per-service sequential round-trips (find/create
+platform cat + sub cat + one UPDATE per service). Hundreds of services = hundreds
+of trips. Rewrote it to be fully batched:
+1. Load all services once; compute target platform+sub in memory (plans[]).
+2. Load existing provider_categories once; bulk-insert only the MISSING platform
+   categories, then the missing sub-categories (2 inserts total, with .select()
+   to get ids).
+3. Group services by target (subId, platformKey) and bulk-update with .in("id",
+   chunk) — chunked at 200 and run in Promise.all.
+Result: ~a handful of round-trips regardless of service count → near-instant.
+Empty-category cleanup loop unchanged.
+
+---
+
+## Session: Smarter platform detection (any platform, no "Other" dumping)
+
+### Date: 2026-07-07
+User: LinkedIn was landing in "Other". Want the system to recognize ANY platform
+(popular or not) — detect the service type first, then treat the remaining
+non-service/non-descriptor token as the platform. e.g. "Bluesky custom comments"
+→ platform "Bluesky", sub "Comments". No "Other" bucket for real platforms.
+
+Changes (services.ts):
+- Expanded known platforms (clean labels): + LinkedIn, Twitch, Discord, Reddit,
+  Pinterest, Snapchat, Threads, SoundCloud, Kick, Rumble.
+- NEW extractPlatform(name): strips [brackets]/(parens)/punctuation, then returns
+  the first token that isn't a service word or a quality descriptor
+  (PLATFORM_STOPWORDS set), preserving brand casing (LinkedIn, TikTok). Falls back
+  to "Other" only if nothing identifiable remains (rare).
+- NEW guessPlatformLabel(name) = known clean label, else extractPlatform.
+- import + recategorize now use guessPlatformLabel(service NAME) for the main
+  category (removed the old PLATFORM_FALLBACK="Other" default).
+- recategorize cleanup now loops (removes emptied parent "Other" once children go).
+
+USER ACTION: click **Re-organize** again → LinkedIn/Bluesky/etc. move out of
+"Other" into their own platform categories; the empty "Other" is cleaned up.
+
+---
+
+## Session: Fix categorization — platform-only main cat, real sub-cats, Re-organize
+
+### Date: 2026-07-07
+Problem (user screenshot): catalog showed provider category strings as top-level
+with only "General" subs. Causes: (1) user was viewing OLD flat data from the
+first §2 import (re-import skips already-imported services, so their category_id
+never updates); (2) my sub fallback reused the messy provider category string.
+
+Fixes (services.ts):
+- PLATFORM_LABEL now clean platform names only: "Instagram", "TikTok", "YouTube",
+  "X / Twitter", "Facebook", "Telegram", "Spotify" (fallback "Other").
+- Detection now reads the service NAME first (authoritative), then category.
+- Sub fallback is "Other" (never the provider's raw category). Tightened a few
+  sub-keyword regexes (\bshares\b, \bsaves\b, \blive\b) and added "reactions"→Likes.
+- NEW `recategorizeServices(panelId)`: re-derives platform+type from each existing
+  service NAME, rebuilds the 2-level tree, reassigns category_id + platform, then
+  deletes now-empty leaf categories. This fixes services imported before the
+  2-level scheme WITHOUT delete+reimport.
+- UI: added a "Re-organize" button (Tag icon) next to Sync/Import in ServicesTab.
+
+USER ACTION to fix current mess: open panel → Catalog → click **Re-organize**.
+Result: main categories become platforms (TikTok, X / Twitter, …); each has real
+sub-categories (Followers, Retweets, Views, Likes …); every "TikTok Followers"
+variant collapses under TikTok → Followers regardless of the provider's split.
+
+---
+
+## Session: Merge Categories+Services, 2-level auto-categorize, landing SEO
+
+### Date: 2026-07-07 (user-driven, experience-based improvements)
+
+### Migration
+- `supabase/migrations/0003_category_hierarchy.sql` — adds
+  provider_categories.parent_id (self-FK) + index. **User must run 0003** before
+  import/catalog works. Idempotent.
+
+### Backend (services.ts rewritten)
+- Import now builds a TWO-LEVEL category tree: platform category
+  ("Instagram Services", "Twitter / X Services", …) → sub-category
+  ("Followers","Views","Likes","Retweets / Reposts","Subscribers",
+  "Watch Hours","Plays / Streams","Members","Comments","Shares","Live","Reach").
+  Detected by keyword from provider category + service name. getOrCreateCategory
+  now matches on (panel, provider, name, parent_id).
+- New: updateService (name/description/markup→recompute sell), deleteService,
+  listCatalog (nested CatalogPlatform[]→CatalogSub[]→ServiceVM[]; also folds any
+  older flat categories into a "General" sub). Removed listServices.
+- ServiceVM now includes `description`.
+
+### UI (AdminTabs ServicesTab rewritten as the merged "Catalog" tab)
+- Categories + Services merged into ONE tab ("Catalog — categories & pricing").
+  Accordion: platform (expand) → sub-category (expand) → service rows.
+- Per service: enable/disable toggle (unchanged easy on/off), inline Edit
+  (name, description, markup type+value with a live sell preview via
+  computeSellRate), Delete (window.confirm).
+- Import panel: **prominent select-all** — a gold bar with a real checkbox
+  "Select all shown (N)" + live "N selected" (the old text link was hard to find).
+- Removed the "Categories" tab from PanelAdmin (TABS + render + import). Because
+  PRIMARY_TABS = slice(0,10), removing one tab pulls **Customers** onto the bar
+  (out of the More menu) — matches the user's request.
+
+### Landing (SEO / ad)
+- PublicLanding: new `#features` section "Import a thousand services in one click"
+  — 6 cards (one-click import, auto-categorization, markup your way, one-click
+  sync, full catalog control, keys never exposed). Nav link "Features" added.
+  Marketing/SEO for acquiring panel owners; reflects the real §1/§2/§3 features.
+
+### Notes
+- computeSellRate imported client-side for the edit preview (money.ts is a pure
+  module, not server-only — safe).
+- Dead CategoriesTab function left in AdminTabs (unused export, harmless).
+- Verify: run 0003 → open panel → Catalog → Import (select-all is obvious now) →
+  services appear grouped Platform → Type → service; expand, edit, toggle, delete.
+
+---
+
+## Session: Phase 4 §2 — Service Import & Sync
+
+### Date: 2026-07-07
+
+### Files created
+- `src/lib/money.ts` — computeSellRate(providerRate, kind, value) for
+  percent/multiplier/fixed markup + round4.
+- `src/lib/actions/services.ts` ("use server", service-role + code authz like
+  panels/providers):
+  - fetchImportableServices(providerId) → provider catalog (SMM v2 `services`) +
+    which provider_service_ids are already imported.
+  - importServices(providerId, {providerServiceIds, markupKind, markupValue}) →
+    re-fetches catalog server-side (authoritative), get-or-create
+    provider_categories per category name, guessPlatform() heuristic, computes
+    sell_rate, inserts services rows (skips already-imported). Returns
+    {imported, skipped}.
+  - listServices(panelId) → ServiceVM[] with category name (PostgREST embed
+    provider_categories(name)) + computed profit.
+  - syncProviderServices(providerId) → refresh provider_rate/min/max +
+    availability (disable if gone), recompute sell_rate from stored markup,
+    stamp last_synced_at. Returns {updated, disabled}.
+  - setServiceStatus(serviceId, status) → enable/disable.
+  - NOTE: SMM v2 `services` has no description field, so description is left null
+    on import (owner edits in §3).
+
+### Files modified
+- `src/components/panels/admin/AdminTabs.tsx`:
+  - imports: services actions + ServiceVM + ProviderServiceDTO + MarkupKind +
+    Search/Download icons; removed mock `floorServices` import.
+  - ServicesTab({ panelId }) rewritten real: Import panel (provider picker when
+    >1, markup type/value, searchable catalog with checkboxes + already-imported
+    disabled markers + select-all), imported services table (Service/Category/
+    Cost/Markup/Sell/Profit/Min-Max/Enabled toggle), Sync button, success/error
+    banner, guards non-UUID panels.
+- `src/components/panels/admin/PanelAdmin.tsx` — passes panelId to ServicesTab.
+- CLAUDE.md — §2 marked done; §3 partially done (profit display + enable/disable).
+
+### Verify (user)
+Open a real panel → Providers & API: add a provider with a working api/v2 key →
+Services & Pricing → Import from provider → catalog loads → pick markup + select
+services → Import → they appear in the table with cost/sell/profit → Sync updates
+them; toggle enables/disables.
+
+### Next
+§4 Order Automation (route orders to provider, status enum, cron status sync,
+partial refund) — or §3 full Service Management (edit/bulk) if you prefer.
+
+---
+
+## Session: Fix PanelAdmin tab bar overflowing viewport width
+
+### Date: 2026-07-07
+- Root cause: LedgerlineApp content column `<div className="flex-1">` lacked
+  `min-w-0`, so the 17-tab row (and wide tables) pushed the whole page wider than
+  the viewport. Added `min-w-0` → content now constrained; internal
+  `overflow-x-auto` regions scroll within bounds instead of widening the page.
+- PanelAdmin.tsx tab bar: fixed split — first 10 tabs (PRIMARY_TABS) stay on the
+  bar; the rest (OVERFLOW_TABS) live behind a labeled **"More ▾"** button (text +
+  ChevronDown that rotates when open) — clearer affordance than a bare hamburger.
+  The More button turns gold when the active section is in the overflow set.
+  Outside-click-to-close, max-h scroll. Row keeps overflow-x-auto + min-w-0 safety.
+  (Tab ORDER is user-controlled in the TABS array — they swapped Customers/Payments
+  so Payments sits on the bar and Customers heads the More menu.)
+
+---
+
+## Session: Panels/providers writes switched to service-role + code authz
+
+### Date: 2026-07-07
+
+### Why
+The "new row violates RLS policy for panels" error persisted after the
+getAuthedClient hydration fix. Re-running 0002 then errored
+"policy profiles_self_select already exists" — which PROVES 0002 applied fully
+(policies incl. panels_insert exist). So the policy is correct; the request's
+auth.uid() is resolving to NULL on writes (the user's session token isn't reaching
+PostgREST in this environment), so `owner_id = auth.uid()` fails.
+
+### Fix (removes the auth.uid() dependency for the admin dashboard)
+- `src/lib/auth.ts` — added `getAuthedAdmin()`: validates identity via getUser()
+  (anon client + cookie), returns { user, admin } where admin is the service-role
+  client (bypasses RLS).
+- `src/lib/actions/panels.ts` + `providers.ts` — rewritten to use getAuthedAdmin
+  and enforce ownership IN CODE:
+  - createPanel forces owner_id = user.id (can't be spoofed).
+  - listPanels filters owner_id = user.id.
+  - updatePanelStatus verifies owner before update.
+  - providers: ownsPanel(admin,user,panelId) gate; loadAuthorizedProvider verifies
+    the provider's panel is owned by the user before any key op.
+  This is secure (identity validated, ownership checked) and works regardless of
+  auth.uid(). RLS stays in the DB as protection for the future customer-facing
+  browser (anon) client.
+- getAuthedClient() kept for future RLS-scoped reads (customer side).
+
+### User notes
+- DO NOT re-run 0002 (already applied; would error on existing policies). If you
+  ever must, drop policies first or reset the public schema.
+- Fully RESTART `npm run dev` so the new server-action code is live, then retry
+  Create Panel — it should insert now.
+
+### Still open (separate, low priority)
+Why auth.uid() is null on the RLS path (cookie->PostgREST) — matters for the
+customer storefront (anon client + RLS) later, not for the admin dashboard now.
+
+---
+
+## Session: Fix RLS insert bug + wire ProvidersTab to real providers
+
+### Date: 2026-07-07
+
+### Bug: "new row violates row-level security policy for table panels"
+Root cause was NOT a bad policy — it was a @supabase/ssr session-hydration race.
+Actions called getUser() on one client but ran the insert on a SEPARATE freshly
+created client that hadn't loaded the session yet → its PostgREST request went out
+unauthenticated → auth.uid() was null → `owner_id = auth.uid()` WITH CHECK failed.
+(Same bug would make listPanels silently return []. )
+
+Fix:
+- Added `getAuthedClient()` to `src/lib/auth.ts` — creates one server client, calls
+  getUser() on IT (hydrating the session), returns { supabase, user }. Any query on
+  that client now carries the JWT.
+- Refactored `src/lib/actions/panels.ts` and `src/lib/actions/providers.ts` to use
+  getAuthedClient() (single hydrated client per action). loadAuthorizedProvider now
+  takes the client as a param.
+- If it still errors after this, verify the policy exists:
+  `select policyname, cmd from pg_policies where tablename='panels';`
+  (expect panels_read/insert/update/delete) — if panels_insert is missing, 0002
+  didn't fully apply; re-run it.
+
+### Correctness fix: provider column privileges
+`providers.api_key_enc` is revoked from clients, so `select('*')` errors. Added
+`PROVIDER_COLS` (all non-secret columns) and use it in listProviders /
+loadAuthorizedProvider. Keys never reach the client.
+
+### ProvidersTab wired (Phase 4 §1 UI)
+- `src/lib/actions/providers.ts` — added `listProviders(panelId)`.
+- `AdminTabs.tsx` ProvidersTab({ panelId }) — real: loads providers, add-provider
+  form (name/api_url/api_key/currency) -> createProvider; per-row Test connection
+  (-> balance), Fetch balance (caches + refresh), Delete; loading/empty/error;
+  guards non-UUID mock panels with a "save this panel first" notice. Removed mock
+  providersData usage (+ its import). `Sparkles` import now unused (harmless).
+- `PanelAdmin.tsx` passes `panelId={panel.id}` to ProvidersTab.
+
+### Verify (user)
+After migrations + npm install + login: Create a panel -> open it -> Providers &
+API tab -> Add provider (use a real SMM provider api/v2 URL + key) -> Test
+connection should return the provider balance; Fetch balance caches it on the row.
+
+---
+
+## Session: Phase 4 — real-panel bridge (panels off mock onto DB)
+
+### Date: 2026-07-07
+
+### Files created
+- `src/lib/actions/panels.ts` ("use server") — toPanel() maps PanelRow -> the
+  UI's Panel view-model (custom_domain->domain, ordersToday=0 placeholder);
+  listPanels() (RLS-scoped, empty when signed out), createPanel({name,subdomain,
+  theme}) with validation (subdomain regex, duplicate -> "subdomain taken") and
+  ensureProfile before insert, updatePanelStatus(id,status).
+
+### Files modified (src/components/panels/index.tsx)
+- Imports: useEffect/useCallback; listPanels/createPanel/updatePanelStatus; Panel type.
+- LedgerlineApp: loads real panels on mount (panelList + loadingPanels), refreshPanels();
+  activePanel now typed Panel; handleCreate() creates a real panel, refreshes,
+  and opens the new panel's admin. Passes panels/loading + handlers down.
+- DashboardHome: takes panels+loading props; loading + empty ("Create your first
+  panel") states; renders real panels; static stats zeroed for now.
+- MyPanels: takes panels+loading props; panelStatuses seeded from props via effect;
+  status change persists via updatePanelStatus (optimistic + rollback on error);
+  status lookups fall back to p.status before the effect runs.
+- CreatePanelWizard: onLaunch -> onCreate(input) async; busy + error states;
+  "Launching…"; on success parent navigates (lands in the new panel's admin).
+
+### Result
+Panel owners can now create REAL panels (persisted, RLS-scoped, draft status) and
+open them — PanelAdmin receives a real UUID panel. This unblocks every Phase 4
+module. Mock `panels` constant still used by Billing only.
+
+### Next
+Wire ProvidersTab to real data: a listProviders(panelId) action + pass panel.id
+through PanelAdmin/AdminTabs into ProvidersTab; add-provider form (name/api_url/
+api_key) -> createProvider; per-row Test connection / Fetch balance -> the §1
+actions; loading/error states. Then §2 Service Import & Sync.
+
+### Verify
+Not built (needs npm install + sandbox). After setup + login: Create Panel wizard
+-> should insert a panels row (owner_id = you) and open it; My Panels should list
+it; status dropdown should persist.
+
+---
+
+## Session: Phase 4 §1 — Provider API Management (server layer)
+
+### Date: 2026-07-07
+
+### Files created
+- `src/lib/providers/types.ts` — SMM v2 DTOs (ProviderServiceDTO, Add/Status/
+  MultiStatus/Balance/Refill/Cancel responses, AddOrderInput) + ProviderError.
+- `src/lib/providers/client.ts` (server-only) — generic api/v2 client:
+  callProvider() POSTs form-encoded {key, action, ...}; wrappers fetchServices,
+  addOrder (+drip runs/interval), getStatus, getMultiStatus, refillOrder,
+  cancelOrders, getBalance. Network/HTTP/non-JSON errors → ProviderError.
+- `src/lib/providers/index.ts` (server-only) — getProviderCredentials(id, apiUrl)
+  decrypts key via service-role `get_provider_key` RPC; storeProviderKey via
+  `set_provider_key`. Re-exports types + client.
+- `src/lib/actions/providers.ts` ("use server") — createProvider, updateProvider,
+  deleteProvider (RLS-authorized via user's server client; key set via RPC),
+  testProviderConnection (fetch balance), fetchProviderBalance (caches balance +
+  last_balance_sync on the row), countProviderServices. Result<T> discriminated
+  union; api keys NEVER returned to the client.
+
+### Security model (as built)
+- Authz: mutations/reads go through the user's RLS-scoped server client, so a user
+  can only touch providers on panels they're a member of. Before any service-role
+  key operation, the action first loads the provider via RLS (loadAuthorizedProvider)
+  — that read IS the authz gate.
+- Keys: plaintext api key only ever exists inside server actions / provider client;
+  stored pgcrypto-encrypted; decrypted via service-role RPC using PROVIDER_KEY_SECRET.
+
+### Bridge needed before UI works
+The admin ProvidersTab still renders MOCK panels (PanelAdmin gets a mock `panel`
+with id like "novaboost", not a real UUID). To surface §1 in the UI we need the
+"real-panel bridge": real panel CRUD (create panel -> panels table), list real
+panels, and load a selected real panel into PanelAdmin. That's the next step;
+until then the provider actions are callable but have no real panel_id from the UI.
+
+### Verify
+- Not built (needs npm install + sandbox). The provider client is unit-testable
+  once a real panel + provider row exist and a real provider api key is stored.
+
+---
+
+## Session: Phase 3 — dev admin seed script
+
+### Date: 2026-07-07
+
+User asked whether a login can live in .env.local. Answer: no — Supabase Auth
+users must exist in Supabase. Added a convenience path instead:
+- `scripts/seed-admin.mjs` — reads SEED_ADMIN_EMAIL/PASSWORD/ROLE, creates (or
+  updates) a confirmed auth user via the service-role admin API, sets
+  profiles.role. Idempotent.
+- `package.json` script `seed:admin` = `node --env-file=.env.local scripts/seed-admin.mjs`.
+- `.env.local` — added SEED_ADMIN_EMAIL/PASSWORD/ROLE keys (empty; user fills).
+- `supabase/README.md` — "Getting a login (dev)" section: seed script vs
+  dashboard auto-confirm vs disable email confirmation.
+Note: `.env.local.example` no longer present in the repo (user removed/renamed);
+only `.env.local` is maintained now.
+
+---
+
+## Session: Phase 3 — auth wiring (platform/owner side)
+
+### Date: 2026-07-07
+
+### Files created
+- `src/lib/auth.ts` (server-only) — getUser(), getProfile(), ensureProfile()
+  (insert-if-absent via service role — fallback for the auth.users trigger),
+  hasRole().
+- `src/lib/actions/auth.ts` ("use server") — signInAction, signUpAction
+  (handles email-confirmation-on case → needsConfirmation), signOutAction.
+  (AuthResult type kept non-exported: "use server" files may only export async fns.)
+
+### Files modified
+- `src/components/panels/index.tsx` — AuthScreen now wired to real Supabase:
+  controlled email/password, busy/error/notice states, Enter-to-submit, calls
+  signIn/signUp, on success setWorld("home"), on confirmation shows notice. UI
+  otherwise unchanged. AppTopbar "Log out" calls signOutAction() then
+  setWorld("public"). Added import of the three auth actions.
+- CLAUDE.md — Phase 3 auth marked done (owner side).
+
+### Design notes / boundaries
+- The app is still the client-side preview world-switcher (app/page.tsx), so auth
+  creates real Supabase sessions but doesn't yet GATE anything. Real
+  protected-route redirects come when preview worlds become real routes — a
+  deliberate later step, not done here (per "don't rebuild routes/UI" constraint).
+- Customer storefront auth (CustomerLanding) NOT wired yet: customer accounts are
+  panel-scoped (need panel_id from subdomain routing), so it waits for panel
+  routing. Owner auth is what gates the Phase 4 admin dashboard, so it went first.
+- profiles has no self-insert RLS policy by design; ensureProfile uses the
+  service-role admin client. Works whether or not the auth.users trigger installed.
+
+### Verify
+- Not built (deps: needs `npm install` for @supabase/ssr; sandbox intermittent).
+  After migrations + install: sign up on the "Ledgerline · Login/Signup" world →
+  should create an auth user + profile row and enter the dashboard. If email
+  confirmation is ON in Supabase, expect the "check your inbox" notice.
+
+---
+
+## Session: Phase 3 foundation — Supabase schema, RLS, clients, types
+
+### Date: 2026-07-07
+
+### Decisions locked (from user)
+
+1. Fresh Supabase project (migrations written for them to run).
+2. Provider key storage: **pgcrypto** column encryption.
+3. Cron: **Vercel Cron**.
+4. Customers: **Supabase auth users + `customer_accounts` scoping table**.
+5. Provider API: standard **SMM Panel API v2** (`api/v2?action=...&key=...`).
+
+### Files created
+
+- `supabase/migrations/0001_init.sql` — pgcrypto; enums (user_role, panel_status,
+  provider_status, service_status, markup_type, order_status, customer_status,
+  payment_status, ticket_status, balance_tx_type); tables (profiles, panels,
+  panel_members, customer_accounts, providers, provider_categories, services,
+  orders, order_status_history, balance_transactions, payments, tickets,
+  ticket_messages, faq, audit_logs); indexes; updated_at triggers;
+  handle_new_user() trigger (auto-creates profile on signup);
+  set_provider_key()/get_provider_key() (pgcrypto, secret passed by server);
+  apply_balance_change() (atomic, row-locking, ledger-backed — the ONLY way
+  balance moves).
+- `supabase/migrations/0002_rls.sql` — is_super_admin()/is_panel_member()/
+  owns_customer()/can_admin_customer() helpers (SECURITY DEFINER); RLS enabled on
+  all tables; per-table policies (panel admins full; customers own rows; faq/
+  services customer-read); **column revoke on providers.api_key_enc**; execute
+  grants for set/get_provider_key + apply_balance_change limited to service_role.
+- `src/lib/supabase/client.ts` (browser), `server.ts` (cookies, async in Next 16),
+  `admin.ts` (service-role, `server-only` guard + providerKeySecret()),
+  `middleware.ts` (updateSession helper).
+- `middleware.ts` (root) — session refresh on all non-asset routes.
+- `src/types/db.ts` — row interfaces for every table (ProviderRow intentionally
+  omits api_key_enc); re-exported from `src/types/index.ts`.
+- `supabase/README.md` — how to apply migrations (SQL editor or CLI) + env + security notes.
+
+### Files modified
+
+- `package.json` — added `@supabase/ssr ^0.5.2` (needs `npm install`).
+- `.env.local.example` — added PROVIDER_KEY_SECRET + CRON_SECRET (with generation hints).
+- `CLAUDE.md` — Phase 3 schema/clients/types/RLS marked done; architecture tree updated.
+
+### Hotfix (same session) — migration run errors
+
+User hit `ERROR 42P01: relation "profiles" does not exist` running 0002. Cause:
+0001 rolled back (Supabase SQL editor wraps the script in one txn; the
+`create trigger on auth.users` aborts it because the editor role doesn't own
+auth.users). Fixes to 0001_init.sql:
+- Enums now created in idempotent `do $$ ... exception when duplicate_object`
+  blocks (re-runnable).
+- auth.users trigger wrapped in a guarded `do $$ ... exception` block — on
+  insufficient_privilege it raises a notice and continues instead of aborting
+  the whole migration (profiles then upserted from app code at login).
+- Latent fix: set_provider_key/get_provider_key `search_path` now
+  `public, extensions` (pgcrypto lives in `extensions` on Supabase; otherwise
+  pgp_sym_encrypt/decrypt would be unresolved at call time in Phase 4).
+0002 is unchanged (it failed at its first statement, so nothing partial applied;
+safe to re-run after 0001 succeeds).
+
+### To run (user action)
+
+1. Create a Supabase project. 2. Run `0001_init.sql` then `0002_rls.sql` (SQL editor
+or `supabase db push`). 3. Fill `.env.local` (URL, anon, service role,
+PROVIDER_KEY_SECRET, CRON_SECRET). 4. `npm install` (for @supabase/ssr) then
+`npm run dev` / `npm run build`.
+
+### Not done / next
+
+- Build NOT run (sandbox permission service intermittent; also @supabase/ssr not
+  yet installed locally). User to `npm install` + build at the gate.
+- Next Phase 3 steps: auth wiring (login/register → real Supabase, protected-route
+  redirects in middleware, role gating), then data-access layer to migrate admin/
+  customer UI off mock constants. Then Phase 4 §1 (Providers) begins.
+
+---
+
+## Session: Roadmap reconciliation — SocPanel-style operational admin
+
+### Date: 2026-07-07
+
+### Trigger
+
+User confirmed the product model (Ledgerline = panel maker + admin dashboard,
+bring-your-own provider, does NOT directly sell SMM services) and supplied a
+10-module SocPanel-style admin brief. Task was to check the brief against the
+roadmap and add anything missing.
+
+### Finding
+
+The CORE concept (provider API pulling, order forwarding, order sync) was already
+in the roadmap — Terminology "Provider = bring-your-own", Phase 4 "Provider API
+integration" + "Order synchronization", Phase 3 schema (providers/services/orders).
+BUT the operational detail was under-specified, and one whole module was missing:
+
+- MISSING entirely: **Service Import & Sync** (module 2)
+- Under-specified: provider CRUD / test-connection / fetch-balance / secure
+  server-side key storage; balance transaction ledger; manual payment approval;
+  ticket reply/close/reopen + FAQ CRUD; provider performance analytics
+  (failure rate, profit by provider); cron status-sync job; partial-order refund;
+  staff/manager roles.
+
+### Roadmap changes (CLAUDE.md)
+
+- Phase 3: added the operational tables (providers w/ encrypted api_key, services
+  w/ provider mapping + markup, orders w/ external id + status_history +
+  payload/response, balance_transactions, payments/deposits, faq) and an RLS note
+  that provider api keys are never client-readable.
+- Phase 4: rewritten as "Operational Admin Dashboard (SocPanel-style)" with all
+  10 modules as §1–§10, each broken into concrete tasks. Added the hard constraint
+  that ALL provider API calls are server-side (route handlers / edge functions) so
+  keys never reach the frontend; provider logic isolated in `src/lib/providers/`.
+- Phase 5: noted payment-gateway integration wires into Phase 4 §7.
+
+### Critical dependency / sequencing
+
+None of the 10 modules can be built for real on the current mock-data preview:
+- They need a database + auth (Phase 3 / Supabase) — providers, services, orders,
+  balances, tickets are all persisted, per-panel, RLS-scoped.
+- The "never expose API keys" constraint MANDATES server-side provider calls
+  (Next.js route handlers or Supabase edge functions) — can't be faithfully done
+  in the mock frontend.
+
+So the honest step-by-step order is: **Phase 3 (Supabase foundation) FIRST**, then
+Phase 4 modules in order (§1 Providers → §2 Import/Sync → §3 Services → §4 Order
+automation → §5 Orders page → §6 Users/balance → §7 Payments → §8 Support/FAQ →
+§9 Stats → §10 Settings). The preview admin tabs (src/components/panels/admin/)
+become the UI skeleton these modules fill in.
+
+User chose "just the plan for now" → wrote detailed **PHASE_3_4_PLAN.md** at
+project root (schema table-by-table, RLS notes, src/lib/providers + app/api file
+layout, §1–§10 build order, and 5 open decisions: Supabase project creds, key
+encryption method, cron choice, customer auth model, provider API contract).
+No code written. Awaiting answers to those 5 decisions before Phase 3 build.
+
+---
+
+## Session: Phase 2 — PanelAdmin refactor + shared types + dead-code removal
+
+### Date: 2026-07-07
+
+### Summary
+
+Broke the `src/components/panels/index.tsx` monolith apart. It went from
+**2,250 → ~1,070 lines**. The 670-line `PanelAdmin` component and its 17 tabs are
+now a self-contained module, shared TS types are extracted, and the deprecated
+`LivePanel`/`LivePanelContent` dead code (superseded by the Phase 1 CustomerPanel)
+is deleted.
+
+### Files Created
+
+1. `src/types/index.ts` — `Panel` and `CustomerRow` interfaces; re-exports
+   `PanelStatus`. (Order/Service/Provider/Ticket types still to add.)
+2. `src/components/panels/admin/PanelAdmin.tsx` — the admin shell: header,
+   tab bar (TABS array), status/expandedOrder/selectedCustomer state, renders the
+   active tab + CustomerDrawer. `panel` prop is now typed `Panel` (was `any`).
+3. `src/components/panels/admin/AdminTabs.tsx` — 17 focused, independently
+   editable tab components (OverviewTab, StatusTab, BrandingTab, DomainTab,
+   ProvidersTab, ServicesTab, CategoriesTab, FloorTab, OrdersTab, CustomersTab,
+   PaymentsTab, CustomerApiTab, RiskTab, NotificationsTab, SupportTab,
+   AutomationTab, PromotionsTab). Stateful tabs receive props from the shell.
+4. `src/components/panels/admin/CustomerDrawer.tsx` — moved out of index.tsx.
+5. `src/components/panels/admin/index.ts` — barrel (PanelAdmin, CustomerDrawer).
+
+### Files Modified
+
+- `src/components/panels/index.tsx`:
+  - Removed `PanelAdmin` (~670 lines), `CustomerDrawer`, `CustomerRow` (moved to
+    admin/ + types/); added `import { PanelAdmin } from "./admin"`
+  - Removed dead `FloorLedgerMini` + `LivePanelContent` + `LivePanel` (~450 lines)
+  - Pruned 9 now-unused data imports (PANEL_STATUSES, revenueData, floorServices,
+    recentOrders, liveServices, providersData, categoriesData, orderDetailExtras,
+    customerProfileExtra). Icon imports left as-is (unused ones are harmless
+    lint warnings, and removing a still-used one would be a real error — deferred
+    to a lint pass at build time).
+  - `LedgerlineApp` still renders `<PanelAdmin panel={activePanel} setWorld=... />`
+    exactly as before — behavior unchanged.
+
+### Verification note
+
+Could not run `npm run build` / `tsc --noEmit` — the coding-agent sandbox's
+permission service was intermittently down again this session (echo/one-off cmds
+passed; longer commands were blocked). The refactor was done with exact-match
+edits (each large deletion only succeeded because old_string matched the original
+verbatim, so untouched code is byte-identical) and manually cross-checked: every
+icon/data/type symbol used in the new admin/ files is imported. Run
+`npm run build` at the phase gate to confirm.
+
+### Notes for Next Session
+
+- Add remaining shared types (Order, Service, Provider, Ticket) to src/types
+- Optional: prune unused lucide icon imports in panels/index.tsx via `next lint`
+- Then Phase 3: Supabase (auth, schema, RLS, realtime)
+
+---
+
+## Session: Phase 1 Customer Experience Redesign — IMPLEMENTED
+
+### Date: 2026-07-07
+
+### Summary
+
+Implemented the full Phase 1 customer experience redesign as a new, self-contained
+component tree in `src/components/customer/`, completely separate from the Panel
+Owner dashboard. The world switcher's "Created panel · Customer-facing (NovaBoost)"
+view now renders the new `CustomerPanel` instead of the legacy `LivePanel`.
+
+### Files Created
+
+1. `src/components/customer/PlatformIcons.tsx`
+   - Official monochrome brand glyphs as inline SVGs (Instagram, TikTok, YouTube,
+     X, Facebook, Telegram, Spotify), fill=currentColor, 24x24 viewBox
+   - `PlatformGlyph` (raw icon) and `PlatformButton` (soft rounded-square card,
+     active = violet tint; large touch targets)
+2. `src/components/customer/CustomerLanding.tsx`
+   - White-label per-panel landing: Create Account / Log In only, NO Ledgerline
+     branding (removed "powered by Ledgerline" badge)
+   - Value props, monochrome platform strip, inactive-mode banner
+3. `src/components/customer/NewOrder.tsx`
+   - Progressive form: Platform (icon buttons) → Search → Category → Service →
+     Link → Quantity → Amount → Create Order
+   - Smart search: token-based match across platform label + platform aliases +
+     category + service name + service ID + service aliases
+     ("twitter views" matches "X Views" via platform alias)
+   - Category disabled until platform; service disabled until category; changing
+     platform resets all dependent selections
+   - Automatic "★ Favorites" category (appears when platform has favorited services)
+   - Service preview card: ID, min/max, start time, completion, refill, cancel,
+     description + favorite star toggle
+   - Quantity: number input ONLY (slider removed), min/max validation
+   - Sticky order summary on desktop (lg:sticky lg:top-20)
+   - Empty state guides user to platform buttons or search
+4. `src/components/customer/CustomerDashboard.tsx`
+   - Nav: Dashboard, New Order, Orders, Wallet, Tickets, API, Profile
+     (NO Login/Register in nav — auth lives only on the landing page)
+   - Header: wallet balance + Add Funds shortcut always visible
+   - Mobile: hamburger menu with large touch targets
+   - Dashboard: stat cards (wallet, pending, completed today, total), Favorites
+     quick-order cards, Recently Ordered, recent orders w/ "View all"
+   - Orders: full history, Reorder button on completed orders (prefills form)
+   - Quick Order flow: any service card click → New Order page pre-filled
+   - Wallet: balance, top-up methods, deposit history
+   - Tickets, API (key + endpoint docs, inactive-mode note), Profile
+5. `src/components/customer/index.tsx`
+   - `CustomerPanel`: preview status bar (live/inactive/suspended/maintenance/
+     draft) + guest/logged-in toggle; offline screens; wires landing → dashboard
+
+### Files Modified
+
+- `src/data/constants.ts` — added PlatformKey, PLATFORMS (with aliases),
+  CustomerService interface, customerServices (19 services across 7 platforms,
+  each with id/category/min/max/startTime/completion/refill/cancel/description/
+  aliases), CustomerOrder + customerOrders, customerWallet, customerTickets,
+  initialFavoriteIds, recentServiceIds
+- `app/page.tsx` — "live" world now renders CustomerPanel (from
+  src/components/customer) instead of legacy LivePanel
+- `CLAUDE.md` — Phase 1 marked implemented, architecture tree updated
+
+### Deprecated (not yet removed)
+
+- `LivePanel` / `LivePanelContent` / `FloorLedgerMini` in
+  `src/components/panels/index.tsx` — no longer routed from app/page.tsx.
+  Remove during the PanelAdmin refactor to keep this change low-risk.
+
+### Follow-up (same day): preview status bar gated behind prop
+
+User confirmed the "Preview Panel Status" switcher bar must never appear on real
+customer panels. Made this structural: `CustomerPanel` now takes
+`previewControls?: boolean` (default **false**) and only renders the status bar
+(and its top padding) when true. Only `app/page.tsx` (the design preview world
+switcher) passes `previewControls`. Real customer routes (Phase 3+) render
+`<CustomerPanel demoStatus={panel.status} />` and customers only ever see status
+*effects*: offline screens for suspended/maintenance/draft, gold paused banner
+for inactive, nothing extra when live.
+
+### Follow-up (same day): customer drip feed toggle
+
+- Added `drip: boolean` to `CustomerService` and set it on all 19 mock services
+  (views/likes/plays-type services mostly true; follower-type mostly false)
+- NewOrder form: services with drip support show a "Drip feed" toggle below
+  quantity — ALWAYS OFF by default, resets on service/platform change
+- When enabled: Runs + Interval (min) number inputs (defaults 5 runs / 30 min)
+  with helper text clarifying total quantity is SPLIT across runs (not
+  multiplied — avoids surprise charges)
+- Service preview card now shows a Drip feed availability row (like refill/
+  cancel); order summary shows "N runs · every M min" line when drip is on
+- Toggle disabled (like other inputs) when panel is in Inactive Mode
+- Reused the display `Toggle` from src/components/ui inside an aria-pressed
+  button
+
+### Follow-up (same day): profile management, API docs samples, landing selling points
+
+**Profile page rebuilt** (CustomerDashboard.tsx) — separate cards for:
+- Edit username (save + confirmation)
+- Change email (new email + current password, "confirmation sent" feedback)
+- Change password (current / new / confirm)
+- API key management: view/copy + "Generate new key" (mock regen creates a new
+  nb_live_ key in state, shared with the API page; warns old key is invalidated)
+- Log out card retained
+
+**API page rebuilt** as `src/components/customer/ApiDocs.tsx` — modeled on
+standard SMM panel API v2 docs (user-provided reference screenshot):
+- Tabs: Service list, Create, Status, Multiple status, Refill, Balance, Cancel
+- Each tab: method chip (GET/POST), description, copyable request sample URL,
+  copyable JSON response sample with lightweight syntax highlighting
+  (keys default, strings green, numbers violet, booleans gold)
+- Create tab documents optional drip params (&runs=&interval=)
+- Shows live API key from dashboard state; inactive-mode note preserved
+
+**Landing page selling sections** (CustomerLanding.tsx), white-label, in-house
+design language (user referenced a BulkFollows-style landing):
+- Stats strip (orders delivered, services, avg start, uptime)
+- "Services for every platform" showcase — reuses monochrome PlatformButton
+  tabs, lists top 4 services of selected platform w/ price + min + start time,
+  CTA to register
+- Benefits grid (secure payments, fast delivery, real-time tracking, 24/7
+  support)
+- FAQ accordion (5 items, first open by default)
+- Final CTA band; header/CTA buttons smooth-scroll to the auth card (#nb-auth)
+
+### Follow-up (same day): API key masking + input responsiveness rule
+
+- API keys are now masked everywhere on the customer side:
+  `nb_live_886c0ba9f8662839976f69bd` → `nb_live_886**********839976f69bd`.
+  `maskApiKey()` exported from ApiDocs.tsx, used in the API page and Profile
+  card. Copy buttons still copy the FULL key (integrations need it) — only the
+  display is masked.
+- New hard rule (also in CLAUDE.md + Claude memory): inputs must echo
+  keystrokes instantly, search results update on the same keystroke. Current
+  implementation is already synchronous in-memory (controlled input + useMemo,
+  no debounce) — any perceived lag is Next.js dev-mode overhead, production
+  build is instant. For Phase 3+: load/cache catalog upfront, filter
+  client-side, debounce network fetches only, never the input echo.
+- Search improvement: numeric queries rank service-ID **prefix** matches first
+  (typing "21" lists 21xx services at the top).
+
+### Follow-up (same day): API key generation moved Profile → API page
+
+Redundancy fix per user: the API key card (masked key display, copy, "Generate
+new key" button + feedback) now lives ONLY in the API page's "API access" card
+(ApiDocs.tsx, via onRegenerate/keyRegenerated props). Profile keeps username /
+email / password / logout. Key state still lives in CustomerDashboard.
+
+**Workflow note:** user runs `npm run dev` locally and will run `npm run build`
+themselves at each phase gate after we confirm the phase is complete. Claude
+should NOT run builds after every change.
+
+### Build Status
+
+- ⚠️ `npm run build` NOT yet run for this change — the coding-agent sandbox's
+  permission service was down at the end of the session, blocking all shell
+  commands. Code was statically reviewed (imports, path aliases, escaped JSX
+  entities, strict-mode typing). Run `npm run build` first thing next session.
+
+### Notes for Next Session
+
+- Favorites/recents are component state seeded from mock constants — becomes
+  Supabase-backed in Phase 3
+- NewOrder exposes onOrderPlaced callback, unused for now — hook for Phase 4
+  order processing
+- Remaining Phase 2 work: break PanelAdmin (2,250-line panels/index.tsx) into
+  tab components; extract shared TS types to src/types/
+
+---
+
+## Session: Customer Dashboard UX Redesign Planning
+
+### Summary
+
+Planned a complete redesign of the customer-facing experience before Supabase integration. The goal is to separate the customer dashboard from the Panel Owner dashboard while creating a faster, cleaner, and more intuitive ordering experience than traditional SMM panels.
+
+### Planned Changes
+
+#### Customer Dashboard
+
+- Separate customer dashboard from Panel Owner dashboard.
+- Customer Home becomes Dashboard after login.
+- Remove Login/Register from dashboard navigation.
+
+#### Landing Pages
+
+- Ledgerline landing page remains dedicated to marketing the platform.
+- Every SMM panel receives its own customer landing page for Create Account and Log In.
+
+#### Platform Organization
+
+New ordering flow:
+
+Platform → Category → Service
+
+- Replace platform dropdown with official platform icon buttons.
+- Use official monochrome brand glyphs (SVGs).
+- Do not use emojis or colorful logos.
+- Display icons inside soft, rounded square cards.
+- Desktop displays all platform icons in one horizontal row whenever possible.
+- Mobile supports horizontal scrolling for platform icons.
+- Selecting a platform filters the available Categories and Services.
+
+#### Order Structure
+
+Platform → Search → Category → Service → Service ID → Quantity → Amount → Create Order
+
+#### Smart Search
+
+Search across:
+
+- Platform
+- Category
+- Service Name
+- Service ID
+- Aliases / Keywords
+
+Search results should intelligently return related services even when terminology differs (e.g. Twitter Views → X Views).
+
+#### Progressive Order Form
+
+- Category disabled until Platform is selected.
+- Service disabled until Category is selected.
+- Service information updates automatically.
+- Changing Platform resets dependent selections.
+
+#### Service Preview
+
+Display:
+
+- Service Name
+- Service ID
+- Minimum
+- Maximum
+- Estimated Start Time
+- Estimated Completion
+- Refill
+- Cancel
+- Description
+
+#### New Customer Features
+
+Planned:
+
+- Favorite Services
+- Automatic Favorites category
+- Recently Ordered
+- Pinned Services / Quick Order
+- Reorder button
+- Sticky Order Summary
+- Wallet always visible in header
+- Better empty states
+
+#### Mobile Improvements
+
+- Hamburger navigation
+- Responsive order form
+- Remove quantity slider completely
+
+#### UI Direction
+
+Adopt a cleaner, modern interface inspired by productivity applications rather than traditional SMM panels.
+
+Platform selection should always use the official monochrome brand glyphs (SVGs) inside soft, rounded square cards to maintain a premium, consistent visual language across desktop and mobile.
+
+### Status
+
+Planning completed.
+
+Implementation will begin before Supabase integration so the production foundation reflects the finalized customer experience.
+
+---
+
+## Session: Initial Setup & Project Foundation
+
+### Date: 2026-07-07
+
+### Summary
+
+Completed initial project setup from scratch. The Ledgerline SMM Panel Maker is now fully functional with the preview accessible at http://localhost:3000.
+
+### What Was Preserved
+
+- **panel-preview.jsx** — The original single-file design reference, gitignored as design source of truth
+- **All existing code and functionality** from the previous session
+
+### What Was Created
+
+1. **package.json** — Complete dependencies with Next.js 16.2.10, React 19.2.7, lucide-react, recharts, Supabase
+2. **app/layout.tsx** — Root layout with Google Fonts (Fraunces, Inter, IBM Plex Mono)
+3. **app/page.tsx** — Main page wiring in PanelPreview with "use client" directive
+4. **app/globals.css** — Tailwind CSS + custom design tokens
+5. **tailwind.config.ts** — Tailwind configuration with custom colors and fonts
+6. **tsconfig.json** — TypeScript configuration
+7. **next.config.js** — Next.js configuration
+8. **CLAUDE.md** — Comprehensive project documentation
+9. **CLAUDE_PROGRESS.txt** — Local progress tracking file
+10. **.gitignore** — Git ignore with local files excluded
+
+### Project Structure
+
+```
+ledgerline/
+├── app/
+│   ├── page.tsx           # Main page — Panel Preview
+│   ├── layout.tsx         # Root layout with fonts
+│   └── globals.css        # Tailwind + design tokens
+├── src/                   # (ready for future refactoring)
+├── panel-preview.jsx      # Original design reference (gitignored)
+├── public/                # Static assets
+├── package.json
+├── tailwind.config.ts
+├── next.config.js
+├── CLAUDE.md
+└── CLAUDE_PROGRESS.txt    # Local (gitignored)
+```
+
+### Dependencies Installed
+
+- **next**: 16.2.10 (upgraded from 14.x for security)
+- **react**: 19.2.7 (upgraded from 18.x)
+- **react-dom**: 19.2.7
+- **lucide-react**: ^0.400.0
+- **recharts**: ^2.12.0
+- **@supabase/supabase-js**: ^2.45.0
+- **tailwindcss**: ^3.4.4
+- **autoprefixer**: ^10.4.19
+- **postcss**: ^8.4.38
+- **typescript**: ^5.5.0
+- **eslint**: ^9.17.0
+- **eslint-config-next**: 16.2.10
+- **@types/react**: 19.2.17
+- **@types/react-dom**: 19.2.3
+- **@types/node**: ^20.14.0
+
+### Build Status
+
+- ✅ `npm run build` — Compiles successfully
+- ✅ `npm run start` — Production server running on http://localhost:3000
+- ✅ TypeScript — Zero errors
+- ✅ All imports resolved
+
+### Security Upgrade (2026-07-07)
+
+**Next.js 14.x → 16.2.10** (React 18.x → 19.2.7)
+
+Next.js 14.x stopped receiving security patches. Vercel's May 2026 advisory cluster (DoS, SSRF via WebSocket upgrades, cache poisoning, XSS via CSP nonces, middleware bypass) only patches 15.5.18+ and 16.2.6+. ESLint also bumped to v9.17.0 to resolve peer dependency conflict.
+
+### Errors Fixed
+
+1. **ESLint peer dependency conflict**: `eslint-config-next@16` requires `eslint@>=9`, project had `eslint@^8.57.0`. Fixed by bumping eslint to ^9.17.0.
+2. **Port 3000 already in use**: Multiple node processes were running. Force killed and restarted cleanly.
+3. **Google Fonts network restriction**: In sandbox environment, fonts.googleapis.com is blocked. Verified as environment-only issue, not code bug. Production deployment will work fine.
+
+### Current Status
+
+- ✅ Preview is active at http://localhost:3000
+- ✅ Panel Preview world switcher working (Public/Ledgerline/Admin views)
+- ✅ All 5 panel statuses (Draft, Live, Inactive, Suspended, Maintenance)
+- ✅ Super Admin view functional
+- ✅ Customer-facing live panel with status-based behavior
+
+---
+
+## Full Roadmap
+
+### Phase 1: Customer Experience Redesign (Pending Implementation)
+
+**Objective**: Redesign the customer-facing experience to be significantly simpler and faster than traditional SMM panels by separating the customer dashboard from the Panel Owner dashboard and reducing the number of steps required to place repeat orders.
+
+#### Customer Dashboard
+- [ ] Separate customer dashboard from Panel Owner dashboard
+- [ ] Customers only access Dashboard, Orders, Wallet, Tickets, API, Profile
+- [ ] Login/Register only on panel's public landing page
+- [ ] Dashboard is default page after authentication
+
+#### Landing Pages
+- [ ] Ledgerline landing page dedicated to selling the platform
+- [ ] Every panel has its own independent customer landing page
+
+#### Platform Organization
+- [ ] Services grouped by Social Platform first
+- [ ] **Platform → Category → Service** flow
+- [ ] Platform selection uses official monochrome brand icon buttons (SVGs)
+- [ ] No emojis or colorful logos
+- [ ] Soft, rounded square cards for platform icons
+- [ ] Desktop: all platform icons in one horizontal row
+- [ ] Mobile: horizontal scrolling with large touch targets
+
+#### Order Structure
+- [ ] Platform (icon buttons)
+- [ ] Search
+- [ ] Category
+- [ ] Service
+- [ ] Service ID
+- [ ] Quantity
+- [ ] Amount
+- [ ] Create Order
+
+#### Smart Search
+- [ ] Search across: Platform, Category, Service Name, Service ID, Aliases
+- [ ] Intelligent results for terminology variations (Twitter Views → X Views)
+
+#### Progressive Form
+- [ ] Category disabled until Platform selected
+- [ ] Service disabled until Category selected
+- [ ] Service details update automatically
+- [ ] Changing Platform resets dependent selections
+
+#### Service Preview
+- [ ] Service Name, Service ID, Minimum, Maximum
+- [ ] Estimated Start Time, Estimated Completion
+- [ ] Refill Availability, Cancel Availability
+- [ ] Description
+
+#### Favorites & Quick Access
+- [ ] Favorite Service feature
+- [ ] Automatic Favorites category
+- [ ] Recently Ordered section
+- [ ] Pinned Services / Quick Order
+- [ ] Reorder button on completed orders
+
+#### Dashboard Improvements
+- [ ] Wallet, Recent Orders, Pending Orders, Completed Today
+- [ ] Favorite Services, Quick Order
+- [ ] Wallet balance always visible in header
+- [ ] Add Funds shortcut in header
+
+#### UX Improvements
+- [ ] Remove all quantity sliders (number/text input only)
+- [ ] Remove unnecessary sliding panels
+- [ ] Mobile hamburger navigation
+- [ ] Sticky Order Summary on desktop
+- [ ] Helpful empty states with actionable guidance
+- [ ] Minimize clicks throughout experience
+- [ ] Optimize for repeat orders, not just first-time users
+
+### Phase 2: Production Foundation
+- [ ] Role-based layouts for panel owner, customer, and super admin
+- [ ] Protected routes with authentication
+- [ ] Loading skeletons and error boundaries
+- [ ] Empty states with helpful CTAs
+- [ ] Component refactoring — Break into smaller files in src/components/
+- [ ] Mock data extraction to src/data/
+- [ ] Utility functions to src/lib/
+
+### Phase 3: Supabase Integration
+- [ ] Authentication with Supabase Auth
+- [ ] User roles: Super Admin, Panel Owner, Customer
+- [ ] Database schema for panels, customers, wallets, orders, providers, services, tickets, audit logs
+- [ ] Row Level Security (RLS) policies
+- [ ] Real-time subscriptions for order updates
+
+### Phase 4: Business Logic
+- [ ] Wallet deposits and withdrawals
+- [ ] Order processing flow
+- [ ] Provider API integration with real API endpoints
+- [ ] Order synchronization between panel and provider
+- [ ] Refund processing
+- [ ] Refill and cancel request handling
+- [ ] Retry/resend logic for failed orders
+
+### Phase 5: Platform Features
+- [ ] Payment gateway integration (Cryptomus, Stripe, PayPal)
+- [ ] Webhook handling for payment confirmations
+- [ ] Customer-facing API with rate limiting
+- [ ] Custom domain setup with SSL
+- [ ] DNS verification flow
+- [ ] SSL management
+- [ ] Rate limiting
+
+### Phase 6: Testing & Deployment
+- [ ] Permission and access control testing
+- [ ] Customer privacy verification
+- [ ] Payment flow testing
+- [ ] Provider failure handling
+- [ ] Production deployment to Vercel
+- [ ] Production Supabase configuration
+- [ ] Launch checklist and documentation
+
+---
+
+---
+
+## Implementation Recommendation (2026-07-07)
+
+### Decision: Start with Phase 2 Refactoring Before Phase 1
+
+**Reasoning:**
+- Current `panel-preview.jsx` is 1,877 lines — implementing Phase 1 on top of this monolith would make it worse
+- Better foundation = faster Phase 1 implementation
+- The preview is already functional — no pressure to rush
+- Logical dependency: Phase 1 changes are easier in a well-organized codebase
+
+### Recommended Implementation Order
+
+| Step | Task | Priority | Why |
+|------|------|----------|-----|
+| 1 | **Extract TypeScript types** → `src/types/index.ts` | High | Interfaces for Panel, Customer, Order, Service, etc. |
+| 2 | **Extract mock data** → `src/data/constants.ts` | High | Removes ~200 lines of data from components |
+| 3 | **Break PanelAdmin into tab components** → `src/components/panels/admin/` | High | Each tab independently editable |
+| 4 | **Build reusable UI components** → `src/components/ui/` | Medium | Card, Toggle, StatusBadge, StatCard, etc. |
+| 5 | **Implement Phase 1 customer redesign** | After refactor | Clean codebase, easier changes |
+
+### Alternative: Start Phase 1 Directly on LivePanel
+
+If visible customer UI progress is preferred:
+- Implement Phase 1 directly on `LivePanelContent` component (~250 lines)
+- Leave PanelAdmin as-is for now
+- Faster visible improvements
+
+### Next Recommended Steps
+
+1. **Extract TypeScript types** — Create `src/types/index.ts` with interfaces
+2. **Extract mock data** — Move to `src/data/constants.ts` and `src/data/mock.ts`
+3. **Break PanelAdmin into tab components** — `src/components/panels/admin/`
+4. **Create reusable UI components** — `src/components/ui/`
+5. **Set up Supabase** — Create database schema and authentication
+
+---
+
+*Last updated: 2026-07-07*
+
+Note: Delete only once saved in_progress
+1: Every time relevant, update the package.json to a tag relevant to the fix.
+2: Add a commit point, whenever you think that it's time to commit, tell me before we continue to the next agenda.
+3: Once commit is needed, give me the exact command including the tag, then when we push, also give the command, that include the tag.
+4: See if you can also add an email forwarder using resend webhook, give me exact instruction on how to get the webhook, the proper endpoint link.
+5: Include binance pay (binance merchant) in the payments. The reason why I needed to register my business was because of binance merchant too.
+6: This is an update: I change the cron route to supabase, so don't add back the cron route in vercel.json (0006 and 0007 sql added)

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Sparkles, Sliders, Tag,
@@ -44,6 +44,29 @@ import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
    Shared state (status, expanded order, selected customer)
    lives in the PanelAdmin shell and is passed in as props.
    ========================================================= */
+
+function getAdminCacheKey(panelId: string, section: string) {
+  return `innvil-admin:${panelId}:${section}`;
+}
+
+function readAdminCache<T>(panelId: string, section: string): T | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(getAdminCacheKey(panelId, section));
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAdminCache<T>(panelId: string, section: string, value: T) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(getAdminCacheKey(panelId, section), JSON.stringify(value));
+  } catch {
+    // ignore storage failures
+  }
+}
 
 export function OverviewTab({ panel }: { panel: Panel }) {
   return (
@@ -305,19 +328,33 @@ const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 
 export function ProvidersTab({ panelId }: { panelId: string }) {
   const realPanel = isUuid(panelId);
-  const [providers, setProviders] = useState<ProviderRow[] | null>(null);
+  const [providers, setProviders] = useState<ProviderRow[] | null>(() =>
+    realPanel ? readAdminCache<ProviderRow[]>(panelId, "providers") : []
+  );
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", apiUrl: "", apiKey: "", currency: "USD" });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [rows, setRows] = useState<Record<string, RowState>>({});
+  const providersRef = useRef<ProviderRow[] | null>(providers);
+
+  useEffect(() => {
+    providersRef.current = providers;
+  }, [providers]);
 
   const refresh = useCallback(async () => {
     if (!realPanel) {
       setProviders([]);
+      writeAdminCache(panelId, "providers", []);
       return;
     }
-    setProviders(await listProviders(panelId));
+
+    const cached = providersRef.current ?? readAdminCache<ProviderRow[]>(panelId, "providers");
+    if (cached) setProviders(cached);
+
+    const next = await listProviders(panelId);
+    setProviders(next);
+    writeAdminCache(panelId, "providers", next);
   }, [panelId, realPanel]);
 
   useEffect(() => {
@@ -499,8 +536,12 @@ type EditForm = { name: string; description: string; markupKind: MarkupKind; mar
 
 export function ServicesTab({ panelId }: { panelId: string }) {
   const realPanel = isUuid(panelId);
-  const [catalog, setCatalog] = useState<CatalogPlatform[] | null>(null);
-  const [providers, setProviders] = useState<ProviderRow[]>([]);
+  const [catalog, setCatalog] = useState<CatalogPlatform[] | null>(() =>
+    realPanel ? readAdminCache<CatalogPlatform[]>(panelId, "services-catalog") : []
+  );
+  const [providers, setProviders] = useState<ProviderRow[]>(() =>
+    realPanel ? readAdminCache<ProviderRow[]>(panelId, "services-providers") ?? [] : []
+  );
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -525,14 +566,37 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const [markupKind, setMarkupKind] = useState<MarkupKind>("percent");
   const [markupValue, setMarkupValue] = useState("20");
   const [search, setSearch] = useState("");
+  const catalogRef = useRef<CatalogPlatform[] | null>(catalog);
+  const providersRef = useRef<ProviderRow[]>(providers);
+
+  useEffect(() => { catalogRef.current = catalog; }, [catalog]);
+  useEffect(() => { providersRef.current = providers; }, [providers]);
 
   const refresh = useCallback(async () => {
-    if (!realPanel) { setCatalog([]); return; }
-    setCatalog(await listCatalog(panelId));
+    if (!realPanel) {
+      setCatalog([]);
+      writeAdminCache(panelId, "services-catalog", []);
+      return;
+    }
+
+    const cached = catalogRef.current ?? readAdminCache<CatalogPlatform[]>(panelId, "services-catalog");
+    if (cached) setCatalog(cached);
+
+    const next = await listCatalog(panelId);
+    setCatalog(next);
+    writeAdminCache(panelId, "services-catalog", next);
   }, [panelId, realPanel]);
 
   useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => { if (realPanel) listProviders(panelId).then(setProviders); }, [panelId, realPanel]);
+  useEffect(() => {
+    if (!realPanel) return;
+    const cached = providersRef.current.length > 0 ? providersRef.current : readAdminCache<ProviderRow[]>(panelId, "services-providers") ?? [];
+    if (cached.length > 0) setProviders(cached);
+    listProviders(panelId).then((next) => {
+      setProviders(next);
+      writeAdminCache(panelId, "services-providers", next);
+    });
+  }, [panelId, realPanel]);
 
   const loadCatalog = async (provId: string) => {
     setImpProvider(provId);
@@ -1133,16 +1197,31 @@ const CUSTOMER_STATUS_TONE: Record<string, string> = {
 
 export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow) => void }) {
   const realPanel = isUuid(panel.id);
-  const [rows, setRows] = useState<PanelCustomerVM[] | null>(null);
+  const [rows, setRows] = useState<PanelCustomerVM[] | null>(() =>
+    realPanel ? readAdminCache<PanelCustomerVM[]>(panel.id, "customers") : []
+  );
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
+  const rowsRef = useRef<PanelCustomerVM[] | null>(rows);
+
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
 
   const refresh = useCallback(async () => {
-    if (!realPanel) { setRows([]); return; }
-    setRows(await listPanelCustomers(panel.id));
+    if (!realPanel) {
+      setRows([]);
+      writeAdminCache(panel.id, "customers", []);
+      return;
+    }
+
+    const cached = rowsRef.current ?? readAdminCache<PanelCustomerVM[]>(panel.id, "customers");
+    if (cached) setRows(cached);
+
+    const next = await listPanelCustomers(panel.id);
+    setRows(next);
+    writeAdminCache(panel.id, "customers", next);
   }, [panel.id, realPanel]);
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -1256,16 +1335,32 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
 
 export function PaymentsTab({ panelId }: { panelId: string }) {
   const realPanel = isUuid(panelId);
-  const [meta, setMeta] = useState<PaymentsMeta | null>(null);
+  const [meta, setMeta] = useState<PaymentsMeta | null>(() =>
+    realPanel ? readAdminCache<PaymentsMeta>(panelId, "payments") : { catalog: [], fields: {}, connected: [] }
+  );
   const [openId, setOpenId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const metaRef = useRef<PaymentsMeta | null>(meta);
+
+  useEffect(() => { metaRef.current = meta; }, [meta]);
 
   const refresh = useCallback(async () => {
-    if (!realPanel) { setMeta({ catalog: [], fields: {}, connected: [] }); return; }
-    setMeta(await getPaymentsMeta(panelId));
+    if (!realPanel) {
+      const emptyMeta = { catalog: [], fields: {}, connected: [] };
+      setMeta(emptyMeta);
+      writeAdminCache(panelId, "payments", emptyMeta);
+      return;
+    }
+
+    const cached = metaRef.current ?? readAdminCache<PaymentsMeta>(panelId, "payments");
+    if (cached) setMeta(cached);
+
+    const next = await getPaymentsMeta(panelId);
+    setMeta(next);
+    writeAdminCache(panelId, "payments", next);
   }, [panelId, realPanel]);
   useEffect(() => { refresh(); }, [refresh]);
 

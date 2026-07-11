@@ -52,7 +52,7 @@ export interface StorefrontService {
 type ServiceJoin = Pick<
   ServiceRow,
   "id" | "local_id" | "name" | "platform" | "sell_rate" | "min" | "max" | "description"
-> & { provider_categories: { name: string } | null };
+> & { provider_categories: Array<{ name: string | null }> | null };
 
 /** Active services for a panel's storefront (customer-safe fields only). */
 export async function getStorefrontServices(panelId: string): Promise<StorefrontService[]> {
@@ -65,12 +65,12 @@ export async function getStorefrontServices(panelId: string): Promise<Storefront
     .order("sort_order", { ascending: true })
     .order("name", { ascending: true });
 
-  return ((data as ServiceJoin[]) ?? []).map((r) => ({
+  return ((data as ServiceJoin[] | null) ?? []).map((r) => ({
     id: r.id,
     localId: r.local_id,
     name: r.name,
     platform: r.platform,
-    category: r.provider_categories?.name ?? null,
+    category: r.provider_categories?.[0]?.name ?? null,
     price: Number(r.sell_rate),
     min: r.min,
     max: r.max,
