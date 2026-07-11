@@ -16,6 +16,16 @@ export interface PublicPanel {
   customDomain: string | null;
   status: PanelStatus;
   theme: string | null;
+  currency: string;
+}
+
+/** The panel's operating currency (from settings; default USD). */
+function panelCurrency(settings: unknown): string {
+  if (settings && typeof settings === "object") {
+    const c = (settings as Record<string, unknown>).currency;
+    if (typeof c === "string" && c) return c.toUpperCase();
+  }
+  return "USD";
 }
 
 /** Resolve a panel by its subdomain (case-insensitive). */
@@ -23,7 +33,7 @@ export async function getPublicPanel(subdomain: string): Promise<PublicPanel | n
   const admin = createAdminClient();
   const { data } = await admin
     .from("panels")
-    .select("id, name, subdomain, custom_domain, status, theme")
+    .select("id, name, subdomain, custom_domain, status, theme, settings")
     .ilike("subdomain", subdomain)
     .maybeSingle();
   if (!data) return null;
@@ -34,7 +44,32 @@ export async function getPublicPanel(subdomain: string): Promise<PublicPanel | n
     customDomain: data.custom_domain,
     status: data.status,
     theme: data.theme,
+    currency: panelCurrency(data.settings),
   };
+}
+
+/** Payment methods a panel has connected (public — id/label/category only). */
+export interface PublicPaymentMethod {
+  id: string; // gateway id
+  label: string;
+  category: string; // "crypto" | "card" | "ewallet" | "bank"
+}
+
+export async function getPanelPaymentMethods(panelId: string): Promise<PublicPaymentMethod[]> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("panel_payment_gateways")
+    .select("gateway, status")
+    .eq("panel_id", panelId)
+    .eq("status", "active");
+  const { GATEWAY_CATALOG } = await import("@/src/lib/payments/adapters");
+  const byId = new Map(GATEWAY_CATALOG.map((c) => [c.id, c]));
+  return (data ?? [])
+    .flatMap((r) => {
+      const cat = byId.get(r.gateway as string);
+      if (!cat) return [];
+      return [{ id: cat.id, label: cat.label, category: cat.category } satisfies PublicPaymentMethod];
+    });
 }
 
 export interface StorefrontService {

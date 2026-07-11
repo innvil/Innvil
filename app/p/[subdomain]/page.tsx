@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Lock, Wrench, FileText } from "lucide-react";
-import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms } from "@/src/lib/actions/storefront";
+import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
 import { listCustomerOrders } from "@/src/lib/actions/orders";
 import { listDeposits } from "@/src/lib/actions/payments";
@@ -63,10 +63,11 @@ export default async function StorefrontPage({ params }: Params) {
     return <OfflineScreen status={panel.status} name={panel.name} />;
   }
 
-  const [services, account, platformMeta] = await Promise.all([
+  const [services, account, platformMeta, paymentMethods] = await Promise.all([
     getStorefrontServices(panel.id),
     getCustomerAccount(panel.id),
     getStorefrontPlatforms(panel.id),
+    getPanelPaymentMethods(panel.id),
   ]);
   // Only signed-in customers have orders/deposits; skip the queries for guests.
   const [orders, deposits] = account
@@ -75,12 +76,13 @@ export default async function StorefrontPage({ params }: Params) {
 
   return (
     <Storefront
-      panel={{ id: panel.id, name: panel.name, status: panel.status }}
+      panel={{ id: panel.id, name: panel.name, status: panel.status, currency: panel.currency }}
       services={services}
       initialAccount={account}
       initialOrders={orders}
       initialDeposits={deposits}
       platformMeta={platformMeta}
+      paymentMethods={paymentMethods}
     />
   );
 }

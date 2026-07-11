@@ -9,6 +9,7 @@ import {
   PLATFORMS, PlatformKey, CustomerService, customerServices,
 } from "@/src/data/constants";
 import { PlatformButton } from "./PlatformIcons";
+import { formatMoney } from "@/src/lib/money";
 
 /** Real order placement — resolves with success or an error message. */
 export interface PlaceOrderArgs {
@@ -71,6 +72,7 @@ export function NewOrder({
   services = customerServices,
   onPlaceOrder,
   platformMeta,
+  currency = "USD",
 }: {
   canOrder: boolean;
   favoriteIds: number[];
@@ -83,7 +85,10 @@ export function NewOrder({
   onPlaceOrder?: PlaceOrderHandler;
   /** Per-platform label/logo overrides (for owner-added platforms). */
   platformMeta?: PlatformMeta;
+  /** Panel operating currency (ISO code) for price display. */
+  currency?: string;
 }) {
+  const money = (n: number) => formatMoney(n, currency);
   const [platform, setPlatform] = useState<PlatformKey | null>(null);
   const [category, setCategory] = useState<string | null>(null);
   const [service, setService] = useState<CustomerService | null>(null);
@@ -184,7 +189,7 @@ export function NewOrder({
 
   const qtyNum = parseInt(qty, 10) || 0;
   const qtyValid = service ? qtyNum >= service.min && qtyNum <= service.max : false;
-  const total = service && qtyNum > 0 ? ((qtyNum / 1000) * service.price).toFixed(2) : "0.00";
+  const total = service && qtyNum > 0 ? money((qtyNum / 1000) * service.price) : money(0);
   const isFavorite = service ? favoriteIds.includes(service.id) : false;
 
   const handlePlatform = (key: PlatformKey) => {
@@ -289,7 +294,7 @@ export function NewOrder({
                     </p>
                   </div>
                   <span className="fp-mono text-xs fp-gold shrink-0">
-                    ${s.price.toFixed(2)}/{s.unit}
+                    {money(s.price)}/{s.unit}
                   </span>
                 </button>
               ))}
@@ -344,7 +349,7 @@ export function NewOrder({
                 </p>
               </div>
               <span className="flex items-center gap-2 shrink-0">
-                <span className="fp-mono text-sm fp-gold">${service.price.toFixed(2)}/{service.unit}</span>
+                <span className="fp-mono text-sm fp-gold">{money(service.price)}/{service.unit}</span>
                 <ChevronDown size={16} className="fp-text-faint" />
               </span>
             </button>
@@ -367,7 +372,7 @@ export function NewOrder({
                     </p>
                   </div>
                   <span className="fp-mono text-sm fp-gold shrink-0">
-                    ${s.price.toFixed(2)}/{s.unit}
+                    {money(s.price)}/{s.unit}
                   </span>
                 </button>
               ))}
@@ -531,7 +536,7 @@ export function NewOrder({
               </div>
               <div className="flex justify-between text-sm mb-2">
                 <span className="fp-text-dim">Rate</span>
-                <span className="fp-mono">${service.price.toFixed(2)} / {service.unit}</span>
+                <span className="fp-mono">{money(service.price)} / {service.unit}</span>
               </div>
               {drip && (
                 <div className="flex justify-between text-sm mb-2">
@@ -545,7 +550,7 @@ export function NewOrder({
               )}
               <div className="border-t fp-line-soft pt-4 mt-4 flex justify-between items-end">
                 <span className="fp-display text-lg">Total</span>
-                <span className="fp-display text-3xl fp-gold">${total}</span>
+                <span className="fp-display text-3xl fp-gold">{total}</span>
               </div>
               <button
                 disabled={!canOrder || !canSubmit || placed || placing}
@@ -560,7 +565,7 @@ export function NewOrder({
                       ? "Orders temporarily paused"
                       : linkRequired && !link.trim()
                         ? "Enter a link to continue"
-                        : `Create order — $${total}`}
+                        : `Create order — ${total}`}
               </button>
               {placeError && (
                 <p className="text-xs text-red-400 text-center mt-3 flex items-center justify-center gap-1">

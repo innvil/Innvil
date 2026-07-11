@@ -13,9 +13,18 @@ import {
 import { PlatformGlyph } from "./PlatformIcons";
 import { NewOrder, PlaceOrderHandler, PlatformMeta } from "./NewOrder";
 import { ApiDocs } from "./ApiDocs";
+import { formatMoney, currencySymbol } from "@/src/lib/money";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
 type Ticket = { id: string; subj: string; status: string; updated: string };
+export type PaymentMethod = { id: string; label: string; category: string };
+
+const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
+  { key: "crypto", label: "Crypto" },
+  { key: "card", label: "Card" },
+  { key: "ewallet", label: "E-wallet" },
+  { key: "bank", label: "Bank" },
+];
 
 /* =========================================================
    CUSTOMER DASHBOARD — fully independent from the
@@ -51,11 +60,13 @@ function ServiceQuickCard({
   onQuickOrder,
   badge,
   pathOverride,
+  currency,
 }: {
   service: CustomerService;
   onQuickOrder: (id: number) => void;
   badge?: React.ReactNode;
   pathOverride?: string | null;
+  currency: string;
 }) {
   return (
     <button
@@ -68,7 +79,7 @@ function ServiceQuickCard({
       <span className="min-w-0 flex-1">
         <span className="text-sm font-medium truncate block">{service.name}</span>
         <span className="text-xs fp-text-faint fp-mono">
-          ${service.price.toFixed(2)}/{service.unit}
+          {formatMoney(service.price, currency)}/{service.unit}
         </span>
       </span>
       {badge}
@@ -93,6 +104,8 @@ export function CustomerDashboard({
   onAddFunds,
   onDeposit,
   platformMeta,
+  currency = "USD",
+  paymentMethods = [],
 }: {
   canOrder: boolean;
   inactive: boolean;
@@ -109,25 +122,46 @@ export function CustomerDashboard({
   /** When set, New Order places real orders through this handler. */
   onPlaceOrder?: PlaceOrderHandler;
   onAddFunds?: () => void;
-  /** Start a crypto deposit → returns a checkout URL to redirect the customer to. */
-  onDeposit?: (amount: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
+  /** Start a deposit via the given gateway → returns a checkout URL to redirect to. */
+  onDeposit?: (amount: number, gateway?: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
   platformMeta?: PlatformMeta;
+  /** Panel operating currency (ISO code). */
+  currency?: string;
+  /** Connected payment methods (id/label/category) for the Add-Funds chooser. */
+  paymentMethods?: PaymentMethod[];
 }) {
   const glyphPath = (key: string) => platformMeta?.[key]?.icon ?? undefined;
+  const fmt = (n: number) => formatMoney(n, currency);
   const [depositAmount, setDepositAmount] = useState("");
   const [depositBusy, setDepositBusy] = useState(false);
   const [depositError, setDepositError] = useState<string | null>(null);
+
+  // Add-Funds method chooser — group connected gateways by category.
+  const payCategories = useMemo(
+    () => PAY_CATEGORY_ORDER.filter((c) => paymentMethods.some((m) => m.category === c.key)),
+    [paymentMethods]
+  );
+  const [payCat, setPayCat] = useState("");
+  const activeCat = payCat || payCategories[0]?.key || "";
+  const catMethods = useMemo(
+    () => paymentMethods.filter((m) => m.category === activeCat),
+    [paymentMethods, activeCat]
+  );
+  const [payGateway, setPayGateway] = useState("");
+  const activeGateway =
+    payGateway && catMethods.some((m) => m.id === payGateway) ? payGateway : catMethods[0]?.id ?? "";
 
   const startDeposit = async () => {
     if (!onDeposit || depositBusy) return;
     const amt = Number(depositAmount);
     if (!amt || amt <= 0) { setDepositError("Enter an amount."); return; }
+    if (paymentMethods.length > 0 && !activeGateway) { setDepositError("Choose a payment method."); return; }
     setDepositError(null);
     setDepositBusy(true);
-    const res = await onDeposit(amt);
+    const res = await onDeposit(amt, activeGateway || undefined);
     setDepositBusy(false);
     if (!res.ok || !res.url) { setDepositError(res.error ?? "Could not start the deposit."); return; }
-    window.location.href = res.url; // hosted crypto checkout
+    window.location.href = res.url; // hosted checkout
   };
   const [page, setPage] = useState<CustomerPage>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -230,7 +264,7 @@ export function CustomerDashboard({
           <div className="flex items-center gap-2 shrink-0">
             <span className="fp-mono text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-2">
               <span className="fp-text-faint hidden sm:inline">Balance </span>
-              <span className="fp-gold">${walletBalance.toFixed(2)}</span>
+              <span className="fp-gold">{fmt(walletBalance)}</span>
             </span>
             <button
               onClick={() => (onAddFunds ? onAddFunds() : go("wallet"))}
@@ -271,7 +305,7 @@ export function CustomerDashboard({
           <div className="space-y-6">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {[
-                { label: "Wallet balance", value: `$${walletBalance.toFixed(2)}`, tone: "fp-gold" },
+                { label: "Wallet balance", value: fmt(walletBalance), tone: "fp-gold" },
                 { label: "Pending orders", value: String(pendingCount), tone: "fp-violet" },
                 { label: "Completed today", value: String(completedToday), tone: "fp-safe" },
                 { label: "Total orders", value: String(orders.length), tone: "" },
@@ -305,7 +339,7 @@ export function CustomerDashboard({
                 ) : (
                   <div className="space-y-2">
                     {favoriteServices.map((s) => (
-                      <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} />
+                      <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} currency={currency} />
                     ))}
                   </div>
                 )}
@@ -320,7 +354,7 @@ export function CustomerDashboard({
                 </div>
                 <div className="space-y-2">
                   {recentServices.map((s) => (
-                    <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} />
+                    <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} currency={currency} />
                   ))}
                 </div>
               </div>
@@ -349,6 +383,7 @@ export function CustomerDashboard({
             services={services}
             onPlaceOrder={onPlaceOrder}
             platformMeta={platformMeta}
+            currency={currency}
           />
         )}
 
@@ -375,25 +410,61 @@ export function CustomerDashboard({
             <div className="fp-panel border fp-gold-border rounded-2xl p-6">
               <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Wallet balance</p>
               <p className="fp-display text-4xl fp-gold mt-2 mb-6">
-                ${walletBalance.toFixed(2)}
+                {fmt(walletBalance)}
               </p>
               <p className="text-sm fp-text-dim mb-4">
                 {inactive
                   ? "Deposits stay available in Inactive Mode — orders resume automatically once the panel is back."
                   : "Top up once, order across every platform."}
               </p>
-              {onDeposit ? (
+              {!onDeposit ? (
+                <p className="fp-text-faint text-sm">Funding isn&apos;t available on this panel yet.</p>
+              ) : paymentMethods.length === 0 ? (
+                <p className="fp-text-faint text-sm">This panel hasn&apos;t enabled a payment method yet.</p>
+              ) : (
                 <div className="space-y-3">
-                  <label className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Add funds — crypto</label>
+                  <label className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Add funds</label>
+
+                  {/* Payment category */}
+                  {payCategories.length > 1 && (
+                    <div className="flex gap-2 flex-wrap">
+                      {payCategories.map((c) => (
+                        <button
+                          key={c.key}
+                          onClick={() => { setPayCat(c.key); setPayGateway(""); }}
+                          className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                            activeCat === c.key ? "fp-gold-soft-bg fp-gold fp-gold-border" : "fp-panel-raised fp-text-dim border-[#262A35] hover:fp-text"
+                          }`}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Method within the category — dropdown when there's more than one */}
+                  {catMethods.length > 1 && (
+                    <select
+                      value={activeGateway}
+                      onChange={(e) => setPayGateway(e.target.value)}
+                      className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl px-3 py-2.5 text-sm outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
+                    >
+                      {catMethods.map((m) => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* Amount */}
                   <div className="flex gap-2">
                     <div className="relative flex-1">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint text-sm">$</span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint text-sm">{currencySymbol(currency)}</span>
                       <input
                         value={depositAmount}
                         onChange={(e) => { setDepositAmount(e.target.value); setDepositError(null); }}
                         onKeyDown={(e) => e.key === "Enter" && startDeposit()}
                         type="number" inputMode="decimal" min="1" step="0.01" placeholder="25.00"
-                        className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl pl-7 pr-3 py-3 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
+                        className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl pl-8 pr-3 py-3 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
                       />
                     </div>
                     <button onClick={startDeposit} disabled={depositBusy} className="fp-btn-primary text-sm font-semibold px-5 rounded-xl disabled:opacity-50 whitespace-nowrap">
@@ -402,14 +473,12 @@ export function CustomerDashboard({
                   </div>
                   <div className="flex gap-2">
                     {[10, 25, 50, 100].map((v) => (
-                      <button key={v} onClick={() => setDepositAmount(String(v))} className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 fp-text-dim hover:fp-gold-border">${v}</button>
+                      <button key={v} onClick={() => setDepositAmount(String(v))} className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 fp-text-dim hover:fp-gold-border">{fmt(v)}</button>
                     ))}
                   </div>
                   {depositError && <p className="text-xs text-red-400">{depositError}</p>}
-                  <p className="fp-text-faint text-[11px]">You&apos;ll be sent to a secure crypto checkout. Your balance updates automatically once the payment confirms.</p>
+                  <p className="fp-text-faint text-[11px]">You&apos;ll be sent to a secure checkout. Your balance updates automatically once the payment confirms.</p>
                 </div>
-              ) : (
-                <p className="fp-text-faint text-sm">Funding isn&apos;t available on this panel yet.</p>
               )}
             </div>
             <div className="fp-panel border fp-line rounded-2xl p-6">

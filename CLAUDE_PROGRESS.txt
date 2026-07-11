@@ -5,6 +5,56 @@
 
 ---
 
+## Session: Build fixes + Innvil logo/favicon alignment
+
+### Date: 2026-07-12
+- Re-ran production build and fixed all surfaced TypeScript blockers:
+  - `CustomerDashboard.tsx`: passed required `currency` prop to recent quick-card usage.
+  - `AdminTabs.tsx` PaymentsTab: corrected non-real-panel fallback to full `PaymentsMeta` shape (`currency`, `currencies` included).
+  - `storefront.ts`: tightened payment-method mapping typing to return a clean `PublicPaymentMethod[]`.
+- Reworked branding to match Innvil naming/meaning:
+  - Added a modern anvil-inspired reusable mark component and replaced gauge-based app-shell branding.
+  - Updated favicon to the same anvil visual language so icon/logo are consistent.
+- Increased logo readability in-page:
+  - Removed extra external logo margin so the mark fills the beige badge container.
+  - Updated in-page brand-mark usages to full-bleed sizing (`w-full h-full`) and removed fixed-size shrink.
+- Verified build success after all changes (`npm run build` passed).
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Per-panel currency + customer Add-Funds method chooser
+
+### Date: 2026-07-09
+Agenda item #1 (currency + payment chooser). Automator marked "coming soon". Binance
+Pay (#2) + Resend forwarder (#3) deferred. Did NOT touch user changes (v0.2.1,
+typed cookie params, empty vercel.json).
+
+Currency (well-known, not just USD):
+- `money.ts`: `CURRENCIES` (USD/EUR/GBP/INR/PHP/IDR/BRL/NGN/AED/PKR/AUD/CAD/SGD/MYR)
+  + `formatMoney(amount, code)` + `currencySymbol(code)`.
+- Stored in `panels.settings.currency` (default USD). `setPanelCurrency` action;
+  `getPaymentsMeta` now returns `currency` + `currencies`; `getPublicPanel` returns
+  `currency`; `createDeposit` uses the panel currency (Razorpay adapter now uses
+  ctx.currency instead of forcing INR).
+- Owner: **Panel currency** selector card in PaymentsTab.
+- Customer: `currency` threaded storefront → CustomerDashboard → NewOrder +
+  ServiceQuickCard; all wallet/price/order/deposit amounts use `formatMoney`
+  (removed hardcoded `$`). NewOrder `total` is now currency-formatted.
+
+Add-Funds method chooser:
+- Catalog gained a `category` ("crypto"|"card"|"ewallet"|"bank"); added GCash + Maya
+  (PH e-wallets) as coming-soon entries. `getPanelPaymentMethods(panelId)` (public,
+  id/label/category only) → passed storefront → CustomerDashboard.
+- Wallet Add-Funds now shows **category buttons** (Crypto / Card / E-wallet — only
+  those with a connected method) + a **method dropdown** when a category has >1, then
+  amount → `onDeposit(amount, gateway)` → createDeposit routes to that gateway.
+
+KNOWN: single-currency wallets (no FX conversion) — owners pick a currency matching
+their gateway. Next (user): a **design pass** before Binance Pay / Resend.
+
+---
+
 ## Session: Admin tab refresh UX — show cached content immediately
 
 ### Date: 2026-07-12

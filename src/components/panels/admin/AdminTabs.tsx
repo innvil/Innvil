@@ -33,7 +33,7 @@ import {
   type PanelCustomerVM,
 } from "@/src/lib/actions/customers";
 import {
-  getPaymentsMeta, connectGateway, disconnectGateway, type PaymentsMeta,
+  getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency, type PaymentsMeta,
 } from "@/src/lib/actions/payments";
 import { computeSellRate } from "@/src/lib/money";
 import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
@@ -1335,8 +1335,15 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
 
 export function PaymentsTab({ panelId }: { panelId: string }) {
   const realPanel = isUuid(panelId);
+  const fallbackMeta: PaymentsMeta = {
+    catalog: [],
+    fields: {},
+    connected: [],
+    currency: "USD",
+    currencies: [],
+  };
   const [meta, setMeta] = useState<PaymentsMeta | null>(() =>
-    realPanel ? readAdminCache<PaymentsMeta>(panelId, "payments") : { catalog: [], fields: {}, connected: [] }
+    realPanel ? readAdminCache<PaymentsMeta>(panelId, "payments") : fallbackMeta
   );
   const [openId, setOpenId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -1349,9 +1356,8 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
 
   const refresh = useCallback(async () => {
     if (!realPanel) {
-      const emptyMeta = { catalog: [], fields: {}, connected: [] };
-      setMeta(emptyMeta);
-      writeAdminCache(panelId, "payments", emptyMeta);
+      setMeta(fallbackMeta);
+      writeAdminCache(panelId, "payments", fallbackMeta);
       return;
     }
 
@@ -1406,6 +1412,33 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
           <span>{msg.text}</span>
           <button onClick={() => setMsg(null)} className="opacity-70 hover:opacity-100"><X size={14} /></button>
         </div>
+      )}
+
+      {meta && (
+        <Card title="Panel currency" icon={CreditCard}>
+          <p className="fp-text-dim text-sm mb-3">
+            Wallets, prices, and deposits on this panel are shown and charged in this currency.
+            Pick the one your gateway settles in (e.g. Razorpay → INR).
+          </p>
+          <select
+            value={meta.currency}
+            onChange={async (e) => {
+              const code = e.target.value;
+              setBusy(true); setMsg(null);
+              const res = await setPanelCurrency(panelId, code);
+              setBusy(false);
+              if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+              setMsg({ text: `Currency set to ${code}.` });
+              refresh();
+            }}
+            disabled={busy}
+            className="w-full max-w-sm fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border disabled:opacity-50"
+          >
+            {meta.currencies.map((c) => (
+              <option key={c.code} value={c.code}>{c.label}</option>
+            ))}
+          </select>
+        </Card>
       )}
 
       <Card title="Payment gateways" icon={CreditCard}>
@@ -1580,13 +1613,21 @@ export function SupportTab() {
 
 export function AutomationTab() {
   return (
-    <Card title="Automator add-on" icon={Bot}>
+    <Card
+      title="Automator add-on"
+      icon={Bot}
+      right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}
+    >
       <p className="fp-text-dim text-sm mb-4">
-        Your panel fulfills orders manually by default. Add the automator to fulfill automatically —
-        and optionally offer it as a paid feature to your own renters.
+        Mass &amp; automatic order fulfillment — paste or upload many links, auto-detect the platform,
+        and fan each one out to the right services from your presets. You&apos;ll be able to offer it
+        as a paid upgrade to your own customers.
       </p>
-      <button className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg text-sm">
-        View automator add-on
+      <p className="fp-text-faint text-sm">
+        The Automator ships after the core owner, admin, super-admin, and customer tools are complete.
+      </p>
+      <button disabled className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg text-sm mt-4 opacity-50 cursor-not-allowed">
+        Coming soon
       </button>
     </Card>
   );

@@ -5,7 +5,8 @@
    once the project is provisioned.
    ========================================================= */
 
-import { PanelStatus } from "@/src/data/constants";
+import type { PanelStatus } from "@/src/data/constants";
+export type { PanelStatus };
 
 export type UserRole = "super_admin" | "panel_owner" | "staff" | "customer";
 export type ProviderStatus = "active" | "paused";

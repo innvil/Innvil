@@ -10,16 +10,16 @@ import { PLATFORMS, PlatformKey, CustomerService, CustomerOrder } from "@/src/da
 import { PlatformGlyph, PlatformButton } from "@/src/components/customer/PlatformIcons";
 import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
-import type { StorefrontService, StorefrontPlatformMeta } from "@/src/lib/actions/storefront";
+import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod } from "@/src/lib/actions/storefront";
 import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
+import { formatMoney } from "@/src/lib/money";
 import {
   customerSignUp, customerSignIn, customerSignOut,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
 
 const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
-const price = (n: number) => `$${n.toFixed(2)}`;
 
 /** Map a live storefront service to the customer UI's service shape. */
 function toCustomerService(s: StorefrontService, i: number): CustomerService {
@@ -71,17 +71,20 @@ export function Storefront({
   initialOrders = [],
   initialDeposits = [],
   platformMeta = {},
+  paymentMethods = [],
 }: {
-  panel: { id: string; name: string; status: string };
+  panel: { id: string; name: string; status: string; currency: string };
   services: StorefrontService[];
   initialAccount: CustomerAccountInfo | null;
   initialOrders?: CustomerOrderVM[];
   initialDeposits?: DepositVM[];
   platformMeta?: StorefrontPlatformMeta;
+  paymentMethods?: PublicPaymentMethod[];
 }) {
   const router = useRouter();
   const inactive = panel.status === "inactive";
   const account = initialAccount; // re-fetched by the server after auth via router.refresh()
+  const fmt = (n: number) => formatMoney(n, panel.currency);
 
   // ---- Live data → customer dashboard shapes -------------------------------
   const uiServices = useMemo(() => services.map(toCustomerService), [services]);
@@ -99,7 +102,7 @@ export function Storefront({
         service: o.serviceName,
         link: o.link,
         qty: o.quantity,
-        amount: price(o.charge),
+        amount: fmt(o.charge),
         status: ORDER_STATUS_LABEL[o.status] ?? "Pending",
         date: formatOrderDate(o.createdAt),
       })),
@@ -130,8 +133,8 @@ export function Storefront({
     return { ok: res.ok, error: res.ok ? undefined : res.error };
   };
 
-  const handleDeposit = async (amount: number) => {
-    const res = await createDeposit(panel.id, amount);
+  const handleDeposit = async (amount: number, gateway?: string) => {
+    const res = await createDeposit(panel.id, amount, gateway);
     return res.ok ? { ok: true, url: res.data.url } : { ok: false, error: res.error };
   };
 
@@ -142,7 +145,7 @@ export function Storefront({
   const uiDeposits = useMemo(
     () =>
       initialDeposits.map((d) => ({
-        amount: `+${price(d.amount)}`,
+        amount: `+${fmt(d.amount)}`,
         method: d.method === "crypto" ? "Crypto (Cryptomus)" : d.method,
         date: new Date(d.createdAt).toLocaleDateString([], { month: "short", day: "numeric" }),
         status: DEPOSIT_STATUS_LABEL[d.status] ?? d.status,
@@ -244,7 +247,7 @@ export function Storefront({
                 {s.category ?? "—"} · min {s.min.toLocaleString()} · max {s.max.toLocaleString()}
               </p>
             </div>
-            <span className="fp-mono text-sm fp-gold shrink-0">{price(s.price)}/1k</span>
+            <span className="fp-mono text-sm fp-gold shrink-0">{fmt(s.price)}/1k</span>
           </div>
         ))
       )}
@@ -269,6 +272,8 @@ export function Storefront({
         onPlaceOrder={handlePlaceOrder}
         onDeposit={handleDeposit}
         platformMeta={platformMeta}
+        currency={panel.currency}
+        paymentMethods={paymentMethods}
       />
     );
   }

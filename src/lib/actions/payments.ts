@@ -3,7 +3,7 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
-import { round4 } from "@/src/lib/money";
+import { round4, CURRENCIES } from "@/src/lib/money";
 import {
   getAdapter,
   getGatewayContext,
@@ -11,6 +11,15 @@ import {
   type CatalogEntry,
   type GatewayField,
 } from "@/src/lib/payments";
+
+/** Read a panel's operating currency from its settings (default USD). */
+function readPanelCurrency(settings: unknown): string {
+  if (settings && typeof settings === "object") {
+    const c = (settings as Record<string, unknown>).currency;
+    if (typeof c === "string" && c) return c.toUpperCase();
+  }
+  return "USD";
+}
 
 /* =========================================================
    §7 PAYMENTS — multi-gateway (bring-your-own, per panel).
@@ -46,21 +55,26 @@ export interface PaymentsMeta {
   catalog: CatalogEntry[];
   fields: Record<string, GatewayField[]>; // per available gateway id
   connected: ConnectedGateway[];
+  currency: string; // the panel's operating currency
+  currencies: { code: string; label: string }[]; // options for the selector
 }
 
-/** Everything the owner Payments tab needs: the full catalog, connect fields, and
-    which gateways this panel has connected. */
+/** Everything the owner Payments tab needs: the full catalog, connect fields,
+    which gateways this panel has connected, and its currency. */
 export async function getPaymentsMeta(panelId: string): Promise<PaymentsMeta> {
   const fields: Record<string, GatewayField[]> = {};
   for (const c of GATEWAY_CATALOG) if (c.available) fields[c.id] = getAdapter(c.id)?.fields ?? [];
+  const currencies = CURRENCIES.map((c) => ({ code: c.code, label: `${c.code} — ${c.label}` }));
 
   const { user, admin } = await getAuthedAdmin();
   let connected: ConnectedGateway[] = [];
+  let currency = "USD";
   if (user && (await ownsPanel(user.id, panelId))) {
-    const { data } = await admin
-      .from("panel_payment_gateways")
-      .select("gateway, status, config, merchant_id")
-      .eq("panel_id", panelId);
+    const [{ data }, { data: panel }] = await Promise.all([
+      admin.from("panel_payment_gateways").select("gateway, status, config, merchant_id").eq("panel_id", panelId),
+      admin.from("panels").select("settings").eq("id", panelId).maybeSingle(),
+    ]);
+    currency = readPanelCurrency(panel?.settings);
     connected = (data ?? []).map((r) => {
       const config: Record<string, string> = { ...((r.config as Record<string, string>) ?? {}) };
       if (r.gateway === "cryptomus" && r.merchant_id && !config.merchantId) {
@@ -69,7 +83,24 @@ export async function getPaymentsMeta(panelId: string): Promise<PaymentsMeta> {
       return { gateway: r.gateway as string, status: r.status as string, config };
     });
   }
-  return { catalog: GATEWAY_CATALOG, fields, connected };
+  return { catalog: GATEWAY_CATALOG, fields, connected, currency, currencies };
+}
+
+/** Set the panel's operating currency (owner). Stored in panels.settings.currency. */
+export async function setPanelCurrency(panelId: string, code: string): Promise<Result> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!(await ownsPanel(user.id, panelId))) return { ok: false, error: "Not authorized for this panel" };
+  const cc = (code || "").toUpperCase();
+  if (!CURRENCIES.some((c) => c.code === cc)) return { ok: false, error: "Unsupported currency." };
+
+  const { data: panel } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  const settings: Record<string, unknown> =
+    panel?.settings && typeof panel.settings === "object" ? { ...(panel.settings as Record<string, unknown>) } : {};
+  settings.currency = cc;
+  const { error } = await admin.from("panels").update({ settings }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 /** Connect (or update) a gateway. Blank secret fields keep the existing value. */
@@ -172,7 +203,7 @@ export async function createDeposit(
   const admin = createAdminClient();
   const { data: panel } = await admin
     .from("panels")
-    .select("id, status, subdomain")
+    .select("id, status, subdomain, settings")
     .eq("id", panelId)
     .maybeSingle();
   if (!panel) return { ok: false, error: "Panel not found." };
@@ -211,7 +242,7 @@ export async function createDeposit(
   const ctx = await getGatewayContext(panelId, gw);
   if (!ctx) return { ok: false, error: "This payment method isn't fully configured." };
 
-  const currency = ctx.config.currency || "USD";
+  const currency = readPanelCurrency(panel.settings);
   const { data: pay, error } = await admin
     .from("payments")
     .insert({

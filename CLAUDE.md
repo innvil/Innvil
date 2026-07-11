@@ -127,6 +127,12 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Build fixes + Innvil anvil brand mark refresh
+- Fixed TypeScript build blockers across customer/admin/storefront flows: added missing `currency` prop usage in customer quick cards, corrected PaymentsTab fallback typing to satisfy `PaymentsMeta`, and tightened storefront payment-method mapping typing.
+- Replaced the old gauge/L visual mismatch with a modern anvil-inspired Innvil mark and aligned favicon + in-app logo usage.
+- Increased brand-mark visibility by removing extra logo/container margins so the mark fills its badge area more clearly in top nav/auth/sidebar placements.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
 ### 2026-07-12 — Instant admin content while background sync refreshes
 - Improved the owner admin experience so providers, services, customers, and payments content remains visible immediately after load while a background refresh updates it with the latest data.
 - The admin tabs now use a lightweight session cache to preserve the last loaded state during refreshes, reducing blank states and perceived loading delays.
