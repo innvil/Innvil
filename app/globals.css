@@ -1,0 +1,231 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Veyra Design Tokens */
+:root {
+  /* Colors */
+  --gold: #C9A574;
+  --gold-light: #E9CE9A;
+  --gold-soft: rgba(201, 165, 116, 0.10);
+  --gold-soft-border: rgba(201, 165, 116, 0.20);
+
+  --violet: #8B7FFF;
+  --violet-light: #A89FFF;
+  --violet-soft: rgba(139, 127, 255, 0.12);
+  --violet-soft-border: rgba(139, 127, 255, 0.35);
+
+  --safe: #6FCF97;
+  --safe-soft: rgba(111, 207, 151, 0.10);
+  --safe-soft-border: rgba(111, 207, 151, 0.35);
+
+  /* Surfaces */
+  --void: #0A0B0F;
+  --void-2: #0D0F14;
+  --panel: #14161D;
+  --panel-raised: #1B1E27;
+  --line: #262A35;
+  --line-soft: #1E212A;
+
+  /* Text */
+  --text: #EDEAE2;
+  --text-dim: #9497A3;
+  --text-faint: #5C5F6B;
+
+  /* Fonts */
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  /* Backdrops (used by .fp-noise / .fp-grid-bg) */
+  --bg-noise: radial-gradient(circle at 20% 20%, rgba(139,127,255,0.10), transparent 40%), radial-gradient(circle at 80% 0%, rgba(201,165,116,0.08), transparent 35%);
+  --bg-grid: linear-gradient(rgba(255,255,255,0.028) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.028) 1px, transparent 1px);
+}
+
+/* Global resets and base styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--void);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--void);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--line-soft);
+}
+
+/* Selection color */
+::selection {
+  background: rgba(201, 165, 116, 0.35);
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* Utility classes */
+.fp-root {
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.fp-display {
+  font-family: var(--font-display);
+}
+
+.fp-mono {
+  font-family: var(--font-mono);
+}
+
+.fp-void {
+  background: var(--void);
+}
+
+.fp-void-2 {
+  background: var(--void-2);
+}
+
+.fp-panel {
+  background: var(--panel);
+}
+
+.fp-panel-raised {
+  background: var(--panel-raised);
+}
+
+.fp-line {
+  border-color: var(--line);
+}
+
+.fp-line-soft {
+  border-color: var(--line-soft);
+}
+
+.fp-text {
+  color: var(--text);
+}
+
+.fp-text-dim {
+  color: var(--text-dim);
+}
+
+.fp-text-faint {
+  color: var(--text-faint);
+}
+
+.fp-gold {
+  color: var(--gold);
+}
+
+.fp-gold-bg {
+  background: var(--gold);
+}
+
+.fp-gold-border {
+  border-color: var(--gold);
+}
+
+.fp-gold-soft-bg {
+  background: var(--gold-soft);
+}
+
+.fp-violet {
+  color: var(--violet);
+}
+
+.fp-violet-bg {
+  background: var(--violet);
+}
+
+.fp-violet-soft-bg {
+  background: var(--violet-soft);
+}
+
+.fp-violet-border {
+  border-color: var(--violet-soft-border);
+}
+
+.fp-safe {
+  color: var(--safe);
+}
+
+.fp-safe-soft-bg {
+  background: var(--safe-soft);
+}
+
+.fp-safe-border {
+  border-color: var(--safe-soft-border);
+}
+
+.fp-noise {
+  background-image: var(--bg-noise);
+}
+
+.fp-grid-bg {
+  background-image: var(--bg-grid);
+  background-size: 42px 42px;
+}
+
+.fp-btn-primary {
+  background: linear-gradient(120deg, #E9CE9A, #C9A574);
+  color: var(--void);
+}
+
+.fp-btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+.fp-grad-text {
+  background: linear-gradient(120deg, #E9CE9A 0%, #C9A574 45%, #8B7FFF 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Toggle component */
+.fp-toggle {
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  position: relative;
+  transition: background 0.15s;
+}
+
+.fp-toggle-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--void);
+  position: absolute;
+  top: 3px;
+  transition: left 0.15s;
+}

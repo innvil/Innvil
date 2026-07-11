@@ -1,0 +1,621 @@
+"use client";
+
+import React, { useMemo, useState } from "react";
+import {
+  Sparkles, Menu, X, Wallet, Plus, Clock, Star, RotateCcw, Zap,
+  LayoutGrid, ListOrdered, MessageSquare, KeyRound, UserCircle2,
+  ShoppingCart, CheckCircle2, LogOut,
+} from "lucide-react";
+import {
+  customerServices, customerOrders, customerWallet, customerTickets,
+  initialFavoriteIds, recentServiceIds, CustomerService, CustomerOrder,
+} from "@/src/data/constants";
+import { PlatformGlyph } from "./PlatformIcons";
+import { NewOrder, PlaceOrderHandler, PlatformMeta } from "./NewOrder";
+import { ApiDocs } from "./ApiDocs";
+
+type Deposit = { amount: string; method: string; date: string; status: string };
+type Ticket = { id: string; subj: string; status: string; updated: string };
+
+/* =========================================================
+   CUSTOMER DASHBOARD — fully independent from the
+   Panel Owner dashboard. Nav: Dashboard, New Order, Orders,
+   Wallet, Tickets, API, Profile. No Login/Register here.
+   ========================================================= */
+
+type CustomerPage = "dashboard" | "order" | "orders" | "wallet" | "tickets" | "api" | "profile";
+
+const NAV: Array<{ k: CustomerPage; label: string; icon: typeof LayoutGrid }> = [
+  { k: "dashboard", label: "Dashboard", icon: LayoutGrid },
+  { k: "order", label: "New Order", icon: ShoppingCart },
+  { k: "orders", label: "Orders", icon: ListOrdered },
+  { k: "wallet", label: "Wallet", icon: Wallet },
+  { k: "tickets", label: "Tickets", icon: MessageSquare },
+  { k: "api", label: "API", icon: KeyRound },
+  { k: "profile", label: "Profile", icon: UserCircle2 },
+];
+
+const profileInputCls =
+  "w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[rgba(139,127,255,0.35)] text-[#EDEAE2]";
+
+const statusTone: Record<string, string> = {
+  Completed: "fp-safe-soft-bg fp-safe",
+  Processing: "fp-gold-soft-bg fp-gold",
+  Pending: "fp-violet-soft-bg fp-violet",
+  Partial: "fp-gold-soft-bg fp-gold",
+  Canceled: "bg-red-500/10 text-red-400",
+};
+
+function ServiceQuickCard({
+  service,
+  onQuickOrder,
+  badge,
+  pathOverride,
+}: {
+  service: CustomerService;
+  onQuickOrder: (id: number) => void;
+  badge?: React.ReactNode;
+  pathOverride?: string | null;
+}) {
+  return (
+    <button
+      onClick={() => onQuickOrder(service.id)}
+      className="text-left rounded-xl border border-[#1E212A] bg-[#1B1E27] hover:border-[rgba(139,127,255,0.45)] transition-colors px-4 py-3 flex items-center gap-3 w-full"
+    >
+      <span className="w-9 h-9 rounded-lg fp-panel border fp-line-soft flex items-center justify-center fp-text-dim shrink-0">
+        <PlatformGlyph platform={service.platform} size={15} pathOverride={pathOverride} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="text-sm font-medium truncate block">{service.name}</span>
+        <span className="text-xs fp-text-faint fp-mono">
+          ${service.price.toFixed(2)}/{service.unit}
+        </span>
+      </span>
+      {badge}
+      <Zap size={14} className="fp-violet shrink-0" />
+    </button>
+  );
+}
+
+export function CustomerDashboard({
+  canOrder,
+  inactive,
+  onLogout,
+  brandName = "NovaBoost",
+  services = customerServices,
+  orders = customerOrders,
+  walletBalance = customerWallet.balance,
+  deposits = customerWallet.deposits,
+  tickets = customerTickets,
+  recentIds = recentServiceIds,
+  email,
+  onPlaceOrder,
+  onAddFunds,
+  onDeposit,
+  platformMeta,
+}: {
+  canOrder: boolean;
+  inactive: boolean;
+  onLogout: () => void;
+  /** Real data (all default to mock so the /?preview=1 switcher still works). */
+  brandName?: string;
+  services?: CustomerService[];
+  orders?: CustomerOrder[];
+  walletBalance?: number;
+  deposits?: Deposit[];
+  tickets?: Ticket[];
+  recentIds?: number[];
+  email?: string;
+  /** When set, New Order places real orders through this handler. */
+  onPlaceOrder?: PlaceOrderHandler;
+  onAddFunds?: () => void;
+  /** Start a crypto deposit → returns a checkout URL to redirect the customer to. */
+  onDeposit?: (amount: number) => Promise<{ ok: boolean; url?: string; error?: string }>;
+  platformMeta?: PlatformMeta;
+}) {
+  const glyphPath = (key: string) => platformMeta?.[key]?.icon ?? undefined;
+  const [depositAmount, setDepositAmount] = useState("");
+  const [depositBusy, setDepositBusy] = useState(false);
+  const [depositError, setDepositError] = useState<string | null>(null);
+
+  const startDeposit = async () => {
+    if (!onDeposit || depositBusy) return;
+    const amt = Number(depositAmount);
+    if (!amt || amt <= 0) { setDepositError("Enter an amount."); return; }
+    setDepositError(null);
+    setDepositBusy(true);
+    const res = await onDeposit(amt);
+    setDepositBusy(false);
+    if (!res.ok || !res.url) { setDepositError(res.error ?? "Could not start the deposit."); return; }
+    window.location.href = res.url; // hosted crypto checkout
+  };
+  const [page, setPage] = useState<CustomerPage>("dashboard");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [favoriteIds, setFavoriteIds] = useState<number[]>(
+    () => initialFavoriteIds.filter((id) => services.some((s) => s.id === id))
+  );
+  const [prefillServiceId, setPrefillServiceId] = useState<number | null>(null);
+  const [apiKey, setApiKey] = useState("nb_live_9f2a41c8d0b37e6fa215c81e");
+  const [keyRegenerated, setKeyRegenerated] = useState(false);
+  const [savedCard, setSavedCard] = useState<string | null>(null);
+
+  const regenerateApiKey = () => {
+    const hex = Array.from({ length: 24 }, () =>
+      Math.floor(Math.random() * 16).toString(16)
+    ).join("");
+    setApiKey(`nb_live_${hex}`);
+    setKeyRegenerated(true);
+  };
+
+  const toggleFavorite = (id: number) =>
+    setFavoriteIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+
+  // One click from anywhere to a pre-filled order form
+  const quickOrder = (serviceId: number) => {
+    setPrefillServiceId(serviceId);
+    setPage("order");
+    setMenuOpen(false);
+  };
+
+  const favoriteServices = useMemo(
+    () => services.filter((s) => favoriteIds.includes(s.id)),
+    [favoriteIds, services]
+  );
+  const recentServices = useMemo(
+    () =>
+      recentIds
+        .map((id) => services.find((s) => s.id === id))
+        .filter((s): s is CustomerService => Boolean(s))
+        .slice(0, 4),
+    [recentIds, services]
+  );
+
+  const pendingCount = orders.filter(
+    (o) => o.status === "Processing" || o.status === "Pending"
+  ).length;
+  const completedToday = orders.filter(
+    (o) => o.status === "Completed" && o.date.startsWith("Today")
+  ).length;
+
+  const go = (p: CustomerPage) => {
+    if (p === "order") setPrefillServiceId(null);
+    setPage(p);
+    setMenuOpen(false);
+  };
+
+  return (
+    <div className="fp-root min-h-screen fp-grid-bg">
+      {inactive && (
+        <div className="fp-gold-soft-bg border-b border-[rgba(201,165,116,0.2)] px-4 py-2.5 text-center">
+          <p className="fp-gold text-sm flex items-center justify-center gap-2">
+            <Clock size={13} />
+            New orders are temporarily paused. You can still browse, add funds, and view history.
+          </p>
+        </div>
+      )}
+
+      {/* Header — wallet balance + Add Funds always visible */}
+      <header className="border-b fp-line-soft bg-[#0A0B0F]/90 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              onClick={() => setMenuOpen(!menuOpen)}
+              className="md:hidden w-9 h-9 rounded-lg fp-panel-raised border fp-line-soft flex items-center justify-center fp-text-dim"
+              aria-label="Menu"
+            >
+              {menuOpen ? <X size={17} /> : <Menu size={17} />}
+            </button>
+            <div className="w-7 h-7 rounded-md fp-violet-bg flex items-center justify-center">
+              <Sparkles size={14} color="#0A0B0F" />
+            </div>
+            <span className="fp-display text-lg hidden sm:inline">{brandName}</span>
+          </div>
+
+          <nav className="hidden md:flex items-center gap-1">
+            {NAV.map((n) => (
+              <button
+                key={n.k}
+                onClick={() => go(n.k)}
+                className={`text-xs px-3 py-1.5 rounded-full transition-colors ${
+                  page === n.k ? "fp-violet-soft-bg fp-violet" : "fp-text-dim hover:fp-text"
+                }`}
+              >
+                {n.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="fp-mono text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-2">
+              <span className="fp-text-faint hidden sm:inline">Balance </span>
+              <span className="fp-gold">${walletBalance.toFixed(2)}</span>
+            </span>
+            <button
+              onClick={() => (onAddFunds ? onAddFunds() : go("wallet"))}
+              className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1"
+            >
+              <Plus size={13} /> <span className="hidden sm:inline">Add Funds</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile hamburger menu */}
+        {menuOpen && (
+          <nav className="md:hidden border-t fp-line-soft bg-[#0D0F14] px-4 py-3 space-y-1">
+            {NAV.map((n) => (
+              <button
+                key={n.k}
+                onClick={() => go(n.k)}
+                className={`w-full text-left flex items-center gap-3 px-3 py-3 rounded-lg text-sm ${
+                  page === n.k ? "fp-violet-soft-bg fp-violet" : "fp-text-dim"
+                }`}
+              >
+                <n.icon size={16} /> {n.label}
+              </button>
+            ))}
+            <button
+              onClick={onLogout}
+              className="w-full text-left flex items-center gap-3 px-3 py-3 rounded-lg text-sm fp-text-faint"
+            >
+              <LogOut size={16} /> Log out
+            </button>
+          </nav>
+        )}
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+        {/* ---------- DASHBOARD ---------- */}
+        {page === "dashboard" && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {[
+                { label: "Wallet balance", value: `$${walletBalance.toFixed(2)}`, tone: "fp-gold" },
+                { label: "Pending orders", value: String(pendingCount), tone: "fp-violet" },
+                { label: "Completed today", value: String(completedToday), tone: "fp-safe" },
+                { label: "Total orders", value: String(orders.length), tone: "" },
+              ].map((s) => (
+                <div key={s.label} className="fp-panel border fp-line rounded-2xl p-4">
+                  <p className="fp-text-faint text-[11px] fp-mono uppercase tracking-wide">{s.label}</p>
+                  <p className={`fp-display text-2xl mt-1.5 ${s.tone}`}>{s.value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-6">
+              {/* Quick order — favorites */}
+              <div className="fp-panel border fp-line rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <p className="fp-display text-lg flex items-center gap-2">
+                    <Star size={15} className="fp-gold" /> Favorites
+                  </p>
+                  <span className="fp-text-faint text-xs fp-mono">1-click quick order</span>
+                </div>
+                {favoriteServices.length === 0 ? (
+                  <div className="text-center py-6">
+                    <p className="text-sm fp-text-dim mb-3">No favorites yet.</p>
+                    <button
+                      onClick={() => go("order")}
+                      className="text-sm fp-violet"
+                    >
+                      Star a service while ordering to pin it here →
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {favoriteServices.map((s) => (
+                      <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Recently ordered */}
+              <div className="fp-panel border fp-line rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <p className="fp-display text-lg flex items-center gap-2">
+                    <Clock size={15} className="fp-violet" /> Recently ordered
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  {recentServices.map((s) => (
+                    <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Recent orders */}
+            <div className="fp-panel border fp-line rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="fp-display text-lg">Recent orders</p>
+                <button onClick={() => go("orders")} className="text-xs fp-violet">
+                  View all →
+                </button>
+              </div>
+              <OrderRows orders={orders.slice(0, 3)} services={services} onReorder={quickOrder} compact platformMeta={platformMeta} />
+            </div>
+          </div>
+        )}
+
+        {/* ---------- NEW ORDER ---------- */}
+        {page === "order" && (
+          <NewOrder
+            canOrder={canOrder}
+            favoriteIds={favoriteIds}
+            onToggleFavorite={toggleFavorite}
+            prefillServiceId={prefillServiceId}
+            services={services}
+            onPlaceOrder={onPlaceOrder}
+            platformMeta={platformMeta}
+          />
+        )}
+
+        {/* ---------- ORDERS ---------- */}
+        {page === "orders" && (
+          <div className="fp-panel border fp-line rounded-2xl p-5">
+            <p className="fp-display text-lg mb-4">Order history</p>
+            {orders.length === 0 ? (
+              <div className="text-center py-10">
+                <p className="text-sm fp-text-dim mb-3">You haven&apos;t placed any orders yet.</p>
+                <button onClick={() => go("order")} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg">
+                  Place your first order
+                </button>
+              </div>
+            ) : (
+              <OrderRows orders={orders} services={services} onReorder={quickOrder} />
+            )}
+          </div>
+        )}
+
+        {/* ---------- WALLET ---------- */}
+        {page === "wallet" && (
+          <div className="grid lg:grid-cols-2 gap-6 items-start">
+            <div className="fp-panel border fp-gold-border rounded-2xl p-6">
+              <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Wallet balance</p>
+              <p className="fp-display text-4xl fp-gold mt-2 mb-6">
+                ${walletBalance.toFixed(2)}
+              </p>
+              <p className="text-sm fp-text-dim mb-4">
+                {inactive
+                  ? "Deposits stay available in Inactive Mode — orders resume automatically once the panel is back."
+                  : "Top up once, order across every platform."}
+              </p>
+              {onDeposit ? (
+                <div className="space-y-3">
+                  <label className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Add funds — crypto</label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint text-sm">$</span>
+                      <input
+                        value={depositAmount}
+                        onChange={(e) => { setDepositAmount(e.target.value); setDepositError(null); }}
+                        onKeyDown={(e) => e.key === "Enter" && startDeposit()}
+                        type="number" inputMode="decimal" min="1" step="0.01" placeholder="25.00"
+                        className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl pl-7 pr-3 py-3 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
+                      />
+                    </div>
+                    <button onClick={startDeposit} disabled={depositBusy} className="fp-btn-primary text-sm font-semibold px-5 rounded-xl disabled:opacity-50 whitespace-nowrap">
+                      {depositBusy ? "Starting…" : "Add funds"}
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    {[10, 25, 50, 100].map((v) => (
+                      <button key={v} onClick={() => setDepositAmount(String(v))} className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 fp-text-dim hover:fp-gold-border">${v}</button>
+                    ))}
+                  </div>
+                  {depositError && <p className="text-xs text-red-400">{depositError}</p>}
+                  <p className="fp-text-faint text-[11px]">You&apos;ll be sent to a secure crypto checkout. Your balance updates automatically once the payment confirms.</p>
+                </div>
+              ) : (
+                <p className="fp-text-faint text-sm">Funding isn&apos;t available on this panel yet.</p>
+              )}
+            </div>
+            <div className="fp-panel border fp-line rounded-2xl p-6">
+              <p className="fp-display text-lg mb-4">Deposit history</p>
+              {deposits.length === 0 && (
+                <p className="fp-text-faint text-sm py-6 text-center">No deposits yet.</p>
+              )}
+              {deposits.map((d) => (
+                <div key={d.date + d.amount} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3 text-sm">
+                  <div>
+                    <p className="fp-safe fp-mono">{d.amount}</p>
+                    <p className="text-xs fp-text-faint mt-0.5">{d.method}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs fp-text-dim">{d.date}</p>
+                    <p className="text-xs fp-safe mt-0.5 flex items-center gap-1 justify-end">
+                      <CheckCircle2 size={11} /> {d.status}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ---------- TICKETS ---------- */}
+        {page === "tickets" && (
+          <div className="fp-panel border fp-line rounded-2xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <p className="fp-display text-lg">Support tickets</p>
+              <button className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1">
+                <Plus size={13} /> New ticket
+              </button>
+            </div>
+            {tickets.length === 0 && (
+              <p className="fp-text-faint text-sm py-6 text-center">No tickets yet.</p>
+            )}
+            {tickets.map((t) => (
+              <div key={t.id} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3.5 text-sm gap-3">
+                <div className="min-w-0">
+                  <p className="truncate">{t.subj}</p>
+                  <p className="text-xs fp-text-faint fp-mono mt-0.5">{t.id} · {t.updated}</p>
+                </div>
+                <span className={`text-xs px-2.5 py-1 rounded-full shrink-0 ${t.status === "Answered" ? "fp-safe-soft-bg fp-safe" : "fp-panel-raised fp-text-dim"}`}>
+                  {t.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ---------- API ---------- */}
+        {page === "api" && (
+          <div className="max-w-3xl">
+            <ApiDocs
+              apiKey={apiKey}
+              inactive={inactive}
+              onRegenerate={regenerateApiKey}
+              keyRegenerated={keyRegenerated}
+            />
+          </div>
+        )}
+
+        {/* ---------- PROFILE ---------- */}
+        {page === "profile" && (
+          <div className="max-w-2xl space-y-5">
+            {/* Username */}
+            <div className="fp-panel border fp-line rounded-2xl p-6">
+              <p className="fp-display text-lg mb-5">Username</p>
+              <input
+                defaultValue={email ? email.split("@")[0] : "marisol.co"}
+                className={profileInputCls}
+              />
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => setSavedCard("username")}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                >
+                  Save username
+                </button>
+                {savedCard === "username" && (
+                  <span className="text-xs fp-safe flex items-center gap-1">
+                    <CheckCircle2 size={12} /> Saved
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Email */}
+            <div className="fp-panel border fp-line rounded-2xl p-6">
+              <p className="fp-display text-lg mb-1">Email</p>
+              <p className="text-xs fp-text-dim mb-5">
+                We&apos;ll send a confirmation link to the new address before it takes effect.
+              </p>
+              <div className="space-y-3">
+                <input defaultValue={email ?? "marisol@example.com"} type="email" className={profileInputCls} />
+                <input placeholder="Current password" type="password" className={profileInputCls} />
+              </div>
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => setSavedCard("email")}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                >
+                  Change email
+                </button>
+                {savedCard === "email" && (
+                  <span className="text-xs fp-safe flex items-center gap-1">
+                    <CheckCircle2 size={12} /> Confirmation sent
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Password */}
+            <div className="fp-panel border fp-line rounded-2xl p-6">
+              <p className="fp-display text-lg mb-5">Change password</p>
+              <div className="space-y-3">
+                <input placeholder="Current password" type="password" className={profileInputCls} />
+                <input placeholder="New password" type="password" className={profileInputCls} />
+                <input placeholder="Confirm new password" type="password" className={profileInputCls} />
+              </div>
+              <div className="flex items-center gap-3 mt-4">
+                <button
+                  onClick={() => setSavedCard("password")}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                >
+                  Update password
+                </button>
+                {savedCard === "password" && (
+                  <span className="text-xs fp-safe flex items-center gap-1">
+                    <CheckCircle2 size={12} /> Password updated
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Log out */}
+            <div className="fp-panel border fp-line rounded-2xl p-6 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Log out</p>
+                <p className="text-xs fp-text-dim mt-0.5">End your session on this device.</p>
+              </div>
+              <button
+                onClick={onLogout}
+                className="text-sm fp-text-dim border fp-line rounded-lg px-4 py-2 hover:fp-text flex items-center gap-2"
+              >
+                <LogOut size={14} /> Log out
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function OrderRows({
+  orders,
+  services,
+  onReorder,
+  compact = false,
+  platformMeta,
+}: {
+  orders: CustomerOrder[];
+  services: CustomerService[];
+  onReorder: (serviceId: number) => void;
+  compact?: boolean;
+  platformMeta?: PlatformMeta;
+}) {
+  return (
+    <div>
+      {orders.map((o) => {
+        const svc = services.find((s) => s.id === o.serviceId);
+        return (
+          <div
+            key={o.id}
+            className="flex items-center gap-3 border-b fp-line-soft last:border-0 py-3.5"
+          >
+            {svc && (
+              <span className="w-8 h-8 rounded-lg fp-panel-raised border fp-line-soft flex items-center justify-center fp-text-dim shrink-0">
+                <PlatformGlyph platform={svc.platform} size={13} pathOverride={platformMeta?.[svc.platform]?.icon ?? undefined} />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-sm truncate">{o.service}</p>
+              <p className="text-xs fp-text-faint fp-mono mt-0.5 truncate">
+                #{o.id} · {o.qty.toLocaleString()} · {o.date}
+                {!compact && ` · ${o.link}`}
+              </p>
+            </div>
+            <span className="fp-mono text-sm shrink-0">{o.amount}</span>
+            <span className={`text-xs px-2.5 py-1 rounded-full shrink-0 ${statusTone[o.status]}`}>
+              {o.status}
+            </span>
+            {o.status === "Completed" && (
+              <button
+                onClick={() => onReorder(o.serviceId)}
+                className="shrink-0 text-xs fp-violet border border-[rgba(139,127,255,0.35)] rounded-lg px-2.5 py-1.5 hover:fp-violet-soft-bg flex items-center gap-1 transition-colors"
+                title="Reorder"
+              >
+                <RotateCcw size={11} /> <span className="hidden sm:inline">Reorder</span>
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}

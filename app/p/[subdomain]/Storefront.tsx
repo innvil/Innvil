@@ -1,0 +1,363 @@
+"use client";
+
+import React, { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  Sparkles, Zap, ShieldCheck, Wallet, Clock,
+  AlertTriangle, CheckCircle2,
+} from "lucide-react";
+import { PLATFORMS, PlatformKey, CustomerService, CustomerOrder } from "@/src/data/constants";
+import { PlatformGlyph, PlatformButton } from "@/src/components/customer/PlatformIcons";
+import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
+import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
+import type { StorefrontService, StorefrontPlatformMeta } from "@/src/lib/actions/storefront";
+import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
+import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
+import {
+  customerSignUp, customerSignIn, customerSignOut,
+  type CustomerAccountInfo,
+} from "@/src/lib/actions/customer-auth";
+
+const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
+const price = (n: number) => `$${n.toFixed(2)}`;
+
+/** Map a live storefront service to the customer UI's service shape. */
+function toCustomerService(s: StorefrontService, i: number): CustomerService {
+  return {
+    id: s.localId ?? i + 1,
+    uuid: s.id,
+    platform: (s.platform ?? "") as PlatformKey, // unknown platforms render a blank glyph
+    category: s.category ?? "Other",
+    name: s.name,
+    price: s.price,
+    unit: "1k",
+    min: s.min,
+    max: s.max,
+    startTime: "Varies",
+    completion: "Varies",
+    refill: false,
+    cancel: false,
+    drip: false,
+    description: s.description ?? "",
+    aliases: [],
+  };
+}
+
+/** Lowercase order status → the customer UI's Title-case status. */
+const ORDER_STATUS_LABEL: Record<string, CustomerOrder["status"]> = {
+  pending: "Pending",
+  processing: "Processing",
+  in_progress: "Processing",
+  partial: "Partial",
+  completed: "Completed",
+  canceled: "Canceled",
+  failed: "Canceled",
+  refunded: "Canceled",
+};
+
+function formatOrderDate(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return `Today, ${time}`;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+export function Storefront({
+  panel,
+  services,
+  initialAccount,
+  initialOrders = [],
+  initialDeposits = [],
+  platformMeta = {},
+}: {
+  panel: { id: string; name: string; status: string };
+  services: StorefrontService[];
+  initialAccount: CustomerAccountInfo | null;
+  initialOrders?: CustomerOrderVM[];
+  initialDeposits?: DepositVM[];
+  platformMeta?: StorefrontPlatformMeta;
+}) {
+  const router = useRouter();
+  const inactive = panel.status === "inactive";
+  const account = initialAccount; // re-fetched by the server after auth via router.refresh()
+
+  // ---- Live data → customer dashboard shapes -------------------------------
+  const uiServices = useMemo(() => services.map(toCustomerService), [services]);
+  const uuidToLocalId = useMemo(() => {
+    const m = new Map<string, number>();
+    uiServices.forEach((s) => { if (s.uuid) m.set(s.uuid, s.id); });
+    return m;
+  }, [uiServices]);
+
+  const uiOrders: CustomerOrder[] = useMemo(
+    () =>
+      initialOrders.map((o) => ({
+        id: o.localId,
+        serviceId: (o.serviceId && uuidToLocalId.get(o.serviceId)) || 0,
+        service: o.serviceName,
+        link: o.link,
+        qty: o.quantity,
+        amount: price(o.charge),
+        status: ORDER_STATUS_LABEL[o.status] ?? "Pending",
+        date: formatOrderDate(o.createdAt),
+      })),
+    [initialOrders, uuidToLocalId]
+  );
+
+  // Recently ordered — distinct service ids from the newest orders.
+  const recentIds = useMemo(() => {
+    const seen: number[] = [];
+    for (const o of uiOrders) {
+      if (o.serviceId && !seen.includes(o.serviceId)) seen.push(o.serviceId);
+      if (seen.length >= 6) break;
+    }
+    return seen;
+  }, [uiOrders]);
+
+  const handlePlaceOrder = async (args: PlaceOrderArgs) => {
+    if (!args.service.uuid) return { ok: false, error: "This service can't be ordered yet." };
+    const res = await placeOrder({
+      panelId: panel.id,
+      serviceId: args.service.uuid,
+      link: args.link,
+      quantity: args.quantity,
+      runs: args.runs,
+      interval: args.interval,
+    });
+    if (res.ok) router.refresh();
+    return { ok: res.ok, error: res.ok ? undefined : res.error };
+  };
+
+  const handleDeposit = async (amount: number) => {
+    const res = await createDeposit(panel.id, amount);
+    return res.ok ? { ok: true, url: res.data.url } : { ok: false, error: res.error };
+  };
+
+  // Deposit history → the dashboard's deposit shape.
+  const DEPOSIT_STATUS_LABEL: Record<string, string> = {
+    completed: "Confirmed", pending: "Pending", approved: "Approved", rejected: "Failed",
+  };
+  const uiDeposits = useMemo(
+    () =>
+      initialDeposits.map((d) => ({
+        amount: `+${price(d.amount)}`,
+        method: d.method === "crypto" ? "Crypto (Cryptomus)" : d.method,
+        date: new Date(d.createdAt).toLocaleDateString([], { month: "short", day: "numeric" }),
+        status: DEPOSIT_STATUS_LABEL[d.status] ?? d.status,
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [initialDeposits]
+  );
+
+  // Group services by platform for the showcase
+  const groups = useMemo(() => {
+    const m = new Map<string, StorefrontService[]>();
+    for (const s of services) {
+      const k = s.platform && KNOWN.has(s.platform) ? s.platform : "other";
+      const arr = m.get(k) ?? [];
+      arr.push(s);
+      m.set(k, arr);
+    }
+    return m;
+  }, [services]);
+  const platformKeys = useMemo(() => [...groups.keys()], [groups]);
+  const [activeP, setActiveP] = useState("");
+  const active = activeP || platformKeys[0] || "";
+  const shown = (groups.get(active) ?? []).slice(0, 10);
+
+  // Auth
+  const [mode, setMode] = useState<"register" | "login">("register");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const submitAuth = async () => {
+    if (busy) return;
+    setError(null);
+    setNotice(null);
+    if (!email || !password) { setError("Enter your email and password."); return; }
+    setBusy(true);
+    try {
+      const res =
+        mode === "login"
+          ? await customerSignIn(panel.id, email, password)
+          : await customerSignUp(panel.id, email, password);
+      if (!res.ok) setError(res.error);
+      else if (res.needsConfirmation) { setNotice("Check your inbox to confirm your email, then log in."); setMode("login"); }
+      else router.refresh();
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    await customerSignOut();
+    router.refresh();
+  };
+
+  const inputCls =
+    "w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[rgba(139,127,255,0.35)] text-[#EDEAE2]";
+
+  const PlatformTabs = (
+    <div className="flex gap-3 overflow-x-auto pb-1 md:flex-wrap md:overflow-visible">
+      {platformKeys.map((k) =>
+        k === "other" ? (
+          <button
+            key="other"
+            onClick={() => setActiveP("other")}
+            className={`flex flex-col items-center gap-2 shrink-0 ${active === "other" ? "fp-violet" : "fp-text-faint"}`}
+          >
+            <span className={`w-14 h-14 rounded-2xl border flex items-center justify-center ${active === "other" ? "fp-violet-soft-bg border-[rgba(139,127,255,0.45)]" : "fp-panel-raised border-[#262A35]"}`}>
+              <Sparkles size={20} />
+            </span>
+            <span className="text-[11px]">Other</span>
+          </button>
+        ) : (
+          <PlatformButton
+            key={k}
+            platform={k as PlatformKey}
+            label={PLATFORMS.find((p) => p.key === k)?.label ?? k}
+            active={active === k}
+            onClick={() => setActiveP(k)}
+          />
+        )
+      )}
+    </div>
+  );
+
+  const ServiceList = (
+    <div className="fp-panel border fp-line rounded-2xl p-3 sm:p-5">
+      {shown.length === 0 ? (
+        <p className="fp-text-faint text-sm py-6 text-center">No services in this category yet.</p>
+      ) : (
+        shown.map((s) => (
+          <div key={s.id} className="flex items-center justify-between gap-3 border-b fp-line-soft last:border-0 py-3.5 px-1">
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">{s.name}</p>
+              <p className="text-xs fp-text-faint fp-mono mt-0.5">
+                {s.category ?? "—"} · min {s.min.toLocaleString()} · max {s.max.toLocaleString()}
+              </p>
+            </div>
+            <span className="fp-mono text-sm fp-gold shrink-0">{price(s.price)}/1k</span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
+  /* ---------------- Signed-in view — the real customer dashboard ---------------- */
+  if (account) {
+    return (
+      <CustomerDashboard
+        canOrder={panel.status === "live" && account.status === "active"}
+        inactive={inactive}
+        onLogout={logout}
+        brandName={panel.name}
+        services={uiServices}
+        orders={uiOrders}
+        walletBalance={account.balance}
+        deposits={uiDeposits}
+        tickets={[]}
+        recentIds={recentIds}
+        email={account.email ?? undefined}
+        onPlaceOrder={handlePlaceOrder}
+        onDeposit={handleDeposit}
+        platformMeta={platformMeta}
+      />
+    );
+  }
+
+  /* ---------------- Guest landing ---------------- */
+  return (
+    <div className="fp-root min-h-screen fp-grid-bg fp-noise">
+      {inactive && (
+        <div className="fp-gold-soft-bg border-b border-[rgba(201,165,116,0.2)] px-6 py-2.5 text-center">
+          <p className="fp-gold text-sm flex items-center justify-center gap-2">
+            <Clock size={13} /> New orders are temporarily paused. Accounts and browsing remain available.
+          </p>
+        </div>
+      )}
+
+      <header className="border-b fp-line-soft bg-[#0A0B0F]/90 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center">
+              <Sparkles size={16} color="#0A0B0F" />
+            </div>
+            <span className="fp-display text-xl">{panel.name}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setMode("login")} className={`text-sm px-4 py-2 rounded-lg transition-colors ${mode === "login" ? "fp-violet-soft-bg fp-violet" : "fp-text-dim hover:fp-text"}`}>Log in</button>
+            <button onClick={() => setMode("register")} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-12 md:py-20 grid md:grid-cols-2 gap-12 items-start">
+        <div>
+          <h1 className="fp-display text-4xl md:text-5xl leading-tight mb-5">Grow every platform from one wallet.</h1>
+          <p className="fp-text-dim text-lg mb-8 leading-relaxed">Instant delivery, transparent pricing, and one balance for all your social growth on {panel.name}.</p>
+          <div className="flex gap-3 flex-wrap mb-10">
+            {PLATFORMS.filter((p) => groups.has(p.key)).map((p) => (
+              <span key={p.key} className="w-11 h-11 rounded-xl fp-panel-raised border border-[#262A35] flex items-center justify-center fp-text-dim" title={p.label}>
+                <PlatformGlyph platform={p.key} size={18} />
+              </span>
+            ))}
+          </div>
+          <div className="space-y-4">
+            {[
+              { icon: Zap, title: "Instant start", sub: "Most orders begin within minutes of payment." },
+              { icon: Wallet, title: "One wallet", sub: "Top up once, order across every platform." },
+              { icon: ShieldCheck, title: "Refill guarantee", sub: "Eligible services include automatic refill." },
+            ].map((f) => (
+              <div key={f.title} className="flex items-start gap-3">
+                <span className="w-9 h-9 rounded-lg fp-violet-soft-bg fp-violet flex items-center justify-center shrink-0 mt-0.5"><f.icon size={16} /></span>
+                <div>
+                  <p className="text-sm font-medium">{f.title}</p>
+                  <p className="text-sm fp-text-dim">{f.sub}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div id="nb-auth" className="fp-panel border fp-line rounded-2xl p-7 max-w-md w-full md:justify-self-end">
+          <div className="flex gap-1 fp-panel-raised rounded-xl p-1 mb-6">
+            {([{ k: "register", label: "Create account" }, { k: "login", label: "Log in" }] as const).map((t) => (
+              <button key={t.k} onClick={() => { setMode(t.k); setError(null); setNotice(null); }} className={`flex-1 text-sm py-2 rounded-lg transition-colors ${mode === t.k ? "fp-panel fp-text font-medium border fp-line" : "fp-text-dim"}`}>{t.label}</button>
+            ))}
+          </div>
+          <h2 className="fp-display text-2xl mb-5">{mode === "register" ? "Start growing today" : "Welcome back"}</h2>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="Email" className={`${inputCls} mb-3`} />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAuth()} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="Password" className={`${inputCls} mb-4`} />
+          {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+          {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
+          <button onClick={submitAuth} disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
+            {busy ? "Please wait…" : mode === "register" ? "Create account" : "Log in"}
+          </button>
+          <p className="fp-text-faint text-xs text-center mt-4">
+            {mode === "register" ? (<>Already have an account? <button onClick={() => setMode("login")} className="fp-violet">Log in</button></>) : (<>New here? <button onClick={() => setMode("register")} className="fp-violet">Create account</button></>)}
+          </p>
+        </div>
+      </main>
+
+      {services.length > 0 && (
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 py-12 border-t fp-line-soft">
+          <h2 className="fp-display text-2xl mb-6 text-center">Services for every platform</h2>
+          <div className="mb-6 flex justify-center">{PlatformTabs}</div>
+          <div className="max-w-2xl mx-auto">{ServiceList}</div>
+        </section>
+      )}
+
+      <footer className="border-t fp-line-soft py-8">
+        <div className="max-w-6xl mx-auto px-6 text-center text-xs fp-text-faint">© 2026 {panel.name}</div>
+      </footer>
+    </div>
+  );
+}
