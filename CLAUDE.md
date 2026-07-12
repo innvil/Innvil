@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Owner landing sections + NOWPayments gateway (v0.2.6)
+- Owners can add their own promo/ad blocks to the storefront landing (heading, body,
+  optional CTA button/link) via the Design Studio, shown below the default landing
+  content and stored in `settings.branding.sections`. Sanitized on read and write.
+- NOWPayments is now a real, connectable crypto gateway (300+ coins): hosted invoice
+  checkout + HMAC-SHA512 IPN verification, reusing the existing adapter/webhook
+  pipeline. Owner enters API key + IPN secret and points NOWPayments' IPN callback at
+  `<APP_URL>/api/webhooks/nowpayments`.
+
 ### 2026-07-12 — Glyph revert (shape restored)
 - Reverted the latest transform-based glyph distortion and restored the previous anvil shape in both in-app logo and favicon.
 - Kept spacing/layout tuning independent from symbol geometry so future adjustments can target fit without altering identity.
@@ -564,8 +573,9 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
     `GATEWAY_CATALOG` (shows the whole ecosystem incl. India options; unbuilt ones
     are "coming soon"). Adding a gateway = one adapter + it's live.
   - ✅ **Cryptomus** (crypto), **Razorpay** (India — Payment Links + HMAC webhook),
-    **Stripe** (global — Checkout Session + signed webhook) all connectable.
-    PayPal / PayU / Cashfree / Paytm / NOWPayments / Coinbase = catalog "coming soon".
+    **Stripe** (global — Checkout Session + signed webhook), **NOWPayments** (crypto,
+    300+ coins — hosted invoice + HMAC-SHA512 IPN) all connectable.
+    PayPal / PayU / Cashfree / Paytm / Coinbase = catalog "coming soon".
   - ✅ Credentials: migration `0005` table `panel_payment_gateways`; secrets stored
     as an ENCRYPTED JSON blob in `api_key_enc` (reuse set/get_gateway_key), public
     fields in `config` jsonb. `getGatewayContext` decrypts server-side only.
@@ -577,7 +587,9 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
     (routes via the panel's active gateway) / listDeposits. PaymentsTab = full
     catalog UI. **Requires `NEXT_PUBLIC_APP_URL` + a public webhook URL.**
   - Owner setup: Razorpay/Stripe owners add the webhook endpoint in their gateway
-    dashboard (help text in the UI); Cryptomus is per-invoice (auto).
+    dashboard (help text in the UI); Cryptomus is per-invoice (auto). NOWPayments
+    owners set the IPN callback URL to `<APP_URL>/api/webhooks/nowpayments` and paste
+    the API key + IPN secret.
   - [ ] Next: PayPal, then PayU/Cashfree/Paytm adapters; per-panel CURRENCY (wallets
     are USD-oriented today — Razorpay charges INR); storefront multi-gateway chooser;
     admin deposits/tx-log view.

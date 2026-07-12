@@ -35,7 +35,7 @@ import {
 import {
   getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency, type PaymentsMeta,
 } from "@/src/lib/actions/payments";
-import { getPanelBranding, updatePanelBranding } from "@/src/lib/actions/panels";
+import { getPanelBranding, updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import { THEMES } from "@/src/data/themes";
 import { DesignStudio } from "./DesignStudio";
 import { computeSellRate } from "@/src/lib/money";
@@ -256,6 +256,7 @@ export function BrandingTab({ panel }: { panel: Panel }) {
   const [headline, setHeadline] = useState("");
   const [description, setDescription] = useState("");
   const [favicon, setFavicon] = useState("");
+  const [sections, setSections] = useState<LandingSection[]>([]);
   const [studioFull, setStudioFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
@@ -271,13 +272,14 @@ export function BrandingTab({ panel }: { panel: Panel }) {
       setHeadline(b.headline);
       setDescription(b.description);
       setFavicon(b.favicon);
+      setSections(b.sections);
     });
   }, [panel.id, realPanel]);
 
   const save = async () => {
     if (!realPanel) { setMsg({ text: "Save this panel first.", error: true }); return; }
     setBusy(true); setMsg(null);
-    const res = await updatePanelBranding(panel.id, { name, theme, logoUrl, accent, headline, description, favicon });
+    const res = await updatePanelBranding(panel.id, { name, theme, logoUrl, accent, headline, description, favicon, sections });
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setMsg({ text: "Branding saved — reload your live panel to see it." });
@@ -290,12 +292,12 @@ export function BrandingTab({ panel }: { panel: Panel }) {
       {studioFull && realPanel && (
         <DesignStudio
           panel={{ id: panel.id, name, subdomain: panel.subdomain }}
-          initial={{ name, theme, logoUrl, accent, headline, description, favicon }}
+          initial={{ name, theme, logoUrl, accent, headline, description, favicon, sections }}
           onClose={() => setStudioFull(false)}
           onSaved={(vv) => {
             setName(vv.name); setTheme(vv.theme); setLogoUrl(vv.logoUrl);
             setAccent(vv.accent); setHeadline(vv.headline); setDescription(vv.description);
-            setFavicon(vv.favicon);
+            setFavicon(vv.favicon); setSections(vv.sections);
             setMsg({ text: "Design saved — reload your live panel to see it." });
           }}
         />

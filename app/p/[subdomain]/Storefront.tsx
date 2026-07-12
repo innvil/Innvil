@@ -10,7 +10,7 @@ import { PLATFORMS, PlatformKey, CustomerService, CustomerOrder } from "@/src/da
 import { PlatformGlyph, PlatformButton } from "@/src/components/customer/PlatformIcons";
 import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
-import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod } from "@/src/lib/actions/storefront";
+import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, PublicLandingSection } from "@/src/lib/actions/storefront";
 import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
@@ -73,7 +73,7 @@ export function Storefront({
   platformMeta = {},
   paymentMethods = [],
 }: {
-  panel: { id: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string };
+  panel: { id: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[] };
   services: StorefrontService[];
   initialAccount: CustomerAccountInfo | null;
   initialOrders?: CustomerOrderVM[];
@@ -406,6 +406,17 @@ export function Storefront({
           ))}
         </div>
       </section>
+
+      {/* Owner-authored landing blocks */}
+      {(panel.sections ?? []).map((sec) => (
+        <section key={sec.id} className="max-w-4xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft text-center">
+          {sec.title && <h2 className="fp-display text-2xl md:text-3xl mb-3">{sec.title}</h2>}
+          {sec.body && <p className="fp-text-dim text-sm md:text-base max-w-2xl mx-auto whitespace-pre-line leading-relaxed">{sec.body}</p>}
+          {sec.ctaLabel && (
+            <a href={sec.ctaHref || "#nb-auth"} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg text-sm inline-block mt-6">{sec.ctaLabel}</a>
+          )}
+        </section>
+      ))}
 
       {/* CTA band — default section */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">

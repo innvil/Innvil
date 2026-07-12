@@ -9,6 +9,14 @@ import type { PanelStatus, ServiceRow } from "@/src/types/db";
  * customer-safe fields — never provider cost, markup, profit, or api keys.
  */
 
+export interface PublicLandingSection {
+  id: string;
+  title: string;
+  body: string;
+  ctaLabel: string;
+  ctaHref: string;
+}
+
 export interface PublicPanel {
   id: string;
   name: string;
@@ -22,6 +30,7 @@ export interface PublicPanel {
   headline: string;
   description: string;
   favicon: string;
+  sections: PublicLandingSection[];
 }
 
 /** The panel's operating currency (from settings; default USD). */
@@ -33,9 +42,28 @@ function panelCurrency(settings: unknown): string {
   return "USD";
 }
 
+/** Owner-authored landing blocks (from settings.branding.sections). */
+function landingSections(raw: unknown): PublicLandingSection[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 12).flatMap((s, i) => {
+    if (!s || typeof s !== "object") return [];
+    const o = s as Record<string, unknown>;
+    const title = typeof o.title === "string" ? o.title : "";
+    const body = typeof o.body === "string" ? o.body : "";
+    if (!title && !body) return [];
+    return [{
+      id: typeof o.id === "string" && o.id ? o.id : `s${i}`,
+      title,
+      body,
+      ctaLabel: typeof o.ctaLabel === "string" ? o.ctaLabel : "",
+      ctaHref: typeof o.ctaHref === "string" ? o.ctaHref : "",
+    }];
+  });
+}
+
 /** Customer-facing branding (logo, accent, hero copy) from settings.branding. */
-function panelBranding(settings: unknown): { logoUrl: string; accent: string; headline: string; description: string; favicon: string } {
-  const empty = { logoUrl: "", accent: "", headline: "", description: "", favicon: "" };
+function panelBranding(settings: unknown): { logoUrl: string; accent: string; headline: string; description: string; favicon: string; sections: PublicLandingSection[] } {
+  const empty = { logoUrl: "", accent: "", headline: "", description: "", favicon: "", sections: [] as PublicLandingSection[] };
   if (settings && typeof settings === "object") {
     const b = (settings as Record<string, unknown>).branding;
     if (b && typeof b === "object") {
@@ -46,6 +74,7 @@ function panelBranding(settings: unknown): { logoUrl: string; accent: string; he
         headline: typeof o.headline === "string" ? o.headline : "",
         description: typeof o.description === "string" ? o.description : "",
         favicon: typeof o.favicon === "string" ? o.favicon : "",
+        sections: landingSections(o.sections),
       };
     }
   }
@@ -75,6 +104,7 @@ export async function getPublicPanel(subdomain: string): Promise<PublicPanel | n
     headline: branding.headline,
     description: branding.description,
     favicon: branding.favicon || branding.logoUrl,
+    sections: branding.sections,
   };
 }
 

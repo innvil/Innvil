@@ -88,7 +88,7 @@ export default async function StorefrontPage({ params }: Params) {
   return (
     <div style={themeStyle}>
       <Storefront
-        panel={{ id: panel.id, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description }}
+        panel={{ id: panel.id, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description, sections: panel.sections }}
         services={services}
         initialAccount={account}
         initialOrders={orders}

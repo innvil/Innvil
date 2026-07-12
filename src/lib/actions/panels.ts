@@ -94,6 +94,15 @@ export async function updatePanelStatus(
 
 /* ---------------- Branding & Design Studio ---------------- */
 
+/** An owner-authored promo/ad block shown on the storefront landing. */
+export interface LandingSection {
+  id: string;
+  title: string;
+  body: string;
+  ctaLabel: string; // "" = no button
+  ctaHref: string;
+}
+
 export interface PanelBranding {
   name: string;
   theme: string; // theme id
@@ -102,12 +111,32 @@ export interface PanelBranding {
   headline: string; // storefront hero headline
   description: string; // storefront hero subtext
   favicon: string; // browser-tab icon URL ("" = use logo)
+  sections: LandingSection[]; // extra owner-added landing blocks
 }
 
-type BrandingBlob = { logoUrl: string; accent: string; headline: string; description: string; favicon: string };
+type BrandingBlob = { logoUrl: string; accent: string; headline: string; description: string; favicon: string; sections: LandingSection[] };
+
+/** Coerce arbitrary stored JSON into a clean, safe LandingSection[]. */
+function readSections(raw: unknown): LandingSection[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 12).flatMap((s, i) => {
+    if (!s || typeof s !== "object") return [];
+    const o = s as Record<string, unknown>;
+    const title = typeof o.title === "string" ? o.title : "";
+    const body = typeof o.body === "string" ? o.body : "";
+    if (!title && !body) return [];
+    return [{
+      id: typeof o.id === "string" && o.id ? o.id : `s${i}`,
+      title,
+      body,
+      ctaLabel: typeof o.ctaLabel === "string" ? o.ctaLabel : "",
+      ctaHref: typeof o.ctaHref === "string" ? o.ctaHref : "",
+    }];
+  });
+}
 
 function readBranding(settings: unknown): BrandingBlob {
-  const empty: BrandingBlob = { logoUrl: "", accent: "", headline: "", description: "", favicon: "" };
+  const empty: BrandingBlob = { logoUrl: "", accent: "", headline: "", description: "", favicon: "", sections: [] };
   if (settings && typeof settings === "object") {
     const b = (settings as Record<string, unknown>).branding;
     if (b && typeof b === "object") {
@@ -118,6 +147,7 @@ function readBranding(settings: unknown): BrandingBlob {
         headline: typeof o.headline === "string" ? o.headline : "",
         description: typeof o.description === "string" ? o.description : "",
         favicon: typeof o.favicon === "string" ? o.favicon : "",
+        sections: readSections(o.sections),
       };
     }
   }
@@ -143,13 +173,14 @@ export async function getPanelBranding(panelId: string): Promise<PanelBranding |
     headline: b.headline,
     description: b.description,
     favicon: b.favicon,
+    sections: b.sections,
   };
 }
 
 /** Save panel branding (name, theme, logo, accent, hero headline/description). */
 export async function updatePanelBranding(
   panelId: string,
-  patch: { name?: string; theme?: string; logoUrl?: string; accent?: string; headline?: string; description?: string; favicon?: string }
+  patch: { name?: string; theme?: string; logoUrl?: string; accent?: string; headline?: string; description?: string; favicon?: string; sections?: LandingSection[] }
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
@@ -169,7 +200,7 @@ export async function updatePanelBranding(
   }
   if (patch.theme !== undefined) update.theme = patch.theme;
 
-  const brandingKeys = ["logoUrl", "accent", "headline", "description", "favicon"] as const;
+  const brandingKeys = ["logoUrl", "accent", "headline", "description", "favicon", "sections"] as const;
   if (brandingKeys.some((k) => patch[k] !== undefined)) {
     const settings: Record<string, unknown> =
       panel.settings && typeof panel.settings === "object" ? { ...(panel.settings as Record<string, unknown>) } : {};
@@ -180,6 +211,15 @@ export async function updatePanelBranding(
       headline: patch.headline !== undefined ? patch.headline.trim() : current.headline,
       description: patch.description !== undefined ? patch.description.trim() : current.description,
       favicon: patch.favicon !== undefined ? patch.favicon.trim() : current.favicon,
+      sections: patch.sections !== undefined
+        ? readSections(patch.sections.map((s, i) => ({
+            id: s.id || `s${i}`,
+            title: (s.title || "").trim(),
+            body: (s.body || "").trim(),
+            ctaLabel: (s.ctaLabel || "").trim(),
+            ctaHref: (s.ctaHref || "").trim(),
+          })))
+        : current.sections,
     };
     update.settings = settings;
   }

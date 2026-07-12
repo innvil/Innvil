@@ -5,6 +5,42 @@
 
 ---
 
+## Session: Owner landing sections + NOWPayments gateway (v0.2.6)
+
+### Date: 2026-07-12
+Two things. **package.json bumped to 0.2.6** (v0.2.5 already committed+tagged).
+
+**1. Owner-editable landing sections ("your ads").** Owners can now add their own
+promo blocks below the default landing content (the defaults from v0.2.5 stay).
+- Data: `settings.branding.sections: LandingSection[]` = {id,title,body,ctaLabel,ctaHref}.
+  Sanitized on read AND write (max 12, drops empties) in both `panels.ts`
+  (`readSections`, owner side) and `storefront.ts` (`landingSections`, public side).
+- Threaded through: `PanelBranding`/`getPanelBranding`/`updatePanelBranding` →
+  `PublicPanel`/`getPublicPanel` → `page.tsx` → `Storefront.tsx` (renders each block
+  with optional CTA; blank CTA link falls back to the sign-up card `#nb-auth`).
+- Editor lives in the **Design Studio** (full-screen): add/remove/reorder-free list
+  with heading/body/button/link, shown live in the mockup preview. BrandingTab
+  threads `sections` into the Studio initial + onSaved + Save.
+
+**2. NOWPayments crypto gateway (real, connectable).** User did KYC on NOWPayments
+(Cryptomus blocked on a phone issue for now).
+- Client `src/lib/payments/nowpayments.ts`: createInvoice (hosted `/v1/invoice`,
+  `x-api-key`), getPaymentStatus, getStatus (health), verifyIpnSignature
+  (HMAC-SHA512 over alphabetically-sorted JSON body, header `x-nowpayments-sig`),
+  isPaidStatus (`finished`).
+- Adapter `adapters/nowpayments.ts`: two SECRET fields (API key + IPN secret; no
+  public config). verifyWebhook = signature check → payment_status `finished` →
+  best-effort server-to-server re-check. Registered in `adapters/index.ts` and
+  flipped `available: true` in GATEWAY_CATALOG (category "crypto").
+- Reuses the generic pipeline unchanged: connectGateway (all-secret adapter OK),
+  createDeposit (`callbackUrl = /api/webhooks/nowpayments`), dynamic webhook route,
+  shared webhook-handler (idempotent pending→completed → apply_balance_change).
+- **Owner setup:** in NOWPayments, set the IPN callback URL to
+  `<NEXT_PUBLIC_APP_URL>/api/webhooks/nowpayments` and paste API key + IPN secret in
+  the panel's Payments tab. Requires a PUBLIC app URL for IPNs to arrive.
+
+---
+
 ## Session: Favicon, seasonal themes, richer default landing (v0.2.5)
 
 ### Date: 2026-07-09

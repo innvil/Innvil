@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Save, Type, Sparkles, Lock } from "lucide-react";
+import { X, Save, Type, Sparkles, Lock, Plus, Trash2 } from "lucide-react";
 import { THEMES, themeVars } from "@/src/data/themes";
-import { updatePanelBranding } from "@/src/lib/actions/panels";
+import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import { formatMoney } from "@/src/lib/money";
 
 /* =========================================================
@@ -21,7 +21,11 @@ export interface StudioValues {
   headline: string;
   description: string;
   favicon: string;
+  sections: LandingSection[];
 }
+
+let SECTION_SEQ = 0;
+const newSection = (): LandingSection => ({ id: `s${Date.now()}_${SECTION_SEQ++}`, title: "", body: "", ctaLabel: "", ctaHref: "" });
 
 const PREMIUM_DESIGNS = [
   { id: "aurora", label: "Aurora", note: "Gradient glass · animated hero" },
@@ -44,6 +48,10 @@ export function DesignStudio({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const set = (patch: Partial<StudioValues>) => setV((s) => ({ ...s, ...patch }));
+  const setSection = (id: string, patch: Partial<LandingSection>) =>
+    setV((s) => ({ ...s, sections: s.sections.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
+  const addSection = () => setV((s) => ({ ...s, sections: [...s.sections, newSection()] }));
+  const removeSection = (id: string) => setV((s) => ({ ...s, sections: s.sections.filter((x) => x.id !== id) }));
   const currency = panel.currency || "USD";
   const preview = themeVars(v.theme, v.accent) as React.CSSProperties;
   const inputCls = "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border";
@@ -53,6 +61,7 @@ export function DesignStudio({
     const res = await updatePanelBranding(panel.id, {
       name: v.name, theme: v.theme, logoUrl: v.logoUrl, accent: v.accent,
       headline: v.headline, description: v.description, favicon: v.favicon,
+      sections: v.sections,
     });
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
@@ -106,6 +115,30 @@ export function DesignStudio({
             <input value={v.headline} onChange={(e) => set({ headline: e.target.value })} placeholder="Grow every platform from one wallet." className={`${inputCls} mt-1 mb-3`} />
             <label className="fp-text-dim text-xs">Description</label>
             <textarea value={v.description} onChange={(e) => set({ description: e.target.value })} rows={3} placeholder="Instant delivery, transparent pricing…" className={`${inputCls} mt-1`} />
+          </section>
+
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <p className="fp-text-faint text-xs fp-mono uppercase">Landing sections · your ads</p>
+              <button onClick={addSection} className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-1 text-xs fp-text-dim hover:fp-text flex items-center gap-1"><Plus size={12} /> Add</button>
+            </div>
+            {v.sections.length === 0 && <p className="fp-text-faint text-[11px] mb-2">Add promo blocks (offers, reviews, guarantees…) below the default landing content.</p>}
+            <div className="space-y-3">
+              {v.sections.map((sec, i) => (
+                <div key={sec.id} className="fp-panel-raised border fp-line-soft rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="fp-text-faint text-[11px] fp-mono">Section {i + 1}</span>
+                    <button onClick={() => removeSection(sec.id)} className="fp-text-faint hover:text-red-400"><Trash2 size={13} /></button>
+                  </div>
+                  <input value={sec.title} onChange={(e) => setSection(sec.id, { title: e.target.value })} placeholder="Heading" className={`${inputCls} mb-2`} />
+                  <textarea value={sec.body} onChange={(e) => setSection(sec.id, { body: e.target.value })} rows={2} placeholder="Body text…" className={`${inputCls} mb-2`} />
+                  <div className="flex gap-2">
+                    <input value={sec.ctaLabel} onChange={(e) => setSection(sec.id, { ctaLabel: e.target.value })} placeholder="Button (optional)" className={`${inputCls} flex-1`} />
+                    <input value={sec.ctaHref} onChange={(e) => setSection(sec.id, { ctaHref: e.target.value })} placeholder="Link (blank = sign up)" className={`${inputCls} flex-1 fp-mono`} />
+                  </div>
+                </div>
+              ))}
+            </div>
           </section>
 
           <section>
@@ -165,6 +198,13 @@ export function DesignStudio({
                 <div><p className="text-sm font-medium">Instagram Followers — HQ</p><p className="fp-text-faint text-xs fp-mono">Followers · min 100</p></div>
                 <span className="fp-mono text-sm fp-gold">{formatMoney(1.35, currency)}/1k</span>
               </div>
+              {v.sections.filter((s) => s.title || s.body).map((s) => (
+                <div key={s.id} className="border-t fp-line-soft mt-5 pt-5 text-center">
+                  {s.title && <p className="fp-display text-lg mb-1">{s.title}</p>}
+                  {s.body && <p className="fp-text-dim text-sm whitespace-pre-line">{s.body}</p>}
+                  {s.ctaLabel && <span className="fp-btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mt-3">{s.ctaLabel}</span>}
+                </div>
+              ))}
             </div>
             {/* Dashboard header */}
             <div className="fp-root border-t fp-line-soft p-4 flex items-center justify-between" style={{ background: "var(--void-2)" }}>
