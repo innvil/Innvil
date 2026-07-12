@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Super-admin dashboard + platform payments (v0.2.9)
+- New role-gated `/superadmin` (server-checked `hasRole('super_admin')`) with a real
+  **Platform payments** config: the super admin connects **Cryptomus + NOWPayments**
+  (how panel owners pay Innvil). Secrets pgcrypto-encrypted in a new
+  `platform_payment_gateways` table — **run migration `0008`**. Binance Pay later.
+- Actions: `platform-payments.ts` (get/connect/disconnect, reuse adapter fields) +
+  `superadmin.ts` (platform overview counts, `amSuperAdmin`). Owner sidebar shows a
+  "Super admin" link only to super admins.
+- Make yourself super admin once:
+  `update profiles set role='super_admin' where id=(select id from auth.users where email='you@…');`
+
 ### 2026-07-12 — Owner dashboard + auth production (v0.2.8)
 - Auth split into dedicated worlds/routes: `/login`, `/signup` (username + confirm +
   email verification), `/forgot-password`, `/reset-password`. Landing CTAs link to them.

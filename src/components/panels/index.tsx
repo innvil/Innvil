@@ -25,6 +25,7 @@ import { AccountSettings } from "./AccountSettings";
 import { OwnerOrders, OwnerCustomers, OwnerBilling } from "./OwnerSections";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
+import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
 
@@ -358,7 +359,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
    C. LEDGERLINE APP SHELL (dashboard)
    ========================================================= */
 
-function AppSidebar({ section, setSection }: { section: string; setSection: (s: string) => void }) {
+function AppSidebar({ section, setSection, isSuper }: { section: string; setSection: (s: string) => void; isSuper?: boolean }) {
   const items = [
     { k: "home", label: "Dashboard home", icon: LayoutGrid },
     { k: "panels", label: "My Panels", icon: Gauge },
@@ -388,6 +389,13 @@ function AppSidebar({ section, setSection }: { section: string; setSection: (s: 
           </div>
         ))}
       </nav>
+      {isSuper && (
+        <div className="border-t fp-line-soft pt-4 mt-4">
+          <Link href="/superadmin" className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm fp-gold hover:fp-gold-soft-bg">
+            <ShieldCheck size={16} /> Super admin
+          </Link>
+        </div>
+      )}
     </aside>
   );
 }
@@ -925,6 +933,9 @@ export function InnvilApp({ setWorld, initialSection }: {
   const [panelList, setPanelList] = useState<Panel[]>(cachedPanels);
   const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
   const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
+  const [isSuper, setIsSuper] = useState(false);
+
+  useEffect(() => { amSuperAdmin().then(setIsSuper); }, []);
 
   const refreshPanels = useCallback(async () => {
     setLoadingPanels(panelList.length === 0);
@@ -955,7 +966,7 @@ export function InnvilApp({ setWorld, initialSection }: {
 
   return (
     <div className="fp-root min-h-screen flex">
-      <AppSidebar section={section === "panelAdmin" || section === "create" ? "panels" : section} setSection={setSection} />
+      <AppSidebar section={section === "panelAdmin" || section === "create" ? "panels" : section} setSection={setSection} isSuper={isSuper} />
       <div className="flex-1 min-w-0">
         <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} />
         {section === "account" && <AccountSettings />}

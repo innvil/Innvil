@@ -5,6 +5,38 @@
 
 ---
 
+## Session: Super-admin dashboard live + platform payments (v0.2.9)
+
+### Date: 2026-07-12
+Super-admin control panel, role-gated, with platform-level payment config so the
+super admin can set how PANEL OWNERS pay Innvil. **package.json → 0.2.9.**
+**Run migration `0008_platform_payment_gateways.sql`.**
+
+- Migration 0008: `platform_payment_gateways` (one row per gateway, no panel_id) +
+  `set_platform_gateway_key`/`get_platform_gateway_key` (pgcrypto, mirror the panel
+  RPCs) + RLS `is_super_admin()` only. Secrets encrypted, service-role only.
+- `src/lib/actions/platform-payments.ts` (super-admin gated via hasRole):
+  getPlatformPaymentsMeta / connectPlatformGateway / disconnectPlatformGateway.
+  Reuses the existing Cryptomus + NOWPayments adapters' `fields`. PLATFORM_GATEWAY_IDS
+  = ['cryptomus','nowpayments'] (Binance Pay later).
+- `src/lib/actions/superadmin.ts`: getPlatformOverview (panels/live/owners/customers/
+  orders counts) + amSuperAdmin().
+- `src/components/superadmin/SuperAdminDashboard.tsx`: Overview + Platform payments
+  tabs (connect/update/disconnect each gateway; blank secret keeps existing).
+- `app/superadmin/page.tsx`: server component, `hasRole('super_admin')` gate → renders
+  the dashboard, else a "Restricted" screen; signed-out → /login.
+- Owner sidebar shows a "Super admin" link only when `amSuperAdmin()` (→ /superadmin).
+
+**To use:** set your account's role to super_admin once in SQL:
+  `update profiles set role='super_admin' where id = (select id from auth.users where email='you@…');`
+The old mock `SuperAdmin` in panels/index.tsx stays for /?preview=1 only.
+
+NOTE: the actual owner→Innvil top-up flow that CONSUMES these gateways isn't wired yet
+(owner Add-Funds modal is still a placeholder) — this pass delivers the config surface.
+NEXT (requested): customer-front support tickets (usable), then that owner top-up flow.
+
+---
+
 ## Session: Owner dashboard + auth production (v0.2.8)
 
 ### Date: 2026-07-12
