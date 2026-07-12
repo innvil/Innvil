@@ -5,272 +5,34 @@
 
 ---
 
-## Session: Customer support tickets (usable, both sides) (v0.2.10)
+## Session: Owner min top-up persistence in Payments tab
 
 ### Date: 2026-07-12
-Real support-ticket system end-to-end. **package.json → 0.2.10.**
-**Run migration `0009_support_tickets.sql`.** Optional: set RESEND_API_KEY (+ RESEND_FROM)
-for email notifications — the app works without them (in-app only).
-
-- Migration 0009: `support_tickets` (panel_id, customer_id, subject, status enum
-  open/answered/closed, last_sender, customer_unread/owner_unread, last_message_at) +
-  `support_ticket_messages` (ticket_id, sender_role, sender_id, body) + RLS
-  (panel member / super admin / the ticket's own customer). updated_at trigger.
-- Customer actions `tickets.ts` (storefront session; authz derives the panel FROM the
-  ticket so multi-panel customers are safe): createTicket, listCustomerTickets,
-  getCustomerTicket (clears customer_unread), customerReply (reopens), customerCloseTicket.
-- Owner actions `admin-tickets.ts` (owner session + ownership): listPanelTickets,
-  getOwnerTicket (clears owner_unread, resolves customer email), ownerReplyToTicket
-  (→ answered + email customer), setTicketStatus (close/reopen), countOpenPanelTickets.
-- Email: `src/lib/email/resend.ts` — best-effort, fire-and-forget, no-ops without
-  RESEND_API_KEY. Customer→owner on new/reply; owner→customer on reply.
-- UI: customer `CustomerTickets.tsx` (list → compose → thread with replies + close),
-  wired into CustomerDashboard's Tickets tab via a new `panelId` prop (mock fallback
-  kept for /?preview=1). Owner `admin/SupportInbox.tsx` replaces the SupportTab
-  "coming soon" (list → thread → reply + close/reopen); PanelAdmin passes panelId.
+- Fixed owner-side Payments tab behavior where a saved gateway minimum top-up could appear to disappear after save/reopen.
+- Payment gateway edit forms now prefill from the currently saved gateway config, so `minTopup` remains visible unless the owner changes it.
+- Added a persistent per-gateway summary line on each connected method card to show the active minimum top-up amount at a glance.
+- Kept backend min-topup persistence unchanged; this pass fixes owner UX visibility and edit-state hydration.
+- Verified production build success after the fix.
 
 ---
 
-## Session: Super-admin dashboard live + platform payments (v0.2.9)
+Note: 
+add a receipt download feature - the receipt should show the overall top-up.
+user can choose period of what receipt they want, choosing from 1st to anywhere until the last day of the month.
+the calender choice should be easy, they just open one calender chooser then choose 1-31 in that same calendar.
+receipt logic should be: total top up for the selected period minus API price to the orders - the total should show the profit they have per period they choose.
+can delete after noting.
+
+
+## Session: Owner topbar balance + auth autofill hardening
 
 ### Date: 2026-07-12
-Super-admin control panel, role-gated, with platform-level payment config so the
-super admin can set how PANEL OWNERS pay Innvil. **package.json → 0.2.9.**
-**Run migration `0008_platform_payment_gateways.sql`.**
-
-- Migration 0008: `platform_payment_gateways` (one row per gateway, no panel_id) +
-  `set_platform_gateway_key`/`get_platform_gateway_key` (pgcrypto, mirror the panel
-  RPCs) + RLS `is_super_admin()` only. Secrets encrypted, service-role only.
-- `src/lib/actions/platform-payments.ts` (super-admin gated via hasRole):
-  getPlatformPaymentsMeta / connectPlatformGateway / disconnectPlatformGateway.
-  Reuses the existing Cryptomus + NOWPayments adapters' `fields`. PLATFORM_GATEWAY_IDS
-  = ['cryptomus','nowpayments'] (Binance Pay later).
-- `src/lib/actions/superadmin.ts`: getPlatformOverview (panels/live/owners/customers/
-  orders counts) + amSuperAdmin().
-- `src/components/superadmin/SuperAdminDashboard.tsx`: Overview + Platform payments
-  tabs (connect/update/disconnect each gateway; blank secret keeps existing).
-- `app/superadmin/page.tsx`: server component, `hasRole('super_admin')` gate → renders
-  the dashboard, else a "Restricted" screen; signed-out → /login.
-- Owner sidebar shows a "Super admin" link only when `amSuperAdmin()` (→ /superadmin).
-
-**To use:** set your account's role to super_admin once in SQL:
-  `update profiles set role='super_admin' where id = (select id from auth.users where email='you@…');`
-The old mock `SuperAdmin` in panels/index.tsx stays for /?preview=1 only.
-
-NOTE: the actual owner→Innvil top-up flow that CONSUMES these gateways isn't wired yet
-(owner Add-Funds modal is still a placeholder) — this pass delivers the config surface.
-NEXT (requested): customer-front support tickets (usable), then that owner top-up flow.
-
----
-
-## Session: Owner dashboard + auth production (v0.2.8)
-
-### Date: 2026-07-12
-Owner/app-shell + auth pass. **package.json → 0.2.8** (v0.2.7 committed + tagged).
-
-**Bug fixes**
-- `.ledgerline.app` → shared `src/lib/config.ts` (`PANEL_ROOT_DOMAIN` = innvil.cloud,
-  `panelDisplayDomain`, `panelStorefrontPath`). Replaced in DashboardHome, MyPanels,
-  Create wizard (subdomain suffix + review).
-- **My Panels "Visit"** now a real `<a href="/p/<sub>" target="_blank">` (was a dead button).
-- **Create-panel "Connect provider"**: the inert card is now a real toggle; on launch
-  the owner lands straight on the panel's **Providers & API** tab (PanelAdmin gained
-  `initialTab`; InnvilApp threads it via openPanel(p, tab)).
-- **Bell icon**: now a real button with a notifications dropdown ("all caught up"
-  placeholder).
-
-**Owner account settings (new)** — `src/lib/actions/account.ts`
-(getAccount/updateDisplayName/updateEmail/updatePassword; email change → confirm
-link, password change re-authenticates with current password) +
-`AccountSettings.tsx` (username/email/password cards). Wired to the sidebar
-"Account settings" item + the topbar avatar (section "account").
-
-**Auth in its own worlds (routes)** — `app/login`, `app/signup`, `app/forgot-password`,
-`app/reset-password` (+ shared `src/components/auth/AuthShell.tsx`). Signup now takes
-**username** + confirm password + email-confirmation state; login has **Forgot
-password**; reset-password consumes the emailed recovery link client-side
-(exchangeCodeForSession). New `requestPasswordReset` action (redirect → /reset-password;
-needs NEXT_PUBLIC_APP_URL). Landing CTAs now `<Link>` to /login and /signup.
-The old combined `AuthScreen` remains only as a fallback (root view "auth").
-
-**Owner app shell real data** — `src/components/panels/OwnerSections.tsx`:
-- OwnerOrders (listAllOwnerOrders — orders across all owned panels, with panel col),
-- OwnerCustomers (listAllOwnerCustomers in customers.ts),
-- OwnerBilling (getOwnerBillingSummary — REAL revenue today + 5% commission ESTIMATE
-  per panel; auto-billing/settlement marked "coming soon" since owner-wallet infra
-  isn't built). Deleted the old mock `Billing`; Support (all panels) → coming soon.
-  admin-orders.ts refactored with a shared `mapOrderRow`.
-
-Left for later (noted, not fake controls): DashboardHome "Orders today"/RevenueChart
-are still placeholder visuals; owner Add-Funds modal is still a placeholder (owner
-prepaid balance infra not built); custom-domain host routing in proxy.ts still pending;
-super-admin dashboard + its payment-method config (Cryptomus + NOWPayments) is the
-NEXT agenda; landing "how it works" video slot (super-admin only) is a future update.
-
-Aggregate money across panels is shown in USD (per-panel currencies differ) — fine
-for MVP; revisit if multi-currency owners appear.
-
----
-
-## Session: Admin dashboard production pass — real Orders + Overview (v0.2.7)
-
-### Date: 2026-07-12
-Goal: make the owner admin dashboard production-ready ("Core + honest placeholders").
-**package.json bumped to 0.2.7** (v0.2.6 committed + tagged).
-
-Inventory before: 6 real tabs (Status, Branding, Providers, Services, Payments,
-Customers); 9 mock/placeholder tabs with non-functional controls.
-
-**Built real:**
-- `src/lib/actions/admin-orders.ts` (new, owner-auth + ownership in code):
-  - `listPanelOrders(panelId, {status?, limit?})` → AdminOrderVM[] with owner-only
-    fields (charge, provider_cost, profit, provider_order_id, remains); emails resolved
-    via `admin.auth.admin.getUserById`; service name via `services(name)` embed and
-    customer via `customer_accounts(user_id)` embed (FKs exist). Filter applied BEFORE
-    order/limit (PostgREST ordering rule).
-  - Per-order actions: `resendOrder` (pending, unsubmitted → addOrder), `requestRefill`,
-    `requestCancel` (provider calls; status settles via sync), `markOrderCompleted`,
-    `refundOrder` (full/partial → apply_balance_change 'refund' + mark refunded).
-  - `getPanelOverview(panelId)` (revenue/profit today, orders today, pending, customers,
-    active services, recent[6]) and `getPanelCurrency(panelId)`.
-- `OrdersTab({panelId})` rewritten: status chips + in-memory search, sessionStorage
-  cache, expandable detail with actions + "Sync statuses" (syncOrdersNow). Shell no
-  longer passes expandedOrder (OrdersTab owns its state).
-- `OverviewTab` rewritten to real stats + recent-orders table (shared `OrderStatusPill`).
-
-**Honest "Coming soon" placeholders** (were fake controls): Domain (custom domains;
-still shows the real live subdomain), Customer API, Risk & Security, Notifications,
-Support, Promotions — via a shared `ComingSoon` card. Automation stays coming-soon.
-
-Removed now-unused imports (recentOrders, orderDetailExtras, tickets, OrdersTable,
-Mail, Percent). NOTE: `middleware.ts` → `proxy.ts` (Next 16). Custom-domain routing
-(host-based rewrite in proxy.ts, for innvil.cloud subdomains + connected domains) was
-started then paused for this admin pass — still pending.
-
----
-
-## Session: Owner landing sections + NOWPayments gateway (v0.2.6)
-
-### Date: 2026-07-12
-Two things. **package.json bumped to 0.2.6** (v0.2.5 already committed+tagged).
-
-**1. Owner-editable landing sections ("your ads").** Owners can now add their own
-promo blocks below the default landing content (the defaults from v0.2.5 stay).
-- Data: `settings.branding.sections: LandingSection[]` = {id,title,body,ctaLabel,ctaHref}.
-  Sanitized on read AND write (max 12, drops empties) in both `panels.ts`
-  (`readSections`, owner side) and `storefront.ts` (`landingSections`, public side).
-- Threaded through: `PanelBranding`/`getPanelBranding`/`updatePanelBranding` →
-  `PublicPanel`/`getPublicPanel` → `page.tsx` → `Storefront.tsx` (renders each block
-  with optional CTA; blank CTA link falls back to the sign-up card `#nb-auth`).
-- Editor lives in the **Design Studio** (full-screen): add/remove/reorder-free list
-  with heading/body/button/link, shown live in the mockup preview. BrandingTab
-  threads `sections` into the Studio initial + onSaved + Save.
-
-**2. NOWPayments crypto gateway (real, connectable).** User did KYC on NOWPayments
-(Cryptomus blocked on a phone issue for now).
-- Client `src/lib/payments/nowpayments.ts`: createInvoice (hosted `/v1/invoice`,
-  `x-api-key`), getPaymentStatus, getStatus (health), verifyIpnSignature
-  (HMAC-SHA512 over alphabetically-sorted JSON body, header `x-nowpayments-sig`),
-  isPaidStatus (`finished`).
-- Adapter `adapters/nowpayments.ts`: two SECRET fields (API key + IPN secret; no
-  public config). verifyWebhook = signature check → payment_status `finished` →
-  best-effort server-to-server re-check. Registered in `adapters/index.ts` and
-  flipped `available: true` in GATEWAY_CATALOG (category "crypto").
-- Reuses the generic pipeline unchanged: connectGateway (all-secret adapter OK),
-  createDeposit (`callbackUrl = /api/webhooks/nowpayments`), dynamic webhook route,
-  shared webhook-handler (idempotent pending→completed → apply_balance_change).
-- **Owner setup:** in NOWPayments, set the IPN callback URL to
-  `<NEXT_PUBLIC_APP_URL>/api/webhooks/nowpayments` and paste API key + IPN secret in
-  the panel's Payments tab. Requires a PUBLIC app URL for IPNs to arrive.
-
----
-
-## Session: Favicon, seasonal themes, richer default landing (v0.2.5)
-
-### Date: 2026-07-09
-Follow-ups on the redesign. **package.json bumped to 0.2.5** (checked tags: v0.2.0–
-v0.2.4 exist → next is v0.2.5; do NOT reuse v0.2.4).
-- **Favicon**: branding now has a `favicon` field (settings.branding; falls back to
-  logo). Design Studio has a Favicon URL slot (with a tiny preview). getPublicPanel
-  returns it; `generateMetadata` sets per-panel `icons.icon` so the browser tab uses
-  the owner's favicon.
-- **Seasonal free themes** added to `themes.ts`: Christmas, Autumn/Fall, Winter
-  Frost, Spring Bloom (`seasonal: true`). Show alongside the core 4 in the picker.
-- **Richer default landing** (every panel, pre-added — it felt too empty): added a
-  "Why {panel}" benefits grid, an FAQ accordion (`<details>`), and a CTA band before
-  the footer, plus the editable hero headline/description from the Studio.
-- NOTE: owner-added CUSTOM sections/ads (a section builder) not built yet — the
-  defaults are pre-added; custom-block editing is a follow-up. File logo upload
-  (vs URL) still pending (needs Supabase Storage).
-
-Reminder locked in: always bump package.json to the version we're on, and check
-existing git tags before giving a tag command (no repeats).
-
----
-
-## Session: Design Studio "world" + live preview + Design Shop scaffold
-
-### Date: 2026-07-09
-- **Fixed the live-preview bug**: `.fp-btn-primary` / `.fp-grad-text` used HARDCODED
-  gold (#E9CE9A/#C9A574) instead of `var(--gold*)` — so accent/theme never touched
-  buttons. Tokenized them → themes/accents now recolor buttons app-wide + preview.
-- **Full-screen Design Studio** `src/components/panels/admin/DesignStudio.tsx`: its
-  own "world" (fixed inset-0). Controls (name, logo, landing headline+description,
-  theme, custom accent) on the left; a **live mockup preview** (landing hero +
-  service card + dashboard header + wallet, styled via `themeVars`) on the right
-  that updates as you type. "Save & apply" → updatePanelBranding. Opened from
-  BrandingTab's "Open full Design Studio".
-- **Landing copy**: branding now stores `headline` + `description`
-  (settings.branding); getPublicPanel returns them; the storefront hero uses them.
-- **Design Shop** scaffolded inside the studio: free themes = active (within root);
-  premium designs (Aurora / Carbon Pro / Luxe) = "Soon" (they'll restyle landing
-  AND dashboard — the paid tier).
-- Chose the efficient **mockup** preview (not a real-storefront iframe): still
-  true-to-ad because committed designs actually change the live panel.
-
-CUSTOM DOMAIN (user ask — "show their real domain, not the subdomain, on load"):
-NOT built — it needs host-based middleware routing (map panel.customdomain.com →
-/p/[subdomain] via a rewrite so the address bar keeps the custom domain) + Vercel
-wildcard/custom domain config + per-panel domain verification. Moderately heavy →
-added to the agenda as the **Custom domain routing** feature (Domain tab / Phase 5).
-
-package.json still 0.2.2 (tags to v0.2.3); next tag = v0.2.4.
-
----
-
-## Session: A2 — Branding & Design Studio (real, end-to-end)
-
-### Date: 2026-07-09
-Made the owner Branding tab actually drive the customer storefront.
-- `src/data/themes.ts`: THEMES (obsidian-gold / violet-night / ivory-minimal /
-  neon-slate) each mapping to CSS-variable overrides; `themeVars(themeId, accent)`
-  builds the inline style; `themeById` (matches id or legacy label).
-- `panels.ts`: `getPanelBranding` / `updatePanelBranding(name, theme, logoUrl,
-  accent)` — name/theme on the panel row, logoUrl+accent in `settings.branding`.
-- `storefront.ts getPublicPanel`: now returns `theme`, `logoUrl`, `accent`.
-- `app/p/[subdomain]/page.tsx`: wraps the storefront (and offline screens) in a div
-  whose inline `style` sets the theme's CSS vars → fp-* classes pick them up, so the
-  chosen theme + custom accent actually recolor the storefront. Logo passed to the
-  Storefront + CustomerDashboard headers (shows `<img>` when set, else the mark).
-- `BrandingTab` rewritten: real (loads current branding), theme picker (persists),
-  display name, logo URL, and "Open full Design Studio" → custom accent color picker
-  + a live preview swatch. "Save branding" → updatePanelBranding.
-
-KNOWN LIMITATIONS: accent-swap themes (Violet Night / Neon Slate) recolor cleanly;
-Ivory Minimal (full light) is only partial because some components use hardcoded
-dark hex instead of tokens — a polish-pass item. Logo is URL-based for now (file
-upload needs Supabase Storage — follow-up). `package.json` 0.2.2 lags tag v0.2.3;
-next tag = v0.2.4.
-
----
-
-## Session: Anvil mark rebuilt as single geometric silhouette (fixes "cat" look)
-
-### Date: 2026-07-12
-- User reported the in-app logo reads as a cat face at nav/sidebar size, not an anvil, and asked for a bold single-silhouette mark in the spirit of GitHub/Vercel/Nike marks (flat, iconic, unmistakable at small sizes) rather than another micro-refinement pass on the old geometry.
-- Replaced the path in `src/components/ui/BrandMark.tsx` and `public/favicon.svg` with a single 14-point flat polygon: flat top face, one asymmetric tapered horn (right side), pinched waist, flared base — no inner cutouts, arcs, or eye-hole negative space (those were what produced the cat-face read).
-- Logged as a new baseline shape, not another "refinement" of the previous geometry — if further tuning is requested, iterate on this polygon's coordinates directly.
-- Documented a new future paid add-on in CLAUDE.md: Phase 4.y, Analytics Dashboard + Content Calendar (`analytics.innvil`), bring-your-own-API, rental pricing ($25/$45/$75/$105 tiers by refresh rate, not API cost), referencing `C:\Users\My PC\Documents\CRM style analytics dashboard` (LinkBatch) for schema/data-shape ideas only — Innvil's own theme and IA still win. Not started; build after core Phases 2-4 are done and earning.
+- Added an always-visible owner/admin balance indicator in the dashboard top bar (placed before the notification bell) so balance is visible outside Billing.
+- Wired the topbar balance to real owner billing data (`getOwnerBillingSummary`) with instant session-cache hydration and background sync.
+- Fixed account-access placement by moving the Account settings action from the sidebar to the top-right account controls near Log out.
+- Hardened browser autofill behavior for owner/customer auth by adding proper form boundaries, standard field names/autocomplete hints, and explicit owner vs customer autofill sections to reduce wrong stale credential suggestions.
+- Kept owner sections snappy with cached instant paint and background refresh for Orders, Customers, Billing, and panel-list views.
+- Verified production build success after these changes.
 
 ---
 
@@ -281,16 +43,6 @@ next tag = v0.2.4.
 - Rebalanced the silhouette for optical clarity and stronger icon readability at small sizes.
 - Updated `src/components/ui/BrandMark.tsx` and synced `public/favicon.svg` to the same refined silhouette.
 - Retained the requested muted beige rounded-square background and dark charcoal glyph palette.
-- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
-
----
-
-## Session: Precision correction pass (icon fit + micro-geometry)
-
-### Date: 2026-07-12
-- Performed requested micro-edits on the existing anvil glyph without changing concept: heel extension, 2px left optical shift, thinner top face, flatter pre-horn rise, shorter horn tip, slightly wider base, and stronger waist pinch.
-- Preserved container size/radius and palette; kept the glyph fully inside the badge with controlled internal spacing.
-- Synced the corrected path across `src/components/ui/BrandMark.tsx` and `public/favicon.svg`; updated in-app sizing classes in `src/components/panels/index.tsx` for consistent fit.
 - Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
 
 ---

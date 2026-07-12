@@ -113,13 +113,20 @@ export interface PublicPaymentMethod {
   id: string; // gateway id
   label: string;
   category: string; // "crypto" | "card" | "ewallet" | "bank"
+  minTopup: number;
+}
+
+function normalizeMinTopup(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.round(n * 10000) / 10000;
 }
 
 export async function getPanelPaymentMethods(panelId: string): Promise<PublicPaymentMethod[]> {
   const admin = createAdminClient();
   const { data } = await admin
     .from("panel_payment_gateways")
-    .select("gateway, status")
+    .select("gateway, status, config")
     .eq("panel_id", panelId)
     .eq("status", "active");
   const { GATEWAY_CATALOG } = await import("@/src/lib/payments/adapters");
@@ -128,7 +135,13 @@ export async function getPanelPaymentMethods(panelId: string): Promise<PublicPay
     .flatMap((r) => {
       const cat = byId.get(r.gateway as string);
       if (!cat) return [];
-      return [{ id: cat.id, label: cat.label, category: cat.category } satisfies PublicPaymentMethod];
+      const cfg = (r.config as Record<string, unknown> | null) ?? null;
+      return [{
+        id: cat.id,
+        label: cat.label,
+        category: cat.category,
+        minTopup: normalizeMinTopup(cfg?.minTopup),
+      } satisfies PublicPaymentMethod];
     });
 }
 

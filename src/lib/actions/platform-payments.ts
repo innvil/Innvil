@@ -15,7 +15,9 @@ import { getAdapter, catalogEntry } from "@/src/lib/payments/adapters";
 type Result = { ok: true } | { ok: false; error: string };
 
 /** The gateways a super admin may configure at the platform level (crypto only for now). */
-export const PLATFORM_GATEWAY_IDS = ["cryptomus", "nowpayments"] as const;
+const PLATFORM_GATEWAY_IDS = ["cryptomus", "nowpayments"] as const;
+const OWNER_TOPUP_MIN = 5;
+const OWNER_FIRST_TOPUP_MIN = 10;
 
 export interface PlatformGatewayField {
   key: string; label: string; secret: boolean; placeholder?: string; help?: string; optional?: boolean;
@@ -28,6 +30,18 @@ export interface PlatformGatewayMeta {
   connected: boolean;
   status: string | null;
   config: Record<string, string>; // non-secret public values (safe to show)
+}
+
+export interface OwnerTopupMethod {
+  id: string;
+  label: string;
+  note: string;
+}
+
+export interface OwnerTopupPolicy {
+  minTopup: number;
+  firstTopupMin: number;
+  methods: OwnerTopupMethod[];
 }
 
 async function requireSuperAdmin(): Promise<boolean> {
@@ -145,4 +159,30 @@ export async function disconnectPlatformGateway(gateway: string): Promise<Result
   const { error } = await admin.from("platform_payment_gateways").delete().eq("gateway", gateway);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+/** Owner-facing top-up policy and currently active platform methods. */
+export async function getOwnerTopupPolicy(): Promise<OwnerTopupPolicy> {
+  const { user } = await getAuthedAdmin();
+  if (!user) return { minTopup: OWNER_TOPUP_MIN, firstTopupMin: OWNER_FIRST_TOPUP_MIN, methods: [] };
+
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("platform_payment_gateways")
+    .select("gateway, status")
+    .in("gateway", PLATFORM_GATEWAY_IDS as unknown as string[])
+    .eq("status", "active");
+
+  const methods = (data ?? []).flatMap((r) => {
+    const id = r.gateway as string;
+    const cat = catalogEntry(id);
+    if (!cat) return [];
+    return [{ id, label: cat.label, note: cat.note } satisfies OwnerTopupMethod];
+  });
+
+  return {
+    minTopup: OWNER_TOPUP_MIN,
+    firstTopupMin: OWNER_FIRST_TOPUP_MIN,
+    methods,
+  };
 }

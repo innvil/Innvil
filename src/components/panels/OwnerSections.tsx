@@ -210,20 +210,20 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <Wallet size={16} className="fp-gold" />
-            <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Commission — all panels</p>
+            <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Innvil balance — all panels</p>
           </div>
           <span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Auto-billing coming soon</span>
         </div>
-        <p className="fp-display text-4xl fp-gold">{data ? fmt(data.commissionToday) : "—"}</p>
-        <p className="fp-text-faint text-xs mt-1">Estimated 5% of today&apos;s panel-price orders across every panel you own.</p>
+        <p className="fp-display text-4xl fp-gold">{data ? fmt(data.innvilBalance) : "—"}</p>
+        <p className="fp-text-faint text-xs mt-1">Your available Innvil balance across every panel you own.</p>
         <div className="grid grid-cols-2 gap-4 mt-6">
           <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
             <p className="fp-text-faint text-xs fp-mono uppercase">Revenue today (all panels)</p>
             <p className="fp-display text-xl mt-1">{data ? fmt(data.revenueToday) : "—"}</p>
           </div>
           <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
-            <p className="fp-text-faint text-xs fp-mono uppercase">Orders today</p>
-            <p className="fp-display text-xl mt-1 fp-violet">{data ? data.ordersToday : "—"}</p>
+            <p className="fp-text-faint text-xs fp-mono uppercase">Commission today</p>
+            <p className="fp-display text-xl mt-1 fp-violet">{data ? fmt(data.commissionToday) : "—"}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 mt-6">
@@ -244,14 +244,17 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
         </p>
       </Card>
 
-      <Card title="Commission by panel today" icon={ListOrdered}>
+      <Card title="By panel today" icon={ListOrdered}>
         {!data || data.perPanel.length === 0 ? (
           <p className="fp-text-faint text-sm py-4 text-center">No panels yet.</p>
         ) : (
           data.perPanel.map((p) => (
             <div key={p.panelId} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3">
-              <span className="text-sm">{p.panelName}</span>
-              <span className="fp-mono text-sm">{fmt(p.commissionToday)}</span>
+              <div>
+                <p className="text-sm">{p.panelName}</p>
+                <p className="fp-text-faint text-xs">Commission today: {fmt(p.commissionToday)}</p>
+              </div>
+              <span className="fp-mono text-sm">{fmt(p.innvilBalance)}</span>
             </div>
           ))
         )}

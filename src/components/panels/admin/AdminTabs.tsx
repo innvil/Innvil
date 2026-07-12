@@ -1662,7 +1662,19 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
     [meta]
   );
 
-  const openForm = (id: string) => { setOpenId((p) => (p === id ? null : id)); setValues({}); setMsg(null); };
+  const openForm = (id: string) => {
+    setOpenId((p) => {
+      const next = p === id ? null : id;
+      if (next) {
+        const conn = connectedMap.get(id);
+        setValues({ ...(conn?.config ?? {}) });
+      } else {
+        setValues({});
+      }
+      return next;
+    });
+    setMsg(null);
+  };
   const save = async (id: string, label: string) => {
     setBusy(true); setMsg(null);
     const res = await connectGateway(panelId, id, values);
@@ -1743,6 +1755,8 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
               const conn = connectedMap.get(c.id);
               const fields = meta.fields[c.id] ?? [];
               const isOpen = openId === c.id && c.available;
+              const minTopup = Number(conn?.config?.minTopup);
+              const hasMinTopup = Number.isFinite(minTopup);
               return (
                 <div key={c.id} className="border fp-line-soft rounded-xl overflow-hidden">
                   <div className="flex items-center justify-between gap-3 px-4 py-3 fp-panel-raised">
@@ -1750,6 +1764,11 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
                       <p className="text-sm font-medium flex items-center gap-2">
                         {c.label}
                         {conn && <span className="text-[10px] fp-safe-soft-bg fp-safe px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> Connected</span>}
+                        {conn && hasMinTopup && (
+                          <span className="text-[10px] fp-gold-soft-bg fp-gold px-2 py-0.5 rounded-full">
+                            Min ${minTopup.toFixed(2)}
+                          </span>
+                        )}
                       </p>
                       <p className="fp-text-faint text-xs mt-0.5">{c.note}</p>
                     </div>
@@ -1775,7 +1794,7 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
                             {f.label}{f.optional ? " (optional)" : ""}
                           </label>
                           <input
-                            value={values[f.key] ?? ""}
+                            value={values[f.key] ?? conn?.config?.[f.key] ?? ""}
                             onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
                             type={f.secret ? "password" : "text"}
                             placeholder={conn && f.secret ? "•••••• (leave blank to keep)" : f.placeholder}

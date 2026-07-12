@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Sparkles, Menu, X, Wallet, Plus, Clock, Star, RotateCcw, Zap,
   LayoutGrid, ListOrdered, MessageSquare, KeyRound, UserCircle2,
@@ -18,7 +18,7 @@ import { formatMoney, currencySymbol } from "@/src/lib/money";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
 type Ticket = { id: string; subj: string; status: string; updated: string };
-export type PaymentMethod = { id: string; label: string; category: string };
+export type PaymentMethod = { id: string; label: string; category: string; minTopup: number };
 
 const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
   { key: "crypto", label: "Crypto" },
@@ -154,14 +154,25 @@ export function CustomerDashboard({
     [paymentMethods, activeCat]
   );
   const [payGateway, setPayGateway] = useState("");
-  const activeGateway =
-    payGateway && catMethods.some((m) => m.id === payGateway) ? payGateway : catMethods[0]?.id ?? "";
+  const activeGateway = payGateway && catMethods.some((m) => m.id === payGateway) ? payGateway : "";
+  const activeMethod = catMethods.find((m) => m.id === activeGateway) ?? null;
+  const minTopup = activeMethod?.minTopup ?? 1;
+
+  useEffect(() => {
+    if (!payGateway && catMethods.length === 1) {
+      setPayGateway(catMethods[0].id);
+    }
+    if (payGateway && !catMethods.some((m) => m.id === payGateway)) {
+      setPayGateway("");
+    }
+  }, [catMethods, payGateway]);
 
   const startDeposit = async () => {
     if (!onDeposit || depositBusy) return;
     const amt = Number(depositAmount);
     if (!amt || amt <= 0) { setDepositError("Enter an amount."); return; }
     if (paymentMethods.length > 0 && !activeGateway) { setDepositError("Choose a payment method."); return; }
+    if (amt < minTopup) { setDepositError(`Minimum top-up for ${activeMethod?.label ?? "this method"} is ${fmt(minTopup)}.`); return; }
     setDepositError(null);
     setDepositBusy(true);
     const res = await onDeposit(amt, activeGateway || undefined);
@@ -465,6 +476,17 @@ export function CustomerDashboard({
                       ))}
                     </select>
                   )}
+                  {catMethods.length === 1 && activeMethod && (
+                    <div className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl px-3 py-2.5 text-sm text-[#EDEAE2]">
+                      {activeMethod.label}
+                    </div>
+                  )}
+
+                  {activeMethod && (
+                    <p className="fp-text-faint text-xs">
+                      Method: <span className="fp-text">{activeMethod.label}</span> · Minimum: <span className="fp-gold">{fmt(minTopup)}</span>
+                    </p>
+                  )}
 
                   {/* Amount */}
                   <div className="flex gap-2">
@@ -474,7 +496,7 @@ export function CustomerDashboard({
                         value={depositAmount}
                         onChange={(e) => { setDepositAmount(e.target.value); setDepositError(null); }}
                         onKeyDown={(e) => e.key === "Enter" && startDeposit()}
-                        type="number" inputMode="decimal" min="1" step="0.01" placeholder="25.00"
+                        type="number" inputMode="decimal" min={String(minTopup)} step="0.01" placeholder="25.00"
                         className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl pl-8 pr-3 py-3 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
                       />
                     </div>

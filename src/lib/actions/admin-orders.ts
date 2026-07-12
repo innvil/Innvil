@@ -189,23 +189,24 @@ export async function listAllOwnerOrders(limit = 200): Promise<OwnerOrderVM[]> {
 }
 
 export interface OwnerBillingSummary {
+  innvilBalance: number;
   revenueToday: number;
   profitToday: number;
   commissionToday: number; // 5% of today's panel-price revenue (estimate)
   ordersToday: number;
   panels: number;
-  perPanel: Array<{ panelId: string; panelName: string; revenueToday: number; commissionToday: number }>;
+  perPanel: Array<{ panelId: string; panelName: string; revenueToday: number; commissionToday: number; innvilBalance: number }>;
 }
 
 const COMMISSION_RATE = 0.05;
 
 /** Real cross-panel revenue + a 5% commission estimate for the Billing page. */
 export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
-  const empty: OwnerBillingSummary = { revenueToday: 0, profitToday: 0, commissionToday: 0, ordersToday: 0, panels: 0, perPanel: [] };
+  const empty: OwnerBillingSummary = { innvilBalance: 0, revenueToday: 0, profitToday: 0, commissionToday: 0, ordersToday: 0, panels: 0, perPanel: [] };
   const { user, admin } = await getAuthedAdmin();
   if (!user) return empty;
-  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
-  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  const { data: panels } = await admin.from("panels").select("id, name, settings").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string; settings: Record<string, unknown> | null }> | null) ?? [];
   if (!list.length) return empty;
 
   const startOfToday = new Date();
@@ -228,7 +229,18 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
     perPanel.set(o.panel_id, p);
   }
 
+  const panelBalances = new Map<string, number>();
+  let innvilBalance = 0;
+  for (const p of list) {
+    const settings = (p.settings && typeof p.settings === "object") ? p.settings : {};
+    const balance = Number((settings as Record<string, unknown>).innvil_balance ?? 0);
+    const safe = Number.isFinite(balance) ? round4(balance) : 0;
+    panelBalances.set(p.id, safe);
+    innvilBalance += safe;
+  }
+
   return {
+    innvilBalance: round4(innvilBalance),
     revenueToday: round4(revenueToday),
     profitToday: round4(profitToday),
     commissionToday: round4(revenueToday * COMMISSION_RATE),
@@ -239,6 +251,7 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
       panelName: p.name,
       revenueToday: round4(perPanel.get(p.id)?.revenueToday ?? 0),
       commissionToday: round4((perPanel.get(p.id)?.revenueToday ?? 0) * COMMISSION_RATE),
+      innvilBalance: panelBalances.get(p.id) ?? 0,
     })),
   };
 }

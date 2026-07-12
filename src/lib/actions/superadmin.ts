@@ -22,6 +22,31 @@ export interface PlatformOverview {
   orders: number;
 }
 
+export interface SuperAdminPanelVM {
+  id: string;
+  name: string;
+  subdomain: string;
+  status: string;
+  ownerId: string;
+  ownerEmail: string | null;
+  balance: number;
+}
+
+type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+
+function toSettings(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+}
+
+function toBalance(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
 export async function getPlatformOverview(): Promise<PlatformOverview | null> {
   if (!(await requireSuperAdmin())) return null;
   const admin = createAdminClient();
@@ -39,6 +64,89 @@ export async function getPlatformOverview(): Promise<PlatformOverview | null> {
     customers: customers.count ?? 0,
     orders: orders.count ?? 0,
   };
+}
+
+/** Super-admin panel list with owner email + Innvil balance. */
+export async function listPanelsForSuperAdmin(limit = 200): Promise<SuperAdminPanelVM[]> {
+  if (!(await requireSuperAdmin())) return [];
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("panels")
+    .select("id, name, subdomain, status, owner_id, settings")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  const rows = (data as Array<{
+    id: string;
+    name: string;
+    subdomain: string;
+    status: string;
+    owner_id: string;
+    settings: unknown;
+  }> | null) ?? [];
+
+  const ownerIds = [...new Set(rows.map((r) => r.owner_id))];
+  const emailEntries = await Promise.all(
+    ownerIds.map(async (id) => {
+      try {
+        const { data: user } = await admin.auth.admin.getUserById(id);
+        return [id, user.user?.email ?? null] as const;
+      } catch {
+        return [id, null] as const;
+      }
+    })
+  );
+  const ownerEmailById = new Map<string, string | null>(emailEntries);
+
+  return rows.map((r) => {
+    const settings = toSettings(r.settings);
+    return {
+      id: r.id,
+      name: r.name,
+      subdomain: r.subdomain,
+      status: r.status,
+      ownerId: r.owner_id,
+      ownerEmail: ownerEmailById.get(r.owner_id) ?? null,
+      balance: toBalance(settings.innvil_balance),
+    };
+  });
+}
+
+/** Credit/debit a panel's Innvil balance (stored in panels.settings.innvil_balance). */
+export async function adjustPanelBalance(
+  panelId: string,
+  delta: number,
+  reason?: string
+): Promise<Result<{ balance: number }>> {
+  if (!(await requireSuperAdmin())) return { ok: false, error: "Super admin only." };
+  if (!Number.isFinite(delta) || delta === 0) return { ok: false, error: "Delta must be non-zero." };
+
+  const admin = createAdminClient();
+  const { user } = await getAuthedAdmin();
+  const { data: row } = await admin
+    .from("panels")
+    .select("id, name, settings")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (!row) return { ok: false, error: "Panel not found." };
+
+  const settings = toSettings(row.settings);
+  const current = toBalance(settings.innvil_balance);
+  const next = round4(current + delta);
+  if (next < 0) return { ok: false, error: "Balance cannot go below 0." };
+
+  const updated = { ...settings, innvil_balance: next };
+  const { error } = await admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_logs").insert({
+    panel_id: panelId,
+    actor_id: user?.id ?? null,
+    action: "superadmin.panel_balance_adjusted",
+    meta: { delta: round4(delta), balance: next, reason: reason?.trim() || null },
+  });
+
+  return { ok: true, data: { balance: next } };
 }
 
 /** Whether the signed-in user is a super admin (for client gating/links). */

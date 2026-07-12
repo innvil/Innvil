@@ -17,7 +17,7 @@ import {
 } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
-  customers, topUpMethods, themes,
+  customers, themes,
   allPanelsAdmin, PanelStatus, auditLogs,
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
@@ -27,6 +27,7 @@ import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/aut
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
+import { getOwnerTopupPolicy, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
 
@@ -411,7 +412,8 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
     try {
       const raw = window.sessionStorage.getItem("innvil-owner:billing");
       if (!raw) return null;
-      const parsed = JSON.parse(raw) as { commissionToday?: number };
+      const parsed = JSON.parse(raw) as { innvilBalance?: number; commissionToday?: number };
+      if (typeof parsed.innvilBalance === "number") return parsed.innvilBalance;
       return typeof parsed.commissionToday === "number" ? parsed.commissionToday : null;
     } catch {
       return null;
@@ -424,7 +426,7 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
     setSyncingBalance(ownerBalance !== null);
     getOwnerBillingSummary().then((summary) => {
       if (!alive) return;
-      setOwnerBalance(summary.commissionToday);
+      setOwnerBalance(summary.innvilBalance);
       setSyncingBalance(false);
     }).catch(() => {
       if (!alive) return;
@@ -863,7 +865,55 @@ function CreatePanelWizard({ onCreate }: {
 function AddFundsModal({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState("amount");
   const [amount, setAmount] = useState("50");
-  const [method, setMethod] = useState("Cryptomus");
+  const [method, setMethod] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [policy, setPolicy] = useState<OwnerTopupPolicy | null>(null);
+  const [innvilBalance, setInnvilBalance] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setBusy(true);
+    Promise.all([getOwnerTopupPolicy(), getOwnerBillingSummary()]).then(([nextPolicy, summary]) => {
+      if (!alive) return;
+      setPolicy(nextPolicy);
+      setMethod(nextPolicy.methods[0]?.id ?? "");
+      setInnvilBalance(summary.innvilBalance);
+      setBusy(false);
+    }).catch(() => {
+      if (!alive) return;
+      setBusy(false);
+      setError("Could not load payment methods right now.");
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const methodMeta = policy?.methods.find((m) => m.id === method) ?? null;
+  const normalizedAmount = Number(amount);
+  const firstTopup = (innvilBalance ?? 0) <= 0;
+  const minTopup = firstTopup ? (policy?.firstTopupMin ?? 10) : (policy?.minTopup ?? 5);
+
+  const continueToMethod = () => {
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      setError("Enter a valid amount.");
+      return;
+    }
+    if (normalizedAmount < minTopup) {
+      setError(`Minimum top-up is $${minTopup.toFixed(2)}${firstTopup ? " for your first top-up" : ""}.`);
+      return;
+    }
+    setError(null);
+    setStep("method");
+  };
+
+  const continueToConfirm = () => {
+    if (!method) {
+      setError("Choose a payment method.");
+      return;
+    }
+    setError(null);
+    setStep("confirm");
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
@@ -880,24 +930,30 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
               <span className="fp-display text-2xl fp-gold">$</span>
               <input
                 value={amount}
-                onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                onChange={(e) => { setAmount(e.target.value.replace(/[^0-9.]/g, "")); setError(null); }}
                 className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-xl fp-display flex-1 outline-none focus:fp-gold-border"
               />
             </div>
+            <p className="fp-text-faint text-xs mb-3">
+              Minimum top-up: <span className="fp-text">${minTopup.toFixed(2)}</span>
+              {firstTopup ? " (first top-up)" : ""}
+            </p>
             <div className="flex gap-2 mb-6">
               {[25, 50, 100, 250].map((v) => (
                 <button
                   key={v}
-                  onClick={() => setAmount(String(v))}
+                  onClick={() => { setAmount(String(v)); setError(null); }}
                   className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 text-xs fp-mono fp-text-dim hover:fp-gold-border"
                 >
                   ${v}
                 </button>
               ))}
             </div>
+            {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
             <button
-              onClick={() => setStep("method")}
-              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm"
+              onClick={continueToMethod}
+              disabled={busy || !policy}
+              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
               Continue
             </button>
@@ -911,41 +967,41 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Pay ${amount || "0"} via</p>
             <h3 className="fp-display text-xl mb-6">Choose a top-up method</h3>
             <div className="space-y-2 mb-6">
-              {topUpMethods.map((m) => (
+              {(policy?.methods ?? []).map((m) => (
                 <button
-                  key={m.name}
-                  disabled={m.status === "soon"}
-                  onClick={() => setMethod(m.name)}
+                  key={m.id}
+                  onClick={() => { setMethod(m.id); setError(null); }}
                   className={`w-full text-left flex items-center justify-between rounded-xl border px-4 py-3 ${
-                    m.status === "soon"
-                      ? "fp-line-soft opacity-40 cursor-not-allowed"
-                      : method === m.name
-                        ? "fp-gold-border fp-gold-soft-bg"
-                        : "fp-line-soft fp-panel-raised"
+                    method === m.id ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft fp-panel-raised"
                   }`}
                 >
                   <div>
-                    <p className="text-sm font-medium">{m.name}</p>
-                    <p className="fp-text-faint text-xs mt-0.5">{m.sub}</p>
+                    <p className="text-sm font-medium">{m.label}</p>
+                    <p className="fp-text-faint text-xs mt-0.5">{m.note}</p>
                   </div>
-                  {m.status === "active" && method === m.name && <CheckCircle2 size={16} className="fp-gold" />}
+                  {method === m.id && <CheckCircle2 size={16} className="fp-gold" />}
                 </button>
               ))}
             </div>
+            {(!policy || policy.methods.length === 0) && (
+              <p className="text-sm text-red-400 mb-4">No payment method is active right now. Ask super admin to connect one.</p>
+            )}
+            {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
             <button
-              onClick={() => setStep("confirm")}
-              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm"
+              onClick={continueToConfirm}
+              disabled={!method}
+              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Continue with {method}
+              Continue with {methodMeta?.label ?? "method"}
             </button>
           </>
         )}
         {step === "confirm" && (
           <>
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Almost there</p>
-            <h3 className="fp-display text-xl mb-4">You&apos;ll be redirected to {method}</h3>
+            <h3 className="fp-display text-xl mb-4">You&apos;ll be redirected to {methodMeta?.label ?? "your method"}</h3>
             <p className="fp-text-dim text-sm leading-relaxed mb-6">
-              Complete your ${amount || "0"} payment on {method}&apos;s secure checkout.
+              Complete your ${amount || "0"} payment on {methodMeta?.label ?? "the selected method"}&apos;s secure checkout.
               Your balance updates automatically — no card or wallet details ever touch our servers.
             </p>
             <div className="fp-panel-raised border fp-line-soft rounded-xl p-4 flex items-center justify-between mb-6">
@@ -953,7 +1009,7 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
               <span className="fp-display text-lg fp-gold">${amount || "0"}</span>
             </div>
             <button onClick={onClose} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm">
-              Go to {method}
+              Go to {methodMeta?.label ?? "checkout"}
             </button>
           </>
         )}

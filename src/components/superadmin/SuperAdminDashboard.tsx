@@ -3,11 +3,14 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft,
+  ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
 } from "lucide-react";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
-import { getPlatformOverview, type PlatformOverview } from "@/src/lib/actions/superadmin";
+import {
+  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance,
+  type PlatformOverview, type SuperAdminPanelVM,
+} from "@/src/lib/actions/superadmin";
 import {
   getPlatformPaymentsMeta, connectPlatformGateway, disconnectPlatformGateway,
   type PlatformGatewayMeta,
@@ -19,7 +22,30 @@ const inputCls =
 /* ---------------- Overview ---------------- */
 function OverviewTab() {
   const [data, setData] = useState<PlatformOverview | null>(null);
-  useEffect(() => { getPlatformOverview().then(setData); }, []);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getPlatformOverview()
+      .then((next) => {
+        if (!alive) return;
+        setData(next);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setError(e instanceof Error ? e.message : "Could not load overview.");
+      });
+    return () => { alive = false; };
+  }, []);
+
+  if (error) {
+    return (
+      <Card title="Overview" icon={LayoutGrid}>
+        <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>
+      </Card>
+    );
+  }
+
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       <StatCard label="Panels" value={data ? String(data.panels) : "—"} tone="gold" />
@@ -107,20 +133,173 @@ function GatewayCard({ g, onSaved }: { g: PlatformGatewayMeta; onSaved: () => vo
 
 function PaymentsTab() {
   const [meta, setMeta] = useState<PlatformGatewayMeta[] | null>(null);
-  const load = () => getPlatformPaymentsMeta().then(setMeta);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => {
+    setError(null);
+    return getPlatformPaymentsMeta()
+      .then((next) => {
+        setMeta(next);
+        setError(null);
+      })
+      .catch((e) => {
+        setMeta([]);
+        setError(e instanceof Error ? e.message : "Could not load platform payments.");
+      });
+  };
   useEffect(() => { load(); }, []);
 
   return (
     <div className="space-y-5 max-w-2xl">
       <p className="fp-text-dim text-sm">
         These are the methods <span className="fp-text">panel owners</span> use to pay Innvil (top up their
-        commission balance). Credentials are encrypted and never leave the server. Binance Pay is coming later.
+        commission balance). Credentials are encrypted and never leave the server. Minimum owner top-up is
+        <span className="fp-text"> $5</span>, and the first top-up per panel is fixed at
+        <span className="fp-text"> $10</span>. Binance Pay is coming later.
       </p>
       {meta === null ? (
         <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
       ) : (
-        <div className="grid gap-4">
-          {meta.map((g) => <GatewayCard key={g.id} g={g} onSaved={load} />)}
+        <>
+          {error && (
+            <div className="fp-panel border border-red-500/30 rounded-xl p-3 flex items-center justify-between gap-3">
+              <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>
+              <button onClick={load} className="text-xs fp-gold">Retry</button>
+            </div>
+          )}
+          <div className="grid gap-4">
+            {meta.map((g) => <GatewayCard key={g.id} g={g} onSaved={load} />)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Panel management ---------------- */
+function PanelsTab() {
+  const [rows, setRows] = useState<SuperAdminPanelVM[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [amountById, setAmountById] = useState<Record<string, string>>({});
+  const [reasonById, setReasonById] = useState<Record<string, string>>({});
+
+  const fmt = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+  const load = () => {
+    setError(null);
+    return listPanelsForSuperAdmin()
+      .then((next) => {
+        setRows(next);
+        setError(null);
+      })
+      .catch((e) => {
+        setRows([]);
+        setError(e instanceof Error ? e.message : "Could not load panels.");
+      });
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const apply = async (panelId: string, sign: 1 | -1) => {
+    setNotice(null);
+    setError(null);
+    const raw = (amountById[panelId] ?? "").trim();
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("Enter a valid amount greater than 0.");
+      return;
+    }
+
+    const key = `${panelId}:${sign}`;
+    setBusyKey(key);
+    const reason = reasonById[panelId] ?? "";
+    const res = await adjustPanelBalance(panelId, sign * amount, reason);
+    setBusyKey(null);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+
+    setRows((prev) => (prev ?? []).map((r) => (r.id === panelId ? { ...r, balance: res.data.balance } : r)));
+    setAmountById((prev) => ({ ...prev, [panelId]: "" }));
+    setNotice(`Updated balance for panel ${panelId.slice(0, 8)}.`);
+  };
+
+  return (
+    <div className="space-y-5">
+      <p className="fp-text-dim text-sm">
+        Manage panel balances directly for payment correction cases. Credits and debits are audit-logged.
+      </p>
+      {notice && <p className="text-xs fp-safe flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
+      {error && <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+
+      {rows === null ? (
+        <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="fp-text-faint text-sm py-6 text-center">No panels found.</p>
+      ) : (
+        <div className="fp-panel border fp-line rounded-2xl p-4 overflow-x-auto">
+          <table className="w-full min-w-[980px] text-sm">
+            <thead>
+              <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
+                <th className="py-2 font-normal">Panel</th>
+                <th className="py-2 font-normal">Owner</th>
+                <th className="py-2 font-normal">Status</th>
+                <th className="py-2 font-normal text-right">Innvil balance</th>
+                <th className="py-2 font-normal">Amount</th>
+                <th className="py-2 font-normal">Reason</th>
+                <th className="py-2 font-normal text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-b fp-line-soft last:border-0">
+                  <td className="py-2.5">
+                    <p className="font-medium">{r.name}</p>
+                    <p className="fp-text-faint text-xs fp-mono">{r.subdomain}.innvil.cloud</p>
+                  </td>
+                  <td className="py-2.5 fp-text-dim">{r.ownerEmail ?? r.ownerId.slice(0, 8)}</td>
+                  <td className="py-2.5"><Pill tone={r.status === "live" ? "safe" : "muted"}>{r.status}</Pill></td>
+                  <td className="py-2.5 text-right fp-mono fp-gold">{fmt(r.balance)}</td>
+                  <td className="py-2.5">
+                    <input
+                      value={amountById[r.id] ?? ""}
+                      onChange={(e) => setAmountById((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                      placeholder="0.00"
+                      inputMode="decimal"
+                      className="w-28 fp-panel-raised border fp-line-soft rounded-lg px-2.5 py-1.5 text-xs fp-mono outline-none focus:fp-gold-border"
+                    />
+                  </td>
+                  <td className="py-2.5">
+                    <input
+                      value={reasonById[r.id] ?? ""}
+                      onChange={(e) => setReasonById((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                      placeholder="Payment error correction"
+                      className="w-64 fp-panel-raised border fp-line-soft rounded-lg px-2.5 py-1.5 text-xs outline-none focus:fp-gold-border"
+                    />
+                  </td>
+                  <td className="py-2.5 text-right">
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        onClick={() => apply(r.id, 1)}
+                        disabled={busyKey !== null}
+                        className="text-xs fp-safe-soft-bg fp-safe px-2.5 py-1.5 rounded-lg disabled:opacity-60"
+                      >
+                        + Credit
+                      </button>
+                      <button
+                        onClick={() => apply(r.id, -1)}
+                        disabled={busyKey !== null}
+                        className="text-xs bg-red-500/10 text-red-400 px-2.5 py-1.5 rounded-lg border border-red-500/30 disabled:opacity-60"
+                      >
+                        − Debit
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -130,6 +309,7 @@ function PaymentsTab() {
 /* ---------------- Shell ---------------- */
 const TABS = [
   { k: "overview", label: "Overview", icon: LayoutGrid },
+  { k: "panels", label: "Panels", icon: Wallet },
   { k: "payments", label: "Platform payments", icon: CreditCard },
 ];
 
@@ -176,6 +356,7 @@ export function SuperAdminDashboard() {
             </Card>
           </>
         )}
+        {tab === "panels" && <PanelsTab />}
         {tab === "payments" && <PaymentsTab />}
       </div>
     </div>

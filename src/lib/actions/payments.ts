@@ -59,11 +59,32 @@ export interface PaymentsMeta {
   currencies: { code: string; label: string }[]; // options for the selector
 }
 
+const DEFAULT_GATEWAY_MIN_TOPUP = 1;
+
+function normalizeMinTopup(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_GATEWAY_MIN_TOPUP;
+  return round4(n);
+}
+
 /** Everything the owner Payments tab needs: the full catalog, connect fields,
     which gateways this panel has connected, and its currency. */
 export async function getPaymentsMeta(panelId: string): Promise<PaymentsMeta> {
   const fields: Record<string, GatewayField[]> = {};
-  for (const c of GATEWAY_CATALOG) if (c.available) fields[c.id] = getAdapter(c.id)?.fields ?? [];
+  for (const c of GATEWAY_CATALOG) {
+    if (!c.available) continue;
+    fields[c.id] = [
+      ...(getAdapter(c.id)?.fields ?? []),
+      {
+        key: "minTopup",
+        label: "Minimum top-up",
+        secret: false,
+        placeholder: "1.00",
+        help: "Customer deposits via this method must be at least this amount.",
+        optional: true,
+      },
+    ];
+  }
   const currencies = CURRENCIES.map((c) => ({ code: c.code, label: `${c.code} — ${c.label}` }));
 
   const { user, admin } = await getAuthedAdmin();
@@ -77,6 +98,7 @@ export async function getPaymentsMeta(panelId: string): Promise<PaymentsMeta> {
     currency = readPanelCurrency(panel?.settings);
     connected = (data ?? []).map((r) => {
       const config: Record<string, string> = { ...((r.config as Record<string, string>) ?? {}) };
+      if (!config.minTopup) config.minTopup = String(DEFAULT_GATEWAY_MIN_TOPUP);
       if (r.gateway === "cryptomus" && r.merchant_id && !config.merchantId) {
         config.merchantId = r.merchant_id as string;
       }
@@ -130,12 +152,26 @@ export async function connectGateway(
     if (!f.secret && !f.optional && !config[f.key]) return { ok: false, error: `Enter ${f.label}.` };
   }
 
+  const rawMinTopup = (values.minTopup ?? "").trim();
+  if (rawMinTopup) {
+    const parsed = Number(rawMinTopup);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return { ok: false, error: "Minimum top-up must be a number greater than 0." };
+    }
+    config.minTopup = String(round4(parsed));
+  }
+
   const { data: existing } = await admin
     .from("panel_payment_gateways")
-    .select("id")
+    .select("id, config")
     .eq("panel_id", panelId)
     .eq("gateway", gateway)
     .maybeSingle();
+
+  if (!config.minTopup) {
+    const prevCfg = (existing?.config as Record<string, unknown> | null) ?? null;
+    config.minTopup = String(normalizeMinTopup(prevCfg?.minTopup));
+  }
 
   // Merge secrets so an unchanged (blank) secret field keeps its stored value.
   let secrets = { ...providedSecrets };
@@ -221,24 +257,25 @@ export async function createDeposit(
 
   const amt = round4(Number(amount));
   if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter a valid amount." };
-  if (amt < 1) return { ok: false, error: "Minimum deposit is 1.00." };
 
-  // Pick the gateway: the one requested, else the panel's first active one.
-  let gw = gateway;
-  if (!gw) {
-    const { data } = await admin
-      .from("panel_payment_gateways")
-      .select("gateway")
-      .eq("panel_id", panelId)
-      .eq("status", "active")
-      .order("created_at", { ascending: true })
-      .limit(1);
-    gw = (data?.[0]?.gateway as string) ?? undefined;
-  }
-  if (!gw) return { ok: false, error: "This panel hasn't enabled deposits yet." };
+  const gw = (gateway ?? "").trim();
+  if (!gw) return { ok: false, error: "Choose a payment method." };
+
+  const { data: gwRow } = await admin
+    .from("panel_payment_gateways")
+    .select("config")
+    .eq("panel_id", panelId)
+    .eq("gateway", gw)
+    .eq("status", "active")
+    .maybeSingle();
+  const gwConfig = (gwRow?.config as Record<string, unknown> | null) ?? null;
+  const gatewayMinTopup = normalizeMinTopup(gwConfig?.minTopup);
 
   const adapter = getAdapter(gw);
   if (!adapter) return { ok: false, error: "That payment method isn't available." };
+  if (amt < gatewayMinTopup) {
+    return { ok: false, error: `Minimum top-up for ${adapter.label} is ${gatewayMinTopup.toFixed(2)}.` };
+  }
   const ctx = await getGatewayContext(panelId, gw);
   if (!ctx) return { ok: false, error: "This payment method isn't fully configured." };
 
