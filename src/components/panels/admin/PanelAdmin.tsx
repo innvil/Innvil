@@ -10,6 +10,7 @@ import { StatusBadge } from "@/src/components/ui";
 import { PanelStatus } from "@/src/data/constants";
 import { Panel, CustomerRow } from "@/src/types";
 import { updatePanelStatus } from "@/src/lib/actions/panels";
+import { panelStorefrontPath } from "@/src/lib/config";
 import { CustomerDrawer } from "./CustomerDrawer";
 import {
   OverviewTab, StatusTab, BrandingTab, DomainTab, ProvidersTab, ServicesTab,
@@ -72,7 +73,7 @@ export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setW
         </div>
         <div className="flex items-center gap-2">
           <a
-            href={`/p/${panel.subdomain}`}
+            href={panelStorefrontPath(panel.subdomain, panel.domain)}
             target="_blank"
             rel="noopener noreferrer"
             className="fp-panel-raised border fp-line-soft text-sm px-4 py-2 rounded-lg flex items-center gap-1.5 hover:fp-gold-border"

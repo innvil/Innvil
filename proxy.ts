@@ -4,23 +4,45 @@ import { PANEL_ROOT_DOMAIN } from "@/src/lib/config";
 
 /* =========================================================
    Host-based routing (Next 16 proxy).
-   A panel lives on `<subdomain>.innvil.cloud`. We rewrite those hosts to the
-   internal `/p/<subdomain>` storefront route (the app + landing stay on the apex
-   `innvil.cloud`). Custom domains land in a later pass. Everything still flows
-   through updateSession so auth cookies stay fresh.
+   A panel is served on either `<subdomain>.innvil.cloud` OR a connected custom
+   domain (e.g. `mypanel.com`). Both are rewritten to the internal `/p/<identifier>`
+   storefront route; getPublicPanel() resolves the identifier by subdomain OR
+   custom_domain. The app + landing stay on the apex `innvil.cloud`. Everything
+   still flows through updateSession so auth cookies stay fresh.
    ========================================================= */
 
 // Subdomains that are NOT panels (reserved for the platform itself).
 const RESERVED = new Set(["www", "app", "api", "admin", "superadmin", "staging", "dev", "mail", "cdn", "assets"]);
 
-/** If `host` is `<sub>.<ROOT>` (and not reserved), return `<sub>`, else null. */
-function panelSubdomain(host: string): string | null {
+/** Hosts that serve the OWNER app / landing (never a storefront). */
+function isAppHost(h: string): boolean {
+  const root = PANEL_ROOT_DOMAIN.toLowerCase();
+  return (
+    h === root ||
+    h === `www.${root}` ||
+    h === "localhost" ||
+    h === "127.0.0.1" ||
+    h.endsWith(".localhost") ||
+    h.endsWith(".vercel.app") // Vercel preview deployments
+  );
+}
+
+/**
+ * Resolve the storefront identifier for a host, or null if the host serves the app.
+ * - `<sub>.innvil.cloud` (not reserved) → the subdomain label
+ * - any other non-app host → the full hostname (a custom domain, resolved by
+ *   custom_domain in getPublicPanel)
+ */
+function storefrontIdentifier(host: string): string | null {
   const root = PANEL_ROOT_DOMAIN.toLowerCase();
   const h = host.split(":")[0].toLowerCase(); // strip port
-  if (h === root || !h.endsWith(`.${root}`)) return null;
-  const sub = h.slice(0, h.length - root.length - 1);
-  if (!sub || sub.includes(".") || RESERVED.has(sub)) return null;
-  return sub;
+  if (!h || isAppHost(h)) return null;
+  if (h.endsWith(`.${root}`)) {
+    const sub = h.slice(0, h.length - root.length - 1);
+    if (!sub || sub.includes(".") || RESERVED.has(sub)) return null;
+    return sub;
+  }
+  return h; // custom domain
 }
 
 // Paths that must never be rewritten to the storefront (framework + API + assets).
@@ -36,12 +58,12 @@ function isPassthroughPath(pathname: string): boolean {
 
 export async function proxy(request: NextRequest) {
   const host = request.headers.get("host") || "";
-  const sub = panelSubdomain(host);
+  const identifier = storefrontIdentifier(host);
   const { pathname } = request.nextUrl;
 
-  if (sub && !isPassthroughPath(pathname)) {
+  if (identifier && !isPassthroughPath(pathname)) {
     const rewriteTo = request.nextUrl.clone();
-    rewriteTo.pathname = `/p/${sub}${pathname === "/" ? "" : pathname}`;
+    rewriteTo.pathname = `/p/${identifier}${pathname === "/" ? "" : pathname}`;
     return updateSession(request, { rewriteTo, storefront: true });
   }
 

@@ -81,13 +81,22 @@ function panelBranding(settings: unknown): { logoUrl: string; accent: string; he
   return empty;
 }
 
-/** Resolve a panel by its subdomain (case-insensitive). */
-export async function getPublicPanel(subdomain: string): Promise<PublicPanel | null> {
+/**
+ * Resolve a panel by its subdomain OR its connected custom domain (case-insensitive).
+ * The proxy rewrites both `<sub>.innvil.cloud` and a custom host to `/p/<identifier>`,
+ * so `identifier` may be either a subdomain label or a full hostname.
+ */
+export async function getPublicPanel(identifier: string): Promise<PublicPanel | null> {
   const admin = createAdminClient();
+  // Only letters/digits/dot/hyphen are valid in a hostname/subdomain — sanitize so the
+  // value can't break the PostgREST `.or()` filter.
+  const id = identifier.trim().toLowerCase().replace(/[^a-z0-9.-]/g, "");
+  if (!id) return null;
   const { data } = await admin
     .from("panels")
     .select("id, name, subdomain, custom_domain, status, theme, settings")
-    .ilike("subdomain", subdomain)
+    .or(`subdomain.ilike.${id},custom_domain.ilike.${id}`)
+    .limit(1)
     .maybeSingle();
   if (!data) return null;
   const branding = panelBranding(data.settings);

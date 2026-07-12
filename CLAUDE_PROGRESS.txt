@@ -7,6 +7,31 @@
 for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 
+## Session: Custom domains (v0.2.16)
+
+### Date: 2026-07-12
+Owners can connect their own domain to a panel. **package.json → 0.2.16.** No migration
+(uses existing `panels.custom_domain`).
+- `proxy.ts`: host classification — apex/www/localhost/*.vercel.app → owner app;
+  `<sub>.innvil.cloud` → `/p/<sub>`; ANY other host → `/p/<host>` (custom domain).
+  `isAppHost` + `storefrontIdentifier`.
+- `storefront.ts getPublicPanel(identifier)`: now resolves by subdomain OR
+  custom_domain (`.or(subdomain.ilike,custom_domain.ilike)`, sanitized input).
+- `src/lib/vercel/domains.ts`: Vercel Domains API (add/get/remove project domain) —
+  best-effort, needs `VERCEL_API_TOKEN` + `VERCEL_PROJECT_ID` (+ optional
+  `VERCEL_TEAM_ID`). Returns verification records + verified/misconfigured.
+- `src/lib/actions/custom-domain.ts` (owner-auth): getDomainInfo / setCustomDomain
+  (validate host, reject *.innvil.cloud + duplicates, register on Vercel, store) /
+  verifyCustomDomain / removeCustomDomain. Recommends the DNS record (apex → A
+  76.76.21.21; sub → CNAME cname.vercel-dns.com).
+- Domain tab (AdminTabs) is now REAL: shows the live included subdomain (+Visit),
+  connect a custom domain, live status pill (Live/Pending/DNS-not-detected), the DNS
+  record(s) to add, Re-check + Disconnect. If the Vercel API isn't configured it still
+  stores the domain and tells the owner to add it in Vercel manually.
+- **Env (for auto setup):** VERCEL_API_TOKEN, VERCEL_PROJECT_ID, VERCEL_TEAM_ID.
+
+---
+
 ## Session: Subdomain routing — panels live on <sub>.innvil.cloud (v0.2.15)
 
 ### Date: 2026-07-12

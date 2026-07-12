@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Custom domains (v0.2.16)
+- Owners connect their own domain in the Domain tab: real connect/verify/disconnect,
+  live status, and the exact DNS record to add. `proxy.ts` routes any non-app host →
+  `/p/<host>`; `getPublicPanel` resolves by subdomain OR `custom_domain`. Vercel
+  Domains API wired (`src/lib/vercel/domains.ts` + `actions/custom-domain.ts`) so the
+  domain is added to the project + SSL issued automatically. Works without the API too
+  (stores domain, shows manual Vercel step). **Env for auto-setup:** `VERCEL_API_TOKEN`,
+  `VERCEL_PROJECT_ID`, optional `VERCEL_TEAM_ID`.
+
 ### 2026-07-12 — Subdomain routing (v0.2.15)
 - Panels are now reachable at `<subdomain>.innvil.cloud` (not just `/p/<sub>`).
   `proxy.ts` rewrites a panel-subdomain host → `/p/<sub>` internally and forces the

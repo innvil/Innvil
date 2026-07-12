@@ -662,7 +662,7 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
                 Manage
               </button>
               <a
-                href={panelStorefrontPath(p.subdomain)}
+                href={panelStorefrontPath(p.subdomain, p.domain)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim flex items-center gap-1 hover:fp-gold-border"

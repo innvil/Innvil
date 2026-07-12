@@ -13,9 +13,8 @@ export function panelDisplayDomain(subdomain: string, customDomain?: string | nu
 }
 
 /**
- * A link that opens a panel's live storefront. Uses the in-app path (`/p/<sub>`),
- * which works today in every environment; custom-domain host routing lands later.
+ * Absolute live storefront URL for a panel (custom domain if set, else subdomain).
  */
-export function panelStorefrontPath(subdomain: string): string {
-  return `/p/${subdomain}`;
+export function panelStorefrontPath(subdomain: string, customDomain?: string | null): string {
+  return `https://${panelDisplayDomain(subdomain, customDomain)}`;
 }

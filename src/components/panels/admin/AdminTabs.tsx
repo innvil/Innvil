@@ -5,7 +5,7 @@ import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Sparkles, Sliders, Tag,
   ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
-  MessageSquare, Bot, Plus, Trash2, Search, Download, LucideIcon,
+  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, LucideIcon,
 } from "lucide-react";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
@@ -41,6 +41,10 @@ import {
   type AdminOrderVM, type PanelOverview,
 } from "@/src/lib/actions/admin-orders";
 import { syncOrdersNow } from "@/src/lib/actions/orders";
+import {
+  getDomainInfo, setCustomDomain, removeCustomDomain, type DomainInfo,
+} from "@/src/lib/actions/custom-domain";
+import { PANEL_ROOT_DOMAIN, panelStorefrontPath } from "@/src/lib/config";
 import { THEMES } from "@/src/data/themes";
 import { DesignStudio } from "./DesignStudio";
 import { SupportInbox } from "./SupportInbox";
@@ -448,24 +452,127 @@ export function BrandingTab({ panel }: { panel: Panel }) {
   );
 }
 
-export function DomainTab({ panel }: { panel: Panel }) {
+function DnsRecordRow({ type, name, value }: { type: string; name: string; value: string }) {
   return (
-    <Card
-      title="Domain"
-      icon={Globe}
-      right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Custom domains coming soon</span>}
-    >
-      <div className="flex items-center justify-between fp-panel-raised border fp-line-soft rounded-xl p-4 mb-4">
-        <div>
-          <p className="text-sm fp-mono">{panel.subdomain}</p>
+    <div className="grid grid-cols-[64px_1fr] sm:grid-cols-[80px_120px_1fr] gap-2 items-center text-xs py-1.5 border-b fp-line-soft last:border-0">
+      <span className="fp-mono fp-gold">{type}</span>
+      <span className="fp-mono fp-text-dim truncate hidden sm:block">{name}</span>
+      <span className="fp-mono fp-text truncate">{value}</span>
+    </div>
+  );
+}
+
+export function DomainTab({ panel }: { panel: Panel }) {
+  const realPanel = isUuid(panel.id);
+  const [info, setInfo] = useState<DomainInfo | null>(null);
+  const [domain, setDomain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  const load = useCallback(async () => {
+    if (!realPanel) return;
+    const i = await getDomainInfo(panel.id);
+    setInfo(i);
+    if (i?.customDomain) setDomain(i.customDomain);
+  }, [panel.id, realPanel]);
+  useEffect(() => { load(); }, [load]);
+
+  const connect = async () => {
+    setBusy(true); setMsg(null);
+    const res = await setCustomDomain(panel.id, domain);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setInfo(res.data);
+    setMsg({ text: "Domain saved. Add the DNS record below, then re-check." });
+  };
+
+  const disconnect = async () => {
+    setBusy(true); setMsg(null);
+    const res = await removeCustomDomain(panel.id);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setDomain(""); setInfo((p) => p ? { ...p, customDomain: null, verified: false, verification: [], recommended: null } : p);
+    load();
+  };
+
+  const connected = !!info?.customDomain;
+  const statusPill = !connected ? null
+    : info!.verified ? <Pill tone="safe" icon={CheckCircle2}>Live &amp; secured</Pill>
+    : info!.misconfigured ? <Pill tone="danger" icon={AlertTriangle}>DNS not detected</Pill>
+    : <Pill tone="gold" icon={Clock}>Pending DNS</Pill>;
+
+  return (
+    <Card title="Domain" icon={Globe} right={statusPill ?? undefined}>
+      {/* Included subdomain — always live */}
+      <div className="flex items-center justify-between fp-panel-raised border fp-line-soft rounded-xl p-4 mb-5">
+        <div className="min-w-0">
+          <p className="text-sm fp-mono truncate">{panel.subdomain}.{PANEL_ROOT_DOMAIN}</p>
           <p className="fp-text-faint text-xs mt-0.5">Included subdomain — live now</p>
         </div>
-        <Pill tone="safe" icon={CheckCircle2}>Active</Pill>
+        <a href={panelStorefrontPath(panel.subdomain, panel.domain)} target="_blank" rel="noopener noreferrer" className="fp-panel border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-gold-border flex items-center gap-1 shrink-0">
+          <ExternalLink size={12} /> Visit
+        </a>
       </div>
-      <p className="fp-text-dim text-sm leading-relaxed">
-        Connecting your own custom domain — with automatic SSL and DNS verification — is coming soon.
-        Until then, your panel is fully live on its included subdomain above.
-      </p>
+
+      {!realPanel ? (
+        <p className="fp-text-faint text-sm">Save this panel first to connect a custom domain.</p>
+      ) : (
+        <>
+          <label className="fp-text-dim text-xs fp-mono uppercase">Custom domain</label>
+          <div className="flex gap-2 mt-2">
+            <input
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder="panel.yourbrand.com"
+              className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:fp-gold-border"
+            />
+            {connected ? (
+              <>
+                <button onClick={load} disabled={busy} className="fp-panel-raised border fp-line-soft px-4 rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-50">
+                  <RefreshCw size={13} /> Re-check
+                </button>
+                <button onClick={disconnect} disabled={busy} className="border border-red-500/30 text-red-400 px-4 rounded-lg text-sm disabled:opacity-50">Disconnect</button>
+              </>
+            ) : (
+              <button onClick={connect} disabled={busy || !domain.trim()} className="fp-btn-primary text-sm font-semibold px-4 rounded-lg disabled:opacity-50">
+                {busy ? "…" : "Connect"}
+              </button>
+            )}
+          </div>
+
+          {msg && <p className={`text-xs mt-2 flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>}
+
+          {connected && (
+            <div className="mt-5 fp-panel-raised border fp-line-soft rounded-xl p-4">
+              <p className="fp-text-faint text-xs fp-mono uppercase mb-1">DNS setup</p>
+              <p className="fp-text-dim text-xs mb-3">
+                At your domain registrar, add {info!.recommended?.type === "A" ? "this A record" : "this CNAME record"}. SSL is issued automatically once DNS resolves.
+              </p>
+              <div className="grid grid-cols-[64px_1fr] sm:grid-cols-[80px_120px_1fr] gap-2 fp-text-faint text-[10px] fp-mono uppercase pb-1 border-b fp-line-soft">
+                <span>Type</span><span className="hidden sm:block">Name</span><span>Value</span>
+              </div>
+              {info!.recommended && <DnsRecordRow type={info!.recommended.type} name={info!.recommended.name} value={info!.recommended.value} />}
+              {info!.verification.map((v, i) => <DnsRecordRow key={i} type={v.type} name={v.domain} value={v.value} />)}
+
+              {info!.verified ? (
+                <p className="fp-safe text-xs mt-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> Verified — your panel is live on {info!.customDomain}.</p>
+              ) : (
+                <p className="fp-text-faint text-xs mt-3">After adding the record, DNS can take a few minutes to a few hours. Click Re-check to refresh.</p>
+              )}
+              {!info!.vercelManaged && (
+                <p className="fp-gold text-[11px] mt-3 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Automatic setup isn&apos;t configured (VERCEL_API_TOKEN). Also add <span className="fp-mono">{info!.customDomain}</span> to the Vercel project so it routes and gets an SSL cert.</p>
+              )}
+            </div>
+          )}
+
+          {!connected && (
+            <p className="fp-text-faint text-xs mt-3 leading-relaxed">
+              Point your own domain at this panel. Your customers see your brand end-to-end — the included
+              {" "}{PANEL_ROOT_DOMAIN} subdomain keeps working too.
+            </p>
+          )}
+        </>
+      )}
     </Card>
   );
 }
