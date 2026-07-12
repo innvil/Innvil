@@ -346,13 +346,21 @@ export function Storefront({
             ))}
           </div>
           <h2 className="fp-display text-2xl mb-5">{mode === "register" ? "Start growing today" : "Welcome back"}</h2>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="Email" className={`${inputCls} mb-3`} />
-          <input value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitAuth()} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="Password" className={`${inputCls} mb-4`} />
-          {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-          {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
-          <button onClick={submitAuth} disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
-            {busy ? "Please wait…" : mode === "register" ? "Create account" : "Log in"}
-          </button>
+          <form
+            autoComplete={`section-innvil-customer-${panel.id} on`}
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitAuth();
+            }}
+          >
+            <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete={`section-innvil-customer-${panel.id} username`} placeholder="Email" className={`${inputCls} mb-3`} />
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete={mode === "login" ? `section-innvil-customer-${panel.id} current-password` : `section-innvil-customer-${panel.id} new-password`} placeholder="Password" className={`${inputCls} mb-4`} />
+            {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+            {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
+            <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
+              {busy ? "Please wait…" : mode === "register" ? "Create account" : "Log in"}
+            </button>
+          </form>
           <p className="fp-text-faint text-xs text-center mt-4">
             {mode === "register" ? (<>Already have an account? <button onClick={() => setMode("login")} className="fp-violet">Log in</button></>) : (<>New here? <button onClick={() => setMode("register")} className="fp-violet">Create account</button></>)}
           </p>

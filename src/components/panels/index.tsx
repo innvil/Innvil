@@ -24,6 +24,7 @@ import { PanelAdmin } from "./admin";
 import { AccountSettings } from "./AccountSettings";
 import { OwnerOrders, OwnerCustomers, OwnerBilling } from "./OwnerSections";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
+import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
@@ -299,33 +300,34 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
             Sign up
           </button>
         </div>
-        <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          type="email"
-          name="ll-owner-email"
-          autoComplete="off"
-          data-lpignore="true"
-          data-1p-ignore
-          data-form-type="other"
-          placeholder="you@example.com"
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
-        />
-        <label className="fp-text-dim text-xs fp-mono uppercase">Password</label>
-        <input
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          type="password"
-          name="ll-owner-password"
-          autoComplete="new-password"
-          data-lpignore="true"
-          data-1p-ignore
-          data-form-type="other"
-          placeholder="••••••••"
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
-        />
+        <form
+          autoComplete="section-innvil-owner on"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            type="email"
+            name="email"
+            autoComplete="section-innvil-owner username"
+            placeholder="you@example.com"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
+          />
+          <label className="fp-text-dim text-xs fp-mono uppercase">Password</label>
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            type="password"
+            name="password"
+            autoComplete={mode === "login" ? "section-innvil-owner current-password" : "section-innvil-owner new-password"}
+            placeholder="••••••••"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
+          />
         {error && (
           <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5">
             <AlertTriangle size={12} /> {error}
@@ -337,6 +339,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
           </p>
         )}
         <button
+          type="submit"
           onClick={submit}
           disabled={busy}
           className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -344,6 +347,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
           <LogIn size={15} />
           {busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
         </button>
+        </form>
         <p className="fp-text-faint text-xs text-center mt-5">
           {mode === "login" ? "New to Innvil?" : "Already have an account?"}{" "}
           <button onClick={() => switchMode(mode === "login" ? "signup" : "login")} className="fp-gold">
@@ -402,6 +406,36 @@ function AppSidebar({ section, setSection, isSuper }: { section: string; setSect
 
 function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void; onOpenAccount: () => void }) {
   const [bellOpen, setBellOpen] = useState(false);
+  const [ownerBalance, setOwnerBalance] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.sessionStorage.getItem("innvil-owner:billing");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { commissionToday?: number };
+      return typeof parsed.commissionToday === "number" ? parsed.commissionToday : null;
+    } catch {
+      return null;
+    }
+  });
+  const [syncingBalance, setSyncingBalance] = useState(ownerBalance !== null);
+
+  useEffect(() => {
+    let alive = true;
+    setSyncingBalance(ownerBalance !== null);
+    getOwnerBillingSummary().then((summary) => {
+      if (!alive) return;
+      setOwnerBalance(summary.commissionToday);
+      setSyncingBalance(false);
+    }).catch(() => {
+      if (!alive) return;
+      setSyncingBalance(false);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const fmtBalance = (n: number) =>
+    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+
   return (
     <div className="flex items-center justify-between px-8 py-5 border-b fp-line-soft">
       <div className="relative w-72">
@@ -412,6 +446,14 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
         />
       </div>
       <div className="flex items-center gap-5">
+        <div className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 flex items-center gap-2">
+          <Wallet size={13} className="fp-gold" />
+          <div>
+            <p className="text-[10px] fp-text-faint fp-mono uppercase leading-none">Balance</p>
+            <p className="text-xs fp-mono leading-tight">{ownerBalance == null ? "—" : fmtBalance(ownerBalance)}</p>
+          </div>
+          {syncingBalance && <RefreshCw size={11} className="fp-text-faint animate-spin" />}
+        </div>
         <div className="relative">
           <button
             onClick={() => setBellOpen((o) => !o)}

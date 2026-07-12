@@ -74,16 +74,22 @@ export default function ResetPasswordPage() {
       ) : !ready ? (
         <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {error ?? "Invalid or expired link."}</p>
       ) : (
-        <>
+        <form
+          autoComplete="section-innvil-owner on"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
           <label className="fp-text-dim text-xs fp-mono uppercase">New password</label>
-          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="new-password" placeholder="At least 8 characters" className={authInputCls} />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="new-password" autoComplete="section-innvil-owner new-password" placeholder="At least 8 characters" className={authInputCls} />
           <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Confirm new password</label>
-          <input value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} type="password" autoComplete="new-password" placeholder="••••••••" className={authInputCls} />
+          <input value={confirm} onChange={(e) => setConfirm(e.target.value)} type="password" name="confirm-password" autoComplete="section-innvil-owner new-password" placeholder="••••••••" className={authInputCls} />
           {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-          <button onClick={submit} disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
+          <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
             <KeyRound size={15} /> {busy ? "Saving…" : "Update password"}
           </button>
-        </>
+        </form>
       )}
     </AuthShell>
   );

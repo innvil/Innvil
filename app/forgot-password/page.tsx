@@ -47,12 +47,20 @@ export default function ForgotPasswordPage() {
       subtitle="Enter your email and we'll send you a reset link."
       footer={<>Remembered it? <Link href="/login" className="fp-gold">Log in</Link></>}
     >
-      <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
-      <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} type="email" autoComplete="email" placeholder="you@example.com" className={authInputCls} />
-      {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-      <button onClick={submit} disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
-        <Send size={15} /> {busy ? "Sending…" : "Send reset link"}
-      </button>
+      <form
+        autoComplete="section-innvil-owner on"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete="section-innvil-owner email" placeholder="you@example.com" className={authInputCls} />
+        {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+        <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
+          <Send size={15} /> {busy ? "Sending…" : "Send reset link"}
+        </button>
+      </form>
     </AuthShell>
   );
 }

@@ -91,7 +91,7 @@ export function AccountSettings() {
 
       <Card title="Profile" icon={UserCircle2}>
         <label className="fp-text-dim text-xs fp-mono uppercase">Username</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" className={inputCls} />
+        <input value={name} onChange={(e) => setName(e.target.value)} name="username" autoComplete="section-innvil-owner username" placeholder="Your name" className={inputCls} />
         <div className="mt-4">
           <button onClick={saveName} disabled={nameBusy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
             {nameBusy ? "Saving…" : "Save username"}
@@ -102,7 +102,7 @@ export function AccountSettings() {
 
       <Card title="Email" icon={Mail}>
         <label className="fp-text-dim text-xs fp-mono uppercase">Email address</label>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="you@example.com" className={`${inputCls} fp-mono`} />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete="section-innvil-owner email" placeholder="you@example.com" className={`${inputCls} fp-mono`} />
         <p className="fp-text-faint text-xs mt-2">Changing this sends a confirmation link to the new address — it applies only after you confirm.</p>
         <div className="mt-4">
           <button onClick={saveEmail} disabled={emailBusy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
@@ -114,11 +114,11 @@ export function AccountSettings() {
 
       <Card title="Password" icon={Lock}>
         <label className="fp-text-dim text-xs fp-mono uppercase">Current password</label>
-        <input value={curPw} onChange={(e) => setCurPw(e.target.value)} type="password" autoComplete="current-password" className={inputCls} />
+        <input value={curPw} onChange={(e) => setCurPw(e.target.value)} type="password" name="current-password" autoComplete="section-innvil-owner current-password" className={inputCls} />
         <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">New password</label>
-        <input value={newPw} onChange={(e) => setNewPw(e.target.value)} type="password" autoComplete="new-password" className={inputCls} />
+        <input value={newPw} onChange={(e) => setNewPw(e.target.value)} type="password" name="new-password" autoComplete="section-innvil-owner new-password" className={inputCls} />
         <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Confirm new password</label>
-        <input value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} type="password" autoComplete="new-password" className={inputCls} />
+        <input value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} type="password" name="confirm-password" autoComplete="section-innvil-owner new-password" className={inputCls} />
         <div className="mt-4">
           <button onClick={savePassword} disabled={pwBusy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
             {pwBusy ? "Saving…" : "Change password"}

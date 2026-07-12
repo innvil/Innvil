@@ -56,21 +56,29 @@ export default function SignUpPage() {
       subtitle="Launch your own white-label SMM panel."
       footer={<>Already have an account? <Link href="/login" className="fp-gold">Log in</Link></>}
     >
-      <label className="fp-text-dim text-xs fp-mono uppercase">Username</label>
-      <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" placeholder="yourname" className={authInputCls} />
-      <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Email</label>
-      <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="you@example.com" className={authInputCls} />
-      <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Password</label>
-      <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="new-password" placeholder="At least 8 characters" className={authInputCls} />
-      <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Confirm password</label>
-      <input value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} type="password" autoComplete="new-password" placeholder="••••••••" className={authInputCls} />
-      {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-      <button onClick={submit} disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
-        <UserPlus size={15} /> {busy ? "Please wait…" : "Create account"}
-      </button>
-      <p className="fp-text-faint text-[11px] mt-3 flex items-center gap-1.5">
-        <CheckCircle2 size={11} /> We&apos;ll email you a confirmation link to verify your address.
-      </p>
+      <form
+        autoComplete="section-innvil-owner on"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <label className="fp-text-dim text-xs fp-mono uppercase">Username</label>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} name="username" autoComplete="section-innvil-owner username" placeholder="yourname" className={authInputCls} />
+        <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Email</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete="section-innvil-owner email" placeholder="you@example.com" className={authInputCls} />
+        <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Password</label>
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="new-password" autoComplete="section-innvil-owner new-password" placeholder="At least 8 characters" className={authInputCls} />
+        <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Confirm password</label>
+        <input value={confirm} onChange={(e) => setConfirm(e.target.value)} type="password" name="confirm-password" autoComplete="section-innvil-owner new-password" placeholder="••••••••" className={authInputCls} />
+        {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+        <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
+          <UserPlus size={15} /> {busy ? "Please wait…" : "Create account"}
+        </button>
+        <p className="fp-text-faint text-[11px] mt-3 flex items-center gap-1.5">
+          <CheckCircle2 size={11} /> We&apos;ll email you a confirmation link to verify your address.
+        </p>
+      </form>
     </AuthShell>
   );
 }
