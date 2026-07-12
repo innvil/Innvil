@@ -36,6 +36,66 @@ export interface PanelCustomerVM {
   joinedAt: string;
 }
 
+export interface OwnerCustomerVM extends PanelCustomerVM {
+  panelId: string;
+  panelName: string;
+}
+
+/** Customers across ALL panels the owner controls (app-level Customers page). */
+export async function listAllOwnerCustomers(): Promise<OwnerCustomerVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return [];
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+  const panelIds = list.map((p) => p.id);
+
+  const { data: accts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id, panel_id, balance, status, created_at")
+    .in("panel_id", panelIds)
+    .order("created_at", { ascending: false });
+  if (!accts?.length) return [];
+
+  const { data: orders } = await admin
+    .from("orders")
+    .select("customer_id, charge, status")
+    .in("panel_id", panelIds);
+  const agg = new Map<string, { orders: number; spent: number }>();
+  for (const o of orders ?? []) {
+    const a = agg.get(o.customer_id as string) ?? { orders: 0, spent: 0 };
+    a.orders++;
+    if (o.status !== "refunded") a.spent += Number(o.charge);
+    agg.set(o.customer_id as string, a);
+  }
+
+  const result: OwnerCustomerVM[] = [];
+  for (const c of accts) {
+    let email: string | null = null;
+    try {
+      const { data } = await admin.auth.admin.getUserById(c.user_id as string);
+      email = data.user?.email ?? null;
+    } catch {
+      // best-effort
+    }
+    const a = agg.get(c.id as string) ?? { orders: 0, spent: 0 };
+    result.push({
+      id: c.id as string,
+      userId: c.user_id as string,
+      email,
+      balance: Number(c.balance),
+      status: c.status as CustomerStatus,
+      orders: a.orders,
+      spent: round4(a.spent),
+      joinedAt: c.created_at as string,
+      panelId: c.panel_id as string,
+      panelName: nameById.get(c.panel_id as string) ?? "Panel",
+    });
+  }
+  return result;
+}
+
 /** All customers on a panel the owner controls, with order count + spend. */
 export async function listPanelCustomers(panelId: string): Promise<PanelCustomerVM[]> {
   const { user, admin } = await getAuthedAdmin();

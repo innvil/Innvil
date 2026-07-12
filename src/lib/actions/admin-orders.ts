@@ -17,6 +17,25 @@ import type { OrderStatus } from "@/src/types/db";
    ========================================================= */
 
 type Result = { ok: true } | { ok: false; error: string };
+type AuthorizedOrderResult =
+  | { error: string }
+  | {
+      admin: SupabaseClient;
+      order: {
+        id: string;
+        panel_id: string | null;
+        customer_id: string | null;
+        service_id: string | null;
+        provider_id: string | null;
+        provider_order_id: string | null;
+        link: string | null;
+        quantity: number | null;
+        charge: number | null;
+        remains: number | null;
+        status: OrderStatus;
+        provider_payload: unknown;
+      };
+    };
 
 async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string): Promise<boolean> {
   const { data } = await admin
@@ -29,16 +48,16 @@ async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string)
 }
 
 /** Load an order and confirm the signed-in user owns its panel. */
-async function authorizeOrder(orderId: string) {
+async function authorizeOrder(orderId: string): Promise<AuthorizedOrderResult> {
   const { user, admin } = await getAuthedAdmin();
-  if (!user) return { error: "Not signed in" as const };
+  if (!user) return { error: "Not signed in" };
   const { data: order } = await admin
     .from("orders")
     .select("id, panel_id, customer_id, service_id, provider_id, provider_order_id, link, quantity, charge, remains, status, provider_payload")
     .eq("id", orderId)
     .maybeSingle();
-  if (!order) return { error: "Order not found" as const };
-  if (!(await ownsPanel(admin, user.id, order.panel_id as string))) return { error: "Not authorized" as const };
+  if (!order) return { error: "Order not found" };
+  if (!(await ownsPanel(admin, user.id, order.panel_id as string))) return { error: "Not authorized" };
   return { admin, order };
 }
 
@@ -64,6 +83,7 @@ export interface AdminOrderVM {
 
 interface OrderRow {
   id: string;
+  panel_id?: string;
   service_id: string | null;
   customer_id: string;
   link: string;
@@ -81,6 +101,25 @@ interface OrderRow {
 
 function one<T>(v: T | T[] | null): T | undefined {
   return Array.isArray(v) ? v[0] : v ?? undefined;
+}
+
+/** Map a joined order row + resolved emails to the admin view-model. */
+function mapOrderRow(r: OrderRow, emails: Map<string, string | null>): AdminOrderVM {
+  return {
+    id: r.id,
+    shortId: String(r.id).slice(0, 8),
+    serviceName: one(r.services)?.name ?? "Service",
+    customerEmail: emails.get(one(r.customer_accounts)?.user_id ?? "") ?? null,
+    link: r.link,
+    quantity: r.quantity,
+    charge: Number(r.charge),
+    providerCost: Number(r.provider_cost ?? 0),
+    profit: Number(r.profit ?? 0),
+    status: r.status,
+    providerOrderId: r.provider_order_id,
+    remains: r.remains,
+    createdAt: r.created_at,
+  };
 }
 
 /** Resolve emails for a set of customer_accounts user_ids (best-effort, batched). */
@@ -117,22 +156,91 @@ export async function listPanelOrders(
     .limit(opts?.limit ?? 200);
   const rows = (data as OrderRow[] | null) ?? [];
   const emails = await resolveEmails(admin, rows.map((r) => one(r.customer_accounts)?.user_id ?? "").filter(Boolean));
+  return rows.map((r) => mapOrderRow(r, emails));
+}
 
+export interface OwnerOrderVM extends AdminOrderVM {
+  panelId: string;
+  panelName: string;
+}
+
+/** Orders across ALL panels the owner controls (for the app-level Orders page). */
+export async function listAllOwnerOrders(limit = 200): Promise<OwnerOrderVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return [];
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+
+  const { data } = await admin
+    .from("orders")
+    .select("id, panel_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, services(name), customer_accounts(user_id)")
+    .in("panel_id", list.map((p) => p.id))
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  const rows = (data as OrderRow[] | null) ?? [];
+  const emails = await resolveEmails(admin, rows.map((r) => one(r.customer_accounts)?.user_id ?? "").filter(Boolean));
   return rows.map((r) => ({
-    id: r.id,
-    shortId: String(r.id).slice(0, 8),
-    serviceName: one(r.services)?.name ?? "Service",
-    customerEmail: emails.get(one(r.customer_accounts)?.user_id ?? "") ?? null,
-    link: r.link,
-    quantity: r.quantity,
-    charge: Number(r.charge),
-    providerCost: Number(r.provider_cost ?? 0),
-    profit: Number(r.profit ?? 0),
-    status: r.status,
-    providerOrderId: r.provider_order_id,
-    remains: r.remains,
-    createdAt: r.created_at,
+    ...mapOrderRow(r, emails),
+    panelId: r.panel_id ?? "",
+    panelName: nameById.get(r.panel_id ?? "") ?? "Panel",
   }));
+}
+
+export interface OwnerBillingSummary {
+  revenueToday: number;
+  profitToday: number;
+  commissionToday: number; // 5% of today's panel-price revenue (estimate)
+  ordersToday: number;
+  panels: number;
+  perPanel: Array<{ panelId: string; panelName: string; revenueToday: number; commissionToday: number }>;
+}
+
+const COMMISSION_RATE = 0.05;
+
+/** Real cross-panel revenue + a 5% commission estimate for the Billing page. */
+export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
+  const empty: OwnerBillingSummary = { revenueToday: 0, profitToday: 0, commissionToday: 0, ordersToday: 0, panels: 0, perPanel: [] };
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return empty;
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return empty;
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const { data: orders } = await admin
+    .from("orders")
+    .select("panel_id, charge, profit, status")
+    .in("panel_id", list.map((p) => p.id))
+    .gte("created_at", startOfToday.toISOString());
+
+  const perPanel = new Map<string, { revenueToday: number }>();
+  let revenueToday = 0, profitToday = 0, ordersToday = 0;
+  for (const o of (orders as Array<{ panel_id: string; charge: number; profit: number | null; status: OrderStatus }> | null) ?? []) {
+    ordersToday++;
+    if (o.status === "refunded") continue;
+    revenueToday += Number(o.charge);
+    profitToday += Number(o.profit ?? 0);
+    const p = perPanel.get(o.panel_id) ?? { revenueToday: 0 };
+    p.revenueToday += Number(o.charge);
+    perPanel.set(o.panel_id, p);
+  }
+
+  return {
+    revenueToday: round4(revenueToday),
+    profitToday: round4(profitToday),
+    commissionToday: round4(revenueToday * COMMISSION_RATE),
+    ordersToday,
+    panels: list.length,
+    perPanel: list.map((p) => ({
+      panelId: p.id,
+      panelName: p.name,
+      revenueToday: round4(perPanel.get(p.id)?.revenueToday ?? 0),
+      commissionToday: round4((perPanel.get(p.id)?.revenueToday ?? 0) * COMMISSION_RATE),
+    })),
+  };
 }
 
 export interface PanelOverview {

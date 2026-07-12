@@ -45,6 +45,19 @@ export async function signUpAction(
   return { ok: true, needsConfirmation: true };
 }
 
+/** Email a password-reset link. The link lands on /reset-password to set a new one. */
+export async function requestPasswordReset(email: string): Promise<AuthResult> {
+  const supabase = await createClient();
+  const origin = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  const { error } = await supabase.auth.resetPasswordForEmail(
+    email.trim().toLowerCase(),
+    origin ? { redirectTo: `${origin}/reset-password` } : undefined
+  );
+  // Don't leak whether an email exists — report success regardless of lookup.
+  if (error && !/rate/i.test(error.message)) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 /** Sign the current user out (clears the session cookie). */
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();

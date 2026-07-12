@@ -40,8 +40,8 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
 const PRIMARY_TABS = TABS.slice(0, 10);
 const OVERFLOW_TABS = TABS.slice(10);
 
-export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: string) => void }) {
-  const [tab, setTab] = useState("overview");
+export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setWorld: (w: string) => void; initialTab?: string }) {
+  const [tab, setTab] = useState(initialTab || "overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [panelStatus, setPanelStatus] = useState<PanelStatus>(panel.status || "live");
 

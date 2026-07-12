@@ -127,6 +127,18 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Owner dashboard + auth production (v0.2.8)
+- Auth split into dedicated worlds/routes: `/login`, `/signup` (username + confirm +
+  email verification), `/forgot-password`, `/reset-password`. Landing CTAs link to them.
+- Owner **Account settings** (username, email w/ confirmation, password) via
+  `account.ts` + `AccountSettings.tsx`; reachable from the sidebar + topbar avatar.
+- Fixes: `.ledgerline.app` → `innvil.cloud` (shared `src/lib/config.ts`); My Panels
+  **Visit** button works (`/p/<sub>`); create-panel **Connect provider** lands you on
+  the Providers tab (`PanelAdmin` `initialTab`); the **bell** is clickable (dropdown).
+- Owner shell real data: Orders (all panels) + Customers (all panels) + Billing
+  (real revenue + 5% commission estimate; auto-settlement "coming soon"); Support
+  (all panels) → coming soon. See `OwnerSections.tsx`.
+
 ### 2026-07-12 — Admin dashboard production pass (v0.2.7)
 - **Orders tab is now real** (§5): `admin-orders.ts` — `listPanelOrders` (owner-only
   fields incl. provider cost/profit), status-filter chips + search, expandable detail,

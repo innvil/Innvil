@@ -5,6 +5,55 @@
 
 ---
 
+## Session: Owner dashboard + auth production (v0.2.8)
+
+### Date: 2026-07-12
+Owner/app-shell + auth pass. **package.json → 0.2.8** (v0.2.7 committed + tagged).
+
+**Bug fixes**
+- `.ledgerline.app` → shared `src/lib/config.ts` (`PANEL_ROOT_DOMAIN` = innvil.cloud,
+  `panelDisplayDomain`, `panelStorefrontPath`). Replaced in DashboardHome, MyPanels,
+  Create wizard (subdomain suffix + review).
+- **My Panels "Visit"** now a real `<a href="/p/<sub>" target="_blank">` (was a dead button).
+- **Create-panel "Connect provider"**: the inert card is now a real toggle; on launch
+  the owner lands straight on the panel's **Providers & API** tab (PanelAdmin gained
+  `initialTab`; InnvilApp threads it via openPanel(p, tab)).
+- **Bell icon**: now a real button with a notifications dropdown ("all caught up"
+  placeholder).
+
+**Owner account settings (new)** — `src/lib/actions/account.ts`
+(getAccount/updateDisplayName/updateEmail/updatePassword; email change → confirm
+link, password change re-authenticates with current password) +
+`AccountSettings.tsx` (username/email/password cards). Wired to the sidebar
+"Account settings" item + the topbar avatar (section "account").
+
+**Auth in its own worlds (routes)** — `app/login`, `app/signup`, `app/forgot-password`,
+`app/reset-password` (+ shared `src/components/auth/AuthShell.tsx`). Signup now takes
+**username** + confirm password + email-confirmation state; login has **Forgot
+password**; reset-password consumes the emailed recovery link client-side
+(exchangeCodeForSession). New `requestPasswordReset` action (redirect → /reset-password;
+needs NEXT_PUBLIC_APP_URL). Landing CTAs now `<Link>` to /login and /signup.
+The old combined `AuthScreen` remains only as a fallback (root view "auth").
+
+**Owner app shell real data** — `src/components/panels/OwnerSections.tsx`:
+- OwnerOrders (listAllOwnerOrders — orders across all owned panels, with panel col),
+- OwnerCustomers (listAllOwnerCustomers in customers.ts),
+- OwnerBilling (getOwnerBillingSummary — REAL revenue today + 5% commission ESTIMATE
+  per panel; auto-billing/settlement marked "coming soon" since owner-wallet infra
+  isn't built). Deleted the old mock `Billing`; Support (all panels) → coming soon.
+  admin-orders.ts refactored with a shared `mapOrderRow`.
+
+Left for later (noted, not fake controls): DashboardHome "Orders today"/RevenueChart
+are still placeholder visuals; owner Add-Funds modal is still a placeholder (owner
+prepaid balance infra not built); custom-domain host routing in proxy.ts still pending;
+super-admin dashboard + its payment-method config (Cryptomus + NOWPayments) is the
+NEXT agenda; landing "how it works" video slot (super-admin only) is a future update.
+
+Aggregate money across panels is shown in USD (per-panel currencies differ) — fine
+for MVP; revisit if multi-currency owners appear.
+
+---
+
 ## Session: Admin dashboard production pass — real Orders + Overview (v0.2.7)
 
 ### Date: 2026-07-12

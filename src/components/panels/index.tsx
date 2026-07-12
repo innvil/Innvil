@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
   Wifi, ShieldCheck, Users, CreditCard, MessageSquare, Palette, Settings, Bell,
   Search, ArrowUpRight, ArrowRight, TrendingUp, Lock, CheckCircle2, Sparkles, Gauge,
@@ -11,18 +12,54 @@ import {
   AlertTriangle, Wrench, Eye, EyeOff,
 } from "lucide-react";
 import {
-  Card, StatCard, FloorLedger, RevenueChart, OrdersTable, StatusBadge,
+  Card, StatCard, FloorLedger, RevenueChart, StatusBadge,
   StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
-  panels, ledgerlineBalance, customers, tickets, topUpMethods, themes,
+  customers, topUpMethods, themes,
   allPanelsAdmin, PanelStatus, auditLogs,
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
+import { AccountSettings } from "./AccountSettings";
+import { OwnerOrders, OwnerCustomers, OwnerBilling } from "./OwnerSections";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
+import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
+
+const OWNER_APP_CACHE_PREFIX = "innvil-owner-app";
+const ownerAppMemory = new Map<string, unknown>();
+
+function getOwnerAppCacheKey(section: string) {
+  return `${OWNER_APP_CACHE_PREFIX}:${section}`;
+}
+
+function readOwnerAppCache<T>(section: string): T | null {
+  const key = getOwnerAppCacheKey(section);
+  if (ownerAppMemory.has(key)) return ownerAppMemory.get(key) as T;
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as T;
+    ownerAppMemory.set(key, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeOwnerAppCache<T>(section: string, value: T) {
+  const key = getOwnerAppCacheKey(section);
+  ownerAppMemory.set(key, value);
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage failures
+  }
+}
 
 /* =========================================================
    A. LEDGERLINE PUBLIC LANDING PAGE
@@ -45,10 +82,10 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
           <a href="#pricing" className="hover:fp-text">Pricing</a>
         </nav>
         <div className="flex items-center gap-3">
-          <button onClick={() => setWorld("auth")} className="text-sm fp-text-dim">Log in</button>
-          <button onClick={() => setWorld("auth")} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
+          <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
+          <Link href="/signup" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
             Create your panel <ArrowRight size={14} />
-          </button>
+          </Link>
         </div>
       </div>
     </header>
@@ -74,9 +111,9 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
               yours to brand, price, and grow.
             </p>
             <div className="flex items-center gap-4 mt-8">
-              <button onClick={() => setWorld("auth")} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg flex items-center gap-2">
+              <Link href="/signup" className="fp-btn-primary font-semibold px-6 py-3 rounded-lg flex items-center gap-2">
                 Create your panel <ArrowRight size={16} />
-              </button>
+              </Link>
               <a href="#how" className="fp-text-dim text-sm flex items-center gap-1 hover:fp-text">
                 See how it works <ChevronRight size={14} />
               </a>
@@ -171,9 +208,9 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
               </li>
             ))}
           </ul>
-          <button onClick={() => setWorld("auth")} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg mt-8 flex items-center gap-2">
+          <Link href="/signup" className="fp-btn-primary font-semibold px-6 py-3 rounded-lg mt-8 flex items-center gap-2 w-fit">
             Create your panel <ArrowRight size={16} />
-          </button>
+          </Link>
         </div>
       </section>
 
@@ -351,16 +388,12 @@ function AppSidebar({ section, setSection }: { section: string; setSection: (s: 
           </div>
         ))}
       </nav>
-      <div className="border-t fp-line-soft pt-4 mt-4">
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm fp-text-dim">
-          <Settings size={16} /> Account settings
-        </div>
-      </div>
     </aside>
   );
 }
 
-function AppTopbar({ setWorld }: { setWorld: (w: string) => void }) {
+function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void; onOpenAccount: () => void }) {
+  const [bellOpen, setBellOpen] = useState(false);
   return (
     <div className="flex items-center justify-between px-8 py-5 border-b fp-line-soft">
       <div className="relative w-72">
@@ -371,7 +404,34 @@ function AppTopbar({ setWorld }: { setWorld: (w: string) => void }) {
         />
       </div>
       <div className="flex items-center gap-5">
-        <Bell size={17} className="fp-text-dim" />
+        <div className="relative">
+          <button
+            onClick={() => setBellOpen((o) => !o)}
+            aria-label="Notifications"
+            className={`p-1 rounded-lg ${bellOpen ? "fp-gold" : "fp-text-dim hover:fp-text"}`}
+          >
+            <Bell size={17} />
+          </button>
+          {bellOpen && (
+            <>
+              <button aria-hidden onClick={() => setBellOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+              <div className="absolute right-0 top-full mt-2 w-72 fp-panel border fp-line rounded-xl shadow-2xl z-50 p-4">
+                <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Notifications</p>
+                <div className="text-center py-6">
+                  <CheckCircle2 size={20} className="fp-safe mx-auto mb-2" />
+                  <p className="fp-text-dim text-sm">You&apos;re all caught up.</p>
+                  <p className="fp-text-faint text-xs mt-1">Order and deposit alerts will appear here.</p>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          onClick={onOpenAccount}
+          className="fp-text-faint text-xs flex items-center gap-1.5 hover:fp-text"
+        >
+          <Settings size={14} /> Account settings
+        </button>
         <button
           onClick={async () => {
             await signOutAction();
@@ -381,16 +441,23 @@ function AppTopbar({ setWorld }: { setWorld: (w: string) => void }) {
         >
           Log out
         </button>
-        <div className="w-8 h-8 rounded-full fp-violet-bg flex items-center justify-center fp-mono text-xs font-semibold">KG</div>
+        <button
+          onClick={onOpenAccount}
+          aria-label="Account settings"
+          className="w-8 h-8 rounded-full fp-violet-bg flex items-center justify-center fp-mono text-xs font-semibold hover:opacity-80"
+        >
+          <UserCircle2 size={18} className="text-[#0A0B0F]" />
+        </button>
       </div>
     </div>
   );
 }
 
 /* --- Dashboard home --- */
-function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
+function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel }: {
   panels: Panel[];
   loading: boolean;
+  syncing: boolean;
   goPanels: () => void;
   goCreate: () => void;
   openPanel: (p: Panel) => void;
@@ -418,7 +485,12 @@ function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
       <Card
         title="Your panels"
         icon={Gauge}
-        right={<button onClick={goPanels} className="text-xs fp-gold flex items-center gap-1">View all <ChevronRight size={12} /></button>}
+        right={(
+          <div className="flex items-center gap-3">
+            {syncing && <span className="text-xs fp-text-faint flex items-center gap-1">Syncing…</span>}
+            <button onClick={goPanels} className="text-xs fp-gold flex items-center gap-1">View all <ChevronRight size={12} /></button>
+          </div>
+        )}
       >
         {loading ? (
           <p className="fp-text-faint text-sm py-6 text-center">Loading panels…</p>
@@ -441,7 +513,7 @@ function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
                   <p className="text-sm font-medium">{p.name}</p>
                   <StatusBadge status={p.status} />
                 </div>
-                <p className="fp-text-faint text-xs fp-mono">{p.domain || `${p.subdomain}.ledgerline.app`}</p>
+                <p className="fp-text-faint text-xs fp-mono">{panelDisplayDomain(p.subdomain, p.domain)}</p>
                 <p className="fp-mono text-sm mt-3">${p.ordersToday.toFixed(2)} today</p>
               </button>
             ))}
@@ -453,9 +525,10 @@ function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
 }
 
 /* --- My Panels --- */
-function MyPanels({ panels, loading, goCreate, openPanel }: {
+function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
   panels: Panel[];
   loading: boolean;
+  syncing: boolean;
   goCreate: () => void;
   openPanel: (p: Panel) => void;
 }) {
@@ -480,9 +553,12 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="fp-display text-2xl">My Panels</h1>
-        <button onClick={goCreate} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
-          <Plus size={15} /> Create panel
-        </button>
+        <div className="flex items-center gap-3">
+          {syncing && <span className="text-xs fp-text-faint">Syncing…</span>}
+          <button onClick={goCreate} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
+            <Plus size={15} /> Create panel
+          </button>
+        </div>
       </div>
       {loading && <p className="fp-text-faint text-sm">Loading panels…</p>}
       <div className="grid md:grid-cols-3 gap-5">
@@ -496,7 +572,7 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
               />
             </div>
             <p className="fp-text-faint text-xs fp-mono flex items-center gap-1">
-              <Globe size={11} /> {p.domain || `${p.subdomain}.ledgerline.app`}
+              <Globe size={11} /> {panelDisplayDomain(p.subdomain, p.domain)}
             </p>
             <p className="fp-text-dim text-xs mt-1">Theme: {p.theme}</p>
             <p className="fp-mono text-lg mt-4">
@@ -532,9 +608,14 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
               >
                 Manage
               </button>
-              <button className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim flex items-center gap-1">
+              <a
+                href={panelStorefrontPath(p.subdomain)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim flex items-center gap-1 hover:fp-gold-border"
+              >
                 <ExternalLink size={12} /> Visit
-              </button>
+              </a>
             </div>
           </div>
         ))}
@@ -552,12 +633,13 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
 
 /* --- Create Panel Wizard --- */
 function CreatePanelWizard({ onCreate }: {
-  onCreate: (input: { name: string; subdomain: string; theme: string }) => Promise<{ ok: boolean; error?: string }>;
+  onCreate: (input: { name: string; subdomain: string; theme: string; connectProvider: boolean }) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [subdomain, setSubdomain] = useState("");
   const [theme, setTheme] = useState(themes[0].name);
+  const [connectProvider, setConnectProvider] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const steps = ["Basics", "Theme", "Provider", "Launch"];
@@ -566,7 +648,7 @@ function CreatePanelWizard({ onCreate }: {
     if (busy) return;
     setError(null);
     setBusy(true);
-    const res = await onCreate({ name, subdomain, theme });
+    const res = await onCreate({ name, subdomain, theme, connectProvider });
     if (!res.ok) {
       setError(res.error || "Could not create the panel.");
       setBusy(false);
@@ -613,7 +695,7 @@ function CreatePanelWizard({ onCreate }: {
                 placeholder="novaboost"
                 className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border"
               />
-              <span className="fp-text-faint text-sm fp-mono">.ledgerline.app</span>
+              <span className="fp-text-faint text-sm fp-mono">.{PANEL_ROOT_DOMAIN}</span>
             </div>
             <p className="fp-text-faint text-xs mt-2">
               You can connect a custom domain later from the panel&apos;s Domain settings.
@@ -646,16 +728,26 @@ function CreatePanelWizard({ onCreate }: {
           <>
             <p className="fp-text-dim text-sm mb-5">
               Connect the SMM provider you already use — or skip and do it anytime from Panel Admin.
+              You enter your provider&apos;s API URL and key on the next screen (Providers &amp; API).
             </p>
-            <div className="fp-panel-raised border fp-line-soft rounded-xl p-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setConnectProvider((v) => !v)}
+              className={`w-full fp-panel-raised border rounded-xl p-4 flex items-center justify-between text-left transition-colors ${connectProvider ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft"}`}
+            >
               <div className="flex items-center gap-3">
                 <Wifi size={16} className="fp-gold" />
-                <span className="text-sm">Connect provider now</span>
+                <div>
+                  <p className="text-sm">Take me to provider setup after launch</p>
+                  <p className="fp-text-faint text-xs mt-0.5">Opens the panel straight on the Providers &amp; API tab.</p>
+                </div>
               </div>
-              <ChevronRight size={14} className="fp-text-faint" />
-            </div>
+              <span className={`w-5 h-5 rounded-full border flex items-center justify-center ${connectProvider ? "fp-gold-border fp-gold" : "fp-line-soft"}`}>
+                {connectProvider && <CheckCircle2 size={13} />}
+              </span>
+            </button>
             <p className="fp-text-faint text-xs mt-3">
-              Nothing is connected automatically — you choose your own provider.
+              Nothing is connected automatically — you always choose and enter your own provider.
             </p>
           </>
         )}
@@ -669,7 +761,7 @@ function CreatePanelWizard({ onCreate }: {
               </div>
               <div className="flex justify-between">
                 <span className="fp-text-faint">Subdomain</span>
-                <span className="fp-mono">{subdomain || "your-panel"}.ledgerline.app</span>
+                <span className="fp-mono">{subdomain || "your-panel"}.{PANEL_ROOT_DOMAIN}</span>
               </div>
               <div className="flex justify-between">
                 <span className="fp-text-faint">Theme</span>
@@ -716,63 +808,7 @@ function CreatePanelWizard({ onCreate }: {
 
 /* --- Panel Admin lives in ./admin (PanelAdmin, AdminTabs, CustomerDrawer) --- */
 
-/* --- Billing --- */
-function Billing({ onAddFunds }: { onAddFunds: () => void }) {
-  return (
-    <div className="p-8 space-y-6 max-w-3xl">
-      <h1 className="fp-display text-2xl">Billing</h1>
-      <Card tone="gold">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2">
-            <Wallet size={16} className="fp-gold" />
-            <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Innvil balance</p>
-          </div>
-          <span className="fp-text-faint text-xs fp-mono">Funds commission across ALL your panels</span>
-        </div>
-        <p className="fp-display text-4xl fp-gold">${ledgerlineBalance.balance.toFixed(2)}</p>
-        <div className="grid grid-cols-2 gap-4 mt-6">
-          <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
-            <p className="fp-text-faint text-xs fp-mono uppercase">Orders today (all panels)</p>
-            <p className="fp-display text-xl mt-1">${ledgerlineBalance.ordersToday.toFixed(2)}</p>
-          </div>
-          <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
-            <p className="fp-text-faint text-xs fp-mono uppercase">Commission pending</p>
-            <p className="fp-display text-xl mt-1 fp-violet">${ledgerlineBalance.commissionPending.toFixed(2)}</p>
-            <p className="fp-text-faint text-[11px] mt-0.5 flex items-center gap-1">
-              <Clock size={11} /> {ledgerlineBalance.feePct}% · settles in {ledgerlineBalance.chargesIn}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 mt-6">
-          <button onClick={onAddFunds} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
-            <Plus size={15} /> Add funds
-          </button>
-          <button className="fp-panel-raised border fp-line-soft px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm fp-text-dim">
-            <History size={15} /> History
-          </button>
-          <a href="#" className="text-xs fp-violet flex items-center gap-1 ml-auto">
-            <HelpCircle size={13} /> How commission works?
-          </a>
-        </div>
-        <p className="fp-text-faint text-[11px] mt-4 leading-relaxed">
-          Every 24 hours we deduct 5% of that day&apos;s panel-price orders, across every panel you own,
-          from this balance. If it hits $0, your panels are <span className="fp-text">not</span> suspended —
-          they stay fully online and browsable, customers can still log in, view orders, tickets, and balances.
-          Only new order placement pauses (Inactive Mode) until you top up. Your provider is billed by you
-          directly — we never touch that relationship.
-        </p>
-      </Card>
-      <Card title="Commission by panel today" icon={ListOrdered}>
-        {panels.map((p) => (
-          <div key={p.id} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3">
-            <span className="text-sm">{p.name}</span>
-            <span className="fp-mono text-sm">${(p.ordersToday * 0.05).toFixed(2)}</span>
-          </div>
-        ))}
-      </Card>
-    </div>
-  );
-}
+/* --- Billing lives in ./OwnerSections (OwnerBilling — real cross-panel figures) --- */
 
 function AddFundsModal({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState("amount");
@@ -881,31 +917,39 @@ export function InnvilApp({ setWorld, initialSection }: {
   setWorld: (w: string) => void;
   initialSection?: string;
 }) {
+  const cachedPanels = readOwnerAppCache<Panel[]>("panels") ?? [];
   const [section, setSection] = useState(initialSection || "home");
   const [activePanel, setActivePanel] = useState<Panel | null>(null);
+  const [panelInitialTab, setPanelInitialTab] = useState<string | undefined>(undefined);
   const [showAddFunds, setShowAddFunds] = useState(false);
-  const [panelList, setPanelList] = useState<Panel[]>([]);
-  const [loadingPanels, setLoadingPanels] = useState(true);
+  const [panelList, setPanelList] = useState<Panel[]>(cachedPanels);
+  const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
+  const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
 
   const refreshPanels = useCallback(async () => {
-    setLoadingPanels(true);
-    setPanelList(await listPanels());
+    setLoadingPanels(panelList.length === 0);
+    setSyncingPanels(panelList.length > 0);
+    const next = await listPanels();
+    setPanelList(next);
+    writeOwnerAppCache("panels", next);
     setLoadingPanels(false);
+    setSyncingPanels(false);
   }, []);
 
   useEffect(() => {
     refreshPanels();
   }, [refreshPanels]);
 
-  const openPanel = (p: Panel) => { setActivePanel(p); setSection("panelAdmin"); };
+  const openPanel = (p: Panel, tab?: string) => { setActivePanel(p); setPanelInitialTab(tab); setSection("panelAdmin"); };
   const goCreate = () => setSection("create");
   const goPanels = () => setSection("panels");
 
-  const handleCreate = async (input: { name: string; subdomain: string; theme: string }) => {
-    const res = await createPanel(input);
+  const handleCreate = async (input: { name: string; subdomain: string; theme: string; connectProvider: boolean }) => {
+    const res = await createPanel({ name: input.name, subdomain: input.subdomain, theme: input.theme });
     if (!res.ok) return { ok: false, error: res.error };
     await refreshPanels();
-    openPanel(res.panel); // land the owner straight in the new panel's admin
+    // Land the owner straight in the new panel — on Providers if they opted to set one up.
+    openPanel(res.panel, input.connectProvider ? "providers" : undefined);
     return { ok: true };
   };
 
@@ -913,53 +957,22 @@ export function InnvilApp({ setWorld, initialSection }: {
     <div className="fp-root min-h-screen flex">
       <AppSidebar section={section === "panelAdmin" || section === "create" ? "panels" : section} setSection={setSection} />
       <div className="flex-1 min-w-0">
-        <AppTopbar setWorld={setWorld} />
-        {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
-        {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} goCreate={goCreate} openPanel={openPanel} />}
+        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} />
+        {section === "account" && <AccountSettings />}
+        {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
+        {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
-        {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} />}
-        {section === "billing" && <Billing onAddFunds={() => setShowAddFunds(true)} />}
-        {section === "orders" && <div className="p-8"><OrdersTable /></div>}
-        {section === "customers" && (
-          <div className="p-8">
-            <Card title="All customers" icon={Users}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
-                    <th className="py-2 font-normal">Customer</th>
-                    <th className="py-2 font-normal">Panel</th>
-                    <th className="py-2 font-normal">Orders</th>
-                    <th className="py-2 font-normal">Spent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {customers.map((c) => (
-                    <tr key={c.handle} className="border-b fp-line-soft last:border-0">
-                      <td className="py-3">{c.handle}</td>
-                      <td className="py-3 fp-text-dim">{c.panel}</td>
-                      <td className="py-3 fp-mono">{c.orders}</td>
-                      <td className="py-3 fp-mono">{c.spent}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-          </div>
-        )}
+        {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} initialTab={panelInitialTab} />}
+        {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
+        {section === "orders" && <OwnerOrders />}
+        {section === "customers" && <OwnerCustomers />}
         {section === "support" && (
           <div className="p-8">
-            <Card title="Support inbox — all panels" icon={MessageSquare} right={<Pill tone="violet" icon={Bot}>Auto-reply on</Pill>}>
-              <div className="space-y-3">
-                {tickets.map((t) => (
-                  <div key={t.subj} className="flex items-center justify-between border-b fp-line-soft last:border-0 pb-3 last:pb-0">
-                    <div>
-                      <p className="text-sm">{t.subj}</p>
-                      <p className="fp-text-faint text-xs fp-mono mt-0.5">{t.from} · {t.time} ago</p>
-                    </div>
-                    <Pill tone={t.tag === "Auto-replied" ? "safe" : "gold"}>{t.tag}</Pill>
-                  </div>
-                ))}
-              </div>
+            <Card title="Support inbox — all panels" icon={MessageSquare} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>
+              <p className="fp-text-dim text-sm leading-relaxed">
+                A unified ticket inbox across all your panels — view, reply, close, reopen, with optional
+                auto-reply — is coming soon.
+              </p>
             </Card>
           </div>
         )}
