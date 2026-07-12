@@ -23,6 +23,7 @@ import {
 import { PanelAdmin } from "./admin";
 import { AccountSettings } from "./AccountSettings";
 import { OwnerOrders, OwnerCustomers, OwnerBilling } from "./OwnerSections";
+import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
@@ -1072,7 +1073,12 @@ export function InnvilApp({ setWorld, initialSection }: {
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
         {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} initialTab={panelInitialTab} />}
-        {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
+        {section === "billing" && (
+          <>
+            <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />
+            <div className="px-8 pb-8 -mt-2 max-w-3xl"><ReceiptCard /></div>
+          </>
+        )}
         {section === "orders" && <OwnerOrders />}
         {section === "customers" && <OwnerCustomers />}
         {section === "support" && (

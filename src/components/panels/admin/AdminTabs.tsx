@@ -714,6 +714,9 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [markupKind, setMarkupKind] = useState<MarkupKind>("percent");
   const [markupValue, setMarkupValue] = useState("20");
+  // Optional per-service markup override value (keyed by provider_service_id).
+  // Blank = use the global markup. Uses the same markup type as the global.
+  const [perMarkup, setPerMarkup] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const catalogRef = useRef<CatalogPlatform[] | null>(catalog);
   const providersRef = useRef<ProviderRow[]>(providers);
@@ -755,6 +758,7 @@ export function ServicesTab({ panelId }: { panelId: string }) {
     if (!res.ok) { setMsg({ text: res.error, error: true }); setProvCatalog([]); return; }
     setProvCatalog(res.data.services);
     setImportedIds(new Set(res.data.importedIds.map(String)));
+    setPerMarkup({});
   };
 
   const openImport = () => {
@@ -788,10 +792,19 @@ export function ServicesTab({ panelId }: { panelId: string }) {
     if (selected.size === 0) return;
     setBusy(true);
     setMsg(null);
+    // Build per-service overrides for any selected service with a custom value.
+    const markupOverrides: Record<string, { kind: MarkupKind; value: number }> = {};
+    for (const id of selected) {
+      const raw = perMarkup[id];
+      if (raw !== undefined && raw !== "" && !Number.isNaN(Number(raw))) {
+        markupOverrides[id] = { kind: markupKind, value: Number(raw) };
+      }
+    }
     const res = await importServices(impProvider, {
       providerServiceIds: [...selected],
       markupKind,
       markupValue: Number(markupValue) || 0,
+      ...(Object.keys(markupOverrides).length ? { markupOverrides } : {}),
     });
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
@@ -974,7 +987,7 @@ export function ServicesTab({ panelId }: { panelId: string }) {
               <input value={markupValue} onChange={(e) => setMarkupValue(e.target.value)} type="number" className="w-full mt-1.5 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:fp-gold-border" />
             </div>
             <div className="flex items-end">
-              <p className="text-xs fp-text-dim">Applied to all selected on import; editable per service later. Categories auto-created.</p>
+              <p className="text-xs fp-text-dim">Global markup applies to all selected. Set a per-service markup on any selected row to override it. Editable later; categories auto-created.</p>
             </div>
           </div>
 
@@ -1001,14 +1014,41 @@ export function ServicesTab({ panelId }: { panelId: string }) {
                 {filtered.map((s) => {
                   const id = String(s.service);
                   const done = importedIds.has(id);
+                  const isSel = selected.has(id);
+                  const effMarkup = perMarkup[id] !== undefined && perMarkup[id] !== "" ? Number(perMarkup[id]) : Number(markupValue);
                   return (
                     <label key={id} className={`flex items-center gap-3 px-3 py-2.5 text-sm ${done ? "opacity-50" : "cursor-pointer hover:fp-panel-raised"}`}>
-                      <input type="checkbox" disabled={done} checked={selected.has(id)} onChange={() => toggleSel(id)} className="accent-[#C9A574]" />
+                      <input type="checkbox" disabled={done} checked={isSel} onChange={() => toggleSel(id)} className="accent-[#C9A574]" />
                       <span className="flex-1 min-w-0">
                         <span className="truncate block">{s.name}</span>
                         <span className="fp-text-faint text-[11px] fp-mono">#{id} · {s.category} · min {s.min} · max {s.max}</span>
                       </span>
-                      <span className="fp-mono text-xs fp-text-dim shrink-0">${Number(s.rate).toFixed(2)}/1k{done ? " · imported" : ""}</span>
+                      {isSel && !done ? (
+                        <span className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <span className="fp-text-faint text-[10px] fp-mono uppercase hidden sm:inline">Markup</span>
+                          <span className="relative flex items-center">
+                            <input
+                              type="number"
+                              value={perMarkup[id] ?? ""}
+                              onChange={(e) => setPerMarkup((m) => ({ ...m, [id]: e.target.value }))}
+                              placeholder={`${markupValue} (global)`}
+                              title="Set a custom markup for this service — leave blank to use the global markup"
+                              className="w-24 fp-panel border fp-gold-border rounded px-2 py-1 pr-5 text-xs fp-mono outline-none focus:fp-gold-border"
+                            />
+                            <span className="absolute right-2 fp-text-faint text-[11px] pointer-events-none">{markupKind === "percent" ? "%" : markupKind === "multiplier" ? "×" : "$"}</span>
+                          </span>
+                          <span className="fp-gold fp-mono text-xs w-16 text-right">{fmtMoney(computeSellRate(Number(s.rate), markupKind, Number.isNaN(effMarkup) ? 0 : effMarkup))}/1k</span>
+                        </span>
+                      ) : done ? (
+                        <span className="fp-mono text-xs fp-text-dim shrink-0">${Number(s.rate).toFixed(2)}/1k · imported</span>
+                      ) : (
+                        <span className="fp-mono text-xs shrink-0 text-right whitespace-nowrap">
+                          <span className="fp-text-faint">${Number(s.rate).toFixed(2)}</span>
+                          <span className="fp-text-faint"> → </span>
+                          <span className="fp-gold">{fmtMoney(computeSellRate(Number(s.rate), markupKind, Number(markupValue) || 0))}</span>
+                          <span className="fp-text-faint">/1k</span>
+                        </span>
+                      )}
                     </label>
                   );
                 })}

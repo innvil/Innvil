@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Per-service import markup + earnings receipt (v0.2.13)
+- **Import per-service markup**: `importServices` accepts `markupOverrides`
+  (provider_service_id → {kind,value}); the import UI shows a per-selected-row markup
+  input (global type, custom value) with a live sell-price preview. Blank = global.
+- **Earnings receipt** (Billing → `ReceiptCard`): single-month range calendar →
+  `getOwnerReceipt(from,to)` = completed top-ups − provider/API cost = profit
+  (per-panel breakdown) → downloadable self-contained HTML receipt. No migration.
+
 ### 2026-07-12 — Customer support tickets (v0.2.10)
 - Real, usable support tickets both sides: customers open/reply/close in the storefront
   Tickets tab (`CustomerTickets.tsx`); owners reply/close/reopen in the panel's Support

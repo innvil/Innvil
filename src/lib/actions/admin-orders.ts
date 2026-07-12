@@ -256,6 +256,66 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
   };
 }
 
+export interface OwnerReceipt {
+  from: string; // ISO
+  to: string;   // ISO
+  topUps: number;   // total customer top-ups (completed deposits) in the period
+  apiCost: number;  // total provider/API cost of orders in the period
+  profit: number;   // topUps - apiCost
+  depositCount: number;
+  orderCount: number;
+  perPanel: Array<{ panelName: string; topUps: number; apiCost: number; profit: number }>;
+}
+
+/**
+ * A period earnings receipt for the owner: total customer top-ups minus the API
+ * (provider) cost of orders placed in the window = profit. `fromISO`/`toISO` are
+ * the inclusive day boundaries (start-of-day → end-of-day) chosen by the owner.
+ */
+export async function getOwnerReceipt(fromISO: string, toISO: string): Promise<OwnerReceipt> {
+  const empty: OwnerReceipt = { from: fromISO, to: toISO, topUps: 0, apiCost: 0, profit: 0, depositCount: 0, orderCount: 0, perPanel: [] };
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return empty;
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return empty;
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+  const ids = list.map((p) => p.id);
+
+  const [{ data: deposits }, { data: orders }] = await Promise.all([
+    admin.from("payments").select("panel_id, amount, status, created_at")
+      .in("panel_id", ids).eq("status", "completed").gte("created_at", fromISO).lte("created_at", toISO),
+    admin.from("orders").select("panel_id, provider_cost, status, created_at")
+      .in("panel_id", ids).gte("created_at", fromISO).lte("created_at", toISO),
+  ]);
+
+  const per = new Map<string, { topUps: number; apiCost: number }>();
+  const get = (pid: string) => per.get(pid) ?? per.set(pid, { topUps: 0, apiCost: 0 }).get(pid)!;
+
+  let topUps = 0, apiCost = 0, depositCount = 0, orderCount = 0;
+  for (const d of (deposits as Array<{ panel_id: string; amount: number }> | null) ?? []) {
+    depositCount++;
+    topUps += Number(d.amount);
+    get(d.panel_id).topUps += Number(d.amount);
+  }
+  for (const o of (orders as Array<{ panel_id: string; provider_cost: number | null; status: OrderStatus }> | null) ?? []) {
+    if (o.status === "refunded" || o.status === "failed") continue; // not fulfilled → no API cost counted
+    orderCount++;
+    apiCost += Number(o.provider_cost ?? 0);
+    get(o.panel_id).apiCost += Number(o.provider_cost ?? 0);
+  }
+
+  return {
+    from: fromISO, to: toISO,
+    topUps: round4(topUps), apiCost: round4(apiCost), profit: round4(topUps - apiCost),
+    depositCount, orderCount,
+    perPanel: list.map((p) => {
+      const v = per.get(p.id) ?? { topUps: 0, apiCost: 0 };
+      return { panelName: nameById.get(p.id) ?? "Panel", topUps: round4(v.topUps), apiCost: round4(v.apiCost), profit: round4(v.topUps - v.apiCost) };
+    }).filter((p) => p.topUps > 0 || p.apiCost > 0),
+  };
+}
+
 export interface PanelOverview {
   currency: string;
   revenueToday: number;

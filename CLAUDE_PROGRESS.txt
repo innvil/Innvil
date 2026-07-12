@@ -5,6 +5,26 @@
 
 ---
 
+## Session: Per-service import markup + earnings receipt (v0.2.13)
+
+### Date: 2026-07-12
+Implemented the two items from the inline note (now cleared).
+1. **Per-service markup on import** (the "implement first" item): `importServices`
+   gained an optional `markupOverrides` map (provider_service_id → {kind,value});
+   per-selected-row markup input in the import UI (ServicesTab) using the global
+   markup TYPE with a custom VALUE, showing a live sell-price preview. Blank row =
+   global markup. EVERY row also shows `cost → marked-up sell price /1k` (global
+   markup, live) so the owner sees the markup at a glance before selecting.
+2. **Earnings receipt** (`ReceiptCard.tsx`, in the Billing page): a single-month
+   range calendar (click start day → end day), then `getOwnerReceipt(fromISO,toISO)`
+   = total completed customer top-ups (payments) − provider/API cost of orders in
+   the window = profit, with a per-panel breakdown. "Download receipt" builds a
+   self-contained HTML receipt Blob and downloads it.
+
+**package.json → 0.2.13.** No migration needed (reads existing payments + orders).
+
+---
+
 ## Session: Owner min top-up persistence in Payments tab
 
 ### Date: 2026-07-12
@@ -15,14 +35,6 @@
 - Verified production build success after the fix.
 
 ---
-
-Note: 
-add a receipt download feature - the receipt should show the overall top-up.
-user can choose period of what receipt they want, choosing from 1st to anywhere until the last day of the month.
-the calender choice should be easy, they just open one calender chooser then choose 1-31 in that same calendar.
-receipt logic should be: total top up for the selected period minus API price to the orders - the total should show the profit they have per period they choose.
-can delete after noting.
-
 
 ## Session: Owner topbar balance + auth autofill hardening
 

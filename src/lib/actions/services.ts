@@ -271,7 +271,13 @@ export async function fetchImportableServices(
  */
 export async function importServices(
   providerId: string,
-  opts: { providerServiceIds: string[]; markupKind: MarkupKind; markupValue: number }
+  opts: {
+    providerServiceIds: string[];
+    markupKind: MarkupKind;
+    markupValue: number;
+    /** Optional per-service markup, keyed by provider_service_id; overrides the global. */
+    markupOverrides?: Record<string, { kind: MarkupKind; value: number }>;
+  }
 ): Promise<Result<{ imported: number; skipped: number }>> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
@@ -325,6 +331,10 @@ export async function importServices(
     }
 
     const providerRate = Number(s.rate) || 0;
+    // Per-service markup overrides the global markup when provided.
+    const ov = opts.markupOverrides?.[psid];
+    const mKind = ov?.kind ?? opts.markupKind;
+    const mValue = ov ? ov.value : opts.markupValue;
     rows.push({
       panel_id: provider.panel_id,
       provider_id: providerId,
@@ -334,9 +344,9 @@ export async function importServices(
       type: s.type ?? null,
       platform: platformKey,
       provider_rate: providerRate,
-      markup_kind: opts.markupKind,
-      markup_value: opts.markupValue,
-      sell_rate: computeSellRate(providerRate, opts.markupKind, opts.markupValue),
+      markup_kind: mKind,
+      markup_value: mValue,
+      sell_rate: computeSellRate(providerRate, mKind, mValue),
       min: Number(s.min) || 1,
       max: Number(s.max) || 1000000,
       status: "active",
