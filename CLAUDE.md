@@ -127,6 +127,16 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Customer support tickets (v0.2.10)
+- Real, usable support tickets both sides: customers open/reply/close in the storefront
+  Tickets tab (`CustomerTickets.tsx`); owners reply/close/reopen in the panel's Support
+  tab (`admin/SupportInbox.tsx`). Unread badges via `customer_unread`/`owner_unread`.
+- Backend: migration `0009_support_tickets.sql` (`support_tickets` +
+  `support_ticket_messages`, RLS) — **run it**; `tickets.ts` (customer) +
+  `admin-tickets.ts` (owner) actions.
+- Email: best-effort Resend notifier (`src/lib/email/resend.ts`) on each reply —
+  no-ops without `RESEND_API_KEY` (set `RESEND_API_KEY`, optional `RESEND_FROM`).
+
 ### 2026-07-12 — Super-admin dashboard + platform payments (v0.2.9)
 - New role-gated `/superadmin` (server-checked `hasRole('super_admin')`) with a real
   **Platform payments** config: the super admin connects **Cryptomus + NOWPayments**

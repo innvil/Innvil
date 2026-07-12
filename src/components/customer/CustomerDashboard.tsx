@@ -13,6 +13,7 @@ import {
 import { PlatformGlyph } from "./PlatformIcons";
 import { NewOrder, PlaceOrderHandler, PlatformMeta } from "./NewOrder";
 import { ApiDocs } from "./ApiDocs";
+import { CustomerTickets } from "./CustomerTickets";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
@@ -107,6 +108,7 @@ export function CustomerDashboard({
   platformMeta,
   currency = "USD",
   paymentMethods = [],
+  panelId,
 }: {
   canOrder: boolean;
   inactive: boolean;
@@ -131,6 +133,8 @@ export function CustomerDashboard({
   currency?: string;
   /** Connected payment methods (id/label/category) for the Add-Funds chooser. */
   paymentMethods?: PaymentMethod[];
+  /** Real panel id — when set, the Tickets tab uses the live support system. */
+  panelId?: string;
 }) {
   const glyphPath = (key: string) => platformMeta?.[key]?.icon ?? undefined;
   const fmt = (n: number) => formatMoney(n, currency);
@@ -513,28 +517,32 @@ export function CustomerDashboard({
 
         {/* ---------- TICKETS ---------- */}
         {page === "tickets" && (
-          <div className="fp-panel border fp-line rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <p className="fp-display text-lg">Support tickets</p>
-              <button className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1">
-                <Plus size={13} /> New ticket
-              </button>
-            </div>
-            {tickets.length === 0 && (
-              <p className="fp-text-faint text-sm py-6 text-center">No tickets yet.</p>
-            )}
-            {tickets.map((t) => (
-              <div key={t.id} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3.5 text-sm gap-3">
-                <div className="min-w-0">
-                  <p className="truncate">{t.subj}</p>
-                  <p className="text-xs fp-text-faint fp-mono mt-0.5">{t.id} · {t.updated}</p>
-                </div>
-                <span className={`text-xs px-2.5 py-1 rounded-full shrink-0 ${t.status === "Answered" ? "fp-safe-soft-bg fp-safe" : "fp-panel-raised fp-text-dim"}`}>
-                  {t.status}
-                </span>
+          panelId ? (
+            <CustomerTickets panelId={panelId} />
+          ) : (
+            <div className="fp-panel border fp-line rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="fp-display text-lg">Support tickets</p>
+                <button className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1">
+                  <Plus size={13} /> New ticket
+                </button>
               </div>
-            ))}
-          </div>
+              {tickets.length === 0 && (
+                <p className="fp-text-faint text-sm py-6 text-center">No tickets yet.</p>
+              )}
+              {tickets.map((t) => (
+                <div key={t.id} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3.5 text-sm gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate">{t.subj}</p>
+                    <p className="text-xs fp-text-faint fp-mono mt-0.5">{t.id} · {t.updated}</p>
+                  </div>
+                  <span className={`text-xs px-2.5 py-1 rounded-full shrink-0 ${t.status === "Answered" ? "fp-safe-soft-bg fp-safe" : "fp-panel-raised fp-text-dim"}`}>
+                    {t.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
         )}
 
         {/* ---------- API ---------- */}

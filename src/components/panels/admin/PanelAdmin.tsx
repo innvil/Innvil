@@ -142,7 +142,7 @@ export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setW
         {tab === "api" && <CustomerApiTab />}
         {tab === "risk" && <RiskTab />}
         {tab === "notifications" && <NotificationsTab />}
-        {tab === "support" && <SupportTab />}
+        {tab === "support" && <SupportTab panelId={panel.id} />}
         {tab === "automation" && <AutomationTab />}
         {tab === "promotions" && <PromotionsTab />}
       </div>

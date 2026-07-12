@@ -43,6 +43,7 @@ import {
 import { syncOrdersNow } from "@/src/lib/actions/orders";
 import { THEMES } from "@/src/data/themes";
 import { DesignStudio } from "./DesignStudio";
+import { SupportInbox } from "./SupportInbox";
 import { computeSellRate, formatMoney } from "@/src/lib/money";
 import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
 
@@ -1843,13 +1844,8 @@ export function NotificationsTab() {
   );
 }
 
-export function SupportTab() {
-  return (
-    <ComingSoon title="Support" icon={MessageSquare}>
-      A built-in ticket inbox — view, reply, close, reopen, with optional auto-reply — is coming
-      soon.
-    </ComingSoon>
-  );
+export function SupportTab({ panelId }: { panelId: string }) {
+  return <SupportInbox panelId={panelId} />;
 }
 
 export function AutomationTab() {

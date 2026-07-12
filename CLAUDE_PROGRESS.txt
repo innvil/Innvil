@@ -5,6 +5,32 @@
 
 ---
 
+## Session: Customer support tickets (usable, both sides) (v0.2.10)
+
+### Date: 2026-07-12
+Real support-ticket system end-to-end. **package.json → 0.2.10.**
+**Run migration `0009_support_tickets.sql`.** Optional: set RESEND_API_KEY (+ RESEND_FROM)
+for email notifications — the app works without them (in-app only).
+
+- Migration 0009: `support_tickets` (panel_id, customer_id, subject, status enum
+  open/answered/closed, last_sender, customer_unread/owner_unread, last_message_at) +
+  `support_ticket_messages` (ticket_id, sender_role, sender_id, body) + RLS
+  (panel member / super admin / the ticket's own customer). updated_at trigger.
+- Customer actions `tickets.ts` (storefront session; authz derives the panel FROM the
+  ticket so multi-panel customers are safe): createTicket, listCustomerTickets,
+  getCustomerTicket (clears customer_unread), customerReply (reopens), customerCloseTicket.
+- Owner actions `admin-tickets.ts` (owner session + ownership): listPanelTickets,
+  getOwnerTicket (clears owner_unread, resolves customer email), ownerReplyToTicket
+  (→ answered + email customer), setTicketStatus (close/reopen), countOpenPanelTickets.
+- Email: `src/lib/email/resend.ts` — best-effort, fire-and-forget, no-ops without
+  RESEND_API_KEY. Customer→owner on new/reply; owner→customer on reply.
+- UI: customer `CustomerTickets.tsx` (list → compose → thread with replies + close),
+  wired into CustomerDashboard's Tickets tab via a new `panelId` prop (mock fallback
+  kept for /?preview=1). Owner `admin/SupportInbox.tsx` replaces the SupportTab
+  "coming soon" (list → thread → reply + close/reopen); PanelAdmin passes panelId.
+
+---
+
 ## Session: Super-admin dashboard live + platform payments (v0.2.9)
 
 ### Date: 2026-07-12

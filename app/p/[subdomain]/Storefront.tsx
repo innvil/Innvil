@@ -275,6 +275,7 @@ export function Storefront({
         platformMeta={platformMeta}
         currency={panel.currency}
         paymentMethods={paymentMethods}
+        panelId={panel.id}
       />
     );
   }
