@@ -5,6 +5,131 @@
 
 ---
 
+## Session: Canonical anvil silhouette refinement (engineered SaaS pass)
+
+### Date: 2026-07-12
+- Refined the Innvil mark to preserve explicit canonical anvil parts (horn, face, waist, heel, base) while keeping a minimal geometric SaaS language.
+- Rebalanced the silhouette for optical clarity and stronger icon readability at small sizes.
+- Updated `src/components/ui/BrandMark.tsx` and synced `public/favicon.svg` to the same refined silhouette.
+- Retained the requested muted beige rounded-square background and dark charcoal glyph palette.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Precision correction pass (icon fit + micro-geometry)
+
+### Date: 2026-07-12
+- Performed requested micro-edits on the existing anvil glyph without changing concept: heel extension, 2px left optical shift, thinner top face, flatter pre-horn rise, shorter horn tip, slightly wider base, and stronger waist pinch.
+- Preserved container size/radius and palette; kept the glyph fully inside the badge with controlled internal spacing.
+- Synced the corrected path across `src/components/ui/BrandMark.tsx` and `public/favicon.svg`; updated in-app sizing classes in `src/components/panels/index.tsx` for consistent fit.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Revert glyph-only change (keep spacing work)
+
+### Date: 2026-07-12
+- Reverted the last glyph distortion change by removing the vertical transform from both the reusable brand mark and favicon.
+- Kept the anvil shape itself back to the prior version; no new redesign applied in this pass.
+- Spacing/layout controls remain separate so further tuning can target container fit without changing the symbol.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: True geometry spacing fix (top/bottom too large)
+
+### Date: 2026-07-12
+- Addressed the reported issue where top/bottom space still looked too large by changing the glyph geometry itself (vertical occupancy), not just wrapper scaling.
+- Synced the exact same vertical-occupancy adjustment to favicon so spacing matches between page logo and icon asset.
+- Re-balanced wrapper sizing afterward to avoid over-stretch while preserving left/right emphasis.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Badge spacing rebalance (top/bottom vs sides)
+
+### Date: 2026-07-12
+- Adjusted in-app mark scaling/position inside the fixed rounded-square badge to reduce excessive top/bottom empty space and better match side spacing.
+- Kept the same silhouette and palette; this pass only improved container-to-symbol proportionality in nav/auth/sidebar logo placements.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Backdrop-first sizing pass (fixed container)
+
+### Date: 2026-07-12
+- Kept rounded-square container size unchanged and increased in-app mark footprint (~5-10%) to make the anvil read as the hero form.
+- Tuned placement so the silhouette can slightly overrun horizontally (horn/heel balance) while the base remains visually grounded inside the badge.
+- Updated `src/components/ui/BrandMark.tsx` geometry + overflow behavior and aligned `public/favicon.svg` to the same refined silhouette/palette.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Final micro-balance pass (horn/heel/container)
+
+### Date: 2026-07-12
+- Refined continuity where the horn emerges from the face (removed residual visual step), slightly lengthened heel presence, and reduced top-face thickness further.
+- Extended/flattened waist transitions for a more weight-bearing profile and widened the base subtly for stability.
+- Tightened rounded-square corner radius in app containers and favicon badge to better frame the mark.
+- Preserved flat vector style and original palette (muted beige badge + dark charcoal glyph); favicon path remains synchronized with the in-app logo.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Optical balance tuning (micro-proportions)
+
+### Date: 2026-07-12
+- Refined the existing anvil mark with requested micro-adjustments while preserving identity: top face thickness reduced, horn shortened, waist transitions extended/softened, base widened, and left heel projection reduced.
+- Shifted glyph composition slightly left and increased icon breathing room for better visual centering at small sizes.
+- Kept flat vector style and original palette (muted beige rounded-square + dark charcoal glyph), and mirrored the exact silhouette in favicon.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Continuous-form anvil silhouette refinement
+
+### Date: 2026-07-12
+- Refined the existing mark to feel like one continuous sculpted anvil form: clearer waist separation between face and base without square negative cutouts.
+- Removed arbitrary corner treatment and tuned transitions so horn, heel, waist, and base share consistent geometric language and optical weight.
+- Preserved palette and simplicity (muted beige rounded-square badge + dark glyph), and synced favicon to the same silhouette.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Canonical anvil refinement (proportion + balance pass)
+
+### Date: 2026-07-12
+- Refined the existing Innvil anvil mark without changing the core concept: adjusted silhouette geometry for clearer horn/face/waist/heel/base readability.
+- Replaced the rigid center-opening look with a more natural tapered waist via outer-form proportioning, keeping the symbol minimal and favicon-legible.
+- Shaped the left heel to feel intentional (not abruptly cropped) and slightly widened the base for stronger visual stability.
+- Kept the original palette unchanged: muted beige/sand rounded-square background with dark charcoal glyph.
+- Updated both `src/components/ui/BrandMark.tsx` and `public/favicon.svg` so app icon + favicon stay aligned.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Anvil-first silhouette logo pass (bold + unmistakable)
+
+### Date: 2026-07-12
+- Re-redesigned the Innvil mark around an unmistakable anvil silhouette (not abstract line scaffolding), using geometric construction and strong negative space for first-glance recognition.
+- Removed decorative/illustrative motifs and kept the symbol clean, premium, and SaaS-appropriate.
+- Restored requested original palette direction in the icon system: muted beige/sand rounded-square background with dark charcoal glyph.
+- Synced the favicon to the same silhouette and colors for consistent small-size identity.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
+## Session: Minimal geometric logo redesign (anvil-inspired)
+
+### Date: 2026-07-12
+- Redesigned the Innvil mark as a minimalist geometric monoline symbol inspired by an anvil silhouette, with no literal blacksmith details (no hammer/flame/sparks).
+- Shifted the mark toward SaaS-style icon language (simple, bold, clean negative space) for strong favicon-size recognition.
+- Implemented the new reusable mark in `src/components/ui/BrandMark.tsx` using consistent stroke geometry and monochrome styling.
+- Updated in-app logo placements in `src/components/panels/index.tsx` and aligned `public/favicon.svg` to the same core silhouette.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+---
+
 ## Session: Build fixes + Innvil logo/favicon alignment
 
 ### Date: 2026-07-12

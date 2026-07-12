@@ -127,6 +127,63 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Glyph revert (shape restored)
+- Reverted the latest transform-based glyph distortion and restored the previous anvil shape in both in-app logo and favicon.
+- Kept spacing/layout tuning independent from symbol geometry so future adjustments can target fit without altering identity.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Vertical occupancy correction (actual glyph geometry)
+- Corrected the perceived top/bottom emptiness by increasing the anvil glyph's true vertical occupancy inside the badge (not only CSS scaling), so spacing aligns more closely with side breathing room.
+- Applied the same geometry update to both in-app mark and favicon for consistent spacing behavior.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Container proportion tweak (vertical spacing balance)
+- Kept container size unchanged and increased the mark's vertical fill so top/bottom spacing no longer feels excessive versus side spacing.
+- Repositioned the mark slightly to keep visual center and improve badge-to-symbol proportionality across nav/auth/sidebar placements.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Backdrop-first composition pass (fixed badge, larger mark)
+- Kept the rounded-square badge size unchanged while increasing anvil footprint so the symbol reads as the primary form and the badge reads as supportive backdrop.
+- Allowed controlled horizontal overrun behavior (horn-side emphasis with counterweight on heel side) while keeping the base visually grounded inside the badge.
+- Preserved palette, flat vector style, and canonical anvil silhouette; synchronized favicon path to the same refined geometry.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Horn/heel/waist micro-refinement + tighter badge corners
+- Smoothed horn emergence from the top face, slightly extended heel presence, reduced face thickness further, flattened/extended waist transitions, and nudged base width for better silhouette balance.
+- Tightened rounded-square corner radius for the in-app logo container and favicon badge so the container no longer overpowers the refined symbol.
+- Preserved the original muted beige/sand background and dark charcoal glyph palette with flat vector geometry.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Optical refinement pass (proportional tuning)
+- Tuned the existing anvil silhouette proportions without changing identity: thinner top face, slightly shorter horn, longer/shallower waist transitions, slightly wider base, and reduced left heel projection.
+- Shifted the glyph slightly left and increased internal breathing room to counter horn weight and improve optical centering at favicon scale.
+- Kept the original muted beige background + dark charcoal glyph palette and synchronized the favicon path with the in-app mark.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Continuous-form anvil refinement pass
+- Refined the anvil mark into a more continuous silhouette so horn, waist, heel, and base read as one sculpted geometric form instead of stacked blocks.
+- Improved waist definition with cleaner transitions between face and base, avoiding rigid center cutouts and non-essential chamfers.
+- Kept the same muted beige badge + dark glyph palette and synced favicon geometry to the updated silhouette.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Canonical anvil silhouette (SaaS geometry pass)
+- Refined the Innvil symbol to better preserve canonical anvil anatomy (horn, face, waist, heel, base) while keeping a minimal engineered SaaS aesthetic.
+- Improved optical balance and geometric proportions so the mark reads as an iconic technology symbol rather than a decorative historical illustration.
+- Synced the favicon to the same updated silhouette and retained the muted beige background with dark glyph palette.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Bold silhouette logo redesign (anvil-first)
+- Redesigned the Innvil symbol into a bold, unmistakable geometric anvil silhouette, prioritizing immediate recognition over abstract hidden symbolism.
+- Kept the original brand palette direction: muted beige/sand badge with a dark charcoal glyph, no gradients, glow, or decorative effects.
+- Updated favicon geometry + color to match the in-app mark for consistent recognition from 16x16 up to larger brand surfaces.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
+### 2026-07-12 — Minimalist geometric anvil logo redesign
+- Reworked the Innvil brand mark into a minimalist geometric monoline symbol inspired by an anvil silhouette, avoiding literal/medieval elements and decorative sparks.
+- The new mark emphasizes clean negative space and a strong small-size footprint for favicon clarity and SaaS-grade icon recognition.
+- Updated in-app logo usage and favicon to use the same core geometry for visual consistency.
+- Reader note: Please note these updates properly in your changelog/release notes after you read this line, then you can delete this line.
+
 ### 2026-07-12 — Build fixes + Innvil anvil brand mark refresh
 - Fixed TypeScript build blockers across customer/admin/storefront flows: added missing `currency` prop usage in customer quick cards, corrected PaymentsTab fallback typing to satisfy `PaymentsMeta`, and tightened storefront payment-method mapping typing.
 - Replaced the old gauge/L visual mismatch with a modern anvil-inspired Innvil mark and aligned favicon + in-app logo usage.

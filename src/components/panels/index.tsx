@@ -33,8 +33,8 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0B0F]/80 border-b fp-line-soft">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-xl border border-[rgba(201,165,116,0.24)] bg-[rgba(201,165,116,0.12)] flex items-center justify-center">
-            <InnvilBrandMark className="w-full h-full" />
+          <div className="w-10 h-10 rounded-lg border border-[rgba(201,165,116,0.24)] bg-[rgba(201,165,116,0.12)] flex items-center justify-center">
+            <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
           </div>
           <span className="fp-display text-lg tracking-wide">Innvil</span>
         </div>
@@ -242,8 +242,8 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
     <div className="fp-root min-h-screen fp-noise fp-grid-bg flex items-center justify-center px-4">
       <div className="fp-panel border fp-line rounded-2xl w-full max-w-sm p-7">
         <div className="flex items-center gap-2.5 mb-8 justify-center">
-          <div className="w-10 h-10 rounded-xl border border-[rgba(201,165,116,0.24)] bg-[rgba(201,165,116,0.12)] flex items-center justify-center">
-            <InnvilBrandMark className="w-full h-full" />
+          <div className="w-10 h-10 rounded-lg border border-[rgba(201,165,116,0.24)] bg-[rgba(201,165,116,0.12)] flex items-center justify-center">
+            <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
           </div>
           <span className="fp-display text-lg">Innvil</span>
         </div>
@@ -334,8 +334,8 @@ function AppSidebar({ section, setSection }: { section: string; setSection: (s: 
   return (
     <aside className="w-60 shrink-0 fp-void-2 border-r fp-line-soft min-h-screen p-5 hidden md:flex flex-col">
       <div className="flex items-center gap-2.5 mb-10 px-1">
-        <div className="w-10 h-10 rounded-xl border border-[rgba(201,165,116,0.24)] bg-[rgba(201,165,116,0.12)] flex items-center justify-center">
-          <InnvilBrandMark className="w-full h-full" />
+        <div className="w-10 h-10 rounded-lg border border-[rgba(201,165,116,0.24)] bg-[rgba(201,165,116,0.12)] flex items-center justify-center">
+          <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
         </div>
         <span className="fp-display text-lg">Innvil</span>
       </div>
