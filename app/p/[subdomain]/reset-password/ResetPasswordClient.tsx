@@ -1,25 +1,82 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import React, { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import React, { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 import { customerResetPassword } from "@/src/lib/actions/customer-auth";
+import { createStorefrontClient } from "@/src/lib/supabase/client";
 
 export function ResetPasswordClient({ panelName, subdomain }: { panelName: string; subdomain: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
+  const [sessionReady, setSessionReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const loginHref = useMemo(() => `/p/${subdomain}`, [subdomain]);
+  const forgotHref = useMemo(() => `/p/${subdomain}/forgot-password`, [subdomain]);
+
+  useEffect(() => {
+    let alive = true;
+
+    const bootstrap = async () => {
+      setBootstrapping(true);
+      setError(null);
+
+      try {
+        const supabase = createStorefrontClient();
+        const code = searchParams.get("code");
+
+        if (code) {
+          const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+          if (exchangeError) {
+            if (!alive) return;
+            setSessionReady(false);
+            setError("Reset link is invalid or expired. Request a new reset link.");
+            return;
+          }
+        }
+
+        const { data } = await supabase.auth.getSession();
+        if (!alive) return;
+
+        if (!data.session) {
+          setSessionReady(false);
+          setError("Reset link is invalid or expired. Request a new reset link.");
+          return;
+        }
+
+        setSessionReady(true);
+      } catch {
+        if (!alive) return;
+        setSessionReady(false);
+        setError("Could not verify reset link. Please request a new one.");
+      } finally {
+        if (!alive) return;
+        setBootstrapping(false);
+      }
+    };
+
+    bootstrap();
+    return () => {
+      alive = false;
+    };
+  }, [searchParams]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busy) return;
     setError(null);
     setNotice(null);
+
+    if (!sessionReady) {
+      setError("Reset link is invalid or expired. Request a new reset link.");
+      return;
+    }
 
     if (!password) {
       setError("Enter a new password.");
@@ -88,13 +145,15 @@ export function ResetPasswordClient({ panelName, subdomain }: { panelName: strin
           {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
           {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
 
-          <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
-            {busy ? "Please wait..." : "Update password"}
+          <button type="submit" disabled={busy || bootstrapping || !sessionReady} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
+            {bootstrapping ? "Verifying link..." : busy ? "Please wait..." : "Update password"}
           </button>
         </form>
 
         <p className="fp-text-faint text-xs text-center mt-4">
           Back to <Link href={loginHref} className="fp-violet">Log in</Link>
+          <span className="mx-1">·</span>
+          <Link href={forgotHref} className="fp-violet">Request new link</Link>
         </p>
       </div>
     </div>

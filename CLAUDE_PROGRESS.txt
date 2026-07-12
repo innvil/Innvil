@@ -42,6 +42,17 @@ Owners can connect their own domain to a panel. **package.json → 0.2.16.** No 
 
 ---
 
+## Session: Reset password recovery-link session bootstrap (v0.2.18)
+
+### Date: 2026-07-13
+- Fixed customer reset-password flow failing with "Auth session missing!" on recovery links like `/reset-password?code=...`.
+- Reset page now exchanges Supabase recovery `code` for a session before calling password update.
+- Added invalid/expired link handling with clear message + "Request new link" route to `/p/<subdomain>/forgot-password`.
+- Disabled submit until link verification completes and session is ready.
+- **package.json → 0.2.18.**
+
+---
+
 
 ## Session: Subdomain routing — panels live on <sub>.innvil.cloud (v0.2.15)
 
