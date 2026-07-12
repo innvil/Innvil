@@ -30,13 +30,17 @@ export async function customerSignUp(
   panelId: string,
   email: string,
   password: string,
-  displayName?: string
+  displayName?: string,
+  emailRedirectTo?: string
 ): Promise<CustomerAuthResult> {
   const supabase = await createStorefrontClient();
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { display_name: displayName ?? null } },
+    options: {
+      data: { display_name: displayName ?? null },
+      ...(emailRedirectTo ? { emailRedirectTo } : {}),
+    },
   });
   if (error) return { ok: false, error: error.message };
 
@@ -67,6 +71,25 @@ export async function customerSignIn(
 export async function customerSignOut(): Promise<void> {
   const supabase = await createStorefrontClient();
   await supabase.auth.signOut();
+}
+
+export async function customerForgotPassword(
+  email: string,
+  redirectTo: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createStorefrontClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+export async function customerResetPassword(
+  password: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createStorefrontClient();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 export interface CustomerAccountInfo {

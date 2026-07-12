@@ -30,7 +30,18 @@ Owners can connect their own domain to a panel. **package.json → 0.2.16.** No 
   stores the domain and tells the owner to add it in Vercel manually.
 - **Env (for auto setup):** VERCEL_API_TOKEN, VERCEL_PROJECT_ID, VERCEL_TEAM_ID.
 
+## Session: Customer auth world split (v0.2.17)
+
+### Date: 2026-07-13
+- Split customer auth into dedicated storefront routes: login remains on the landing page, while create-account moved to `/p/<subdomain>/signup`.
+- New customer signup flow requires username + email + password, and uses Supabase email confirmation with storefront-aware redirect handling.
+- Added customer forgot/reset password flow: `/p/<subdomain>/forgot-password` sends recovery email and `/p/<subdomain>/reset-password` updates password.
+- Landing login now includes a direct "Forgot password?" link and all create-account CTAs route to the dedicated signup page.
+- Added customer auth server actions for `customerForgotPassword` + `customerResetPassword`, and extended `customerSignUp` with optional `emailRedirectTo`.
+- Verified production build success after route/action updates.
+
 ---
+
 
 ## Session: Subdomain routing — panels live on <sub>.innvil.cloud (v0.2.15)
 

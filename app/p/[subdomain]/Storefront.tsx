@@ -2,6 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Sparkles, Zap, ShieldCheck, Wallet, Clock,
   AlertTriangle, CheckCircle2, ChevronDown,
@@ -15,7 +16,7 @@ import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
 import {
-  customerSignUp, customerSignIn, customerSignOut,
+  customerSignIn, customerSignOut,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
 
@@ -73,7 +74,7 @@ export function Storefront({
   platformMeta = {},
   paymentMethods = [],
 }: {
-  panel: { id: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[] };
+  panel: { id: string; subdomain: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[] };
   services: StorefrontService[];
   initialAccount: CustomerAccountInfo | null;
   initialOrders?: CustomerOrderVM[];
@@ -171,26 +172,19 @@ export function Storefront({
   const shown = (groups.get(active) ?? []).slice(0, 10);
 
   // Auth
-  const [mode, setMode] = useState<"register" | "login">("register");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const submitAuth = async () => {
     if (busy) return;
     setError(null);
-    setNotice(null);
     if (!email || !password) { setError("Enter your email and password."); return; }
     setBusy(true);
     try {
-      const res =
-        mode === "login"
-          ? await customerSignIn(panel.id, email, password)
-          : await customerSignUp(panel.id, email, password);
+      const res = await customerSignIn(panel.id, email, password);
       if (!res.ok) setError(res.error);
-      else if (res.needsConfirmation) { setNotice("Check your inbox to confirm your email, then log in."); setMode("login"); }
       else router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
@@ -305,8 +299,8 @@ export function Storefront({
             <span className="fp-display text-xl">{panel.name}</span>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setMode("login")} className={`text-sm px-4 py-2 rounded-lg transition-colors ${mode === "login" ? "fp-violet-soft-bg fp-violet" : "fp-text-dim hover:fp-text"}`}>Log in</button>
-            <button onClick={() => setMode("register")} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
+            <span className="text-sm px-4 py-2 rounded-lg fp-violet-soft-bg fp-violet">Log in</span>
+            <Link href={`/p/${panel.subdomain}/signup`} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</Link>
           </div>
         </div>
       </header>
@@ -340,12 +334,7 @@ export function Storefront({
         </div>
 
         <div id="nb-auth" className="fp-panel border fp-line rounded-2xl p-7 max-w-md w-full md:justify-self-end">
-          <div className="flex gap-1 fp-panel-raised rounded-xl p-1 mb-6">
-            {([{ k: "register", label: "Create account" }, { k: "login", label: "Log in" }] as const).map((t) => (
-              <button key={t.k} onClick={() => { setMode(t.k); setError(null); setNotice(null); }} className={`flex-1 text-sm py-2 rounded-lg transition-colors ${mode === t.k ? "fp-panel fp-text font-medium border fp-line" : "fp-text-dim"}`}>{t.label}</button>
-            ))}
-          </div>
-          <h2 className="fp-display text-2xl mb-5">{mode === "register" ? "Start growing today" : "Welcome back"}</h2>
+          <h2 className="fp-display text-2xl mb-5">Welcome back</h2>
           <form
             autoComplete={`section-innvil-customer-${panel.id} on`}
             onSubmit={(e) => {
@@ -354,15 +343,19 @@ export function Storefront({
             }}
           >
             <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete={`section-innvil-customer-${panel.id} username`} placeholder="Email" className={`${inputCls} mb-3`} />
-            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete={mode === "login" ? `section-innvil-customer-${panel.id} current-password` : `section-innvil-customer-${panel.id} new-password`} placeholder="Password" className={`${inputCls} mb-4`} />
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete={`section-innvil-customer-${panel.id} current-password`} placeholder="Password" className={`${inputCls} mb-2`} />
+            <div className="flex justify-end mb-4">
+              <Link href={`/p/${panel.subdomain}/forgot-password`} className="fp-text-faint text-xs hover:fp-text">
+                Forgot password?
+              </Link>
+            </div>
             {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-            {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
             <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
-              {busy ? "Please wait…" : mode === "register" ? "Create account" : "Log in"}
+              {busy ? "Please wait…" : "Log in"}
             </button>
           </form>
           <p className="fp-text-faint text-xs text-center mt-4">
-            {mode === "register" ? (<>Already have an account? <button onClick={() => setMode("login")} className="fp-violet">Log in</button></>) : (<>New here? <button onClick={() => setMode("register")} className="fp-violet">Create account</button></>)}
+            New here? <Link href={`/p/${panel.subdomain}/signup`} className="fp-violet">Create account</Link>
           </p>
         </div>
       </main>
@@ -432,7 +425,7 @@ export function Storefront({
         <div className="fp-panel border fp-gold-border rounded-2xl p-8 md:p-10 text-center">
           <h2 className="fp-display text-2xl md:text-3xl mb-3">Ready to grow on {panel.name}?</h2>
           <p className="fp-text-dim text-sm mb-6 max-w-lg mx-auto">Create your account, add funds, and place your first order in minutes.</p>
-          <a href="#nb-auth" onClick={() => setMode("register")} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg text-sm inline-block">Create your account</a>
+          <Link href={`/p/${panel.subdomain}/signup`} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg text-sm inline-block">Create your account</Link>
         </div>
       </section>
 
