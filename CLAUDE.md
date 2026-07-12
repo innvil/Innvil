@@ -640,6 +640,61 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
 - Provider calls reuse `src/lib/providers/` (server-side, keys never exposed).
 - Landing: dedicated feature/SEO block (like the provider-automation section).
 
+### Phase 4.y: Analytics Dashboard + Content Calendar Add-on (NOTED, not built)
+
+> Same shape as the Automator above: a **paid, unlockable add-on** on top of the
+> core panel product, not part of the base panel/storefront. Direction is to
+> grow Innvil into a one-stop shop for social-media-marketing tooling beyond just
+> SMM order fulfillment. Build this only after the current panel-maker product
+> (Phases 2-4 core) is complete and earning — it needs a cron/infra upgrade
+> beyond what Phases 2-4 require.
+
+**What it is:**
+- An analytics dashboard + content calendar. Proposed subdomain shape:
+  `analytics.innvil` (mirrors the `p.[subdomain]` storefront pattern).
+- **Bring-your-own API**, same principle as SMM providers: the panel owner
+  supplies their own platform API keys/credentials — Innvil never fills these in
+  and never pays for or proxies a social platform API on the owner's behalf.
+  This is why pricing is a flat rental, not usage/subscription-to-an-API-cost
+  (see pricing below).
+- **Auto-posting/scheduling is a separate, distinct feature inside the content
+  calendar** — not bundled into "analytics." Analytics = tracking/reporting on
+  followed accounts and links; calendar = planning + (optionally) auto-posting.
+- Core analytics loop: user adds accounts they want to follow/track → every new
+  link pulled gets analytics attached → user can download a synced CSV export on
+  whatever cadence their plan allows. What the user does with those links
+  afterward is their own responsibility — cover this explicitly in ToS/privacy
+  terms (extend Innvil's existing ToS for this add-on specifically).
+
+**Reference implementation (structure/UI reference ONLY, not a design source of
+truth — Innvil's own obsidian/gold/charcoal theme and component system always
+win over this):**
+- `C:\Users\My PC\Documents\CRM style analytics dashboard` (internally named
+  "LinkBatch"). Next.js + Supabase. Relevant files: `components/
+  LinkBatchDashboard.js`, `lib/linkbatch-data.js` (data shape, stats aggregation,
+  hashtag/topic trend helpers), `supabase/migrations/001_linkbatch_crm.sql`
+  (schema: workspaces, connected_accounts, campaigns, posts + post_metrics,
+  export_batches + export_batch_items, reports, activity_events, workflow_jobs,
+  alerts, saved_views, notifications, drafts, scheduled_posts, approvals,
+  media_assets, publishing_logs, plan_limits, admin_cost_settings, billing_usage
+  — all workspace-scoped with RLS via an `lb_is_workspace_member()` helper).
+  The reference project's own dashboard UI is messy/unfocused by the user's own
+  assessment — when porting, consolidate and simplify rather than copy as-is;
+  take the useful pieces (account/link tracking, CSV export batches, hashtag/
+  topic trend rollups, workspace + RLS pattern) into Innvil's own IA.
+- The reference project's plan tiers are subscription-priced against its own API
+  cost ($0/$49/$99/$299/$549/custom) — **do not reuse this pricing model**; that
+  project pays for its own API access, Innvil's add-on does not.
+
+**Innvil pricing direction (rental, not subscription-to-API-cost):**
+- Flat monthly **rental** tiers, gated by sync/refresh frequency (not by API
+  cost, since the owner brings their own key): Basic $25/mo, Standard $45/mo,
+  Premium $75/mo, Business $105/mo (exact naming/amounts TBD at build time, but
+  keep the "rent scales with refresh rate, not with API spend" principle).
+- Higher tiers = faster sync/refresh cadence for pulling link analytics —
+  similar in spirit to the reference project's `sync_frequency_minutes` per
+  plan, but the price basis is refresh rate/rental, not a cost Innvil incurs.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations

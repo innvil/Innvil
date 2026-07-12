@@ -5,6 +5,16 @@
 
 ---
 
+## Session: Anvil mark rebuilt as single geometric silhouette (fixes "cat" look)
+
+### Date: 2026-07-12
+- User reported the in-app logo reads as a cat face at nav/sidebar size, not an anvil, and asked for a bold single-silhouette mark in the spirit of GitHub/Vercel/Nike marks (flat, iconic, unmistakable at small sizes) rather than another micro-refinement pass on the old geometry.
+- Replaced the path in `src/components/ui/BrandMark.tsx` and `public/favicon.svg` with a single 14-point flat polygon: flat top face, one asymmetric tapered horn (right side), pinched waist, flared base — no inner cutouts, arcs, or eye-hole negative space (those were what produced the cat-face read).
+- Logged as a new baseline shape, not another "refinement" of the previous geometry — if further tuning is requested, iterate on this polygon's coordinates directly.
+- Documented a new future paid add-on in CLAUDE.md: Phase 4.y, Analytics Dashboard + Content Calendar (`analytics.innvil`), bring-your-own-API, rental pricing ($25/$45/$75/$105 tiers by refresh rate, not API cost), referencing `C:\Users\My PC\Documents\CRM style analytics dashboard` (LinkBatch) for schema/data-shape ideas only — Innvil's own theme and IA still win. Not started; build after core Phases 2-4 are done and earning.
+
+---
+
 ## Session: Canonical anvil silhouette refinement (engineered SaaS pass)
 
 ### Date: 2026-07-12
