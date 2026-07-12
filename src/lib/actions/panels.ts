@@ -91,3 +91,101 @@ export async function updatePanelStatus(
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+/* ---------------- Branding & Design Studio ---------------- */
+
+export interface PanelBranding {
+  name: string;
+  theme: string; // theme id
+  logoUrl: string;
+  accent: string; // custom accent hex ("" = use theme accent)
+  headline: string; // storefront hero headline
+  description: string; // storefront hero subtext
+  favicon: string; // browser-tab icon URL ("" = use logo)
+}
+
+type BrandingBlob = { logoUrl: string; accent: string; headline: string; description: string; favicon: string };
+
+function readBranding(settings: unknown): BrandingBlob {
+  const empty: BrandingBlob = { logoUrl: "", accent: "", headline: "", description: "", favicon: "" };
+  if (settings && typeof settings === "object") {
+    const b = (settings as Record<string, unknown>).branding;
+    if (b && typeof b === "object") {
+      const o = b as Record<string, unknown>;
+      return {
+        logoUrl: typeof o.logoUrl === "string" ? o.logoUrl : "",
+        accent: typeof o.accent === "string" ? o.accent : "",
+        headline: typeof o.headline === "string" ? o.headline : "",
+        description: typeof o.description === "string" ? o.description : "",
+        favicon: typeof o.favicon === "string" ? o.favicon : "",
+      };
+    }
+  }
+  return empty;
+}
+
+/** Current branding for the owner's Branding tab. */
+export async function getPanelBranding(panelId: string): Promise<PanelBranding | null> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return null;
+  const { data } = await admin
+    .from("panels")
+    .select("name, theme, settings, owner_id")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (!data || data.owner_id !== user.id) return null;
+  const b = readBranding(data.settings);
+  return {
+    name: data.name,
+    theme: data.theme ?? "obsidian-gold",
+    logoUrl: b.logoUrl,
+    accent: b.accent,
+    headline: b.headline,
+    description: b.description,
+    favicon: b.favicon,
+  };
+}
+
+/** Save panel branding (name, theme, logo, accent, hero headline/description). */
+export async function updatePanelBranding(
+  panelId: string,
+  patch: { name?: string; theme?: string; logoUrl?: string; accent?: string; headline?: string; description?: string; favicon?: string }
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: panel } = await admin
+    .from("panels")
+    .select("settings, owner_id")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (!panel || panel.owner_id !== user.id) return { ok: false, error: "Panel not found" };
+
+  const update: Record<string, unknown> = {};
+  if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name) return { ok: false, error: "Panel name can't be empty." };
+    update.name = name;
+  }
+  if (patch.theme !== undefined) update.theme = patch.theme;
+
+  const brandingKeys = ["logoUrl", "accent", "headline", "description", "favicon"] as const;
+  if (brandingKeys.some((k) => patch[k] !== undefined)) {
+    const settings: Record<string, unknown> =
+      panel.settings && typeof panel.settings === "object" ? { ...(panel.settings as Record<string, unknown>) } : {};
+    const current = readBranding(settings);
+    settings.branding = {
+      logoUrl: patch.logoUrl !== undefined ? patch.logoUrl.trim() : current.logoUrl,
+      accent: patch.accent !== undefined ? patch.accent.trim() : current.accent,
+      headline: patch.headline !== undefined ? patch.headline.trim() : current.headline,
+      description: patch.description !== undefined ? patch.description.trim() : current.description,
+      favicon: patch.favicon !== undefined ? patch.favicon.trim() : current.favicon,
+    };
+    update.settings = settings;
+  }
+
+  if (Object.keys(update).length === 0) return { ok: true };
+  const { error } = await admin.from("panels").update(update).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}

@@ -93,6 +93,7 @@ export function CustomerDashboard({
   inactive,
   onLogout,
   brandName = "NovaBoost",
+  logoUrl,
   services = customerServices,
   orders = customerOrders,
   walletBalance = customerWallet.balance,
@@ -112,6 +113,7 @@ export function CustomerDashboard({
   onLogout: () => void;
   /** Real data (all default to mock so the /?preview=1 switcher still works). */
   brandName?: string;
+  logoUrl?: string;
   services?: CustomerService[];
   orders?: CustomerOrder[];
   walletBalance?: number;
@@ -241,9 +243,14 @@ export function CustomerDashboard({
             >
               {menuOpen ? <X size={17} /> : <Menu size={17} />}
             </button>
-            <div className="w-7 h-7 rounded-md fp-violet-bg flex items-center justify-center">
-              <Sparkles size={14} color="#0A0B0F" />
-            </div>
+            {logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logoUrl} alt={brandName} className="w-7 h-7 rounded-md object-cover" />
+            ) : (
+              <div className="w-7 h-7 rounded-md fp-violet-bg flex items-center justify-center">
+                <Sparkles size={14} color="#0A0B0F" />
+              </div>
+            )}
             <span className="fp-display text-lg hidden sm:inline">{brandName}</span>
           </div>
 

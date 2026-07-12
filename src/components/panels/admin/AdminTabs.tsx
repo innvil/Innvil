@@ -11,7 +11,7 @@ import {
   Card, StatCard, FloorLedger, OrdersTable, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
 import {
-  PANEL_STATUSES, themes, categoriesData,
+  PANEL_STATUSES, categoriesData,
   recentOrders, orderDetailExtras, tickets, PanelStatus,
 } from "@/src/data/constants";
 import { Panel, CustomerRow } from "@/src/types";
@@ -35,6 +35,9 @@ import {
 import {
   getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency, type PaymentsMeta,
 } from "@/src/lib/actions/payments";
+import { getPanelBranding, updatePanelBranding } from "@/src/lib/actions/panels";
+import { THEMES } from "@/src/data/themes";
+import { DesignStudio } from "./DesignStudio";
 import { computeSellRate } from "@/src/lib/money";
 import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
 
@@ -245,38 +248,111 @@ export function StatusTab({
 }
 
 export function BrandingTab({ panel }: { panel: Panel }) {
+  const realPanel = isUuid(panel.id);
+  const [name, setName] = useState(panel.name);
+  const [theme, setTheme] = useState("obsidian-gold");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [accent, setAccent] = useState("");
+  const [headline, setHeadline] = useState("");
+  const [description, setDescription] = useState("");
+  const [favicon, setFavicon] = useState("");
+  const [studioFull, setStudioFull] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!realPanel) return;
+    getPanelBranding(panel.id).then((b) => {
+      if (!b) return;
+      setName(b.name);
+      setTheme(b.theme || "obsidian-gold");
+      setLogoUrl(b.logoUrl);
+      setAccent(b.accent);
+      setHeadline(b.headline);
+      setDescription(b.description);
+      setFavicon(b.favicon);
+    });
+  }, [panel.id, realPanel]);
+
+  const save = async () => {
+    if (!realPanel) { setMsg({ text: "Save this panel first.", error: true }); return; }
+    setBusy(true); setMsg(null);
+    const res = await updatePanelBranding(panel.id, { name, theme, logoUrl, accent, headline, description, favicon });
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: "Branding saved — reload your live panel to see it." });
+  };
+
+  const inputCls = "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 outline-none focus:fp-gold-border";
+
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      <Card title="Logo & identity" icon={ImageIcon}>
-        <div className="border border-dashed fp-line rounded-xl h-28 flex items-center justify-center fp-text-faint text-sm mb-4">
-          Drop logo here
-        </div>
-        <label className="fp-text-dim text-xs fp-mono uppercase">Panel display name</label>
-        <input
-          defaultValue={panel.name}
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 outline-none focus:fp-gold-border"
+    <div className="space-y-4">
+      {studioFull && realPanel && (
+        <DesignStudio
+          panel={{ id: panel.id, name, subdomain: panel.subdomain }}
+          initial={{ name, theme, logoUrl, accent, headline, description, favicon }}
+          onClose={() => setStudioFull(false)}
+          onSaved={(vv) => {
+            setName(vv.name); setTheme(vv.theme); setLogoUrl(vv.logoUrl);
+            setAccent(vv.accent); setHeadline(vv.headline); setDescription(vv.description);
+            setFavicon(vv.favicon);
+            setMsg({ text: "Design saved — reload your live panel to see it." });
+          }}
         />
-      </Card>
-      <Card title="Colors & type" icon={Type}>
-        <p className="fp-text-dim text-xs fp-mono uppercase mb-2">Theme</p>
-        <div className="grid grid-cols-2 gap-3 mb-5">
-          {themes.map((t) => (
-            <div
-              key={t.name}
-              className={`rounded-lg border p-3 ${t.name === panel.theme ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft fp-panel-raised"}`}
-            >
-              <div className="flex gap-1.5 mb-2">
-                <span className="w-4 h-4 rounded-full" style={{ background: t.a }} />
-                <span className="w-4 h-4 rounded-full" style={{ background: t.b }} />
-              </div>
-              <p className="text-xs">{t.name}</p>
-            </div>
-          ))}
+      )}
+      {msg && (
+        <div className={`text-sm px-4 py-2.5 rounded-lg border flex items-center justify-between gap-3 ${msg.error ? "bg-red-500/10 border-red-500/20 text-red-400" : "fp-safe-soft-bg fp-safe-border fp-safe"}`}>
+          <span>{msg.text}</span>
+          <button onClick={() => setMsg(null)} className="opacity-70 hover:opacity-100"><X size={14} /></button>
         </div>
-        <button className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">
-          Open full Design Studio
-        </button>
-      </Card>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-6">
+        <Card title="Logo & identity" icon={ImageIcon}>
+          <div className="border border-dashed fp-line rounded-xl h-28 flex items-center justify-center fp-text-faint text-sm mb-4 overflow-hidden">
+            {logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logoUrl} alt="Logo preview" className="max-h-full max-w-full object-contain" />
+            ) : (
+              "Paste a logo URL below"
+            )}
+          </div>
+          <label className="fp-text-dim text-xs fp-mono uppercase">Logo URL</label>
+          <input value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://…/logo.png" className={`${inputCls} fp-mono`} />
+          <p className="fp-text-faint text-[11px] mt-1.5">Direct image URL (PNG/SVG). File upload is coming soon.</p>
+
+          <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Panel display name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
+        </Card>
+
+        <Card title="Colors & type" icon={Type}>
+          <p className="fp-text-dim text-xs fp-mono uppercase mb-2">Theme</p>
+          <div className="grid grid-cols-2 gap-3 mb-5">
+            {THEMES.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTheme(t.id)}
+                className={`text-left rounded-lg border p-3 transition-colors ${theme === t.id ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft fp-panel-raised hover:fp-gold-border"}`}
+              >
+                <div className="flex gap-1.5 mb-2">
+                  <span className="w-4 h-4 rounded-full border border-black/20" style={{ background: t.a }} />
+                  <span className="w-4 h-4 rounded-full border border-black/20" style={{ background: t.b }} />
+                </div>
+                <p className="text-xs">{t.label}</p>
+              </button>
+            ))}
+          </div>
+
+          <button onClick={() => setStudioFull(true)} disabled={!realPanel} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 disabled:opacity-50">
+            <Sparkles size={14} /> Open full Design Studio
+          </button>
+          <p className="fp-text-faint text-[11px] mt-2">Full-screen live editor — custom accent, landing headline &amp; description, real-time preview, and the premium Design Shop.</p>
+        </Card>
+      </div>
+
+      <button onClick={save} disabled={busy} className="fp-btn-primary font-semibold px-5 py-2.5 rounded-lg disabled:opacity-50">
+        {busy ? "Saving…" : "Save branding"}
+      </button>
     </div>
   );
 }

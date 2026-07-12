@@ -5,6 +5,85 @@
 
 ---
 
+## Session: Favicon, seasonal themes, richer default landing (v0.2.5)
+
+### Date: 2026-07-09
+Follow-ups on the redesign. **package.json bumped to 0.2.5** (checked tags: v0.2.0–
+v0.2.4 exist → next is v0.2.5; do NOT reuse v0.2.4).
+- **Favicon**: branding now has a `favicon` field (settings.branding; falls back to
+  logo). Design Studio has a Favicon URL slot (with a tiny preview). getPublicPanel
+  returns it; `generateMetadata` sets per-panel `icons.icon` so the browser tab uses
+  the owner's favicon.
+- **Seasonal free themes** added to `themes.ts`: Christmas, Autumn/Fall, Winter
+  Frost, Spring Bloom (`seasonal: true`). Show alongside the core 4 in the picker.
+- **Richer default landing** (every panel, pre-added — it felt too empty): added a
+  "Why {panel}" benefits grid, an FAQ accordion (`<details>`), and a CTA band before
+  the footer, plus the editable hero headline/description from the Studio.
+- NOTE: owner-added CUSTOM sections/ads (a section builder) not built yet — the
+  defaults are pre-added; custom-block editing is a follow-up. File logo upload
+  (vs URL) still pending (needs Supabase Storage).
+
+Reminder locked in: always bump package.json to the version we're on, and check
+existing git tags before giving a tag command (no repeats).
+
+---
+
+## Session: Design Studio "world" + live preview + Design Shop scaffold
+
+### Date: 2026-07-09
+- **Fixed the live-preview bug**: `.fp-btn-primary` / `.fp-grad-text` used HARDCODED
+  gold (#E9CE9A/#C9A574) instead of `var(--gold*)` — so accent/theme never touched
+  buttons. Tokenized them → themes/accents now recolor buttons app-wide + preview.
+- **Full-screen Design Studio** `src/components/panels/admin/DesignStudio.tsx`: its
+  own "world" (fixed inset-0). Controls (name, logo, landing headline+description,
+  theme, custom accent) on the left; a **live mockup preview** (landing hero +
+  service card + dashboard header + wallet, styled via `themeVars`) on the right
+  that updates as you type. "Save & apply" → updatePanelBranding. Opened from
+  BrandingTab's "Open full Design Studio".
+- **Landing copy**: branding now stores `headline` + `description`
+  (settings.branding); getPublicPanel returns them; the storefront hero uses them.
+- **Design Shop** scaffolded inside the studio: free themes = active (within root);
+  premium designs (Aurora / Carbon Pro / Luxe) = "Soon" (they'll restyle landing
+  AND dashboard — the paid tier).
+- Chose the efficient **mockup** preview (not a real-storefront iframe): still
+  true-to-ad because committed designs actually change the live panel.
+
+CUSTOM DOMAIN (user ask — "show their real domain, not the subdomain, on load"):
+NOT built — it needs host-based middleware routing (map panel.customdomain.com →
+/p/[subdomain] via a rewrite so the address bar keeps the custom domain) + Vercel
+wildcard/custom domain config + per-panel domain verification. Moderately heavy →
+added to the agenda as the **Custom domain routing** feature (Domain tab / Phase 5).
+
+package.json still 0.2.2 (tags to v0.2.3); next tag = v0.2.4.
+
+---
+
+## Session: A2 — Branding & Design Studio (real, end-to-end)
+
+### Date: 2026-07-09
+Made the owner Branding tab actually drive the customer storefront.
+- `src/data/themes.ts`: THEMES (obsidian-gold / violet-night / ivory-minimal /
+  neon-slate) each mapping to CSS-variable overrides; `themeVars(themeId, accent)`
+  builds the inline style; `themeById` (matches id or legacy label).
+- `panels.ts`: `getPanelBranding` / `updatePanelBranding(name, theme, logoUrl,
+  accent)` — name/theme on the panel row, logoUrl+accent in `settings.branding`.
+- `storefront.ts getPublicPanel`: now returns `theme`, `logoUrl`, `accent`.
+- `app/p/[subdomain]/page.tsx`: wraps the storefront (and offline screens) in a div
+  whose inline `style` sets the theme's CSS vars → fp-* classes pick them up, so the
+  chosen theme + custom accent actually recolor the storefront. Logo passed to the
+  Storefront + CustomerDashboard headers (shows `<img>` when set, else the mark).
+- `BrandingTab` rewritten: real (loads current branding), theme picker (persists),
+  display name, logo URL, and "Open full Design Studio" → custom accent color picker
+  + a live preview swatch. "Save branding" → updatePanelBranding.
+
+KNOWN LIMITATIONS: accent-swap themes (Violet Night / Neon Slate) recolor cleanly;
+Ivory Minimal (full light) is only partial because some components use hardcoded
+dark hex instead of tokens — a polish-pass item. Logo is URL-based for now (file
+upload needs Supabase Storage — follow-up). `package.json` 0.2.2 lags tag v0.2.3;
+next tag = v0.2.4.
+
+---
+
 ## Session: Anvil mark rebuilt as single geometric silhouette (fixes "cat" look)
 
 ### Date: 2026-07-12

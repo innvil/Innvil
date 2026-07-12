@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
+import type { CSSProperties } from "react";
 import { Lock, Wrench, FileText } from "lucide-react";
 import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
 import { listCustomerOrders } from "@/src/lib/actions/orders";
 import { listDeposits } from "@/src/lib/actions/payments";
 import type { PanelStatus } from "@/src/types/db";
+import { themeVars } from "@/src/data/themes";
 import { Storefront } from "./Storefront";
 
 type Params = { params: Promise<{ subdomain: string }> };
@@ -15,7 +17,10 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   if (!panel) return { title: "Panel not found" };
   return {
     title: `${panel.name} — Order social media services`,
-    description: `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`,
+    description:
+      panel.description ||
+      `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`,
+    ...(panel.favicon ? { icons: { icon: panel.favicon } } : {}),
   };
 }
 
@@ -59,8 +64,14 @@ export default async function StorefrontPage({ params }: Params) {
     );
   }
 
+  const themeStyle = themeVars(panel.theme, panel.accent) as CSSProperties;
+
   if (panel.status === "draft" || panel.status === "suspended" || panel.status === "maintenance") {
-    return <OfflineScreen status={panel.status} name={panel.name} />;
+    return (
+      <div style={themeStyle}>
+        <OfflineScreen status={panel.status} name={panel.name} />
+      </div>
+    );
   }
 
   const [services, account, platformMeta, paymentMethods] = await Promise.all([
@@ -75,14 +86,16 @@ export default async function StorefrontPage({ params }: Params) {
     : [[], []];
 
   return (
-    <Storefront
-      panel={{ id: panel.id, name: panel.name, status: panel.status, currency: panel.currency }}
-      services={services}
-      initialAccount={account}
-      initialOrders={orders}
-      initialDeposits={deposits}
-      platformMeta={platformMeta}
-      paymentMethods={paymentMethods}
-    />
+    <div style={themeStyle}>
+      <Storefront
+        panel={{ id: panel.id, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description }}
+        services={services}
+        initialAccount={account}
+        initialOrders={orders}
+        initialDeposits={deposits}
+        platformMeta={platformMeta}
+        paymentMethods={paymentMethods}
+      />
+    </div>
   );
 }

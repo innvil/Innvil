@@ -17,6 +17,11 @@ export interface PublicPanel {
   status: PanelStatus;
   theme: string | null;
   currency: string;
+  logoUrl: string;
+  accent: string;
+  headline: string;
+  description: string;
+  favicon: string;
 }
 
 /** The panel's operating currency (from settings; default USD). */
@@ -28,6 +33,25 @@ function panelCurrency(settings: unknown): string {
   return "USD";
 }
 
+/** Customer-facing branding (logo, accent, hero copy) from settings.branding. */
+function panelBranding(settings: unknown): { logoUrl: string; accent: string; headline: string; description: string; favicon: string } {
+  const empty = { logoUrl: "", accent: "", headline: "", description: "", favicon: "" };
+  if (settings && typeof settings === "object") {
+    const b = (settings as Record<string, unknown>).branding;
+    if (b && typeof b === "object") {
+      const o = b as Record<string, unknown>;
+      return {
+        logoUrl: typeof o.logoUrl === "string" ? o.logoUrl : "",
+        accent: typeof o.accent === "string" ? o.accent : "",
+        headline: typeof o.headline === "string" ? o.headline : "",
+        description: typeof o.description === "string" ? o.description : "",
+        favicon: typeof o.favicon === "string" ? o.favicon : "",
+      };
+    }
+  }
+  return empty;
+}
+
 /** Resolve a panel by its subdomain (case-insensitive). */
 export async function getPublicPanel(subdomain: string): Promise<PublicPanel | null> {
   const admin = createAdminClient();
@@ -37,6 +61,7 @@ export async function getPublicPanel(subdomain: string): Promise<PublicPanel | n
     .ilike("subdomain", subdomain)
     .maybeSingle();
   if (!data) return null;
+  const branding = panelBranding(data.settings);
   return {
     id: data.id,
     name: data.name,
@@ -45,6 +70,11 @@ export async function getPublicPanel(subdomain: string): Promise<PublicPanel | n
     status: data.status,
     theme: data.theme,
     currency: panelCurrency(data.settings),
+    logoUrl: branding.logoUrl,
+    accent: branding.accent,
+    headline: branding.headline,
+    description: branding.description,
+    favicon: branding.favicon || branding.logoUrl,
   };
 }
 

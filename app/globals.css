@@ -196,7 +196,7 @@ body {
 }
 
 .fp-btn-primary {
-  background: linear-gradient(120deg, #E9CE9A, #C9A574);
+  background: linear-gradient(120deg, var(--gold-light), var(--gold));
   color: var(--void);
 }
 
@@ -205,7 +205,7 @@ body {
 }
 
 .fp-grad-text {
-  background: linear-gradient(120deg, #E9CE9A 0%, #C9A574 45%, #8B7FFF 100%);
+  background: linear-gradient(120deg, var(--gold-light) 0%, var(--gold) 45%, var(--violet) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;

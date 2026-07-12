@@ -4,7 +4,7 @@ import React, { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Sparkles, Zap, ShieldCheck, Wallet, Clock,
-  AlertTriangle, CheckCircle2,
+  AlertTriangle, CheckCircle2, ChevronDown,
 } from "lucide-react";
 import { PLATFORMS, PlatformKey, CustomerService, CustomerOrder } from "@/src/data/constants";
 import { PlatformGlyph, PlatformButton } from "@/src/components/customer/PlatformIcons";
@@ -73,7 +73,7 @@ export function Storefront({
   platformMeta = {},
   paymentMethods = [],
 }: {
-  panel: { id: string; name: string; status: string; currency: string };
+  panel: { id: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string };
   services: StorefrontService[];
   initialAccount: CustomerAccountInfo | null;
   initialOrders?: CustomerOrderVM[];
@@ -262,6 +262,7 @@ export function Storefront({
         inactive={inactive}
         onLogout={logout}
         brandName={panel.name}
+        logoUrl={panel.logoUrl}
         services={uiServices}
         orders={uiOrders}
         walletBalance={account.balance}
@@ -292,9 +293,14 @@ export function Storefront({
       <header className="border-b fp-line-soft bg-[#0A0B0F]/90 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center">
-              <Sparkles size={16} color="#0A0B0F" />
-            </div>
+            {panel.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={panel.logoUrl} alt={panel.name} className="w-8 h-8 rounded-lg object-cover" />
+            ) : (
+              <div className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center">
+                <Sparkles size={16} color="#0A0B0F" />
+              </div>
+            )}
             <span className="fp-display text-xl">{panel.name}</span>
           </div>
           <div className="flex items-center gap-2">
@@ -306,8 +312,8 @@ export function Storefront({
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-12 md:py-20 grid md:grid-cols-2 gap-12 items-start">
         <div>
-          <h1 className="fp-display text-4xl md:text-5xl leading-tight mb-5">Grow every platform from one wallet.</h1>
-          <p className="fp-text-dim text-lg mb-8 leading-relaxed">Instant delivery, transparent pricing, and one balance for all your social growth on {panel.name}.</p>
+          <h1 className="fp-display text-4xl md:text-5xl leading-tight mb-5">{panel.headline || "Grow every platform from one wallet."}</h1>
+          <p className="fp-text-dim text-lg mb-8 leading-relaxed">{panel.description || `Instant delivery, transparent pricing, and one balance for all your social growth on ${panel.name}.`}</p>
           <div className="flex gap-3 flex-wrap mb-10">
             {PLATFORMS.filter((p) => groups.has(p.key)).map((p) => (
               <span key={p.key} className="w-11 h-11 rounded-xl fp-panel-raised border border-[#262A35] flex items-center justify-center fp-text-dim" title={p.label}>
@@ -359,6 +365,56 @@ export function Storefront({
           <div className="max-w-2xl mx-auto">{ServiceList}</div>
         </section>
       )}
+
+      {/* Why us — default section on every panel */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">
+        <h2 className="fp-display text-2xl md:text-3xl text-center mb-2">Why {panel.name}</h2>
+        <p className="fp-text-dim text-sm text-center mb-10 max-w-xl mx-auto">Everything you need to grow across every platform — fast, transparent, and reliable.</p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { icon: Zap, t: "Instant start", d: "Most orders begin within minutes of payment." },
+            { icon: ShieldCheck, t: "Refill guarantee", d: "Eligible services include automatic refills." },
+            { icon: Wallet, t: "One wallet", d: "Top up once, order across every platform." },
+            { icon: Clock, t: "24/7 processing", d: "Orders run around the clock, automatically." },
+          ].map((f) => (
+            <div key={f.t} className="fp-panel border fp-line rounded-2xl p-5">
+              <span className="w-10 h-10 rounded-xl fp-gold-soft-bg fp-gold flex items-center justify-center mb-3"><f.icon size={18} /></span>
+              <p className="text-sm font-medium mb-1">{f.t}</p>
+              <p className="fp-text-dim text-sm leading-relaxed">{f.d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* FAQ — default section */}
+      <section className="max-w-3xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">
+        <h2 className="fp-display text-2xl md:text-3xl text-center mb-8">Frequently asked</h2>
+        <div className="space-y-2">
+          {[
+            { q: "How fast are orders delivered?", a: "Most orders start within minutes and complete based on the service's speed. Estimated times are shown before you order." },
+            { q: "Is my account safe?", a: "We only ever need the public link to your post or profile — never your password." },
+            { q: "How do I add funds?", a: "Create an account, open your wallet, and top up with the payment methods this panel supports." },
+            { q: "What if an order drops?", a: "Eligible services include a refill guarantee — request a refill from your orders page." },
+          ].map((f) => (
+            <details key={f.q} className="fp-panel border fp-line rounded-xl px-4 py-3 group">
+              <summary className="cursor-pointer text-sm font-medium flex items-center justify-between list-none">
+                {f.q}
+                <ChevronDown size={15} className="fp-text-faint group-open:rotate-180 transition-transform" />
+              </summary>
+              <p className="fp-text-dim text-sm mt-2 leading-relaxed">{f.a}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+
+      {/* CTA band — default section */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">
+        <div className="fp-panel border fp-gold-border rounded-2xl p-8 md:p-10 text-center">
+          <h2 className="fp-display text-2xl md:text-3xl mb-3">Ready to grow on {panel.name}?</h2>
+          <p className="fp-text-dim text-sm mb-6 max-w-lg mx-auto">Create your account, add funds, and place your first order in minutes.</p>
+          <a href="#nb-auth" onClick={() => setMode("register")} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg text-sm inline-block">Create your account</a>
+        </div>
+      </section>
 
       <footer className="border-t fp-line-soft py-8">
         <div className="max-w-6xl mx-auto px-6 text-center text-xs fp-text-faint">© 2026 {panel.name}</div>
