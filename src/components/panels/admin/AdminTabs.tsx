@@ -475,6 +475,23 @@ const inputCls =
   "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border";
 const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
+// Provider (API) balance thresholds — a provider at/under LOW needs a top-up soon.
+const LOW_BALANCE_THRESHOLD = 10; // in the provider's own currency
+const BALANCE_STALE_MS = 10 * 60 * 1000; // auto-refresh balances older than this
+function balanceIsStale(iso: string | null | undefined): boolean {
+  if (!iso) return true;
+  return Date.now() - new Date(iso).getTime() > BALANCE_STALE_MS;
+}
+function shortAgo(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 export function ProvidersTab({ panelId }: { panelId: string }) {
   const realPanel = isUuid(panelId);
   const [providers, setProviders] = useState<ProviderRow[] | null>(() =>
@@ -485,7 +502,9 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [rows, setRows] = useState<Record<string, RowState>>({});
+  const [autoSyncing, setAutoSyncing] = useState(false);
   const providersRef = useRef<ProviderRow[] | null>(providers);
+  const autoFetchedRef = useRef(false);
 
   useEffect(() => {
     providersRef.current = providers;
@@ -509,6 +528,20 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Auto-refresh stale/missing provider balances once on load, so the owner can
+  // immediately see which API needs a top-up without clicking each row.
+  useEffect(() => {
+    if (!realPanel || autoFetchedRef.current) return;
+    if (!providers || providers.length === 0) return;
+    const stale = providers.filter((p) => p.balance == null || balanceIsStale(p.last_balance_sync));
+    if (stale.length === 0) { autoFetchedRef.current = true; return; }
+    autoFetchedRef.current = true;
+    setAutoSyncing(true);
+    Promise.all(stale.map((p) => fetchProviderBalance(p.id).catch(() => null)))
+      .then(() => refresh())
+      .finally(() => setAutoSyncing(false));
+  }, [providers, realPanel, refresh]);
 
   const setRow = (id: string, s: RowState) => setRows((prev) => ({ ...prev, [id]: s }));
 
@@ -577,13 +610,16 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
         title="Connected providers"
         icon={Wifi}
         right={
-          <button
-            onClick={() => { setShowForm((v) => !v); setFormError(null); }}
-            disabled={!realPanel}
-            className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Plus size={13} /> Add provider
-          </button>
+          <div className="flex items-center gap-3">
+            {autoSyncing && <span className="text-[11px] fp-text-faint flex items-center gap-1.5"><RefreshCw size={11} className="animate-spin" /> Checking balances…</span>}
+            <button
+              onClick={() => { setShowForm((v) => !v); setFormError(null); }}
+              disabled={!realPanel}
+              className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Plus size={13} /> Add provider
+            </button>
+          </div>
         }
       >
         {showForm && (
@@ -652,8 +688,22 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
                       <td className="py-3">
                         <Pill tone={p.status === "active" ? "safe" : "muted"}>{p.status}</Pill>
                       </td>
-                      <td className="py-3 fp-mono fp-text-dim text-xs">
-                        {p.balance != null ? `${p.balance} ${p.currency}` : "—"}
+                      <td className="py-3">
+                        {p.balance == null ? (
+                          <span className="fp-text-faint text-xs">—</span>
+                        ) : (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`fp-mono text-sm font-medium ${p.balance <= 0 ? "text-red-400" : p.balance < LOW_BALANCE_THRESHOLD ? "fp-gold" : "fp-text"}`}>
+                              {p.balance} {p.currency}
+                            </span>
+                            {p.balance <= 0 ? (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 flex items-center gap-1"><AlertTriangle size={10} /> Top up</span>
+                            ) : p.balance < LOW_BALANCE_THRESHOLD ? (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full fp-gold-soft-bg fp-gold">Low</span>
+                            ) : null}
+                          </div>
+                        )}
+                        <p className="fp-text-faint text-[10px] mt-0.5">balance · {shortAgo(p.last_balance_sync)}</p>
                       </td>
                       <td className="py-3">
                         <div className="flex gap-2 text-xs fp-text-dim flex-wrap items-center">
@@ -720,9 +770,18 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const [search, setSearch] = useState("");
   const catalogRef = useRef<CatalogPlatform[] | null>(catalog);
   const providersRef = useRef<ProviderRow[]>(providers);
+  // Remember the selection + per-service markup PER provider so switching the
+  // import provider doesn't discard what was already chosen for another one.
+  const selStoreRef = useRef<Record<string, { selected: Set<string>; perMarkup: Record<string, string> }>>({});
+  const impProviderRef = useRef("");
+  const selectedRef = useRef<Set<string>>(selected);
+  const perMarkupRef = useRef<Record<string, string>>(perMarkup);
 
   useEffect(() => { catalogRef.current = catalog; }, [catalog]);
   useEffect(() => { providersRef.current = providers; }, [providers]);
+  useEffect(() => { impProviderRef.current = impProvider; }, [impProvider]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { perMarkupRef.current = perMarkup; }, [perMarkup]);
 
   const refresh = useCallback(async () => {
     if (!realPanel) {
@@ -751,14 +810,21 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   }, [panelId, realPanel]);
 
   const loadCatalog = async (provId: string) => {
+    // Stash the current provider's selection before switching away from it…
+    const prev = impProviderRef.current;
+    if (prev && prev !== provId) {
+      selStoreRef.current[prev] = { selected: new Set(selectedRef.current), perMarkup: { ...perMarkupRef.current } };
+    }
     setImpProvider(provId);
+    // …and restore whatever was previously chosen for the provider we're loading.
+    const saved = selStoreRef.current[provId];
+    setSelected(saved ? new Set(saved.selected) : new Set());
+    setPerMarkup(saved ? { ...saved.perMarkup } : {});
     setProvCatalog(null);
-    setSelected(new Set());
     const res = await fetchImportableServices(provId);
     if (!res.ok) { setMsg({ text: res.error, error: true }); setProvCatalog([]); return; }
     setProvCatalog(res.data.services);
     setImportedIds(new Set(res.data.importedIds.map(String)));
-    setPerMarkup({});
   };
 
   const openImport = () => {
@@ -809,6 +875,10 @@ export function ServicesTab({ panelId }: { panelId: string }) {
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setMsg({ text: `Imported ${res.data.imported} service(s)${res.data.skipped ? `, skipped ${res.data.skipped} already imported` : ""}.` });
+    // Clear this provider's remembered selection now that it's imported.
+    delete selStoreRef.current[impProvider];
+    setSelected(new Set());
+    setPerMarkup({});
     setImportOpen(false);
     refresh();
   };

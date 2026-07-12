@@ -5,6 +5,17 @@
 
 ---
 
+## Session: Import selection persists per provider (v0.2.14)
+
+### Date: 2026-07-12
+- Import panel now remembers the selected services + per-service markup PER provider
+  (selStoreRef keyed by provider id). Switching the import provider stashes the old
+  provider's selection and restores the target's — nothing is lost when flipping
+  between providers. After a successful import, that provider's remembered selection
+  is cleared (imported rows are disabled anyway). package.json → 0.2.14.
+
+---
+
 ## Session: Per-service import markup + earnings receipt (v0.2.13)
 
 ### Date: 2026-07-12
@@ -20,6 +31,12 @@ Implemented the two items from the inline note (now cleared).
    = total completed customer top-ups (payments) − provider/API cost of orders in
    the window = profit, with a per-panel breakdown. "Download receipt" builds a
    self-contained HTML receipt Blob and downloads it.
+3. **Provider (API) balance visibility** (ProvidersTab): balances render prominently —
+   colored by level, red "Top up" flag at/under 0, amber "Low" under $10
+   (LOW_BALANCE_THRESHOLD), plus a "balance · <ago>" freshness line. Stale/missing
+   balances auto-refresh once on load (background `fetchProviderBalance`) with a
+   "Checking balances…" indicator; manual "Balance" still works. Owner sees at a
+   glance which provider needs a top-up.
 
 **package.json → 0.2.13.** No migration needed (reads existing payments + orders).
 
