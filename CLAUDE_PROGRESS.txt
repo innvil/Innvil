@@ -3,6 +3,31 @@
 # (Renamed Ledgerline → Veyra → **Innvil** on 2026-07-09; older entries below keep
 #  the old names as a historical record.)
 
+---Note: 
+for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
+to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
+
+## Session: Subdomain routing — panels live on <sub>.innvil.cloud (v0.2.15)
+
+### Date: 2026-07-12
+Host-based routing so a panel is reachable at its real subdomain, not just the
+`/p/<sub>` path. **package.json → 0.2.15.**
+- `proxy.ts`: resolves the request host; if it's `<sub>.PANEL_ROOT_DOMAIN` (and not a
+  reserved sub — www/app/api/admin/superadmin/…), rewrites internally to
+  `/p/<sub><path>` and refreshes the STOREFRONT session. Apex `innvil.cloud` (app +
+  landing) and localhost/preview hosts are untouched (the `/p/` path still works
+  there for dev). Passthrough for `/_next`, `/api`, `/p/`, and any file-extension path.
+- `src/lib/supabase/middleware.ts` `updateSession(request, opts?)`: now accepts
+  `{ rewriteTo?: URL; storefront?: boolean }` so it can emit a `NextResponse.rewrite`
+  (host routing) while still syncing auth cookies, and force the storefront cookie for
+  subdomain hosts (whose incoming pathname isn't `/p/...` yet).
+- Uses `PANEL_ROOT_DOMAIN` from `src/lib/config.ts` (env `NEXT_PUBLIC_PANEL_ROOT_DOMAIN`,
+  default `innvil.cloud`).
+- **Deploy step (user):** add a wildcard domain `*.innvil.cloud` to the Vercel project
+  and point DNS (`*` CNAME → Vercel) so subdomains reach the app. Server actions POST to
+  the same host → rewritten into the /p/[subdomain] route tree, so ordering/auth work.
+- NEXT: custom domains (resolve host → panel by `custom_domain`).
+
 ---
 
 ## Session: Import selection persists per provider (v0.2.14)

@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Subdomain routing (v0.2.15)
+- Panels are now reachable at `<subdomain>.innvil.cloud` (not just `/p/<sub>`).
+  `proxy.ts` rewrites a panel-subdomain host → `/p/<sub>` internally and forces the
+  storefront session; apex/localhost/preview hosts and `/_next`,`/api`,`/p/`,static
+  paths are untouched. `updateSession` gained `{rewriteTo, storefront}`. Root domain
+  via `PANEL_ROOT_DOMAIN` (`NEXT_PUBLIC_PANEL_ROOT_DOMAIN`, default innvil.cloud).
+  **Deploy:** add wildcard domain `*.innvil.cloud` in Vercel + DNS `*` CNAME. Custom
+  domains next.
+
 ### 2026-07-12 — Per-service import markup + earnings receipt (v0.2.13)
 - **Import per-service markup**: `importServices` accepts `markupOverrides`
   (provider_service_id → {kind,value}); the import UI shows a per-selected-row markup

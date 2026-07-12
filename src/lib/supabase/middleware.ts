@@ -12,10 +12,23 @@ import { STOREFRONT_COOKIE_NAME, isStorefrontPath } from "./constants";
  * other route refreshes the owner/platform session. This keeps the two logins
  * independent in a single browser (see ./constants).
  */
-export async function updateSession(request: NextRequest) {
-  let response = NextResponse.next({ request });
+export async function updateSession(
+  request: NextRequest,
+  opts?: {
+    /** Internally rewrite to this URL (host-based storefront routing) while still
+     *  refreshing the session cookies on the response. */
+    rewriteTo?: URL;
+    /** Force the storefront session cookie (subdomain/custom-domain hosts serve the
+     *  storefront even though the incoming pathname isn't `/p/...` yet). */
+    storefront?: boolean;
+  }
+) {
+  const build = () =>
+    opts?.rewriteTo ? NextResponse.rewrite(opts.rewriteTo, { request }) : NextResponse.next({ request });
 
-  const storefront = isStorefrontPath(request.nextUrl.pathname);
+  let response = build();
+
+  const storefront = opts?.storefront ?? isStorefrontPath(request.nextUrl.pathname);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -30,7 +43,7 @@ export async function updateSession(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
-          response = NextResponse.next({ request });
+          response = build();
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options)
           );
