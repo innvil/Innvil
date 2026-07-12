@@ -54,7 +54,6 @@ export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: st
   };
   const overflowActive = OVERFLOW_TABS.some((t) => t.k === tab);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerRow | null>(null);
-  const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
   return (
     <div>
@@ -137,7 +136,7 @@ export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: st
         {tab === "providers" && <ProvidersTab panelId={panel.id} />}
         {tab === "services" && <ServicesTab panelId={panel.id} />}
         {tab === "floor" && <FloorTab />}
-        {tab === "orders" && <OrdersTab expandedOrder={expandedOrder} setExpandedOrder={setExpandedOrder} />}
+        {tab === "orders" && <OrdersTab panelId={panel.id} />}
         {tab === "customers" && <CustomersTab panel={panel} onView={setSelectedCustomer} />}
         {tab === "payments" && <PaymentsTab panelId={panel.id} />}
         {tab === "api" && <CustomerApiTab />}

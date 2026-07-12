@@ -127,6 +127,20 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-12 — Admin dashboard production pass (v0.2.7)
+- **Orders tab is now real** (§5): `admin-orders.ts` — `listPanelOrders` (owner-only
+  fields incl. provider cost/profit), status-filter chips + search, expandable detail,
+  and working per-order actions (resend / refill / cancel / mark completed / refund
+  full or partial) + on-demand "Sync statuses".
+- **Overview tab is now real**: live stats (revenue today, orders today, pending,
+  customers, active services) + recent orders, via `getPanelOverview`.
+- **Honest placeholders**: the tabs that showed non-functional controls (Domain custom
+  domains, Customer API, Risk & Security, Notifications, Support, Promotions) are now
+  clean "Coming soon" states so no fake controls ship to production. Domain still shows
+  the real, live included subdomain.
+- Note: `middleware.ts` was renamed to `proxy.ts` (Next 16 proxy convention) — edit
+  `proxy.ts`, don't re-add `middleware.ts`.
+
 ### 2026-07-12 — Owner landing sections + NOWPayments gateway (v0.2.6)
 - Owners can add their own promo/ad blocks to the storefront landing (heading, body,
   optional CTA button/link) via the Design Studio, shown below the default landing
@@ -555,10 +569,18 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
     10 min, CRON_SECRET-gated) + owner `syncOrdersNow(panelId)` for on-demand.
     Partial/canceled/refunded auto-refund the unfilled portion (proportional to
     `remains`), once, via the claim → apply_balance_change('refund').
-  - [ ] Manual per-order retry / cancel / refill actions (surface in §5 Orders UI)
-- **§5 Admin Orders Page**
-  - [ ] Filterable order table (status, provider, service, user, date range)
-  - [ ] Detail view: user, service, link, qty, charge, provider cost, profit, provider order ID, status history, raw provider response (admin-only)
+  - ✅ Manual per-order actions (owner): `src/lib/actions/admin-orders.ts`
+    resendOrder / requestRefill / requestCancel / markOrderCompleted / refundOrder
+    (full or partial). All owner-auth + ownership-checked; provider calls server-side.
+- **§5 Admin Orders Page** — DONE (owner Orders tab is real)
+  - ✅ `listPanelOrders(panelId, {status?, limit?})` — real order list with owner-only
+    fields (charge, provider cost, profit, provider order id, remains). Emails resolved
+    via service role. OrdersTab: status filter chips + client-side search (id/service/
+    customer/link), expandable detail with the per-order actions above + "Sync statuses"
+    (syncOrdersNow). Guards non-UUID (mock) panels.
+  - `getPanelOverview(panelId)` powers the real **Overview** tab (revenue today, orders
+    today, pending, customers, active services, recent orders). `getPanelCurrency`.
+  - [ ] Later: provider/date-range filters, raw provider_response viewer, CSV export.
 - **§6 Users & Balance Management** — DONE (owner side)
   - ✅ Real customer list per panel: `listPanelCustomers` (email, balance, order
     count, spend, status: active/banned/restricted). CustomersTab wired to it.

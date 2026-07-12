@@ -4,18 +4,17 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Sparkles, Sliders, Tag,
-  ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell, Mail,
-  MessageSquare, Bot, Percent, Plus, Trash2, Search, Download,
+  ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
+  MessageSquare, Bot, Plus, Trash2, Search, Download, LucideIcon,
 } from "lucide-react";
 import {
-  Card, StatCard, FloorLedger, OrdersTable, StatusBadge, StatusDropdown, Toggle, Pill,
+  Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
 import {
-  PANEL_STATUSES, categoriesData,
-  recentOrders, orderDetailExtras, tickets, PanelStatus,
+  PANEL_STATUSES, categoriesData, PanelStatus,
 } from "@/src/data/constants";
 import { Panel, CustomerRow } from "@/src/types";
-import type { ProviderRow, MarkupKind } from "@/src/types/db";
+import type { ProviderRow, MarkupKind, OrderStatus } from "@/src/types/db";
 import type { ProviderServiceDTO } from "@/src/lib/providers";
 import {
   listProviders, createProvider, testProviderConnection,
@@ -36,9 +35,15 @@ import {
   getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency, type PaymentsMeta,
 } from "@/src/lib/actions/payments";
 import { getPanelBranding, updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
+import {
+  listPanelOrders, getPanelOverview, getPanelCurrency,
+  resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
+  type AdminOrderVM, type PanelOverview,
+} from "@/src/lib/actions/admin-orders";
+import { syncOrdersNow } from "@/src/lib/actions/orders";
 import { THEMES } from "@/src/data/themes";
 import { DesignStudio } from "./DesignStudio";
-import { computeSellRate } from "@/src/lib/money";
+import { computeSellRate, formatMoney } from "@/src/lib/money";
 import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
 
 /* =========================================================
@@ -71,19 +76,102 @@ function writeAdminCache<T>(panelId: string, section: string, value: T) {
   }
 }
 
+const ORDER_STATUS_TONE: Record<string, "safe" | "gold" | "violet" | "muted"> = {
+  completed: "safe",
+  processing: "gold",
+  in_progress: "gold",
+  pending: "violet",
+  partial: "gold",
+  canceled: "muted",
+  failed: "muted",
+  refunded: "muted",
+};
+const ORDER_STATUS_LABEL: Record<string, string> = {
+  completed: "Completed", processing: "Processing", in_progress: "In progress",
+  pending: "Pending", partial: "Partial", canceled: "Canceled",
+  failed: "Failed", refunded: "Refunded",
+};
+function OrderStatusPill({ status }: { status: OrderStatus }) {
+  return <Pill tone={ORDER_STATUS_TONE[status] ?? "muted"}>{ORDER_STATUS_LABEL[status] ?? status}</Pill>;
+}
+
+/** Honest placeholder for admin sections not yet wired to real persistence. */
+function ComingSoon({ title, icon, children }: { title: string; icon: LucideIcon; children?: React.ReactNode }) {
+  return (
+    <Card title={title} icon={icon} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>
+      <p className="fp-text-dim text-sm leading-relaxed">{children}</p>
+    </Card>
+  );
+}
+
 export function OverviewTab({ panel }: { panel: Panel }) {
+  const realPanel = isUuid(panel.id);
+  const [data, setData] = useState<PanelOverview | null>(() =>
+    realPanel ? readAdminCache<PanelOverview>(panel.id, "overview") : null
+  );
+  const [loading, setLoading] = useState(realPanel);
+
+  useEffect(() => {
+    if (!realPanel) return;
+    let alive = true;
+    getPanelOverview(panel.id).then((d) => {
+      if (!alive || !d) { setLoading(false); return; }
+      setData(d);
+      writeAdminCache(panel.id, "overview", d);
+      setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [panel.id, realPanel]);
+
+  const fmt = (n: number) => formatMoney(n, data?.currency ?? "USD");
+
+  if (!realPanel) {
+    return (
+      <div className="fp-panel-raised border fp-line-soft rounded-xl p-6 text-center fp-text-dim text-sm">
+        Save this panel to see live stats here.
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Orders today" value={`$${panel.ordersToday.toFixed(2)}`} delta="+14%" tone="gold" />
-        <StatCard label="Active services" value="4" />
-        <StatCard label="Customers" value="2" />
-        <StatCard label="Open tickets" value="1" />
+        <StatCard label="Revenue today" value={data ? fmt(data.revenueToday) : "—"} tone="gold" />
+        <StatCard label="Orders today" value={data ? String(data.ordersToday) : "—"} />
+        <StatCard label="Pending orders" value={data ? String(data.pendingOrders) : "—"} />
+        <StatCard label="Customers" value={data ? String(data.customers) : "—"} />
       </div>
-      <div className="grid md:grid-cols-3 gap-6">
-        <div className="md:col-span-2"><OrdersTable /></div>
-        <FloorLedger compact />
-      </div>
+
+      <Card title="Recent orders" icon={ListOrdered}>
+        {loading && !data ? (
+          <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+        ) : !data || data.recent.length === 0 ? (
+          <p className="fp-text-faint text-sm py-6 text-center">No orders yet. They&apos;ll appear here as customers order.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
+                <th className="py-2 font-normal">ID</th>
+                <th className="py-2 font-normal">Service</th>
+                <th className="py-2 font-normal">Customer</th>
+                <th className="py-2 font-normal text-right">Charge</th>
+                <th className="py-2 font-normal">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.recent.map((o) => (
+                <tr key={o.id} className="border-b fp-line-soft last:border-0">
+                  <td className="py-2.5 fp-mono fp-text-dim">#{o.shortId}</td>
+                  <td className="py-2.5">{o.serviceName}</td>
+                  <td className="py-2.5 fp-text-dim">{o.customerEmail ?? "—"}</td>
+                  <td className="py-2.5 text-right fp-mono">{fmt(o.charge)}</td>
+                  <td className="py-2.5"><OrderStatusPill status={o.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
     </>
   );
 }
@@ -361,40 +449,22 @@ export function BrandingTab({ panel }: { panel: Panel }) {
 
 export function DomainTab({ panel }: { panel: Panel }) {
   return (
-    <Card title="Domain" icon={Globe}>
+    <Card
+      title="Domain"
+      icon={Globe}
+      right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Custom domains coming soon</span>}
+    >
       <div className="flex items-center justify-between fp-panel-raised border fp-line-soft rounded-xl p-4 mb-4">
         <div>
-          <p className="text-sm">{panel.subdomain}</p>
-          <p className="fp-text-faint text-xs mt-0.5">Included subdomain</p>
+          <p className="text-sm fp-mono">{panel.subdomain}</p>
+          <p className="fp-text-faint text-xs mt-0.5">Included subdomain — live now</p>
         </div>
         <Pill tone="safe" icon={CheckCircle2}>Active</Pill>
       </div>
-      <label className="fp-text-dim text-xs fp-mono uppercase">Primary custom domain</label>
-      <div className="flex gap-2 mt-2 mb-4">
-        <input
-          defaultValue={panel.domain || ""}
-          placeholder="panel.yourdomain.com"
-          className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border"
-        />
-        <button className="fp-panel-raised border fp-line-soft px-4 rounded-lg text-sm flex items-center gap-1.5">
-          <RefreshCw size={13} /> Verify DNS
-        </button>
-      </div>
-      <div className="grid sm:grid-cols-2 gap-3 mb-4">
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-center justify-between text-sm">
-          SSL status <Pill tone={panel.domain ? "safe" : "muted"}>{panel.domain ? "Issued" : "N/A"}</Pill>
-        </div>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-center justify-between text-sm">
-          Force HTTPS <Toggle on={true} />
-        </div>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-center justify-between text-sm">
-          WWW redirect <Toggle on={false} />
-        </div>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-center justify-between text-sm">
-          Custom redirects <span className="fp-text-faint text-xs">0 configured</span>
-        </div>
-      </div>
-      <p className="fp-text-faint text-xs fp-mono">DNS instructions: point a CNAME record to {panel.id}.cname.ledgerline.app</p>
+      <p className="fp-text-dim text-sm leading-relaxed">
+        Connecting your own custom domain — with automatic SSL and DNS verification — is coming soon.
+        Until then, your panel is fully live on its included subdomain above.
+      </p>
     </Card>
   );
 }
@@ -1202,67 +1272,205 @@ export function FloorTab() {
   );
 }
 
-export function OrdersTab({
-  expandedOrder,
-  setExpandedOrder,
-}: {
-  expandedOrder: string | null;
-  setExpandedOrder: (id: string | null) => void;
-}) {
+const ORDER_FILTERS: Array<{ k: OrderStatus | "all"; label: string }> = [
+  { k: "all", label: "All" },
+  { k: "pending", label: "Pending" },
+  { k: "processing", label: "Processing" },
+  { k: "in_progress", label: "In progress" },
+  { k: "completed", label: "Completed" },
+  { k: "partial", label: "Partial" },
+  { k: "canceled", label: "Canceled" },
+  { k: "refunded", label: "Refunded" },
+  { k: "failed", label: "Failed" },
+];
+
+export function OrdersTab({ panelId }: { panelId: string }) {
+  const realPanel = isUuid(panelId);
+  const [rows, setRows] = useState<AdminOrderVM[] | null>(() =>
+    realPanel ? readAdminCache<AdminOrderVM[]>(panelId, "orders") : []
+  );
+  const [status, setStatus] = useState<OrderStatus | "all">("all");
+  const [q, setQ] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [currency, setCurrency] = useState("USD");
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  const load = useCallback(async () => {
+    if (!realPanel) return;
+    const [list, cur] = await Promise.all([listPanelOrders(panelId), getPanelCurrency(panelId)]);
+    setRows(list);
+    setCurrency(cur);
+    writeAdminCache(panelId, "orders", list);
+  }, [panelId, realPanel]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const fmt = (n: number) => formatMoney(n, currency);
+
+  const filtered = useMemo(() => {
+    const list = rows ?? [];
+    const needle = q.trim().toLowerCase();
+    return list.filter((o) => {
+      if (status !== "all" && o.status !== status) return false;
+      if (!needle) return true;
+      return (
+        o.shortId.includes(needle) ||
+        o.serviceName.toLowerCase().includes(needle) ||
+        (o.customerEmail ?? "").toLowerCase().includes(needle) ||
+        o.link.toLowerCase().includes(needle)
+      );
+    });
+  }, [rows, status, q]);
+
+  const act = async (id: string, fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) => {
+    setBusyId(id); setMsg(null);
+    const res = await fn();
+    if (!res.ok) { setMsg({ text: res.error ?? "Action failed.", error: true }); setBusyId(null); return; }
+    setMsg({ text: okMsg });
+    await load();
+    setBusyId(null);
+  };
+
+  const doRefund = async (o: AdminOrderVM) => {
+    const input = window.prompt(`Refund amount for order #${o.shortId} (max ${o.charge}). Leave blank for full refund.`, "");
+    if (input === null) return;
+    const amount = input.trim() === "" ? undefined : Number(input);
+    if (amount !== undefined && (!Number.isFinite(amount) || amount <= 0)) { setMsg({ text: "Enter a valid amount.", error: true }); return; }
+    await act(o.id, () => refundOrder(o.id, amount), "Refund issued.");
+  };
+
+  const syncNow = async () => {
+    setSyncing(true); setMsg(null);
+    const res = await syncOrdersNow(panelId);
+    if (!res.ok) setMsg({ text: res.error, error: true });
+    else { setMsg({ text: `Synced ${res.checked} order(s), ${res.updated} updated.` }); await load(); }
+    setSyncing(false);
+  };
+
+  if (!realPanel) {
+    return (
+      <div className="fp-panel-raised border fp-line-soft rounded-xl p-6 text-center fp-text-dim text-sm">
+        Save this panel to manage real orders here.
+      </div>
+    );
+  }
+
   return (
-    <Card title="Orders" icon={ListOrdered}>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
-            <th className="py-2 font-normal">ID</th>
-            <th className="py-2 font-normal">Service</th>
-            <th className="py-2 font-normal">Customer</th>
-            <th className="py-2 font-normal">Status</th>
-            <th className="py-2 font-normal">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {recentOrders.map((o) => (
-            <React.Fragment key={o.id}>
-              <tr className="border-b fp-line-soft last:border-0">
-                <td className="py-3 fp-mono fp-text-dim">#{o.id}</td>
-                <td className="py-3">{o.service}</td>
-                <td className="py-3 fp-text-dim">{o.customer}</td>
-                <td className="py-3">
-                  <Pill tone={o.status === "Completed" ? "safe" : o.status === "Processing" ? "gold" : "violet"}>{o.status}</Pill>
-                </td>
-                <td className="py-3">
-                  <div className="flex gap-2 text-xs fp-text-dim flex-wrap">
-                    <button>Retry</button>
-                    <button>Refill</button>
-                    <button className="text-red-400">Cancel</button>
-                    <button className="fp-safe">Mark completed</button>
-                    <button onClick={() => setExpandedOrder(expandedOrder === o.id ? null : o.id)} className="fp-gold">
-                      {expandedOrder === o.id ? "Hide" : "Details"}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-              {expandedOrder === o.id && (
-                <tr>
-                  <td colSpan={5} className="pb-4">
-                    <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 grid sm:grid-cols-2 gap-3 text-xs">
-                      <p><span className="fp-text-faint">Provider order ID:</span> {orderDetailExtras.providerOrderId}</p>
-                      <p><span className="fp-text-faint">Provider response:</span> {orderDetailExtras.providerResponse}</p>
-                      <button className="fp-panel border fp-line-soft rounded px-2 py-1 fp-text-dim w-fit">Resend to provider</button>
-                      <div className="sm:col-span-2">
-                        <button className="fp-panel border fp-line-soft rounded px-2 py-1 fp-text-dim">Partial refund</button>{" "}
-                        <button className="fp-panel border fp-line-soft rounded px-2 py-1 fp-text-dim ml-2">Full refund</button>
-                      </div>
-                      <textarea placeholder="Internal notes (staff only)" rows={2} className="sm:col-span-2 fp-panel border fp-line-soft rounded px-2 py-1.5 outline-none" />
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </React.Fragment>
+    <Card
+      title="Orders"
+      icon={ListOrdered}
+      right={
+        <button onClick={syncNow} disabled={syncing} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
+          <RefreshCw size={12} className={syncing ? "animate-spin" : ""} /> {syncing ? "Syncing…" : "Sync statuses"}
+        </button>
+      }
+    >
+      {msg && <p className={`text-xs mb-3 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex gap-1 overflow-x-auto">
+          {ORDER_FILTERS.map((f) => (
+            <button
+              key={f.k}
+              onClick={() => setStatus(f.k)}
+              className={`text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap border ${status === f.k ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim"}`}
+            >
+              {f.label}
+            </button>
           ))}
-        </tbody>
-      </table>
+        </div>
+        <div className="relative ml-auto">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 fp-text-faint" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search id, service, customer…"
+            className="fp-panel-raised border fp-line-soft rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:fp-gold-border w-56"
+          />
+        </div>
+      </div>
+
+      {rows === null ? (
+        <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+      ) : filtered.length === 0 ? (
+        <p className="fp-text-faint text-sm py-6 text-center">
+          {rows.length === 0 ? "No orders yet. They'll appear here as customers order." : "No orders match this filter."}
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[720px]">
+            <thead>
+              <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
+                <th className="py-2 font-normal">ID</th>
+                <th className="py-2 font-normal">Service</th>
+                <th className="py-2 font-normal">Customer</th>
+                <th className="py-2 font-normal text-right">Qty</th>
+                <th className="py-2 font-normal text-right">Charge</th>
+                <th className="py-2 font-normal">Status</th>
+                <th className="py-2 font-normal"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((o) => {
+                const busy = busyId === o.id;
+                const open = expanded === o.id;
+                return (
+                  <React.Fragment key={o.id}>
+                    <tr className="border-b fp-line-soft last:border-0">
+                      <td className="py-3 fp-mono fp-text-dim">#{o.shortId}</td>
+                      <td className="py-3">{o.serviceName}</td>
+                      <td className="py-3 fp-text-dim">{o.customerEmail ?? "—"}</td>
+                      <td className="py-3 text-right fp-mono">{o.quantity.toLocaleString()}</td>
+                      <td className="py-3 text-right fp-mono">{fmt(o.charge)}</td>
+                      <td className="py-3"><OrderStatusPill status={o.status} /></td>
+                      <td className="py-3 text-right">
+                        <button onClick={() => setExpanded(open ? null : o.id)} className="fp-gold text-xs">
+                          {open ? "Hide" : "Manage"}
+                        </button>
+                      </td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td colSpan={7} className="pb-4">
+                          <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 space-y-3 text-xs">
+                            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <p><span className="fp-text-faint">Link:</span> <span className="fp-mono break-all">{o.link}</span></p>
+                              <p><span className="fp-text-faint">Provider order:</span> <span className="fp-mono">{o.providerOrderId ?? "—"}</span></p>
+                              <p><span className="fp-text-faint">Provider cost:</span> {fmt(o.providerCost)}</p>
+                              <p><span className="fp-text-faint">Profit:</span> <span className="fp-safe">{fmt(o.profit)}</span></p>
+                              {o.remains != null && <p><span className="fp-text-faint">Remains:</span> {o.remains.toLocaleString()}</p>}
+                              <p><span className="fp-text-faint">Placed:</span> {new Date(o.createdAt).toLocaleString()}</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {o.status === "pending" && !o.providerOrderId && (
+                                <button disabled={busy} onClick={() => act(o.id, () => resendOrder(o.id), "Resent to provider.")} className="fp-panel border fp-line-soft rounded px-2.5 py-1.5 fp-text-dim hover:fp-text disabled:opacity-50">Resend to provider</button>
+                              )}
+                              {o.providerOrderId && (
+                                <>
+                                  <button disabled={busy} onClick={() => act(o.id, () => requestRefill(o.id), "Refill requested.")} className="fp-panel border fp-line-soft rounded px-2.5 py-1.5 fp-text-dim hover:fp-text disabled:opacity-50">Request refill</button>
+                                  <button disabled={busy} onClick={() => act(o.id, () => requestCancel(o.id), "Cancel requested.")} className="fp-panel border fp-line-soft rounded px-2.5 py-1.5 fp-text-dim hover:fp-text disabled:opacity-50">Request cancel</button>
+                                </>
+                              )}
+                              {o.status !== "completed" && o.status !== "refunded" && (
+                                <button disabled={busy} onClick={() => act(o.id, () => markOrderCompleted(o.id), "Marked completed.")} className="fp-panel border fp-line-soft rounded px-2.5 py-1.5 fp-safe hover:opacity-80 disabled:opacity-50">Mark completed</button>
+                              )}
+                              {o.status !== "refunded" && (
+                                <button disabled={busy} onClick={() => doRefund(o)} className="fp-panel border border-red-500/30 rounded px-2.5 py-1.5 text-red-400 hover:opacity-80 disabled:opacity-50">Refund</button>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   );
 }
@@ -1608,84 +1816,39 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
 
 export function CustomerApiTab() {
   return (
-    <Card title="Customer API" icon={KeyRound}>
-      <p className="fp-text-dim text-sm mb-5">
-        The API your panel&apos;s customers use to place orders programmatically — separate from the provider API you connect on your end.
-      </p>
-      <div className="grid sm:grid-cols-2 gap-4 mb-5">
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-4">
-          <p className="fp-text-faint text-xs fp-mono uppercase mb-2">API access</p>
-          <Toggle on={true} />
-        </div>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-4">
-          <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Rate limit</p>
-          <p className="text-sm">120 requests / min</p>
-        </div>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-4">
-          <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Allowed IPs</p>
-          <p className="text-sm fp-text-faint">Any (unrestricted)</p>
-        </div>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-4">
-          <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Recent API orders</p>
-          <p className="text-sm">42 in the last 24h</p>
-        </div>
-      </div>
-      <button className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim mr-2">Regenerate key</button>
-      <button className="fp-panel-raised border border-red-500/30 text-xs px-3 py-2 rounded-lg text-red-400">Disable API</button>
-    </Card>
+    <ComingSoon title="Customer API" icon={KeyRound}>
+      A programmatic API for your panel&apos;s customers to place orders — with per-key rate limits,
+      IP allow-lists, and usage logs — is coming soon. This is separate from the provider API you
+      connect under Providers &amp; API, which is live now.
+    </ComingSoon>
   );
 }
 
 export function RiskTab() {
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      <Card title="Deposit limits" icon={ShieldCheck}>
-        <div className="flex justify-between text-sm py-2 border-b fp-line-soft"><span>Minimum deposit</span><span className="fp-mono">$5.00</span></div>
-        <div className="flex justify-between text-sm py-2 border-b fp-line-soft"><span>Maximum deposit</span><span className="fp-mono">$2,000</span></div>
-        <div className="flex justify-between text-sm py-2"><span>First deposit manual review</span><Toggle on={false} /></div>
-      </Card>
-      <Card title="Fraud & access controls" icon={Lock}>
-        {["Block duplicate accounts", "Block VPN/proxy traffic", "Require email verification", "Require phone verification", "Login alerts"].map((f, i) => (
-          <div key={f} className="flex justify-between text-sm py-2 border-b fp-line-soft last:border-0">{f}<Toggle on={i < 3} /></div>
-        ))}
-        <p className="fp-text-faint text-xs mt-3">Country restrictions: none configured</p>
-      </Card>
-    </div>
+    <ComingSoon title="Risk & Security" icon={Lock}>
+      Deposit limits, first-deposit review, duplicate-account and VPN/proxy blocking, and login
+      alerts are coming soon. For now, you can ban or restrict individual customers from the
+      Customers tab.
+    </ComingSoon>
   );
 }
 
 export function NotificationsTab() {
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      <Card title="Owner notifications" icon={Bell}>
-        {["Low Innvil balance", "New order", "Failed order", "Provider error", "New customer", "New ticket"].map((f, i) => (
-          <div key={f} className="flex justify-between text-sm py-2 border-b fp-line-soft last:border-0">{f}<Toggle on={i < 4} /></div>
-        ))}
-      </Card>
-      <Card title="Customer notifications" icon={Mail}>
-        {["Deposit completed", "Order completed", "Order partially completed", "Ticket reply", "Password reset"].map((f) => (
-          <div key={f} className="flex justify-between text-sm py-2 border-b fp-line-soft last:border-0">{f}<Toggle on={true} /></div>
-        ))}
-      </Card>
-    </div>
+    <ComingSoon title="Notifications" icon={Bell}>
+      Owner and customer email notifications (new orders, failed orders, deposits, provider errors,
+      and more) are coming soon.
+    </ComingSoon>
   );
 }
 
 export function SupportTab() {
   return (
-    <Card title="Support inbox" icon={MessageSquare} right={<Pill tone="violet" icon={Bot}>Auto-reply on</Pill>}>
-      <div className="space-y-3">
-        {tickets.map((t) => (
-          <div key={t.subj} className="flex items-center justify-between border-b fp-line-soft last:border-0 pb-3 last:pb-0">
-            <div>
-              <p className="text-sm">{t.subj}</p>
-              <p className="fp-text-faint text-xs fp-mono mt-0.5">{t.from} · {t.time} ago</p>
-            </div>
-            <Pill tone={t.tag === "Auto-replied" ? "safe" : "gold"}>{t.tag}</Pill>
-          </div>
-        ))}
-      </div>
-    </Card>
+    <ComingSoon title="Support" icon={MessageSquare}>
+      A built-in ticket inbox — view, reply, close, reopen, with optional auto-reply — is coming
+      soon.
+    </ComingSoon>
   );
 }
 
@@ -1713,21 +1876,8 @@ export function AutomationTab() {
 
 export function PromotionsTab() {
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      <Card title="Promo codes" icon={Tag}>
-        <p className="fp-text-dim text-sm mb-3">e.g. WELCOME10 — 10% off first order</p>
-        <button className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim">
-          + New promo code
-        </button>
-      </Card>
-      <Card title="Referral & discounts" icon={Percent}>
-        <p className="fp-text-dim text-sm mb-3">
-          Reward customers who refer others, or set volume discounts.
-        </p>
-        <button className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim">
-          Configure referral %
-        </button>
-      </Card>
-    </div>
+    <ComingSoon title="Promotions" icon={Tag}>
+      Promo codes, referral rewards, and volume discounts are coming soon.
+    </ComingSoon>
   );
 }

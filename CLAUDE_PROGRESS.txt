@@ -5,6 +5,43 @@
 
 ---
 
+## Session: Admin dashboard production pass — real Orders + Overview (v0.2.7)
+
+### Date: 2026-07-12
+Goal: make the owner admin dashboard production-ready ("Core + honest placeholders").
+**package.json bumped to 0.2.7** (v0.2.6 committed + tagged).
+
+Inventory before: 6 real tabs (Status, Branding, Providers, Services, Payments,
+Customers); 9 mock/placeholder tabs with non-functional controls.
+
+**Built real:**
+- `src/lib/actions/admin-orders.ts` (new, owner-auth + ownership in code):
+  - `listPanelOrders(panelId, {status?, limit?})` → AdminOrderVM[] with owner-only
+    fields (charge, provider_cost, profit, provider_order_id, remains); emails resolved
+    via `admin.auth.admin.getUserById`; service name via `services(name)` embed and
+    customer via `customer_accounts(user_id)` embed (FKs exist). Filter applied BEFORE
+    order/limit (PostgREST ordering rule).
+  - Per-order actions: `resendOrder` (pending, unsubmitted → addOrder), `requestRefill`,
+    `requestCancel` (provider calls; status settles via sync), `markOrderCompleted`,
+    `refundOrder` (full/partial → apply_balance_change 'refund' + mark refunded).
+  - `getPanelOverview(panelId)` (revenue/profit today, orders today, pending, customers,
+    active services, recent[6]) and `getPanelCurrency(panelId)`.
+- `OrdersTab({panelId})` rewritten: status chips + in-memory search, sessionStorage
+  cache, expandable detail with actions + "Sync statuses" (syncOrdersNow). Shell no
+  longer passes expandedOrder (OrdersTab owns its state).
+- `OverviewTab` rewritten to real stats + recent-orders table (shared `OrderStatusPill`).
+
+**Honest "Coming soon" placeholders** (were fake controls): Domain (custom domains;
+still shows the real live subdomain), Customer API, Risk & Security, Notifications,
+Support, Promotions — via a shared `ComingSoon` card. Automation stays coming-soon.
+
+Removed now-unused imports (recentOrders, orderDetailExtras, tickets, OrdersTable,
+Mail, Percent). NOTE: `middleware.ts` → `proxy.ts` (Next 16). Custom-domain routing
+(host-based rewrite in proxy.ts, for innvil.cloud subdomains + connected domains) was
+started then paused for this admin pass — still pending.
+
+---
+
 ## Session: Owner landing sections + NOWPayments gateway (v0.2.6)
 
 ### Date: 2026-07-12
