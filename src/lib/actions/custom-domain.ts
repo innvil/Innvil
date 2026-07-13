@@ -18,11 +18,10 @@ import {
 
 type Result<T = void> = ({ ok: true } & (T extends void ? object : { data: T })) | { ok: false; error: string };
 
-const VERCEL_A_RECORD = "76.76.21.21"; // Vercel apex anycast IP
 const VERCEL_CNAME = "cname.vercel-dns.com";
 const HOST_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/i;
 
-export interface RecommendedRecord { type: "A" | "CNAME"; name: string; value: string; }
+export interface RecommendedRecord { type: "A" | "CNAME" | "ALIAS/ANAME"; name: string; value: string; note?: string; }
 
 export interface DomainInfo {
   subdomain: string;
@@ -31,7 +30,7 @@ export interface DomainInfo {
   misconfigured: boolean;
   vercelManaged: boolean; // whether the Vercel API is wired up
   verification: DomainVerification[];
-  recommended: RecommendedRecord | null; // the DNS record the owner should add
+  recommended: RecommendedRecord[]; // preferred/fallback DNS records for the owner
   error?: string;
 }
 
@@ -49,10 +48,14 @@ async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string)
 function isApex(domain: string): boolean {
   return domain.split(".").length === 2;
 }
-function recommendFor(domain: string): RecommendedRecord {
-  return isApex(domain)
-    ? { type: "A", name: "@", value: VERCEL_A_RECORD }
-    : { type: "CNAME", name: domain.split(".")[0], value: VERCEL_CNAME };
+function recommendFor(domain: string): RecommendedRecord[] {
+  if (isApex(domain)) {
+    return [
+      { type: "CNAME", name: "www", value: VERCEL_CNAME, note: "Connect www directly to Vercel (works on almost all DNS providers)." },
+      { type: "ALIAS/ANAME", name: "@", value: VERCEL_CNAME, note: "Optional root/apex setup if your provider supports ALIAS/ANAME or CNAME flattening." },
+    ];
+  }
+  return [{ type: "CNAME", name: domain.split(".")[0], value: VERCEL_CNAME }];
 }
 
 /** Current custom-domain state for the Domain tab. */
@@ -69,7 +72,7 @@ export async function getDomainInfo(panelId: string): Promise<DomainInfo | null>
     misconfigured: false,
     vercelManaged: vercelConfigured(),
     verification: [],
-    recommended: panel.custom_domain ? recommendFor(panel.custom_domain) : null,
+    recommended: panel.custom_domain ? recommendFor(panel.custom_domain) : [],
   };
   if (!panel.custom_domain) return base;
 

@@ -455,12 +455,15 @@ export function BrandingTab({ panel }: { panel: Panel }) {
   );
 }
 
-function DnsRecordRow({ type, name, value }: { type: string; name: string; value: string }) {
+function DnsRecordRow({ type, name, value, note }: { type: string; name: string; value: string; note?: string }) {
   return (
-    <div className="grid grid-cols-[64px_1fr] sm:grid-cols-[80px_120px_1fr] gap-2 items-center text-xs py-1.5 border-b fp-line-soft last:border-0">
-      <span className="fp-mono fp-gold">{type}</span>
-      <span className="fp-mono fp-text-dim truncate hidden sm:block">{name}</span>
-      <span className="fp-mono fp-text truncate">{value}</span>
+    <div className="py-1.5 border-b fp-line-soft last:border-0">
+      <div className="grid grid-cols-[64px_1fr] sm:grid-cols-[80px_120px_1fr] gap-2 items-center text-xs">
+        <span className="fp-mono fp-gold">{type}</span>
+        <span className="fp-mono fp-text-dim truncate hidden sm:block">{name}</span>
+        <span className="fp-mono fp-text truncate">{value}</span>
+      </div>
+      {note && <p className="text-[11px] fp-text-faint mt-1.5 sm:ml-[200px]">{note}</p>}
     </div>
   );
 }
@@ -474,34 +477,51 @@ export function DomainTab({ panel }: { panel: Panel }) {
 
   const load = useCallback(async () => {
     if (!realPanel) return;
-    const i = await getDomainInfo(panel.id);
-    setInfo(i);
-    if (i?.customDomain) setDomain(i.customDomain);
+    try {
+      const i = await getDomainInfo(panel.id);
+      setInfo(i);
+      if (i?.customDomain) setDomain(i.customDomain);
+    } catch {
+      setMsg({ text: "Could not load current domain status.", error: true });
+    }
   }, [panel.id, realPanel]);
   useEffect(() => { load(); }, [load]);
 
   const connect = async () => {
     setBusy(true); setMsg(null);
-    const res = await setCustomDomain(panel.id, domain);
-    setBusy(false);
-    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
-    setInfo(res.data);
-    setMsg({ text: "Domain saved. Add the DNS record below, then re-check." });
+    try {
+      const res = await setCustomDomain(panel.id, domain);
+      if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+      setInfo(res.data);
+      setMsg({ text: "Domain saved. Add the DNS record below, then re-check." });
+    } catch {
+      setMsg({ text: "Could not save the custom domain right now.", error: true });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const disconnect = async () => {
     setBusy(true); setMsg(null);
-    const res = await removeCustomDomain(panel.id);
-    setBusy(false);
-    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
-    setDomain(""); setInfo((p) => p ? { ...p, customDomain: null, verified: false, verification: [], recommended: null } : p);
-    load();
+    try {
+      const res = await removeCustomDomain(panel.id);
+      if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+      setDomain("");
+      setInfo((p) => p ? { ...p, customDomain: null, verified: false, misconfigured: false, verification: [], recommended: [] } : p);
+      setMsg({ text: "Custom domain disconnected." });
+      await load();
+    } catch {
+      setMsg({ text: "Could not disconnect the domain right now.", error: true });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const connected = !!info?.customDomain;
+  const live = connected && !!info?.verified && !info?.misconfigured;
   const statusPill = !connected ? null
-    : info!.verified ? <Pill tone="safe" icon={CheckCircle2}>Live &amp; secured</Pill>
     : info!.misconfigured ? <Pill tone="danger" icon={AlertTriangle}>DNS not detected</Pill>
+    : live ? <Pill tone="safe" icon={CheckCircle2}>Live &amp; secured</Pill>
     : <Pill tone="gold" icon={Clock}>Pending DNS</Pill>;
 
   return (
@@ -545,26 +565,28 @@ export function DomainTab({ panel }: { panel: Panel }) {
 
           {msg && <p className={`text-xs mt-2 flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>}
 
-          {connected && (
+          {connected && !live && (
             <div className="mt-5 fp-panel-raised border fp-line-soft rounded-xl p-4">
               <p className="fp-text-faint text-xs fp-mono uppercase mb-1">DNS setup</p>
               <p className="fp-text-dim text-xs mb-3">
-                At your domain registrar, add {info!.recommended?.type === "A" ? "this A record" : "this CNAME record"}. SSL is issued automatically once DNS resolves.
+                Add one of the recommended records below. If you entered an apex/root domain, prefer using a `www` CNAME and redirect root to `www` at your registrar. Use ALIAS/ANAME for root only when your DNS supports it.
               </p>
               <div className="grid grid-cols-[64px_1fr] sm:grid-cols-[80px_120px_1fr] gap-2 fp-text-faint text-[10px] fp-mono uppercase pb-1 border-b fp-line-soft">
                 <span>Type</span><span className="hidden sm:block">Name</span><span>Value</span>
               </div>
-              {info!.recommended && <DnsRecordRow type={info!.recommended.type} name={info!.recommended.name} value={info!.recommended.value} />}
+              {info!.recommended.map((r, i) => <DnsRecordRow key={`rec-${i}`} type={r.type} name={r.name} value={r.value} note={r.note} />)}
               {info!.verification.map((v, i) => <DnsRecordRow key={i} type={v.type} name={v.domain} value={v.value} />)}
 
-              {info!.verified ? (
-                <p className="fp-safe text-xs mt-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> Verified — your panel is live on {info!.customDomain}.</p>
-              ) : (
-                <p className="fp-text-faint text-xs mt-3">After adding the record, DNS can take a few minutes to a few hours. Click Re-check to refresh.</p>
-              )}
+              <p className="fp-text-faint text-xs mt-3">After adding the record, DNS can take a few minutes to a few hours. Click Re-check to refresh.</p>
               {!info!.vercelManaged && (
                 <p className="fp-gold text-[11px] mt-3 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Automatic setup isn&apos;t configured (VERCEL_API_TOKEN). Also add <span className="fp-mono">{info!.customDomain}</span> to the Vercel project so it routes and gets an SSL cert.</p>
               )}
+            </div>
+          )}
+
+          {connected && live && (
+            <div className="mt-5 fp-panel-raised border fp-line-soft rounded-xl p-4">
+              <p className="fp-safe text-xs flex items-center gap-1.5"><CheckCircle2 size={12} /> Verified — your panel is live on {info!.customDomain}.</p>
             </div>
           )}
 
