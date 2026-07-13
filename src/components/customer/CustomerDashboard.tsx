@@ -725,6 +725,9 @@ function OrderRows({
   platformMeta?: PlatformMeta;
 }) {
   const [popup, setPopup] = useState<{ title: string; lines: string[] } | null>(null);
+  const linkHref = (link: string) => {
+    try { return new URL(link).toString(); } catch { return null; }
+  };
   const showService = (o: CustomerOrder) => setPopup({
     title: "Service details",
     lines: [o.service, o.serviceNo != null ? `Service #${o.serviceNo}` : "", `Quantity: ${o.qty.toLocaleString()}`, `Link: ${o.link}`].filter(Boolean),
@@ -739,9 +742,17 @@ function OrderRows({
               <button onClick={() => setPopup(null)} className="fp-text-faint hover:fp-text"><X size={16} /></button>
             </div>
             <div className="overflow-y-auto p-4 space-y-1.5">
-              {popup.lines.map((l, i) => (
-                <p key={i} className="text-sm fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 break-words">{l}</p>
-              ))}
+              {popup.lines.map((l, i) => {
+                const match = l.match(/^Link:\s*(.+)$/i);
+                const href = match ? linkHref(match[1]) : null;
+                return href ? (
+                  <a key={i} href={href} target="_blank" rel="noreferrer noopener" className="text-sm fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 break-words hover:fp-gold underline underline-offset-2">
+                    {l}
+                  </a>
+                ) : (
+                  <p key={i} className="text-sm fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 break-words">{l}</p>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -768,7 +779,24 @@ function OrderRows({
               </p>
               <p className="text-xs fp-text-faint fp-mono mt-0.5 truncate">
                 #{o.id} · {o.qty.toLocaleString()} · {o.date}
-                {!compact && ` · ${o.link}`}
+                {!compact && (
+                  <>
+                    {" · "}
+                    {linkHref(o.link) ? (
+                      <a
+                        href={linkHref(o.link) ?? undefined}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="underline underline-offset-2 hover:fp-gold break-all"
+                        title={o.link}
+                      >
+                        {o.link}
+                      </a>
+                    ) : (
+                      <span title={o.link}>{o.link}</span>
+                    )}
+                  </>
+                )}
               </p>
               {o.failReason && (o.status === "Canceled") && (
                 <p className="text-[11px] text-red-400 mt-0.5 truncate">Reason: {o.failReason}</p>

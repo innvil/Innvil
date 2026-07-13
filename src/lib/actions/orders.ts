@@ -7,6 +7,7 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { getProviderCredentials, addOrder, ProviderError } from "@/src/lib/providers";
 import { round4 } from "@/src/lib/money";
 import { syncPanelOrders } from "@/src/lib/orders/sync";
+import { validateOrderLink } from "@/src/lib/order-link";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -105,8 +106,9 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
 
   // 5. Validate link + quantity. For Custom Comments services the quantity is the
   //    number of comments supplied (one per line).
-  const link = input.link.trim();
-  if (!link) return { ok: false, error: "Enter the link for your order." };
+  const linkCheck = validateOrderLink(input.link);
+  if (!linkCheck.ok) return { ok: false, error: linkCheck.error };
+  const link = linkCheck.url;
   const commentList = (input.comments ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const hasComments = commentList.length > 0;
   const qty = hasComments ? commentList.length : Math.floor(Number(input.quantity));

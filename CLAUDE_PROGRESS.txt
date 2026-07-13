@@ -8,6 +8,13 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Clickable preview links + favicon precedence (v0.2.26)
+
+### Date: 2026-07-13
+- **Preview links in order history are clickable now.** Customer order rows keep the service-name summary popup, but the shortened preview URL is rendered as a real external link.
+- **Panel favicon precedence is fixed.** The root layout no longer hardcodes the favicon tag, so panel/custom-domain icon metadata can show correctly.
+- package.json → 0.2.26. No migration.
+
 ## Session: Order numbers, fail reasons, service info, custom comments fix (v0.2.25)
 
 ### Date: 2026-07-13

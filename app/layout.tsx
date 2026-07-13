@@ -27,6 +27,7 @@ export const metadata: Metadata = {
   description: "Launch your own white-label SMM panel. Create as many independent panels as you want, each with its own subdomain, storefront, customer dashboard, and wallet. 5% commission only — no monthly rent.",
   keywords: ["SMM panel", "social media marketing", "panel maker", "white-label", "no-code"],
   authors: [{ name: "Innvil" }],
+  icons: { icon: "/favicon.svg" },
   openGraph: {
     title: "Innvil — The SMM Panel Maker",
     description: "Launch your own white-label SMM panel. 5% commission only.",
@@ -41,9 +42,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${fraunces.variable} ${inter.variable} ${ibmPlexMono.variable}`}>
-      <head>
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-      </head>
       <body className="fp-root min-h-screen antialiased">
         {children}
       </body>

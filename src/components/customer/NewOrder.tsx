@@ -10,6 +10,7 @@ import {
 } from "@/src/data/constants";
 import { PlatformButton } from "./PlatformIcons";
 import { formatMoney } from "@/src/lib/money";
+import { validateOrderLink } from "@/src/lib/order-link";
 
 /** Real order placement — resolves with success or an error message. */
 export interface PlaceOrderArgs {
@@ -221,12 +222,17 @@ export function NewOrder({
     if (!service || !canSubmit || !canOrder || placing) return;
     setPlaceError(null);
     if (onPlaceOrder) {
+      const linkCheck = validateOrderLink(link);
+      if (!linkCheck.ok) {
+        setPlaceError(linkCheck.error);
+        return;
+      }
       setPlacing(true);
       const res = await onPlaceOrder({
         service,
         quantity: qtyNum,
         total,
-        link: link.trim(),
+        link: linkCheck.url,
         runs: drip ? Number(dripRuns) || undefined : undefined,
         interval: drip ? Number(dripInterval) || undefined : undefined,
         comments: isComments ? comments : undefined,

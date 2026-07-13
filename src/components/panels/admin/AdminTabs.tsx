@@ -1710,8 +1710,22 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                             {o.failReason && !o.held && (
                               <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Provider reason: {o.failReason}</p>
                             )}
+                            {(() => {
+                              try {
+                                const href = new URL(o.link).toString();
+                                return (
+                                  <p>
+                                    <span className="fp-text-faint">Link:</span> {" "}
+                                    <a href={href} target="_blank" rel="noreferrer noopener" className="fp-mono break-all hover:fp-gold underline underline-offset-2">
+                                      {o.link}
+                                    </a>
+                                  </p>
+                                );
+                              } catch {
+                                return <p><span className="fp-text-faint">Link:</span> <span className="fp-mono break-all">{o.link}</span></p>;
+                              }
+                            })()}
                             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                              <p><span className="fp-text-faint">Link:</span> <span className="fp-mono break-all">{o.link}</span></p>
                               <p><span className="fp-text-faint">Provider order:</span> <span className="fp-mono">{o.providerOrderId ?? "—"}</span></p>
                               <p><span className="fp-text-faint">Provider cost:</span> {fmt(o.providerCost)}</p>
                               <p><span className="fp-text-faint">Profit:</span> <span className="fp-safe">{fmt(o.profit)}</span></p>
