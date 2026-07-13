@@ -109,6 +109,11 @@ export function CustomerDashboard({
   currency = "USD",
   paymentMethods = [],
   panelId,
+  apiEnabled = true,
+  hasExistingApiKey = false,
+  apiBaseUrl = "/api/v2",
+  apiKey: initialApiKey = null,
+  onRotateApiKey,
 }: {
   canOrder: boolean;
   inactive: boolean;
@@ -135,6 +140,16 @@ export function CustomerDashboard({
   paymentMethods?: PaymentMethod[];
   /** Real panel id — when set, the Tickets tab uses the live support system. */
   panelId?: string;
+  /** Customer API status for this panel. */
+  apiEnabled?: boolean;
+  /** API base URL shown in docs. */
+  apiBaseUrl?: string;
+  /** Whether a key is already configured server-side (hidden by design). */
+  hasExistingApiKey?: boolean;
+  /** Current API key (revealed only on generation/rotation). */
+  apiKey?: string | null;
+  /** Rotate/generate the current customer's API key. */
+  onRotateApiKey?: () => Promise<{ ok: boolean; key?: string; error?: string }>;
 }) {
   const glyphPath = (key: string) => platformMeta?.[key]?.icon ?? undefined;
   const fmt = (n: number) => formatMoney(n, currency);
@@ -186,15 +201,23 @@ export function CustomerDashboard({
     () => initialFavoriteIds.filter((id) => services.some((s) => s.id === id))
   );
   const [prefillServiceId, setPrefillServiceId] = useState<number | null>(null);
-  const [apiKey, setApiKey] = useState("nb_live_9f2a41c8d0b37e6fa215c81e");
+  const [apiKey, setApiKey] = useState<string | null>(initialApiKey);
   const [keyRegenerated, setKeyRegenerated] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [savedCard, setSavedCard] = useState<string | null>(null);
 
-  const regenerateApiKey = () => {
-    const hex = Array.from({ length: 24 }, () =>
-      Math.floor(Math.random() * 16).toString(16)
-    ).join("");
-    setApiKey(`nb_live_${hex}`);
+  const regenerateApiKey = async () => {
+    setApiError(null);
+    if (!onRotateApiKey) {
+      setApiError("API key rotation is unavailable right now.");
+      return;
+    }
+    const res = await onRotateApiKey();
+    if (!res.ok || !res.key) {
+      setApiError(res.error ?? "Could not generate API key.");
+      return;
+    }
+    setApiKey(res.key);
     setKeyRegenerated(true);
   };
 
@@ -571,11 +594,15 @@ export function CustomerDashboard({
         {page === "api" && (
           <div className="max-w-3xl">
             <ApiDocs
+              apiBaseUrl={apiBaseUrl}
               apiKey={apiKey}
               inactive={inactive}
+              enabled={apiEnabled}
+              hasExistingApiKey={hasExistingApiKey}
               onRegenerate={regenerateApiKey}
               keyRegenerated={keyRegenerated}
             />
+            {apiError && <p className="text-xs text-red-400 mt-3">{apiError}</p>}
           </div>
         )}
 

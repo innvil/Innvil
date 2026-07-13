@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import type { CSSProperties } from "react";
+import { headers } from "next/headers";
 import { Lock, Wrench, FileText } from "lucide-react";
 import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
+import { getCustomerApiState } from "@/src/lib/actions/customer-api";
 import { listCustomerOrders } from "@/src/lib/actions/orders";
 import { listDeposits } from "@/src/lib/actions/payments";
 import type { PanelStatus } from "@/src/types/db";
@@ -51,6 +53,16 @@ function OfflineScreen({ status, name }: { status: PanelStatus; name: string }) 
   );
 }
 
+async function getApiBaseUrl(): Promise<string> {
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  if (host) return `${proto}://${host}/api/v2`;
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  return `${appUrl ?? "http://localhost:3000"}/api/v2`;
+}
+
 export default async function StorefrontPage({ params }: Params) {
   const { subdomain } = await params;
   const panel = await getPublicPanel(subdomain);
@@ -74,12 +86,14 @@ export default async function StorefrontPage({ params }: Params) {
     );
   }
 
-  const [services, account, platformMeta, paymentMethods] = await Promise.all([
+  const [services, account, platformMeta, paymentMethods, apiState] = await Promise.all([
     getStorefrontServices(panel.id),
     getCustomerAccount(panel.id),
     getStorefrontPlatforms(panel.id),
     getPanelPaymentMethods(panel.id),
+    getCustomerApiState(panel.id),
   ]);
+  const apiBaseUrl = await getApiBaseUrl();
   // Only signed-in customers have orders/deposits; skip the queries for guests.
   const [orders, deposits] = account
     ? await Promise.all([listCustomerOrders(panel.id), listDeposits(panel.id)])
@@ -95,6 +109,9 @@ export default async function StorefrontPage({ params }: Params) {
         initialDeposits={deposits}
         platformMeta={platformMeta}
         paymentMethods={paymentMethods}
+        customerApiEnabled={apiState.ok ? apiState.enabled : true}
+        customerApiHasKey={apiState.ok ? apiState.hasKey : false}
+        apiBaseUrl={apiBaseUrl}
       />
     </div>
   );

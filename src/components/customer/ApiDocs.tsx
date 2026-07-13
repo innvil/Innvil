@@ -8,7 +8,7 @@ import { Copy, Check, Lock, KeyRound, CheckCircle2 } from "lucide-react";
    request sample and a highlighted JSON response sample.
    ========================================================= */
 
-const BASE = "https://novaboost.ledgerline.app/api/v2";
+const BASE_PLACEHOLDER = "__API_BASE__";
 
 /** Mask an API key for display: nb_live_886c0ba9f8662839976f69bd
     → nb_live_886**********839976f69bd. Copy actions still use the full key. */
@@ -33,7 +33,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Service list",
     method: "GET",
     desc: "Use this method to get the full service list.",
-    request: `${BASE}?action=services&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=services&key=YOUR_API_KEY`,
     response: `[
   {
     "service": 2101,
@@ -54,7 +54,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Create",
     method: "POST",
     desc: "Use this method to create a new order.",
-    request: `${BASE}?action=add&service=2101&link=https://instagram.com/you&quantity=5000&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=add&service=2101&link=https://instagram.com/you&quantity=5000&key=YOUR_API_KEY`,
     note: "Drip feed (only for services with \"drip\": true): append &runs=5&interval=30. Quantity is split across runs, never multiplied.",
     response: `{
   "order": 23501
@@ -65,7 +65,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Status",
     method: "GET",
     desc: "Use this method to get the status of a single order.",
-    request: `${BASE}?action=status&order=8841&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=status&order=8841&key=YOUR_API_KEY`,
     response: `{
   "charge": "6.75",
   "start_count": 3572,
@@ -79,7 +79,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Multiple status",
     method: "GET",
     desc: "Use this method to get the status of up to 100 orders at once.",
-    request: `${BASE}?action=status&orders=8841,8836,8811&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=status&orders=8841,8836,8811&key=YOUR_API_KEY`,
     response: `{
   "8841": {
     "charge": "6.75",
@@ -105,7 +105,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Refill",
     method: "POST",
     desc: "Use this method to request a refill for eligible orders.",
-    request: `${BASE}?action=refill&order=8841&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=refill&order=8841&key=YOUR_API_KEY`,
     response: `{
   "refill": "1"
 }`,
@@ -115,7 +115,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Balance",
     method: "GET",
     desc: "Use this method to get your current wallet balance.",
-    request: `${BASE}?action=balance&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=balance&key=YOUR_API_KEY`,
     response: `{
   "balance": "24.60",
   "currency": "USD"
@@ -126,7 +126,7 @@ const ENDPOINTS: Endpoint[] = [
     label: "Cancel",
     method: "POST",
     desc: "Use this method to cancel orders that support cancellation.",
-    request: `${BASE}?action=cancel&orders=8811,8812&key=YOUR_API_KEY`,
+    request: `${BASE_PLACEHOLDER}?action=cancel&orders=8811,8812&key=YOUR_API_KEY`,
     response: `[
   {
     "order": 8811,
@@ -192,18 +192,25 @@ function CopyButton({ text }: { text: string }) {
 }
 
 export function ApiDocs({
+  apiBaseUrl,
   apiKey,
   inactive,
+  enabled,
+  hasExistingApiKey,
   onRegenerate,
   keyRegenerated,
 }: {
-  apiKey: string;
+  apiBaseUrl: string;
+  apiKey: string | null;
   inactive: boolean;
-  onRegenerate: () => void;
+  enabled: boolean;
+  hasExistingApiKey: boolean;
+  onRegenerate: () => void | Promise<void>;
   keyRegenerated: boolean;
 }) {
   const [tab, setTab] = useState("services");
   const ep = ENDPOINTS.find((e) => e.k === tab) ?? ENDPOINTS[0];
+  const requestSample = ep.request.replace(BASE_PLACEHOLDER, apiBaseUrl);
 
   return (
     <div className="space-y-5">
@@ -214,16 +221,20 @@ export function ApiDocs({
           Your personal API key — keep it secret. Generating a new key immediately
           invalidates the old one, so update any integrations that use it.
         </p>
+        <div className="bg-[#131720] border border-[#1E212A] rounded-lg px-4 py-3 text-xs fp-mono mb-3">
+          <span className="fp-text-faint">Base URL:</span> <span>{apiBaseUrl}</span>
+        </div>
         <div className="bg-[#1B1E27] border border-[#1E212A] rounded-lg px-4 py-3 fp-mono text-sm flex items-center justify-between gap-3">
-          <span className="truncate">{maskApiKey(apiKey)}</span>
-          <CopyButton text={apiKey} />
+          <span className="truncate">{apiKey ? maskApiKey(apiKey) : hasExistingApiKey ? "API key exists (hidden). Generate new key to reveal." : "No API key generated yet"}</span>
+          {apiKey && <CopyButton text={apiKey} />}
         </div>
         <div className="flex items-center gap-3 mt-4">
           <button
             onClick={onRegenerate}
+            disabled={!enabled}
             className="text-sm fp-gold border border-[rgba(201,165,116,0.35)] rounded-lg px-5 py-2.5 hover:fp-gold-soft-bg flex items-center gap-2 transition-colors"
           >
-            <KeyRound size={14} /> Generate new key
+            <KeyRound size={14} /> {apiKey ? "Generate new key" : "Generate API key"}
           </button>
           {keyRegenerated && (
             <span className="text-xs fp-safe flex items-center gap-1">
@@ -231,6 +242,13 @@ export function ApiDocs({
             </span>
           )}
         </div>
+        {!enabled && (
+          <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+            <p className="text-xs text-red-400">
+              API access is disabled by this panel owner.
+            </p>
+          </div>
+        )}
         {inactive && (
           <div className="mt-4 p-3 rounded-lg bg-[rgba(201,165,116,0.08)] border border-[rgba(201,165,116,0.2)]">
             <p className="text-xs fp-gold flex items-start gap-1.5">
@@ -271,8 +289,8 @@ export function ApiDocs({
 
         <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-2">Request sample</p>
         <div className="bg-[#1B1E27] border border-[#1E212A] rounded-lg px-4 py-3 fp-mono text-xs flex items-center justify-between gap-3 mb-2 overflow-x-auto">
-          <span className="whitespace-nowrap">{ep.request}</span>
-          <CopyButton text={ep.request} />
+          <span className="whitespace-nowrap">{requestSample}</span>
+          <CopyButton text={requestSample} />
         </div>
         {ep.note && (
           <p className="text-xs fp-text-dim mb-4 leading-relaxed">{ep.note}</p>

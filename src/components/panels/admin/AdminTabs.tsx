@@ -44,6 +44,9 @@ import { syncOrdersNow } from "@/src/lib/actions/orders";
 import {
   getDomainInfo, setCustomDomain, removeCustomDomain, type DomainInfo,
 } from "@/src/lib/actions/custom-domain";
+import {
+  getPanelCustomerApiSummary, setPanelCustomerApiEnabled, revokeCustomerApiKey,
+} from "@/src/lib/actions/customer-api";
 import { PANEL_ROOT_DOMAIN, panelStorefrontPath } from "@/src/lib/config";
 import { THEMES } from "@/src/data/themes";
 import { DesignStudio } from "./DesignStudio";
@@ -2051,13 +2054,140 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
   );
 }
 
-export function CustomerApiTab() {
+export function CustomerApiTab({ panelId }: { panelId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [enabled, setEnabled] = useState(true);
+  const [totalCustomers, setTotalCustomers] = useState(0);
+  const [activeKeys, setActiveKeys] = useState(0);
+  const [rows, setRows] = useState<Array<{ id: string; email: string | null; status: string; hasKey: boolean; updatedAt: string }>>([]);
+
+  const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/api/v2` : "/api/v2";
+
+  const load = useCallback(async () => {
+    const res = await getPanelCustomerApiSummary(panelId);
+    if (!res.ok) {
+      setMsg({ text: res.error, error: true });
+      return;
+    }
+    setEnabled(res.enabled);
+    setTotalCustomers(res.totalCustomers);
+    setActiveKeys(res.activeKeys);
+    setRows(res.rows);
+  }, [panelId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggleEnabled = async (next: boolean) => {
+    setBusy(true);
+    setMsg(null);
+    const res = await setPanelCustomerApiEnabled(panelId, next);
+    setBusy(false);
+    if (!res.ok) {
+      setMsg({ text: res.error, error: true });
+      return;
+    }
+    setEnabled(next);
+    setMsg({ text: `Customer API ${next ? "enabled" : "disabled"}.` });
+  };
+
+  const revokeKey = async (customerId: string, email: string | null) => {
+    if (!window.confirm(`Revoke API key for ${email ?? "this customer"}? They will need to generate a new one.`)) return;
+    setBusy(true);
+    setMsg(null);
+    const res = await revokeCustomerApiKey(panelId, customerId);
+    setBusy(false);
+    if (!res.ok) {
+      setMsg({ text: res.error, error: true });
+      return;
+    }
+    setMsg({ text: "API key revoked." });
+    load();
+  };
+
   return (
-    <ComingSoon title="Customer API" icon={KeyRound}>
-      A programmatic API for your panel&apos;s customers to place orders — with per-key rate limits,
-      IP allow-lists, and usage logs — is coming soon. This is separate from the provider API you
-      connect under Providers &amp; API, which is live now.
-    </ComingSoon>
+    <div className="space-y-4">
+      {msg && (
+        <div className={`text-sm px-4 py-2.5 rounded-lg border flex items-center justify-between gap-3 ${msg.error ? "bg-red-500/10 border-red-500/20 text-red-400" : "fp-safe-soft-bg fp-safe-border fp-safe"}`}>
+          <span>{msg.text}</span>
+          <button onClick={() => setMsg(null)} className="opacity-70 hover:opacity-100"><X size={14} /></button>
+        </div>
+      )}
+
+      <Card title="Customer API" icon={KeyRound}>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <p className="text-sm font-medium">Enable API for this panel</p>
+            <p className="fp-text-faint text-xs mt-0.5">When disabled, all `/api/v2` requests return an access-disabled error.</p>
+          </div>
+          <button
+            onClick={() => toggleEnabled(!enabled)}
+            disabled={busy}
+            className="disabled:opacity-60"
+            aria-label="Toggle customer API"
+          >
+            <Toggle on={enabled} />
+          </button>
+        </div>
+
+        <div className="bg-[#131720] border border-[#1E212A] rounded-lg px-4 py-3 text-xs fp-mono mb-4 overflow-x-auto">
+          <span className="fp-text-faint">Endpoint:</span> {baseUrl}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+            <p className="fp-text-faint text-[11px] fp-mono uppercase">Customers</p>
+            <p className="fp-display text-xl mt-1">{totalCustomers}</p>
+          </div>
+          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+            <p className="fp-text-faint text-[11px] fp-mono uppercase">Active API keys</p>
+            <p className="fp-display text-xl mt-1 fp-gold">{activeKeys}</p>
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Customer API keys" icon={Users}>
+        {rows.length === 0 ? (
+          <p className="fp-text-faint text-sm py-4 text-center">No customers found yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="fp-text-faint text-xs fp-mono uppercase">
+                <tr className="border-b fp-line-soft">
+                  <th className="text-left py-2">Customer</th>
+                  <th className="text-left py-2">Status</th>
+                  <th className="text-left py-2">API key</th>
+                  <th className="text-left py-2">Updated</th>
+                  <th className="text-right py-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-b fp-line-soft last:border-0">
+                    <td className="py-2.5">{r.email ?? "—"}</td>
+                    <td className="py-2.5 capitalize">{r.status}</td>
+                    <td className="py-2.5">{r.hasKey ? <span className="fp-safe">Active</span> : <span className="fp-text-faint">None</span>}</td>
+                    <td className="py-2.5">{new Date(r.updatedAt).toLocaleString()}</td>
+                    <td className="py-2.5 text-right">
+                      {r.hasKey ? (
+                        <button onClick={() => revokeKey(r.id, r.email)} disabled={busy} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-3 py-1.5 disabled:opacity-50">
+                          Revoke
+                        </button>
+                      ) : (
+                        <span className="text-xs fp-text-faint">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="fp-text-faint text-[11px] mt-3">
+          Security: owners can revoke customer API keys but cannot view raw keys. Customers generate keys from their own dashboard.
+        </p>
+      </Card>
+    </div>
   );
 }
 

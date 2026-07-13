@@ -19,6 +19,7 @@ import {
   customerSignIn, customerSignOut,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
+import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
 
 const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
 
@@ -73,6 +74,9 @@ export function Storefront({
   initialDeposits = [],
   platformMeta = {},
   paymentMethods = [],
+  customerApiEnabled = true,
+  customerApiHasKey = false,
+  apiBaseUrl = "/api/v2",
 }: {
   panel: { id: string; subdomain: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[] };
   services: StorefrontService[];
@@ -81,6 +85,9 @@ export function Storefront({
   initialDeposits?: DepositVM[];
   platformMeta?: StorefrontPlatformMeta;
   paymentMethods?: PublicPaymentMethod[];
+  customerApiEnabled?: boolean;
+  customerApiHasKey?: boolean;
+  apiBaseUrl?: string;
 }) {
   const router = useRouter();
   const inactive = panel.status === "inactive";
@@ -137,6 +144,11 @@ export function Storefront({
   const handleDeposit = async (amount: number, gateway?: string) => {
     const res = await createDeposit(panel.id, amount, gateway);
     return res.ok ? { ok: true, url: res.data.url } : { ok: false, error: res.error };
+  };
+
+  const rotateApiKey = async () => {
+    const res = await rotateCustomerApiKey(panel.id);
+    return res.ok ? { ok: true, key: res.key } : { ok: false, error: res.error };
   };
 
   // Deposit history → the dashboard's deposit shape.
@@ -270,6 +282,10 @@ export function Storefront({
         currency={panel.currency}
         paymentMethods={paymentMethods}
         panelId={panel.id}
+        apiEnabled={customerApiEnabled}
+        hasExistingApiKey={customerApiHasKey}
+        apiBaseUrl={apiBaseUrl}
+        onRotateApiKey={rotateApiKey}
       />
     );
   }

@@ -7,6 +7,30 @@
 for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 
+## Session: Customer API docs live absolute base URL (v0.2.20)
+
+### Date: 2026-07-13
+- Fixed storefront API docs base URL to resolve to the real runtime origin instead of showing a relative `/api/v2` placeholder.
+- Added server-side origin detection in storefront page load (`x-forwarded-proto` + `x-forwarded-host` / `host`) and pass-through to customer dashboard docs.
+- Fallback behavior: if forwarded headers are unavailable, use `NEXT_PUBLIC_APP_URL`, then `http://localhost:3000` for local safety.
+- Customer API request samples now render as full live URLs (for example `https://panel.example.com/api/v2?...`) in production.
+- **package.json → 0.2.20.**
+
+---
+
+## Session: Customer API production rollout (v0.2.19)
+
+### Date: 2026-07-13
+- Implemented a real customer API endpoint at `/api/v2` (GET/POST, action-based SMM API style): `services`, `add`, `status` (single + multiple), `balance`, `refill`, and `cancel`.
+- API now authenticates by hashed customer API key (`customer_accounts.api_key_hash`) and enforces panel/customer state checks before processing.
+- Customer storefront API tab is now production-wired: dynamic base URL, real key generation/rotation, panel API-enabled status handling, and no mock hardcoded key path.
+- Added server actions for customer API key lifecycle (`getCustomerApiState`, `rotateCustomerApiKey`) and owner controls (`getPanelCustomerApiSummary`, `setPanelCustomerApiEnabled`, `revokeCustomerApiKey`).
+- Replaced owner panel "Customer API" coming-soon tab with real controls: enable/disable API, key usage summary, customer key table, and per-customer key revoke.
+- Security behavior: owners can revoke customer API keys but never read raw keys; customers generate keys in their own dashboard.
+- **package.json → 0.2.19.**
+
+---
+
 ## Session: Custom domains (v0.2.16)
 
 ### Date: 2026-07-12
