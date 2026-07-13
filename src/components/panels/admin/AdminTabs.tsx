@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Sparkles, Sliders, Tag,
-  ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell, Wallet,
+  ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
   MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, LucideIcon,
 } from "lucide-react";
 import {
@@ -33,7 +33,7 @@ import {
 } from "@/src/lib/actions/customers";
 import {
   getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency,
-  listCustomerDeposits, listPanelDeposits, commitPendingPayment, cancelPendingPayment,
+  listCustomerDeposits, commitPendingPayment, cancelPendingPayment,
   type PaymentsMeta, type OwnerDepositVM,
 } from "@/src/lib/actions/payments";
 import { getPanelBranding, updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
@@ -1987,9 +1987,6 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
-  const [records, setRecords] = useState<OwnerDepositVM[] | null>(() =>
-    realPanel ? readAdminCache<OwnerDepositVM[]>(panelId, "payment-records") : []
-  );
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const metaRef = useRef<PaymentsMeta | null>(meta);
 
@@ -1999,21 +1996,15 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
     if (!realPanel) {
       setMeta(fallbackMeta);
       writeAdminCache(panelId, "payments", fallbackMeta);
-      setRecords([]);
-      writeAdminCache(panelId, "payment-records", []);
       return;
     }
 
     const cached = metaRef.current ?? readAdminCache<PaymentsMeta>(panelId, "payments");
     if (cached) setMeta(cached);
-    const cachedRecords = readAdminCache<OwnerDepositVM[]>(panelId, "payment-records");
-    if (cachedRecords) setRecords(cachedRecords);
 
-    const [next, depositRows] = await Promise.all([getPaymentsMeta(panelId), listPanelDeposits(panelId)]);
+    const next = await getPaymentsMeta(panelId);
     setMeta(next);
-    setRecords(depositRows);
     writeAdminCache(panelId, "payments", next);
-    writeAdminCache(panelId, "payment-records", depositRows);
   }, [panelId, realPanel]);
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -2099,26 +2090,6 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
           </select>
         </Card>
       )}
-
-      <Card title="Recent top-ups" icon={Wallet}>
-        {records === null ? (
-          <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
-        ) : records.length === 0 ? (
-          <p className="fp-text-faint text-sm py-4 text-center">No customer top-ups recorded yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {records.slice(0, 12).map((r) => (
-              <div key={r.id} className="flex items-center justify-between gap-3 border-b fp-line-soft last:border-0 py-2.5">
-                <div className="min-w-0">
-                  <p className="text-sm truncate">{r.customerEmail ?? r.customerId.slice(0, 8)}</p>
-                  <p className="fp-text-faint text-xs">{r.method} · {new Date(r.createdAt).toLocaleString()} · {r.status}</p>
-                </div>
-                <span className="fp-mono text-sm fp-gold shrink-0">+{r.amount.toFixed(2)} {r.currency}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
 
       <Card title="Payment gateways" icon={CreditCard}>
         <p className="fp-text-dim text-sm mb-5">

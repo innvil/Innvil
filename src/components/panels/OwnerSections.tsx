@@ -7,6 +7,7 @@ import { formatMoney } from "@/src/lib/money";
 import { listAllOwnerOrders, getOwnerBillingSummary, type OwnerOrderVM, type OwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { listAllOwnerCustomers, adjustCustomerBalance, type OwnerCustomerVM } from "@/src/lib/actions/customers";
 import { listAllOwnerProviders, fetchProviderBalance, type OwnerProviderVM } from "@/src/lib/actions/providers";
+import { listAllOwnerDeposits, type OwnerAllDepositVM } from "@/src/lib/actions/payments";
 
 // Provider (API) balance thresholds — a provider at/under LOW needs a top-up soon.
 const LOW_BALANCE_THRESHOLD = 10; // in the provider's own currency
@@ -357,6 +358,49 @@ export function OwnerProviders() {
         )}
       </Card>
     </div>
+  );
+}
+
+/* ---------- Recent top-ups across all panels (Earnings section) ---------- */
+export function OwnerTopUps() {
+  const cachedRows = readOwnerCache<OwnerAllDepositVM[]>("topups");
+  const [rows, setRows] = useState<OwnerAllDepositVM[] | null>(cachedRows);
+  const [syncing, setSyncing] = useState(Boolean(cachedRows));
+  useEffect(() => {
+    let alive = true;
+    setSyncing(rows !== null);
+    listAllOwnerDeposits().then((next) => {
+      if (!alive) return;
+      setRows(next);
+      writeOwnerCache("topups", next);
+      setSyncing(false);
+    }).catch(() => { if (alive) setSyncing(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const statusTone = (s: string) =>
+    s === "completed" ? "fp-safe" : s === "pending" ? "fp-gold" : "fp-text-faint";
+
+  return (
+    <Card title="Recent top-ups — all panels" icon={Wallet} right={<SyncBadge syncing={syncing} />}>
+      {rows === null ? (
+        <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="fp-text-faint text-sm py-4 text-center">No customer top-ups yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {rows.slice(0, 20).map((r) => (
+            <div key={r.id} className="flex items-center justify-between gap-3 border-b fp-line-soft last:border-0 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm truncate">{r.customerEmail ?? r.customerId.slice(0, 8)}</p>
+                <p className="fp-text-faint text-xs truncate">{r.panelName} · {r.method} · {new Date(r.createdAt).toLocaleString()} · <span className={statusTone(r.status)}>{r.status}</span></p>
+              </div>
+              <span className="fp-mono text-sm fp-gold shrink-0">+{r.amount.toFixed(2)} {r.currency}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 

@@ -486,6 +486,56 @@ export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM
   }));
 }
 
+export interface OwnerAllDepositVM extends OwnerDepositVM {
+  panelName: string;
+}
+
+/** Recent customer top-ups across ALL of the owner's panels (for Earnings & receipts). */
+export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDepositVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return [];
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+
+  const { data } = await admin
+    .from("payments")
+    .select("id, panel_id, customer_id, amount, currency, status, method, created_at")
+    .in("panel_id", list.map((p) => p.id))
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (!data?.length) return [];
+
+  const { data: accts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id")
+    .in("id", data.map((p) => p.customer_id as string));
+  const userIdByCustomerId = new Map((accts ?? []).map((a) => [a.id as string, a.user_id as string]));
+
+  const emails = new Map<string, string | null>();
+  for (const uid of new Set(Array.from(userIdByCustomerId.values()))) {
+    try {
+      const { data: authData } = await admin.auth.admin.getUserById(uid);
+      emails.set(uid, authData.user?.email ?? null);
+    } catch {
+      emails.set(uid, null);
+    }
+  }
+
+  return data.map((p) => ({
+    id: p.id as string,
+    panelName: nameById.get(p.panel_id as string) ?? "Panel",
+    customerId: p.customer_id as string,
+    customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
+    amount: Number(p.amount),
+    currency: p.currency as string,
+    status: p.status as string,
+    method: p.method as string,
+    createdAt: p.created_at as string,
+  }));
+}
+
 /** Owner-committed top-up: records a completed payment and credits the wallet as a real deposit. */
 export async function commitCustomerTopup(
   customerAccountId: string,

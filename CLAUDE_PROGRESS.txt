@@ -8,6 +8,28 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Top-ups → Earnings, Payments = methods only, faster add-funds (v0.2.24)
+
+### Date: 2026-07-13
+- **Recent top-ups moved out of the panel Payments tab into Earnings & receipts.**
+  PaymentsTab is now payment-methods-only (gateways + currency); removed its "Recent
+  top-ups" card + `listPanelDeposits` fetch. New `listAllOwnerDeposits()` (payments.ts,
+  all-panels, with panelName + email) feeds `OwnerTopUps` (OwnerSections.tsx), rendered
+  under `ReceiptCard` in the Earnings section.
+- **Add-funds no longer feels silent.** `startDeposit` (CustomerDashboard) shows an
+  immediate prominent "Opening <method> for your $X top-up…" line + button spinner on
+  click, then flips to "Redirecting you to <method>…" and keeps the state through
+  navigation (no flash back to the form). Quick-amount chips disable while busy.
+- package.json → 0.2.24. No migration. (Bundles the prior uncommitted
+  "Providers (all panels)" addition too.)
+
+Reader note: the earlier receipt overhaul request (business name/number/title fields,
+uploadable registration for auto-fill treated as sensitive, professional print-correct
+PDF with "This serves as an official receipt" disclaimer, top-up + profit footprints,
+profit = panel price − API price) is still PENDING — do next.
+
+---
+
 ## Session: Providers (all panels) sidebar section (v0.2.24)
 
 ### Date: 2026-07-13

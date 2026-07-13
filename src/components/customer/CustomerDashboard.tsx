@@ -155,6 +155,7 @@ export function CustomerDashboard({
   const fmt = (n: number) => formatMoney(n, currency);
   const [depositAmount, setDepositAmount] = useState("");
   const [depositBusy, setDepositBusy] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
   const [depositError, setDepositError] = useState<string | null>(null);
 
   // Add-Funds method chooser — group connected gateways by category.
@@ -189,10 +190,10 @@ export function CustomerDashboard({
     if (paymentMethods.length > 0 && !activeGateway) { setDepositError("Choose a payment method."); return; }
     if (amt < minTopup) { setDepositError(`Minimum top-up for ${activeMethod?.label ?? "this method"} is ${fmt(minTopup)}.`); return; }
     setDepositError(null);
-    setDepositBusy(true);
+    setDepositBusy(true); // shows the "Opening <method>…" overlay immediately (no silent gap)
     const res = await onDeposit(amt, activeGateway || undefined);
-    setDepositBusy(false);
-    if (!res.ok || !res.url) { setDepositError(res.error ?? "Could not start the deposit."); return; }
+    if (!res.ok || !res.url) { setDepositBusy(false); setDepositError(res.error ?? "Could not start the deposit."); return; }
+    setRedirecting(true); // keep the overlay up through navigation — no flash back to the form
     window.location.href = res.url; // hosted checkout
   };
   const [page, setPage] = useState<CustomerPage>("dashboard");
@@ -523,17 +524,28 @@ export function CustomerDashboard({
                         className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-xl pl-8 pr-3 py-3 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
                       />
                     </div>
-                    <button onClick={startDeposit} disabled={depositBusy} className="fp-btn-primary text-sm font-semibold px-5 rounded-xl disabled:opacity-50 whitespace-nowrap">
-                      {depositBusy ? "Starting…" : "Add funds"}
+                    <button onClick={startDeposit} disabled={depositBusy} className="fp-btn-primary text-sm font-semibold px-5 rounded-xl disabled:opacity-70 whitespace-nowrap flex items-center gap-1.5">
+                      {depositBusy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+                      {redirecting ? "Redirecting…" : depositBusy ? "Opening…" : "Add funds"}
                     </button>
                   </div>
                   <div className="flex gap-2">
                     {[10, 25, 50, 100].map((v) => (
-                      <button key={v} onClick={() => setDepositAmount(String(v))} className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 fp-text-dim hover:fp-gold-border">{fmt(v)}</button>
+                      <button key={v} disabled={depositBusy} onClick={() => setDepositAmount(String(v))} className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 fp-text-dim hover:fp-gold-border disabled:opacity-50">{fmt(v)}</button>
                     ))}
                   </div>
-                  {depositError && <p className="text-xs text-red-400">{depositError}</p>}
-                  <p className="fp-text-faint text-[11px]">You&apos;ll be sent to a secure checkout. Your balance updates automatically once the payment confirms.</p>
+                  {depositBusy ? (
+                    <p className="fp-gold text-xs flex items-center gap-1.5">
+                      <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      {redirecting
+                        ? `Redirecting you to ${activeMethod?.label ?? "the secure checkout"}…`
+                        : `Opening ${activeMethod?.label ?? "the secure checkout"} for your ${fmt(Number(depositAmount) || 0)} top-up…`}
+                    </p>
+                  ) : depositError ? (
+                    <p className="text-xs text-red-400">{depositError}</p>
+                  ) : (
+                    <p className="fp-text-faint text-[11px]">You&apos;ll be sent to a secure checkout. Your balance updates automatically once the payment confirms.</p>
+                  )}
                 </div>
               )}
             </div>

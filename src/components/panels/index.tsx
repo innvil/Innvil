@@ -22,7 +22,7 @@ import {
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
 import { AccountSettings } from "./AccountSettings";
-import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling } from "./OwnerSections";
+import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling, OwnerTopUps } from "./OwnerSections";
 import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
@@ -1083,6 +1083,7 @@ export function InnvilApp({ setWorld, initialSection }: {
               <p className="fp-text-dim text-sm mt-1">Your customers&apos; top-ups, the API cost of what they ordered, and your profit — pick any period and download a receipt.</p>
             </div>
             <ReceiptCard />
+            <OwnerTopUps />
           </div>
         )}
         {section === "orders" && <OwnerOrders />}
