@@ -58,7 +58,7 @@ export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setW
 
   return (
     <div>
-      <div className="px-8 pt-6 pb-4 border-b fp-line-soft flex items-center justify-between flex-wrap gap-3">
+      <div className="px-4 sm:px-8 pt-6 pb-4 border-b fp-line-soft flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl fp-gold-soft-bg flex items-center justify-center">
             <Gauge size={18} className="fp-gold" />
@@ -129,7 +129,7 @@ export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setW
         </div>
       </div>
 
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {tab === "overview" && <OverviewTab panel={panel} />}
         {tab === "status" && <StatusTab panelStatus={panelStatus} setPanelStatus={changeStatus} />}
         {tab === "branding" && <BrandingTab panel={panel} />}

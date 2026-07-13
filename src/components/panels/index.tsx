@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Wifi, ShieldCheck, Users, CreditCard, MessageSquare, Palette, Settings, Bell,
   Search, ArrowUpRight, ArrowRight, TrendingUp, Lock, CheckCircle2, Sparkles, Gauge,
-  LayoutGrid, ChevronRight, Circle, Bot, Wallet, Clock, HelpCircle, ArrowLeft, X,
+  LayoutGrid, ChevronRight, Circle, Bot, Wallet, Clock, HelpCircle, ArrowLeft, X, Menu,
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
@@ -365,17 +365,19 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
    C. LEDGERLINE APP SHELL (dashboard)
    ========================================================= */
 
+const APP_NAV = [
+  { k: "home", label: "Dashboard home", icon: LayoutGrid },
+  { k: "panels", label: "My Panels", icon: Gauge },
+  { k: "billing", label: "Billing", icon: Wallet },
+  { k: "earnings", label: "Earnings & receipts", icon: TrendingUp },
+  { k: "orders", label: "Orders (all panels)", icon: ListOrdered },
+  { k: "customers", label: "Customers (all panels)", icon: Users },
+  { k: "providers", label: "Providers (all panels)", icon: Wifi },
+  { k: "support", label: "Support inbox", icon: MessageSquare },
+];
+
 function AppSidebar({ section, setSection, isSuper }: { section: string; setSection: (s: string) => void; isSuper?: boolean }) {
-  const items = [
-    { k: "home", label: "Dashboard home", icon: LayoutGrid },
-    { k: "panels", label: "My Panels", icon: Gauge },
-    { k: "billing", label: "Billing", icon: Wallet },
-    { k: "earnings", label: "Earnings & receipts", icon: TrendingUp },
-    { k: "orders", label: "Orders (all panels)", icon: ListOrdered },
-    { k: "customers", label: "Customers (all panels)", icon: Users },
-    { k: "providers", label: "Providers (all panels)", icon: Wifi },
-    { k: "support", label: "Support inbox", icon: MessageSquare },
-  ];
+  const items = APP_NAV;
 
   return (
     <aside className="w-60 shrink-0 fp-void-2 border-r fp-line-soft min-h-screen p-5 hidden md:flex flex-col">
@@ -408,7 +410,7 @@ function AppSidebar({ section, setSection, isSuper }: { section: string; setSect
   );
 }
 
-function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void; onOpenAccount: () => void }) {
+function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: string) => void; onOpenAccount: () => void; onOpenNav: () => void }) {
   const [bellOpen, setBellOpen] = useState(false);
   const [ownerBalance, setOwnerBalance] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
@@ -442,16 +444,21 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
     new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 
   return (
-    <div className="flex items-center justify-between px-8 py-5 border-b fp-line-soft">
-      <div className="relative w-72">
-        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
-        <input
-          placeholder="Search panels, orders, customers…"
-          className="w-full fp-panel border fp-line-soft rounded-lg pl-9 pr-3 py-2 text-sm fp-text placeholder:fp-text-faint outline-none focus:fp-gold-border"
-        />
+    <div className="flex items-center justify-between gap-2 px-4 sm:px-8 py-4 sm:py-5 border-b fp-line-soft">
+      <div className="flex items-center gap-2 min-w-0">
+        <button onClick={onOpenNav} aria-label="Open menu" className="md:hidden p-1.5 rounded-lg fp-text-dim hover:fp-text shrink-0">
+          <Menu size={20} />
+        </button>
+        <div className="relative hidden sm:block sm:w-72 min-w-0">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
+          <input
+            placeholder="Search panels, orders, customers…"
+            className="w-full fp-panel border fp-line-soft rounded-lg pl-9 pr-3 py-2 text-sm fp-text placeholder:fp-text-faint outline-none focus:fp-gold-border"
+          />
+        </div>
       </div>
-      <div className="flex items-center gap-5">
-        <div className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 flex items-center gap-2">
+      <div className="flex items-center gap-2.5 sm:gap-5 min-w-0">
+        <div className="fp-panel-raised border fp-line-soft rounded-lg px-2.5 sm:px-3 py-1.5 flex items-center gap-2 shrink-0">
           <Wallet size={13} className="fp-gold" />
           <div>
             <p className="text-[10px] fp-text-faint fp-mono uppercase leading-none">Balance</p>
@@ -459,7 +466,7 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
           </div>
           {syncingBalance && <RefreshCw size={11} className="fp-text-faint animate-spin" />}
         </div>
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             onClick={() => setBellOpen((o) => !o)}
             aria-label="Notifications"
@@ -483,7 +490,7 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
         </div>
         <button
           onClick={onOpenAccount}
-          className="fp-text-faint text-xs flex items-center gap-1.5 hover:fp-text"
+          className="fp-text-faint text-xs hidden md:flex items-center gap-1.5 hover:fp-text shrink-0"
         >
           <Settings size={14} /> Account settings
         </button>
@@ -492,14 +499,14 @@ function AppTopbar({ setWorld, onOpenAccount }: { setWorld: (w: string) => void;
             await signOutAction();
             setWorld("public");
           }}
-          className="fp-text-faint text-xs"
+          className="fp-text-faint text-xs shrink-0"
         >
           Log out
         </button>
         <button
           onClick={onOpenAccount}
           aria-label="Account settings"
-          className="w-8 h-8 rounded-full fp-violet-bg flex items-center justify-center fp-mono text-xs font-semibold hover:opacity-80"
+          className="w-8 h-8 rounded-full fp-violet-bg flex items-center justify-center fp-mono text-xs font-semibold hover:opacity-80 shrink-0"
         >
           <UserCircle2 size={18} className="text-[#0A0B0F]" />
         </button>
@@ -518,7 +525,7 @@ function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel
   openPanel: (p: Panel) => void;
 }) {
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-8 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="fp-display text-2xl">Welcome back</h1>
         <button onClick={goCreate} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
@@ -605,7 +612,7 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
   };
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-8 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="fp-display text-2xl">My Panels</h1>
         <div className="flex items-center gap-3">
@@ -712,7 +719,7 @@ function CreatePanelWizard({ onCreate }: {
   };
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
+    <div className="p-4 sm:p-8 max-w-2xl mx-auto">
       <h1 className="fp-display text-2xl mb-2">Create a new panel</h1>
       <p className="fp-text-dim text-sm mb-8">
         A real, independent SMM panel — its own storefront, dashboard, and wallet.
@@ -1035,6 +1042,7 @@ export function InnvilApp({ setWorld, initialSection }: {
   const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
   const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
   const [isSuper, setIsSuper] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
 
   useEffect(() => { amSuperAdmin().then(setIsSuper); }, []);
 
@@ -1065,11 +1073,48 @@ export function InnvilApp({ setWorld, initialSection }: {
     return { ok: true };
   };
 
+  const navSection = section === "panelAdmin" || section === "create" ? "panels" : section;
+
   return (
     <div className="fp-root min-h-screen flex">
-      <AppSidebar section={section === "panelAdmin" || section === "create" ? "panels" : section} setSection={setSection} isSuper={isSuper} />
+      <AppSidebar section={navSection} setSection={setSection} isSuper={isSuper} />
+
+      {/* Mobile nav drawer */}
+      {mobileNav && (
+        <div className="fixed inset-0 z-[70] md:hidden">
+          <button aria-label="Close menu" onClick={() => setMobileNav(false)} className="absolute inset-0 bg-black/60" />
+          <aside className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] fp-void-2 border-r fp-line-soft p-5 flex flex-col overflow-y-auto">
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-[9px] bg-[#C9A574] flex items-center justify-center">
+                  <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
+                </div>
+                <span className="fp-display text-lg">Innvil</span>
+              </div>
+              <button onClick={() => setMobileNav(false)} className="fp-text-dim hover:fp-text p-1"><X size={18} /></button>
+            </div>
+            <nav className="space-y-1 flex-1">
+              {APP_NAV.map((it) => (
+                <button
+                  key={it.k}
+                  onClick={() => { setSection(it.k); setMobileNav(false); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left ${navSection === it.k ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
+                >
+                  <it.icon size={16} /> {it.label}
+                </button>
+              ))}
+            </nav>
+            {isSuper && (
+              <Link href="/superadmin" onClick={() => setMobileNav(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm fp-gold border-t fp-line-soft mt-2 pt-4">
+                <ShieldCheck size={16} /> Super admin
+              </Link>
+            )}
+          </aside>
+        </div>
+      )}
+
       <div className="flex-1 min-w-0">
-        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} />
+        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} />
         {section === "account" && <AccountSettings />}
         {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} />}
@@ -1077,7 +1122,7 @@ export function InnvilApp({ setWorld, initialSection }: {
         {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} initialTab={panelInitialTab} />}
         {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
         {section === "earnings" && (
-          <div className="p-8 space-y-6 max-w-3xl">
+          <div className="p-4 sm:p-8 space-y-6 max-w-3xl">
             <div>
               <h1 className="fp-display text-2xl">Earnings &amp; receipts</h1>
               <p className="fp-text-dim text-sm mt-1">Your customers&apos; top-ups, the API cost of what they ordered, and your profit — pick any period and download a receipt.</p>
@@ -1090,7 +1135,7 @@ export function InnvilApp({ setWorld, initialSection }: {
         {section === "customers" && <OwnerCustomers />}
         {section === "providers" && <OwnerProviders />}
         {section === "support" && (
-          <div className="p-8">
+          <div className="p-4 sm:p-8">
             <Card title="Support inbox — all panels" icon={MessageSquare} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>
               <p className="fp-text-dim text-sm leading-relaxed">
                 A unified ticket inbox across all your panels — view, reply, close, reopen, with optional
@@ -1163,7 +1208,7 @@ export function SuperAdmin() {
           <Pill tone="violet" icon={Lock}>Restricted access</Pill>
         </div>
 
-        <div className="p-8 space-y-6">
+        <div className="p-4 sm:p-8 space-y-6">
           {tab === "analytics" && (
             <>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

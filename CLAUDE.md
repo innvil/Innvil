@@ -798,6 +798,22 @@ win over this):**
   similar in spirit to the reference project's `sync_frequency_minutes` per
   plan, but the price basis is refresh rate/rental, not a cost Innvil incurs.
 
+### Phase 4.z: ANVIL platform token (NOTED, not built — post-MVP)
+
+> Innvil's experimental platform token/rewards system — the competitive moat idea.
+> **Build only after the core MVP is stable & public-ready.** Full economics live in
+> memory `innvil-anvil-token.md`. Summary:
+> - **Phase 1 (off-chain, in-platform):** ANVIL rewarded as a % of each top-up; accrues
+>   APY (~0.5–1%/yr, higher when holding ≥ $100 worth); USD ⇄ ANVIL conversion; opt-in
+>   toggle to spend ANVIL as substitute currency when USD is exhausted; ANVIL buys every
+>   paid feature (Design Shop, Analytics rent, Automator, future SaaS) at **tiered
+>   discounts** — each tier kept below Innvil's margin so we still net positive. Target
+>   max supply 10B. Collect traction data for the deck + on-chain reference.
+> - **Phase 2 (on-chain):** launch with extra user benefits to grow holders; in-platform
+>   ANVIL converts **1:1** to the coin; add a **burn** mechanism (spending ANVIL in the
+>   panel burns supply); keep adding SaaS sinks to drive utility + holders.
+> - Branding: platform currency is *anvil* now → *ANVIL* the coin later (logo = the mark).
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations

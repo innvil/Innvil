@@ -97,7 +97,7 @@ export function OwnerOrders() {
   const fmt = (n: number) => formatMoney(n, "USD");
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <Card title="Orders — all panels" icon={ListOrdered} right={<SyncBadge syncing={syncing} />}>
         {rows === null ? (
           <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
@@ -192,7 +192,7 @@ export function OwnerCustomers() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <Card title="Customers — all panels" icon={Users} right={<SyncBadge syncing={syncing} />}>
         {rows === null ? (
           <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
@@ -301,7 +301,7 @@ export function OwnerProviders() {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <Card title="Providers — all panels" icon={Wifi} right={<SyncBadge syncing={syncing} />}>
         {rows === null ? (
           <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>

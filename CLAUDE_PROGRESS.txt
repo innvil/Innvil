@@ -8,6 +8,26 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Mobile responsiveness + ANVIL token noted (v0.2.31)
+
+### Date: 2026-07-13
+- **Mobile fix for the owner app** (was overwidth on phones):
+  - AppTopbar: responsive `px-4 sm:px-8`, search `hidden sm:block`, all controls
+    `shrink-0`, "Account settings" text hidden `md:hidden`, gaps tightened on mobile.
+  - Owner sidebar was `hidden md:flex` with NO mobile nav → added a **hamburger**
+    (Menu, md:hidden) in the topbar that opens a **mobile drawer** (`APP_NAV` lifted to
+    module scope; drawer lists the same items + super-admin link; picking one closes it).
+  - Reduced wasted padding `p-8 → p-4 sm:p-8` across owner pages (index.tsx),
+    OwnerSections, and the PanelAdmin shell (header/content).
+  - Wide tables already use `overflow-x-auto`, so they scroll instead of forcing width.
+- **ANVIL token vision NOTED (not built)** — memory `innvil-anvil-token.md` + CLAUDE.md
+  "Phase 4.z". Off-chain rewards token (APY, tiered discounts on paid features kept below
+  our margin, USD⇄ANVIL, 10B supply, higher APY ≥$100 held), later on-chain 1:1 convert +
+  burn on spend. Build post-MVP.
+- package.json → 0.2.31. No migration.
+
+---
+
 ## Session: Failed-order sync reconciliation (v0.2.30)
 
 ### Date: 2026-07-13
