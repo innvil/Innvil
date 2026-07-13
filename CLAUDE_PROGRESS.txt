@@ -6,6 +6,17 @@
 ---Note: 
 for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
+also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
+
+## Session: Custom-domain reliability + UX hardening (v0.2.21)
+
+### Date: 2026-07-13
+- Domain status UX hardened: "Live & secured" now appears only when verified and not DNS-misconfigured; pending/misconfigured states are shown correctly.
+- DNS setup card now hides automatically after successful verification; once live, the tab shows a clean verified state instead of setup records.
+- Disconnect flow improved for reliability and feedback (clear success/error messaging + state refresh).
+- DNS recommendations updated to provider-compatible defaults (www CNAME + optional apex ALIAS/ANAME) to avoid registrar friction around strict apex A-record handling.
+- Product behavior reaffirmed: if owner disconnects a custom domain, storefront remains accessible on the included panel subdomain.
+- **package.json → 0.2.21.**
 
 ## Session: Customer API docs live absolute base URL (v0.2.20)
 

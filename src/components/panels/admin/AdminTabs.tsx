@@ -473,6 +473,7 @@ export function DomainTab({ panel }: { panel: Panel }) {
   const [info, setInfo] = useState<DomainInfo | null>(null);
   const [domain, setDomain] = useState("");
   const [busy, setBusy] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
   const load = useCallback(async () => {
@@ -517,6 +518,16 @@ export function DomainTab({ panel }: { panel: Panel }) {
     }
   };
 
+  const recheck = async () => {
+    if (busy || rechecking) return;
+    setRechecking(true);
+    try {
+      await load();
+    } finally {
+      setRechecking(false);
+    }
+  };
+
   const connected = !!info?.customDomain;
   const live = connected && !!info?.verified && !info?.misconfigured;
   const statusPill = !connected ? null
@@ -551,8 +562,8 @@ export function DomainTab({ panel }: { panel: Panel }) {
             />
             {connected ? (
               <>
-                <button onClick={load} disabled={busy} className="fp-panel-raised border fp-line-soft px-4 rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-50">
-                  <RefreshCw size={13} /> Re-check
+                <button onClick={recheck} disabled={busy || rechecking} className="fp-panel-raised border fp-line-soft px-4 rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-50">
+                  <RefreshCw size={13} className={rechecking ? "animate-spin" : ""} /> {rechecking ? "Checking..." : "Re-check"}
                 </button>
                 <button onClick={disconnect} disabled={busy} className="border border-red-500/30 text-red-400 px-4 rounded-lg text-sm disabled:opacity-50">Disconnect</button>
               </>
@@ -569,7 +580,7 @@ export function DomainTab({ panel }: { panel: Panel }) {
             <div className="mt-5 fp-panel-raised border fp-line-soft rounded-xl p-4">
               <p className="fp-text-faint text-xs fp-mono uppercase mb-1">DNS setup</p>
               <p className="fp-text-dim text-xs mb-3">
-                Add one of the recommended records below. If you entered an apex/root domain, prefer using a `www` CNAME and redirect root to `www` at your registrar. Use ALIAS/ANAME for root only when your DNS supports it.
+                Add one of the recommended records below. For apex/root domains, you can use Vercel&apos;s A record (76.76.21.21) or use ALIAS/ANAME/CNAME flattening if your DNS provider requires it.
               </p>
               <div className="grid grid-cols-[64px_1fr] sm:grid-cols-[80px_120px_1fr] gap-2 fp-text-faint text-[10px] fp-mono uppercase pb-1 border-b fp-line-soft">
                 <span>Type</span><span className="hidden sm:block">Name</span><span>Value</span>

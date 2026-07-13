@@ -18,6 +18,7 @@ import {
 
 type Result<T = void> = ({ ok: true } & (T extends void ? object : { data: T })) | { ok: false; error: string };
 
+const VERCEL_A_RECORD = "76.76.21.21";
 const VERCEL_CNAME = "cname.vercel-dns.com";
 const HOST_RE = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/i;
 
@@ -51,6 +52,7 @@ function isApex(domain: string): boolean {
 function recommendFor(domain: string): RecommendedRecord[] {
   if (isApex(domain)) {
     return [
+      { type: "A", name: "@", value: VERCEL_A_RECORD, note: "Vercel apex IPv4 record." },
       { type: "CNAME", name: "www", value: VERCEL_CNAME, note: "Connect www directly to Vercel (works on almost all DNS providers)." },
       { type: "ALIAS/ANAME", name: "@", value: VERCEL_CNAME, note: "Optional root/apex setup if your provider supports ALIAS/ANAME or CNAME flattening." },
     ];
