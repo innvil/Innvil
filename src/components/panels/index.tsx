@@ -1045,6 +1045,7 @@ export function InnvilApp({ setWorld, initialSection }: {
   const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
   const [isSuper, setIsSuper] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
+  const [focusOwnerCustomerId, setFocusOwnerCustomerId] = useState<string | null>(null);
   const didRestorePanelRef = useRef(false);
 
   useEffect(() => { amSuperAdmin().then(setIsSuper); }, []);
@@ -1164,8 +1165,15 @@ export function InnvilApp({ setWorld, initialSection }: {
             <OwnerTopUps />
           </div>
         )}
-        {section === "orders" && <OwnerOrders />}
-        {section === "customers" && <OwnerCustomers />}
+        {section === "orders" && (
+          <OwnerOrders
+            onManageCustomer={(customerAccountId) => {
+              setFocusOwnerCustomerId(customerAccountId);
+              setSection("customers");
+            }}
+          />
+        )}
+        {section === "customers" && <OwnerCustomers focusCustomerId={focusOwnerCustomerId} />}
         {section === "providers" && <OwnerProviders />}
         {section === "support" && (
           <div className="p-4 sm:p-8">

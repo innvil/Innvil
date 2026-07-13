@@ -77,7 +77,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /* ---------- Orders across all panels ---------- */
-export function OwnerOrders() {
+export function OwnerOrders({ onManageCustomer }: { onManageCustomer?: (customerAccountId: string) => void }) {
   const cachedRows = readOwnerCache<OwnerOrderVM[]>("orders");
   const [rows, setRows] = useState<OwnerOrderVM[] | null>(cachedRows);
   const [syncing, setSyncing] = useState(Boolean(cachedRows));
@@ -124,7 +124,19 @@ export function OwnerOrders() {
                     <td className="py-2.5 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
                     <td className="py-2.5">{o.panelName}</td>
                     <td className="py-2.5">{o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}</td>
-                    <td className="py-2.5 fp-text-dim">{o.customerUsername ?? o.customerEmail ?? "—"}</td>
+                    <td className="py-2.5 fp-text-dim">
+                      {o.customerUsername ? (
+                        <button
+                          onClick={() => onManageCustomer?.(o.customerAccountId)}
+                          className="hover:fp-gold underline underline-offset-2"
+                          title="Open customer management"
+                        >
+                          {o.customerUsername}
+                        </button>
+                      ) : (
+                        o.customerEmail ?? "—"
+                      )}
+                    </td>
                     <td className="py-2.5 max-w-[280px]">
                       {(() => {
                         const label = o.link.length > 42 ? `${o.link.slice(0, 42)}…` : o.link;
@@ -159,7 +171,7 @@ export function OwnerOrders() {
 }
 
 /* ---------- Customers across all panels ---------- */
-export function OwnerCustomers() {
+export function OwnerCustomers({ focusCustomerId }: { focusCustomerId?: string | null }) {
   const cachedRows = readOwnerCache<OwnerCustomerVM[]>("customers");
   const [rows, setRows] = useState<OwnerCustomerVM[] | null>(cachedRows);
   const [syncing, setSyncing] = useState(Boolean(cachedRows));
@@ -189,6 +201,14 @@ export function OwnerCustomers() {
     setExpanded((prev) => (prev === id ? null : id));
     setAmount(""); setReason(""); setMsg(null);
   };
+
+  useEffect(() => {
+    if (!focusCustomerId) return;
+    const exists = (rows ?? []).some((r) => r.id === focusCustomerId);
+    if (!exists) return;
+    setExpanded(focusCustomerId);
+    setAmount(""); setReason(""); setMsg(null);
+  }, [focusCustomerId, rows]);
 
   const adjust = async (c: OwnerCustomerVM, sign: 1 | -1) => {
     const amt = Number(amount) * sign;
