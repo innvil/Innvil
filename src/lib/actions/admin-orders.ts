@@ -6,6 +6,7 @@ import {
   getProviderCredentials, addOrder, refillOrder, cancelOrders, ProviderError,
 } from "@/src/lib/providers";
 import { round4 } from "@/src/lib/money";
+import { syncPanelOrders } from "@/src/lib/orders/sync";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -164,6 +165,9 @@ export async function listPanelOrders(
   const { user, admin } = await getAuthedAdmin();
   if (!user) return [];
   if (!(await ownsPanel(admin, user.id, panelId))) return [];
+
+  // Keep panel orders fresh whenever the owner opens/manages orders.
+  try { await syncPanelOrders(admin, panelId); } catch { /* best-effort */ }
 
   const base = admin
     .from("orders")

@@ -51,6 +51,7 @@ const profileInputCls =
 const statusTone: Record<string, string> = {
   Completed: "fp-safe-soft-bg fp-safe",
   Processing: "fp-gold-soft-bg fp-gold",
+  "In progress": "fp-gold-soft-bg fp-gold",
   Pending: "fp-violet-soft-bg fp-violet",
   Partial: "fp-gold-soft-bg fp-gold",
   Canceled: "bg-red-500/10 text-red-400",
@@ -247,12 +248,13 @@ export function CustomerDashboard({
     [recentIds, services]
   );
 
-  const pendingCount = orders.filter(
-    (o) => o.status === "Processing" || o.status === "Pending"
-  ).length;
+  const processingCount = orders.filter((o) => o.status === "Processing").length;
+  const inProgressCount = orders.filter((o) => o.status === "In progress").length;
+  const pendingCount = orders.filter((o) => o.status === "Pending").length;
   const completedToday = orders.filter(
     (o) => o.status === "Completed" && o.date.startsWith("Today")
   ).length;
+  const canceledCount = orders.filter((o) => o.status === "Canceled").length;
 
   const go = (p: CustomerPage) => {
     if (p === "order") setPrefillServiceId(null);
@@ -349,12 +351,14 @@ export function CustomerDashboard({
         {/* ---------- DASHBOARD ---------- */}
         {page === "dashboard" && (
           <div className="space-y-6">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
               {[
                 { label: "Wallet balance", value: fmt(walletBalance), tone: "fp-gold" },
-                { label: "Pending orders", value: String(pendingCount), tone: "fp-violet" },
+                { label: "Pending", value: String(pendingCount), tone: "fp-violet" },
+                { label: "Processing", value: String(processingCount), tone: "fp-gold" },
+                { label: "In progress", value: String(inProgressCount), tone: "fp-gold" },
                 { label: "Completed today", value: String(completedToday), tone: "fp-safe" },
-                { label: "Total orders", value: String(orders.length), tone: "" },
+                { label: "Canceled", value: String(canceledCount), tone: "" },
               ].map((s) => (
                 <div key={s.label} className="fp-panel border fp-line rounded-2xl p-4">
                   <p className="fp-text-faint text-[11px] fp-mono uppercase tracking-wide">{s.label}</p>

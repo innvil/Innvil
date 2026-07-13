@@ -1581,6 +1581,23 @@ export function OrdersTab({ panelId }: { panelId: string }) {
     });
   }, [rows, status, q]);
 
+  const statusCounts = useMemo(() => {
+    const base = rows ?? [];
+    const c: Record<string, number> = {
+      all: base.length,
+      pending: 0,
+      processing: 0,
+      in_progress: 0,
+      completed: 0,
+      partial: 0,
+      canceled: 0,
+      refunded: 0,
+      failed: 0,
+    };
+    for (const o of base) c[o.status] = (c[o.status] ?? 0) + 1;
+    return c;
+  }, [rows]);
+
   const act = async (id: string, fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) => {
     setBusyId(id); setMsg(null);
     const res = await fn();
@@ -1628,6 +1645,13 @@ export function OrdersTab({ panelId }: { panelId: string }) {
     >
       {msg && <p className={`text-xs mb-3 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
 
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+        <StatCard label="Pending" value={String(statusCounts.pending)} />
+        <StatCard label="Processing" value={String(statusCounts.processing)} tone="gold" />
+        <StatCard label="In progress" value={String(statusCounts.in_progress)} tone="gold" />
+        <StatCard label="Completed" value={String(statusCounts.completed)} tone="safe" />
+      </div>
+
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="flex gap-1 overflow-x-auto">
           {ORDER_FILTERS.map((f) => (
@@ -1636,7 +1660,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
               onClick={() => setStatus(f.k)}
               className={`text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap border ${status === f.k ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim"}`}
             >
-              {f.label}
+              {f.label} ({statusCounts[f.k] ?? 0})
             </button>
           ))}
         </div>

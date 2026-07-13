@@ -12,7 +12,7 @@ import { PlatformGlyph, PlatformButton } from "@/src/components/customer/Platfor
 import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
 import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, PublicLandingSection } from "@/src/lib/actions/storefront";
-import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
+import { placeOrder, listCustomerOrders, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, getCustomerWalletSnapshot, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
 import {
@@ -50,7 +50,7 @@ function toCustomerService(s: StorefrontService, i: number): CustomerService {
 const ORDER_STATUS_LABEL: Record<string, CustomerOrder["status"]> = {
   pending: "Pending",
   processing: "Processing",
-  in_progress: "Processing",
+  in_progress: "In progress",
   partial: "Partial",
   completed: "Completed",
   canceled: "Canceled",
@@ -96,6 +96,7 @@ export function Storefront({
   const fmt = (n: number) => formatMoney(n, panel.currency);
   const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
   const [liveDeposits, setLiveDeposits] = useState(initialDeposits);
+  const [liveOrders, setLiveOrders] = useState<CustomerOrderVM[]>(initialOrders);
 
   useEffect(() => {
     setLiveBalance(account?.balance ?? 0);
@@ -104,6 +105,10 @@ export function Storefront({
   useEffect(() => {
     setLiveDeposits(initialDeposits);
   }, [initialDeposits]);
+
+  useEffect(() => {
+    setLiveOrders(initialOrders);
+  }, [initialOrders]);
 
   // ---- Live data → customer dashboard shapes -------------------------------
   const uiServices = useMemo(() => services.map(toCustomerService), [services]);
@@ -115,7 +120,7 @@ export function Storefront({
 
   const uiOrders: CustomerOrder[] = useMemo(
     () =>
-      initialOrders.map((o) => ({
+      liveOrders.map((o) => ({
         id: o.localId,
         serviceId: (o.serviceId && uuidToLocalId.get(o.serviceId)) || 0,
         serviceNo: o.serviceNo,
@@ -128,7 +133,7 @@ export function Storefront({
         failReason: o.failReason,
         comments: o.comments,
       })),
-    [initialOrders, uuidToLocalId]
+    [liveOrders, uuidToLocalId]
   );
 
   // Recently ordered — distinct service ids from the newest orders.
@@ -140,6 +145,11 @@ export function Storefront({
     }
     return seen;
   }, [uiOrders]);
+
+  const hasOpenOrders = useMemo(
+    () => liveOrders.some((o) => o.status === "pending" || o.status === "processing" || o.status === "in_progress"),
+    [liveOrders]
+  );
 
   const handlePlaceOrder = async (args: PlaceOrderArgs) => {
     if (!args.service.uuid) return { ok: false, error: "This service can't be ordered yet." };
@@ -201,6 +211,24 @@ export function Storefront({
       window.clearInterval(id);
     };
   }, [account, liveDeposits, panel.id]);
+
+  useEffect(() => {
+    if (!account) return;
+
+    let cancelled = false;
+    const pollOrders = async () => {
+      const next = await listCustomerOrders(panel.id);
+      if (cancelled) return;
+      setLiveOrders(next);
+    };
+
+    pollOrders();
+    const id = window.setInterval(pollOrders, hasOpenOrders ? 12000 : 25000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [account, hasOpenOrders, panel.id]);
 
   // Group services by platform for the showcase
   const groups = useMemo(() => {

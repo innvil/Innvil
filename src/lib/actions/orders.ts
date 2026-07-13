@@ -267,6 +267,9 @@ export async function listCustomerOrders(panelId: string): Promise<CustomerOrder
     .maybeSingle();
   if (!acct) return [];
 
+  // Best-effort live sync so customer-facing statuses track provider progress.
+  try { await syncPanelOrders(admin, panelId); } catch { /* ignore sync failures */ }
+
   const { data } = await admin
     .from("orders")
     .select("id, local_id, service_id, link, quantity, charge, status, created_at, provider_response, provider_payload, services(name, local_id)")

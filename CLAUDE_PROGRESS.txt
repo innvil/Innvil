@@ -8,6 +8,14 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Live provider progress sync + order stats (v0.2.28)
+
+### Date: 2026-07-13
+- **Order status now auto-syncs from providers on both sides.** Panel and customer order reads trigger a best-effort `syncPanelOrders` pass so provider-side progress (e.g. in progress/remains changes) surfaces without waiting for manual sync.
+- **Customer storefront now polls live orders** (faster while open orders exist) and keeps `in_progress` distinct instead of collapsing it into Processing.
+- **Added order-status stats in dashboard views.** Panel Orders now shows status summary cards + per-filter counts; customer dashboard now shows Pending/Processing/In progress/Completed today/Canceled counters.
+- package.json → 0.2.28. No migration.
+
 ## Session: Custom comments API acceptance (v0.2.27)
 
 ### Date: 2026-07-13
