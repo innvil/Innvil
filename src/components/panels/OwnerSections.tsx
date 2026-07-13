@@ -119,9 +119,9 @@ export function OwnerOrders() {
               <tbody>
                 {rows.map((o) => (
                   <tr key={o.id} className="border-b fp-line-soft last:border-0">
-                    <td className="py-2.5 fp-mono fp-text-dim">#{o.shortId}</td>
+                    <td className="py-2.5 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
                     <td className="py-2.5">{o.panelName}</td>
-                    <td className="py-2.5">{o.serviceName}</td>
+                    <td className="py-2.5">{o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}</td>
                     <td className="py-2.5 fp-text-dim">{o.customerEmail ?? "—"}</td>
                     <td className="py-2.5 text-right fp-mono">{fmt(o.charge)}</td>
                     <td className="py-2.5">

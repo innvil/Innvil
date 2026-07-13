@@ -68,7 +68,9 @@ async function addHistory(admin: SupabaseClient, orderId: string, status: OrderS
 export interface AdminOrderVM {
   id: string;
   shortId: string;
+  orderNo: number | null; // per-panel sequential order number (local_id)
   serviceName: string;
+  serviceNo: number | null; // the service's own number (services.local_id)
   customerEmail: string | null;
   link: string;
   quantity: number;
@@ -81,11 +83,16 @@ export interface AdminOrderVM {
   createdAt: string;
   /** True when the order is pending because the PROVIDER's balance was insufficient. */
   held: boolean;
+  /** Provider failure reason (from the provider API response), if any. */
+  failReason: string | null;
+  /** Custom Comments, if this was a comments order. */
+  comments: string[] | null;
 }
 
 interface OrderRow {
   id: string;
   panel_id?: string;
+  local_id: number | null;
   service_id: string | null;
   customer_id: string;
   link: string;
@@ -97,8 +104,9 @@ interface OrderRow {
   provider_order_id: string | null;
   remains: number | null;
   created_at: string;
-  provider_response: { held?: boolean } | null;
-  services: { name?: string } | { name?: string }[] | null;
+  provider_response: { held?: boolean; error?: string } | null;
+  provider_payload: { comments?: string[] } | null;
+  services: { name?: string; local_id?: number } | { name?: string; local_id?: number }[] | null;
   customer_accounts: { user_id?: string } | { user_id?: string }[] | null;
 }
 
@@ -106,12 +114,18 @@ function one<T>(v: T | T[] | null): T | undefined {
   return Array.isArray(v) ? v[0] : v ?? undefined;
 }
 
+const FAILED_STATES: OrderStatus[] = ["failed", "canceled", "refunded"];
+
 /** Map a joined order row + resolved emails to the admin view-model. */
 function mapOrderRow(r: OrderRow, emails: Map<string, string | null>): AdminOrderVM {
+  const svc = one(r.services);
+  const err = typeof r.provider_response?.error === "string" ? r.provider_response.error : null;
   return {
     id: r.id,
     shortId: String(r.id).slice(0, 8),
-    serviceName: one(r.services)?.name ?? "Service",
+    orderNo: r.local_id,
+    serviceName: svc?.name ?? "Service",
+    serviceNo: svc?.local_id ?? null,
     customerEmail: emails.get(one(r.customer_accounts)?.user_id ?? "") ?? null,
     link: r.link,
     quantity: r.quantity,
@@ -123,6 +137,8 @@ function mapOrderRow(r: OrderRow, emails: Map<string, string | null>): AdminOrde
     remains: r.remains,
     createdAt: r.created_at,
     held: r.provider_response?.held === true && r.status === "pending",
+    failReason: FAILED_STATES.includes(r.status) ? err : null,
+    comments: Array.isArray(r.provider_payload?.comments) ? r.provider_payload!.comments : null,
   };
 }
 
@@ -151,7 +167,7 @@ export async function listPanelOrders(
 
   const base = admin
     .from("orders")
-    .select("id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, services(name), customer_accounts(user_id)")
+    .select("id, local_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, provider_payload, services(name, local_id), customer_accounts(user_id)")
     .eq("panel_id", panelId);
   const filtered = opts?.status && opts.status !== "all" ? base.eq("status", opts.status) : base;
 
@@ -179,7 +195,7 @@ export async function listAllOwnerOrders(limit = 200): Promise<OwnerOrderVM[]> {
 
   const { data } = await admin
     .from("orders")
-    .select("id, panel_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, services(name), customer_accounts(user_id)")
+    .select("id, panel_id, local_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, provider_payload, services(name, local_id), customer_accounts(user_id)")
     .in("panel_id", list.map((p) => p.id))
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -408,7 +424,8 @@ export async function resendOrder(orderId: string): Promise<Result> {
     .maybeSingle();
   if (!svc?.provider_service_id || !prov) return { ok: false, error: "Provider or service mapping is missing." };
 
-  const payload = (order.provider_payload as { runs?: number; interval?: number } | null) ?? {};
+  const payload = (order.provider_payload as { runs?: number; interval?: number; comments?: string[] } | null) ?? {};
+  const comments = Array.isArray(payload.comments) ? payload.comments : null;
   try {
     const creds = await getProviderCredentials(order.provider_id as string, prov.api_url as string);
     const resp = await addOrder(creds, {
@@ -417,6 +434,7 @@ export async function resendOrder(orderId: string): Promise<Result> {
       quantity: order.quantity as number,
       ...(payload.runs != null ? { runs: payload.runs } : {}),
       ...(payload.interval != null ? { interval: payload.interval } : {}),
+      ...(comments && comments.length ? { comments: comments.join("\n") } : {}),
     });
     if ("order" in resp) {
       await admin.from("orders").update({

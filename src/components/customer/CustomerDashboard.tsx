@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Sparkles, Menu, X, Wallet, Plus, Clock, Star, RotateCcw, Zap,
   LayoutGrid, ListOrdered, MessageSquare, KeyRound, UserCircle2,
-  ShoppingCart, CheckCircle2, LogOut,
+  ShoppingCart, CheckCircle2, LogOut, FileText,
 } from "lucide-react";
 import {
   customerServices, customerOrders, customerWallet, customerTickets,
@@ -724,8 +724,28 @@ function OrderRows({
   compact?: boolean;
   platformMeta?: PlatformMeta;
 }) {
+  const [popup, setPopup] = useState<{ title: string; lines: string[] } | null>(null);
+  const showService = (o: CustomerOrder) => setPopup({
+    title: "Service details",
+    lines: [o.service, o.serviceNo != null ? `Service #${o.serviceNo}` : "", `Quantity: ${o.qty.toLocaleString()}`, `Link: ${o.link}`].filter(Boolean),
+  });
   return (
     <div>
+      {popup && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={() => setPopup(null)}>
+          <div className="fp-panel border fp-line rounded-2xl w-full max-w-md max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b fp-line-soft">
+              <p className="fp-display text-sm">{popup.title}</p>
+              <button onClick={() => setPopup(null)} className="fp-text-faint hover:fp-text"><X size={16} /></button>
+            </div>
+            <div className="overflow-y-auto p-4 space-y-1.5">
+              {popup.lines.map((l, i) => (
+                <p key={i} className="text-sm fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 break-words">{l}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {orders.map((o) => {
         const svc = services.find((s) => s.id === o.serviceId);
         return (
@@ -739,11 +759,20 @@ function OrderRows({
               </span>
             )}
             <div className="min-w-0 flex-1">
-              <p className="text-sm truncate">{o.service}</p>
+              <p className="text-sm truncate flex items-center gap-1.5">
+                <button onClick={() => showService(o)} className="truncate hover:fp-gold text-left" title="View service">{o.service}</button>
+                {o.serviceNo != null && <span className="fp-text-faint text-xs shrink-0">#{o.serviceNo}</span>}
+                {o.comments && o.comments.length > 0 && (
+                  <button onClick={() => setPopup({ title: `Comments (${o.comments!.length})`, lines: o.comments! })} title="View comments" className="fp-gold shrink-0"><FileText size={12} /></button>
+                )}
+              </p>
               <p className="text-xs fp-text-faint fp-mono mt-0.5 truncate">
                 #{o.id} · {o.qty.toLocaleString()} · {o.date}
                 {!compact && ` · ${o.link}`}
               </p>
+              {o.failReason && (o.status === "Canceled") && (
+                <p className="text-[11px] text-red-400 mt-0.5 truncate">Reason: {o.failReason}</p>
+              )}
             </div>
             <span className="fp-mono text-sm shrink-0">{o.amount}</span>
             <span className={`text-xs px-2.5 py-1 rounded-full shrink-0 ${statusTone[o.status]}`}>

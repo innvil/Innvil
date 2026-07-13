@@ -52,6 +52,9 @@ export interface AddOrderInput {
   /** Drip feed (optional, only for services that support it). */
   runs?: number;
   interval?: number;
+  /** Custom Comments services: newline-separated list of comments (one per line).
+   *  When present, providers use the comment count as the quantity. */
+  comments?: string;
 }
 
 /** Thrown for network failures, non-2xx responses, or unparseable bodies. */

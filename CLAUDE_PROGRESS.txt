@@ -8,6 +8,32 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Order numbers, fail reasons, service info, custom comments fix (v0.2.25)
+
+### Date: 2026-07-13
+**Run migration `0010_order_local_id.sql`.** package.json → 0.2.25.
+- **Sequential order numbers**: migration 0010 adds `orders.local_id` (per-panel, from
+  1) via a BEFORE INSERT trigger under a per-panel advisory lock + backfill. Shown as
+  `#<n>` everywhere (customer orders, owner OrdersTab, Overview recent, OwnerOrders).
+- **Fail reason from the provider API**: order VMs now carry `failReason` (from
+  `provider_response.error`, only for failed/canceled/refunded) — shown in the owner
+  OrdersTab detail and on the customer's canceled orders.
+- **Service number + clickable service**: order VMs carry `serviceNo`
+  (`services.local_id`). Owner views show `Service · #<n>`; customer order rows make the
+  service name a button → a floating popup with service name/#/qty/link.
+- **CUSTOM COMMENTS FIX (root cause was in the codebase, not the API):** the provider
+  client never sent a `comments` param and the form never captured comments, so
+  Custom-Comments orders were canceled. Now: `AddOrderInput.comments` + client sends
+  `comments` (and omits `quantity`, since providers derive it from the comment count);
+  `placeOrder` accepts `comments`, derives quantity = comment lines, stores them in
+  `provider_payload.comments`, forwards them (also in `resendOrder`); NewOrder shows a
+  comments textarea (one per line) for services whose name/category matches /comment/i,
+  with live count vs min/max. Comments are viewable via a paper (FileText) icon → a
+  floating modal in both the owner OrdersTab and the customer order rows (not pasted
+  inline).
+
+---
+
 ## Session: Top-ups → Earnings, Payments = methods only, faster add-funds (v0.2.24)
 
 ### Date: 2026-07-13

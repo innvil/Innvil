@@ -231,6 +231,8 @@ export interface CustomerService {
   refill: boolean;
   cancel: boolean;
   drip: boolean;
+  /** Custom Comments service — the buyer supplies a list of comments (one per line). */
+  comments?: boolean;
   description: string;
   aliases: string[];
 }
@@ -260,12 +262,15 @@ export const customerServices: CustomerService[] = [
 export interface CustomerOrder {
   id: string;
   serviceId: number;
+  serviceNo?: number | null; // the service's own number
   service: string;
   link: string;
   qty: number;
   amount: string;
   status: "Completed" | "Processing" | "Pending" | "Partial" | "Canceled";
   date: string;
+  failReason?: string | null;
+  comments?: string[] | null;
 }
 
 export const customerOrders: CustomerOrder[] = [

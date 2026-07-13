@@ -24,6 +24,9 @@ export interface PlaceOrderInput {
   /** Drip feed (only for services that support it). */
   runs?: number;
   interval?: number;
+  /** Custom Comments services: the list of comments (one per line). When present,
+   *  the quantity is the number of comments. */
+  comments?: string;
 }
 
 export type PlaceOrderResult =
@@ -100,12 +103,17 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   if (!svc || svc.panel_id !== input.panelId) return { ok: false, error: "Service not found." };
   if (svc.status !== "active") return { ok: false, error: "This service is currently unavailable." };
 
-  // 5. Validate link + quantity.
+  // 5. Validate link + quantity. For Custom Comments services the quantity is the
+  //    number of comments supplied (one per line).
   const link = input.link.trim();
   if (!link) return { ok: false, error: "Enter the link for your order." };
-  const qty = Math.floor(Number(input.quantity));
+  const commentList = (input.comments ?? "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const hasComments = commentList.length > 0;
+  const qty = hasComments ? commentList.length : Math.floor(Number(input.quantity));
   if (!Number.isFinite(qty) || qty < svc.min || qty > svc.max) {
-    return { ok: false, error: `Quantity must be between ${svc.min.toLocaleString()} and ${svc.max.toLocaleString()}.` };
+    return hasComments
+      ? { ok: false, error: `Enter between ${svc.min.toLocaleString()} and ${svc.max.toLocaleString()} comments (one per line).` }
+      : { ok: false, error: `Quantity must be between ${svc.min.toLocaleString()} and ${svc.max.toLocaleString()}.` };
   }
 
   // 6. Price it (rates are per 1000).
@@ -136,6 +144,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         service: svc.provider_service_id,
         quantity: qty,
         ...(drip ? { runs: input.runs, interval: input.interval } : {}),
+        ...(hasComments ? { comments: commentList } : {}),
       },
     })
     .select("id")
@@ -179,6 +188,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         link,
         quantity: qty,
         ...(drip ? { runs: input.runs, interval: input.interval } : {}),
+        ...(hasComments ? { comments: commentList.join("\n") } : {}),
       });
       if ("order" in resp) {
         await admin
@@ -223,15 +233,20 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
 
 export interface CustomerOrderVM {
   id: string;
-  localId: string; // short display id (first 8 of uuid)
+  localId: string; // display order number (per-panel sequential), falls back to uuid slice
   serviceId: string | null;
+  serviceNo: number | null; // the service's own number
   serviceName: string;
   link: string;
   quantity: number;
   charge: number;
   status: OrderStatus;
   createdAt: string;
+  failReason: string | null; // provider failure reason for failed/canceled orders
+  comments: string[] | null; // custom comments, if any
 }
+
+const CUSTOMER_FAILED: OrderStatus[] = ["failed", "canceled", "refunded"];
 
 /** The signed-in customer's orders on a panel (newest first). No cost/profit. */
 export async function listCustomerOrders(panelId: string): Promise<CustomerOrderVM[]> {
@@ -252,24 +267,30 @@ export async function listCustomerOrders(panelId: string): Promise<CustomerOrder
 
   const { data } = await admin
     .from("orders")
-    .select("id, service_id, link, quantity, charge, status, created_at, services(name)")
+    .select("id, local_id, service_id, link, quantity, charge, status, created_at, provider_response, provider_payload, services(name, local_id)")
     .eq("customer_id", acct.id)
     .order("created_at", { ascending: false })
     .limit(200);
 
   return (data ?? []).map((o) => {
-    const svc = o.services as { name?: string } | { name?: string }[] | null;
-    const serviceName = Array.isArray(svc) ? svc[0]?.name : svc?.name;
+    const svcRaw = o.services as { name?: string; local_id?: number } | { name?: string; local_id?: number }[] | null;
+    const svc = Array.isArray(svcRaw) ? svcRaw[0] : svcRaw;
+    const pr = o.provider_response as { error?: string } | null;
+    const pp = o.provider_payload as { comments?: string[] } | null;
+    const status = o.status as OrderStatus;
     return {
       id: o.id as string,
-      localId: String(o.id).slice(0, 8),
+      localId: o.local_id != null ? String(o.local_id) : String(o.id).slice(0, 8),
       serviceId: (o.service_id as string) ?? null,
-      serviceName: serviceName ?? "Service",
+      serviceNo: svc?.local_id ?? null,
+      serviceName: svc?.name ?? "Service",
       link: o.link as string,
       quantity: o.quantity as number,
       charge: Number(o.charge),
-      status: o.status as OrderStatus,
+      status,
       createdAt: o.created_at as string,
+      failReason: CUSTOMER_FAILED.includes(status) && typeof pr?.error === "string" ? pr.error : null,
+      comments: Array.isArray(pp?.comments) ? pp!.comments : null,
     };
   });
 }

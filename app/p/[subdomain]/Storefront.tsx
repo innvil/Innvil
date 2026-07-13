@@ -40,6 +40,7 @@ function toCustomerService(s: StorefrontService, i: number): CustomerService {
     refill: false,
     cancel: false,
     drip: false,
+    comments: /comment/i.test(`${s.name} ${s.category ?? ""}`),
     description: s.description ?? "",
     aliases: [],
   };
@@ -117,12 +118,15 @@ export function Storefront({
       initialOrders.map((o) => ({
         id: o.localId,
         serviceId: (o.serviceId && uuidToLocalId.get(o.serviceId)) || 0,
+        serviceNo: o.serviceNo,
         service: o.serviceName,
         link: o.link,
         qty: o.quantity,
         amount: fmt(o.charge),
         status: ORDER_STATUS_LABEL[o.status] ?? "Pending",
         date: formatOrderDate(o.createdAt),
+        failReason: o.failReason,
+        comments: o.comments,
       })),
     [initialOrders, uuidToLocalId]
   );
@@ -146,6 +150,7 @@ export function Storefront({
       quantity: args.quantity,
       runs: args.runs,
       interval: args.interval,
+      comments: args.comments,
     });
     if (res.ok) router.refresh();
     return { ok: res.ok, error: res.ok ? undefined : res.error };

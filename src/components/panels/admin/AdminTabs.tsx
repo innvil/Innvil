@@ -171,8 +171,8 @@ export function OverviewTab({ panel }: { panel: Panel }) {
             <tbody>
               {data.recent.map((o) => (
                 <tr key={o.id} className="border-b fp-line-soft last:border-0">
-                  <td className="py-2.5 fp-mono fp-text-dim">#{o.shortId}</td>
-                  <td className="py-2.5">{o.serviceName}</td>
+                  <td className="py-2.5 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
+                  <td className="py-2.5">{o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}</td>
                   <td className="py-2.5 fp-text-dim">{o.customerEmail ?? "—"}</td>
                   <td className="py-2.5 text-right fp-mono">{fmt(o.charge)}</td>
                   <td className="py-2.5"><OrderStatusPill status={o.status} /></td>
@@ -1552,6 +1552,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
   const [syncing, setSyncing] = useState(false);
   const [currency, setCurrency] = useState("USD");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [commentsView, setCommentsView] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
     if (!realPanel) return;
@@ -1614,6 +1615,8 @@ export function OrdersTab({ panelId }: { panelId: string }) {
   }
 
   return (
+    <>
+    {commentsView && <CommentsModal comments={commentsView} onClose={() => setCommentsView(null)} />}
     <Card
       title="Orders"
       icon={ListOrdered}
@@ -1675,8 +1678,13 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                 return (
                   <React.Fragment key={o.id}>
                     <tr className="border-b fp-line-soft last:border-0">
-                      <td className="py-3 fp-mono fp-text-dim">#{o.shortId}</td>
-                      <td className="py-3">{o.serviceName}</td>
+                      <td className="py-3 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
+                      <td className="py-3">
+                        {o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}
+                        {o.comments && (
+                          <button onClick={() => setCommentsView(o.comments)} title="View comments" className="ml-1.5 fp-gold align-middle"><FileText size={12} /></button>
+                        )}
+                      </td>
                       <td className="py-3 fp-text-dim">{o.customerEmail ?? "—"}</td>
                       <td className="py-3 text-right fp-mono">{o.quantity.toLocaleString()}</td>
                       <td className="py-3 text-right fp-mono">{fmt(o.charge)}</td>
@@ -1698,6 +1706,9 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                           <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 space-y-3 text-xs">
                             {o.held && (
                               <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Your provider&apos;s API balance was insufficient. Top up your provider, then <strong>Resend to provider</strong>. If left unfunded, this order auto-cancels and refunds the customer 24h after it was placed.</p>
+                            )}
+                            {o.failReason && !o.held && (
+                              <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Provider reason: {o.failReason}</p>
                             )}
                             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
                               <p><span className="fp-text-faint">Link:</span> <span className="fp-mono break-all">{o.link}</span></p>
@@ -1736,6 +1747,26 @@ export function OrdersTab({ panelId }: { panelId: string }) {
         </div>
       )}
     </Card>
+    </>
+  );
+}
+
+/** Floating popup that shows a Custom Comments order's comment list. */
+function CommentsModal({ comments, onClose }: { comments: string[]; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onClose}>
+      <div className="fp-panel border fp-line rounded-2xl w-full max-w-md max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b fp-line-soft">
+          <p className="fp-display text-sm flex items-center gap-2"><FileText size={14} /> Comments ({comments.length})</p>
+          <button onClick={onClose} className="fp-text-faint hover:fp-text"><X size={16} /></button>
+        </div>
+        <div className="overflow-y-auto p-4 space-y-1.5">
+          {comments.map((c, i) => (
+            <p key={i} className="text-sm fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 break-words">{c}</p>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -70,8 +70,14 @@ export function addOrder(
     action: "add",
     service: input.service,
     link: input.link,
-    quantity: input.quantity,
   };
+  // Custom Comments: the provider derives quantity from the comment count, so send
+  // `comments` instead of `quantity` (sending both confuses some providers).
+  if (input.comments != null && input.comments.trim() !== "") {
+    params.comments = input.comments;
+  } else {
+    params.quantity = input.quantity;
+  }
   if (input.runs != null) params.runs = input.runs;
   if (input.interval != null) params.interval = input.interval;
   return callProvider(creds, params) as Promise<AddOrderResponse>;

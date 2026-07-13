@@ -19,6 +19,8 @@ export interface PlaceOrderArgs {
   link: string;
   runs?: number;
   interval?: number;
+  /** Custom Comments services: the list of comments (one per line). */
+  comments?: string;
 }
 export type PlaceOrderHandler = (args: PlaceOrderArgs) => Promise<{ ok: boolean; error?: string }>;
 
@@ -125,6 +127,7 @@ export function NewOrder({
   const [drip, setDrip] = useState(false);
   const [dripRuns, setDripRuns] = useState("5");
   const [dripInterval, setDripInterval] = useState("30");
+  const [comments, setComments] = useState("");
 
   const selectService = (s: CustomerService) => {
     setPlatform(s.platform);
@@ -135,6 +138,7 @@ export function NewOrder({
     setPlaced(false);
     setPlaceError(null);
     setDrip(false);
+    setComments("");
     setPickerOpen(false); // collapse the list to a dropdown once chosen
   };
 
@@ -187,7 +191,12 @@ export function NewOrder({
     );
   }, [platform, category, platformFavorites, services]);
 
-  const qtyNum = parseInt(qty, 10) || 0;
+  const isComments = !!service?.comments;
+  const commentLines = useMemo(
+    () => comments.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+    [comments]
+  );
+  const qtyNum = isComments ? commentLines.length : (parseInt(qty, 10) || 0);
   const qtyValid = service ? qtyNum >= service.min && qtyNum <= service.max : false;
   const total = service && qtyNum > 0 ? money((qtyNum / 1000) * service.price) : money(0);
   const isFavorite = service ? favoriteIds.includes(service.id) : false;
@@ -220,6 +229,7 @@ export function NewOrder({
         link: link.trim(),
         runs: drip ? Number(dripRuns) || undefined : undefined,
         interval: drip ? Number(dripInterval) || undefined : undefined,
+        comments: isComments ? comments : undefined,
       });
       setPlacing(false);
       if (!res.ok) { setPlaceError(res.error ?? "Could not place the order."); return; }
@@ -395,6 +405,24 @@ export function NewOrder({
                 className={inputCls}
               />
             </div>
+            {isComments ? (
+              <div>
+                <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <Hash size={11} /> Comments — one per line
+                </p>
+                <textarea
+                  disabled={!canOrder}
+                  value={comments}
+                  onChange={(e) => { setComments(e.target.value); setPlaced(false); }}
+                  rows={6}
+                  placeholder={"Great post!\nLove this 🔥\nAmazing content"}
+                  className={`${inputCls} resize-y`}
+                />
+                <p className={`text-xs mt-1.5 ${qtyValid || commentLines.length === 0 ? "fp-text-faint" : "text-red-400"}`}>
+                  {commentLines.length} comment{commentLines.length === 1 ? "" : "s"} · {service.min.toLocaleString()}–{service.max.toLocaleString()} allowed
+                </p>
+              </div>
+            ) : (
             <div>
               <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-2 flex items-center gap-1.5">
                 <Hash size={11} /> Quantity
@@ -416,6 +444,7 @@ export function NewOrder({
                 </p>
               )}
             </div>
+            )}
 
             {/* Drip feed — only for services that support it, off by default */}
             {service.drip && (
