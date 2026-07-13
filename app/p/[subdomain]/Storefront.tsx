@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -13,7 +13,7 @@ import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
 import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, PublicLandingSection } from "@/src/lib/actions/storefront";
 import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
-import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
+import { createDeposit, getCustomerWalletSnapshot, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
 import {
   customerSignIn, customerSignOut,
@@ -93,6 +93,16 @@ export function Storefront({
   const inactive = panel.status === "inactive";
   const account = initialAccount; // re-fetched by the server after auth via router.refresh()
   const fmt = (n: number) => formatMoney(n, panel.currency);
+  const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
+  const [liveDeposits, setLiveDeposits] = useState(initialDeposits);
+
+  useEffect(() => {
+    setLiveBalance(account?.balance ?? 0);
+  }, [account?.balance]);
+
+  useEffect(() => {
+    setLiveDeposits(initialDeposits);
+  }, [initialDeposits]);
 
   // ---- Live data → customer dashboard shapes -------------------------------
   const uiServices = useMemo(() => services.map(toCustomerService), [services]);
@@ -157,15 +167,35 @@ export function Storefront({
   };
   const uiDeposits = useMemo(
     () =>
-      initialDeposits.map((d) => ({
+      liveDeposits.map((d) => ({
         amount: `+${fmt(d.amount)}`,
         method: d.method === "crypto" ? "Crypto (Cryptomus)" : d.method,
         date: new Date(d.createdAt).toLocaleDateString([], { month: "short", day: "numeric" }),
         status: DEPOSIT_STATUS_LABEL[d.status] ?? d.status,
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [initialDeposits]
+    [liveDeposits]
   );
+
+  useEffect(() => {
+    if (!account) return;
+    const hasPending = liveDeposits.some((d) => d.status === "pending" || d.status === "approved");
+
+    let cancelled = false;
+    const poll = async () => {
+      const next = await getCustomerWalletSnapshot(panel.id);
+      if (!next || cancelled) return;
+      setLiveBalance(next.balance);
+      setLiveDeposits(next.deposits);
+    };
+
+    poll();
+    const id = window.setInterval(poll, hasPending ? 8000 : 20000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [account, liveDeposits, panel.id]);
 
   // Group services by platform for the showcase
   const groups = useMemo(() => {
@@ -271,7 +301,7 @@ export function Storefront({
         logoUrl={panel.logoUrl}
         services={uiServices}
         orders={uiOrders}
-        walletBalance={account.balance}
+        walletBalance={liveBalance}
         deposits={uiDeposits}
         tickets={[]}
         recentIds={recentIds}

@@ -4,6 +4,7 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { round4, CURRENCIES } from "@/src/lib/money";
+import { panelStorefrontPath } from "@/src/lib/config";
 import {
   getAdapter,
   getGatewayContext,
@@ -239,7 +240,7 @@ export async function createDeposit(
   const admin = createAdminClient();
   const { data: panel } = await admin
     .from("panels")
-    .select("id, status, subdomain, settings")
+    .select("id, status, subdomain, custom_domain, settings")
     .eq("id", panelId)
     .maybeSingle();
   if (!panel) return { ok: false, error: "Panel not found." };
@@ -302,7 +303,7 @@ export async function createDeposit(
       currency,
       orderId: pay.id as string,
       callbackUrl: `${appUrl}/api/webhooks/${gw}`,
-      returnUrl: `${appUrl}/p/${panel.subdomain}`,
+      returnUrl: panelStorefrontPath(panel.subdomain as string, (panel.custom_domain as string | null) ?? null),
       config: ctx.config,
       secrets: ctx.secrets,
       customerEmail: user.email ?? null,
@@ -322,6 +323,16 @@ export interface DepositVM {
   status: string;
   method: string;
   createdAt: string;
+}
+
+export interface CustomerWalletSnapshot {
+  balance: number;
+  deposits: DepositVM[];
+}
+
+export interface OwnerDepositVM extends DepositVM {
+  customerId: string;
+  customerEmail: string | null;
 }
 
 export async function listDeposits(panelId: string): Promise<DepositVM[]> {
@@ -355,4 +366,245 @@ export async function listDeposits(panelId: string): Promise<DepositVM[]> {
     method: p.method as string,
     createdAt: p.created_at as string,
   }));
+}
+
+/** Lightweight signed-in wallet snapshot so the storefront can refresh after payment confirmation. */
+export async function getCustomerWalletSnapshot(panelId: string): Promise<CustomerWalletSnapshot | null> {
+  const supa = await createStorefrontClient();
+  const {
+    data: { user },
+  } = await supa.auth.getUser();
+  if (!user) return null;
+
+  const admin = createAdminClient();
+  const { data: acct } = await admin
+    .from("customer_accounts")
+    .select("id, balance")
+    .eq("panel_id", panelId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!acct) return null;
+
+  const deposits = await listDeposits(panelId);
+  return {
+    balance: Number(acct.balance),
+    deposits,
+  };
+}
+
+async function customerAccountForOwner(userId: string, customerAccountId: string) {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("customer_accounts")
+    .select("id, panel_id, user_id")
+    .eq("id", customerAccountId)
+    .maybeSingle();
+  if (!data) return null;
+  if (!(await ownsPanel(userId, data.panel_id as string))) return null;
+  return {
+    id: data.id as string,
+    panelId: data.panel_id as string,
+    userId: data.user_id as string,
+  };
+}
+
+/** Owner-side deposit history for one customer account. */
+export async function listCustomerDeposits(customerAccountId: string): Promise<OwnerDepositVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+
+  const acct = await customerAccountForOwner(user.id, customerAccountId);
+  if (!acct) return [];
+
+  let email: string | null = null;
+  try {
+    const { data } = await admin.auth.admin.getUserById(acct.userId);
+    email = data.user?.email ?? null;
+  } catch {
+    // best-effort
+  }
+
+  const { data } = await admin
+    .from("payments")
+    .select("id, customer_id, amount, currency, status, method, created_at")
+    .eq("customer_id", customerAccountId)
+    .order("created_at", { ascending: false })
+    .limit(25);
+
+  return (data ?? []).map((p) => ({
+    id: p.id as string,
+    customerId: p.customer_id as string,
+    customerEmail: email,
+    amount: Number(p.amount),
+    currency: p.currency as string,
+    status: p.status as string,
+    method: p.method as string,
+    createdAt: p.created_at as string,
+  }));
+}
+
+/** Owner-side panel-wide deposit history for the Payments tab / billing records. */
+export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  if (!(await ownsPanel(user.id, panelId))) return [];
+
+  const { data } = await admin
+    .from("payments")
+    .select("id, customer_id, amount, currency, status, method, created_at")
+    .eq("panel_id", panelId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (!data?.length) return [];
+
+  const { data: accts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id")
+    .eq("panel_id", panelId)
+    .in("id", (data ?? []).map((p) => p.customer_id as string));
+  const userIdByCustomerId = new Map((accts ?? []).map((a) => [a.id as string, a.user_id as string]));
+
+  const emails = new Map<string, string | null>();
+  for (const uid of new Set(Array.from(userIdByCustomerId.values()))) {
+    try {
+      const { data: authData } = await admin.auth.admin.getUserById(uid);
+      emails.set(uid, authData.user?.email ?? null);
+    } catch {
+      emails.set(uid, null);
+    }
+  }
+
+  return data.map((p) => ({
+    id: p.id as string,
+    customerId: p.customer_id as string,
+    customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
+    amount: Number(p.amount),
+    currency: p.currency as string,
+    status: p.status as string,
+    method: p.method as string,
+    createdAt: p.created_at as string,
+  }));
+}
+
+/** Owner-committed top-up: records a completed payment and credits the wallet as a real deposit. */
+export async function commitCustomerTopup(
+  customerAccountId: string,
+  amount: number,
+  reason: string
+): Promise<Result<{ balance: number }>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const acct = await customerAccountForOwner(user.id, customerAccountId);
+  if (!acct) return { ok: false, error: "Customer not found" };
+
+  const amt = round4(Number(amount));
+  if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter an amount greater than 0." };
+
+  const { data: panel } = await admin
+    .from("panels")
+    .select("settings")
+    .eq("id", acct.panelId)
+    .maybeSingle();
+  const currency = readPanelCurrency(panel?.settings);
+
+  const { data: payment, error: payErr } = await admin
+    .from("payments")
+    .insert({
+      panel_id: acct.panelId,
+      customer_id: acct.id,
+      method: "Manual top-up",
+      amount: amt,
+      currency,
+      status: "pending",
+      gateway: "manual",
+      approved_by: user.id,
+    })
+    .select("id")
+    .single();
+  if (payErr || !payment) return { ok: false, error: payErr?.message ?? "Could not record the top-up." };
+
+  const { data: tx, error } = await admin.rpc("apply_balance_change", {
+    p_customer: acct.id,
+    p_amount: amt,
+    p_type: "deposit",
+    p_reason: reason.trim() || `Manual top-up ${payment.id}`,
+    p_admin: user.id,
+  });
+  if (error) {
+    await admin.from("payments").update({ status: "rejected" }).eq("id", payment.id);
+    return { ok: false, error: error.message };
+  }
+
+  await admin.from("payments").update({ status: "completed" }).eq("id", payment.id);
+  return { ok: true, data: { balance: Number((tx as { balance_after: number }).balance_after) } };
+}
+
+/** Owner-side fallback: manually commit a pending/approved payment and credit the wallet. */
+export async function commitPendingPayment(
+  paymentId: string
+): Promise<Result<{ balance: number }>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: payment } = await admin
+    .from("payments")
+    .select("id, panel_id, customer_id, amount, status, method")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (!payment) return { ok: false, error: "Payment not found." };
+  if (!(await ownsPanel(user.id, payment.panel_id as string))) return { ok: false, error: "Not authorized for this panel" };
+  if (payment.status === "completed") return { ok: false, error: "This payment is already completed." };
+  if (payment.status !== "pending" && payment.status !== "approved") {
+    return { ok: false, error: "Only pending payments can be committed." };
+  }
+
+  const { data: claimed } = await admin
+    .from("payments")
+    .update({ status: "completed", approved_by: user.id })
+    .eq("id", paymentId)
+    .in("status", ["pending", "approved"])
+    .select("customer_id, amount, method")
+    .maybeSingle();
+  if (!claimed) return { ok: false, error: "Could not claim this payment for completion." };
+
+  const { data: tx, error } = await admin.rpc("apply_balance_change", {
+    p_customer: claimed.customer_id,
+    p_amount: Number(claimed.amount),
+    p_type: "deposit",
+    p_reason: `${claimed.method} manual commit ${paymentId}`,
+    p_admin: user.id,
+  });
+  if (error) {
+    await admin.from("payments").update({ status: payment.status }).eq("id", paymentId);
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true, data: { balance: Number((tx as { balance_after: number }).balance_after) } };
+}
+
+/** Owner-side safeguard: cancel a pending/approved payment without crediting the wallet. */
+export async function cancelPendingPayment(paymentId: string): Promise<Result> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: payment } = await admin
+    .from("payments")
+    .select("id, panel_id, status")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (!payment) return { ok: false, error: "Payment not found." };
+  if (!(await ownsPanel(user.id, payment.panel_id as string))) return { ok: false, error: "Not authorized for this panel" };
+  if (payment.status === "completed") return { ok: false, error: "Completed payments cannot be canceled." };
+  if (payment.status !== "pending" && payment.status !== "approved") {
+    return { ok: false, error: "Only pending payments can be canceled." };
+  }
+
+  const { error } = await admin
+    .from("payments")
+    .update({ status: "rejected", approved_by: user.id })
+    .eq("id", paymentId)
+    .in("status", ["pending", "approved"]);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }

@@ -53,7 +53,9 @@ function OfflineScreen({ status, name }: { status: PanelStatus; name: string }) 
   );
 }
 
-async function getApiBaseUrl(): Promise<string> {
+async function getApiBaseUrl(customDomain?: string | null): Promise<string> {
+  if (customDomain) return `https://${customDomain}/api/v2`;
+
   const h = await headers();
   const proto = h.get("x-forwarded-proto") ?? "https";
   const host = h.get("x-forwarded-host") ?? h.get("host");
@@ -93,7 +95,7 @@ export default async function StorefrontPage({ params }: Params) {
     getPanelPaymentMethods(panel.id),
     getCustomerApiState(panel.id),
   ]);
-  const apiBaseUrl = await getApiBaseUrl();
+  const apiBaseUrl = await getApiBaseUrl(panel.customDomain);
   // Only signed-in customers have orders/deposits; skip the queries for guests.
   const [orders, deposits] = account
     ? await Promise.all([listCustomerOrders(panel.id), listDeposits(panel.id)])

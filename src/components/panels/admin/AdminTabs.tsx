@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Sparkles, Sliders, Tag,
-  ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
+  ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell, Wallet,
   MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, LucideIcon,
 } from "lucide-react";
 import {
@@ -32,7 +32,9 @@ import {
   type PanelCustomerVM,
 } from "@/src/lib/actions/customers";
 import {
-  getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency, type PaymentsMeta,
+  getPaymentsMeta, connectGateway, disconnectGateway, setPanelCurrency,
+  listCustomerDeposits, listPanelDeposits, commitPendingPayment, cancelPendingPayment,
+  type PaymentsMeta, type OwnerDepositVM,
 } from "@/src/lib/actions/payments";
 import { getPanelBranding, updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import {
@@ -1745,6 +1747,8 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
   const [openId, setOpenId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
+  const [depositBusyId, setDepositBusyId] = useState<string | null>(null);
+  const [depositRows, setDepositRows] = useState<Record<string, OwnerDepositVM[]>>({});
   const rowsRef = useRef<PanelCustomerVM[] | null>(rows);
 
   useEffect(() => { rowsRef.current = rows; }, [rows]);
@@ -1765,9 +1769,15 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
   }, [panel.id, realPanel]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  const openAdjust = (id: string) => {
-    setOpenId((cur) => (cur === id ? null : id));
+  const openAdjust = async (id: string) => {
+    const nextOpen = openId === id ? null : id;
+    setOpenId(nextOpen);
     setAmount(""); setReason(""); setMsg(null);
+    if (!nextOpen || depositRows[id]) return;
+    setDepositBusyId(id);
+    const next = await listCustomerDeposits(id);
+    setDepositRows((prev) => ({ ...prev, [id]: next }));
+    setDepositBusyId(null);
   };
   const adjust = async (id: string, sign: 1 | -1) => {
     const val = Number(amount);
@@ -1785,6 +1795,35 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
     const res = await setCustomerStatus(c.id, next);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     refresh();
+  };
+
+  const commitTopup = async (paymentId: string, customerId: string) => {
+    const proceed = window.confirm(
+      "This will manually mark the pending top-up as verified and credit the customer's wallet. Make sure you checked the payment provider first."
+    );
+    if (!proceed) return;
+    setBusy(true);
+    const res = await commitPendingPayment(paymentId);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: `Pending payment committed. Balance updated to $${res.data.balance.toFixed(2)}. Ask the customer to check their wallet to confirm the credit.` });
+    await refresh();
+    const next = await listCustomerDeposits(customerId);
+    setDepositRows((prev) => ({ ...prev, [customerId]: next }));
+  };
+
+  const cancelTopup = async (paymentId: string, customerId: string) => {
+    const proceed = window.confirm(
+      "Cancel this pending top-up? This will not credit the customer's wallet."
+    );
+    if (!proceed) return;
+    setBusy(true);
+    const res = await cancelPendingPayment(paymentId);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: "Pending top-up canceled. No wallet credit was applied." });
+    const next = await listCustomerDeposits(customerId);
+    setDepositRows((prev) => ({ ...prev, [customerId]: next }));
   };
 
   if (!realPanel) {
@@ -1827,7 +1866,11 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
               {rows.map((c) => (
                 <React.Fragment key={c.id}>
                   <tr className="border-b fp-line-soft last:border-0">
-                    <td className="py-3 pr-3">{c.email ?? <span className="fp-text-faint fp-mono">{c.userId.slice(0, 8)}</span>}</td>
+                    <td className="py-3 pr-3">
+                      <button onClick={() => openAdjust(c.id)} className="text-left hover:fp-gold">
+                        {c.email ?? <span className="fp-text-faint fp-mono">{c.userId.slice(0, 8)}</span>}
+                      </button>
+                    </td>
                     <td className="py-3 fp-mono fp-gold">${c.balance.toFixed(2)}</td>
                     <td className="py-3 fp-mono">{c.orders}</td>
                     <td className="py-3 fp-mono">${c.spent.toFixed(2)}</td>
@@ -1846,18 +1889,65 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
                   {openId === c.id && (
                     <tr className="border-b fp-line-soft">
                       <td colSpan={6} className="py-3">
-                        <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex flex-wrap items-end gap-3">
-                          <div>
-                            <label className="fp-text-dim text-[10px] fp-mono uppercase">Amount ($)</label>
-                            <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" min="0" step="0.01" placeholder="0.00" className={`${inputCls} fp-mono w-32 mt-1 block`} />
+                        <div className="space-y-4">
+                          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex flex-wrap items-end gap-3">
+                            <div>
+                              <label className="fp-text-dim text-[10px] fp-mono uppercase">Amount ($)</label>
+                              <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" min="0" step="0.01" placeholder="0.00" className={`${inputCls} fp-mono w-32 mt-1 block`} />
+                              <p className="fp-text-faint text-[11px] mt-1">Used only for manual credit/debit adjustments.</p>
+                            </div>
+                            <div className="flex-1 min-w-[160px]">
+                              <label className="fp-text-dim text-[10px] fp-mono uppercase">Reason (optional)</label>
+                              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. bonus, correction" className={`${inputCls} w-full mt-1 block`} />
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button onClick={() => adjust(c.id, 1)} disabled={busy} className="text-xs font-semibold px-4 py-2 rounded-lg border fp-line-soft fp-text-dim disabled:opacity-50">Credit +</button>
+                              <button onClick={() => adjust(c.id, -1)} disabled={busy} className="text-xs font-semibold px-4 py-2 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">Debit −</button>
+                            </div>
                           </div>
-                          <div className="flex-1 min-w-[160px]">
-                            <label className="fp-text-dim text-[10px] fp-mono uppercase">Reason (optional)</label>
-                            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. bonus, manual top-up" className={`${inputCls} w-full mt-1 block`} />
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => adjust(c.id, 1)} disabled={busy} className="fp-btn-primary text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-50">Credit +</button>
-                            <button onClick={() => adjust(c.id, -1)} disabled={busy} className="text-xs font-semibold px-4 py-2 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">Debit −</button>
+
+                          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+                            <p className="fp-text-faint text-[10px] fp-mono uppercase mb-2">Top-up record</p>
+                            {depositBusyId === c.id ? (
+                              <p className="fp-text-faint text-sm py-3">Loading top-ups…</p>
+                            ) : (depositRows[c.id]?.length ?? 0) === 0 ? (
+                              <p className="fp-text-faint text-sm py-3">No top-ups recorded yet.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {(depositRows[c.id] ?? []).map((d) => (
+                                  <div key={d.id} className="flex items-center justify-between gap-3 text-xs border-b fp-line-soft last:border-0 pb-2 last:pb-0">
+                                    <div>
+                                      <p className="fp-text">{d.method}</p>
+                                      <p className="fp-text-faint">{new Date(d.createdAt).toLocaleString()}</p>
+                                    </div>
+                                    <div className="text-right flex items-center gap-2">
+                                      {(d.status === "pending" || d.status === "approved") && (
+                                        <>
+                                          <button
+                                            onClick={() => commitTopup(d.id, c.id)}
+                                            disabled={busy}
+                                            className="fp-btn-primary text-[11px] font-semibold px-3 py-1.5 rounded-lg disabled:opacity-50"
+                                          >
+                                            Commit
+                                          </button>
+                                          <button
+                                            onClick={() => cancelTopup(d.id, c.id)}
+                                            disabled={busy}
+                                            className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </>
+                                      )}
+                                      <div>
+                                      <p className="fp-mono fp-gold">+${d.amount.toFixed(2)}</p>
+                                      <p className="fp-text-faint uppercase">{d.status}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1889,6 +1979,9 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [records, setRecords] = useState<OwnerDepositVM[] | null>(() =>
+    realPanel ? readAdminCache<OwnerDepositVM[]>(panelId, "payment-records") : []
+  );
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const metaRef = useRef<PaymentsMeta | null>(meta);
 
@@ -1898,15 +1991,21 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
     if (!realPanel) {
       setMeta(fallbackMeta);
       writeAdminCache(panelId, "payments", fallbackMeta);
+      setRecords([]);
+      writeAdminCache(panelId, "payment-records", []);
       return;
     }
 
     const cached = metaRef.current ?? readAdminCache<PaymentsMeta>(panelId, "payments");
     if (cached) setMeta(cached);
+    const cachedRecords = readAdminCache<OwnerDepositVM[]>(panelId, "payment-records");
+    if (cachedRecords) setRecords(cachedRecords);
 
-    const next = await getPaymentsMeta(panelId);
+    const [next, depositRows] = await Promise.all([getPaymentsMeta(panelId), listPanelDeposits(panelId)]);
     setMeta(next);
+    setRecords(depositRows);
     writeAdminCache(panelId, "payments", next);
+    writeAdminCache(panelId, "payment-records", depositRows);
   }, [panelId, realPanel]);
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -1992,6 +2091,26 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
           </select>
         </Card>
       )}
+
+      <Card title="Recent top-ups" icon={Wallet}>
+        {records === null ? (
+          <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
+        ) : records.length === 0 ? (
+          <p className="fp-text-faint text-sm py-4 text-center">No customer top-ups recorded yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {records.slice(0, 12).map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-3 border-b fp-line-soft last:border-0 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm truncate">{r.customerEmail ?? r.customerId.slice(0, 8)}</p>
+                  <p className="fp-text-faint text-xs">{r.method} · {new Date(r.createdAt).toLocaleString()} · {r.status}</p>
+                </div>
+                <span className="fp-mono text-sm fp-gold shrink-0">+{r.amount.toFixed(2)} {r.currency}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <Card title="Payment gateways" icon={CreditCard}>
         <p className="fp-text-dim text-sm mb-5">

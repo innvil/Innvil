@@ -8,6 +8,15 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Pending top-up owner safeguards (v0.2.22)
+
+### Date: 2026-07-13
+- Owner-side pending top-up records now require an explicit confirmation prompt before manual commit, warning the owner to verify the payment with the gateway first.
+- Pending top-up rows now support both **Commit** and **Cancel** actions; cancel marks the record rejected and guarantees no wallet credit is applied.
+- The amount input in the customer expansion is now clearly for manual balance adjustment only (`Credit +` / `Debit -`), not for committing pending gateway deposits.
+- Commit success messaging now reminds the owner to ask the customer to check their wallet for the reflected credit.
+- **package.json → 0.2.22.**
+
 ## Session: Custom-domain reliability + UX hardening (v0.2.21)
 
 ### Date: 2026-07-13

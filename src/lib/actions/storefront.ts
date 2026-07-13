@@ -168,26 +168,37 @@ export interface StorefrontService {
 
 type ServiceJoin = Pick<
   ServiceRow,
-  "id" | "local_id" | "name" | "platform" | "sell_rate" | "min" | "max" | "description"
-> & { provider_categories: Array<{ name: string | null }> | null };
+  "id" | "local_id" | "name" | "platform" | "sell_rate" | "min" | "max" | "description" | "category_id"
+>;
 
 /** Active services for a panel's storefront (customer-safe fields only). */
 export async function getStorefrontServices(panelId: string): Promise<StorefrontService[]> {
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("services")
-    .select("id, local_id, name, platform, sell_rate, min, max, description, provider_categories(name)")
-    .eq("panel_id", panelId)
-    .eq("status", "active")
-    .order("sort_order", { ascending: true })
-    .order("name", { ascending: true });
+  const [{ data: services }, { data: categories }] = await Promise.all([
+    admin
+      .from("services")
+      .select("id, local_id, name, platform, sell_rate, min, max, description, category_id")
+      .eq("panel_id", panelId)
+      .eq("status", "active")
+      .order("sort_order", { ascending: true })
+      .order("name", { ascending: true }),
+    admin
+      .from("provider_categories")
+      .select("id, name, parent_id")
+      .eq("panel_id", panelId),
+  ]);
 
-  return ((data as ServiceJoin[] | null) ?? []).map((r) => ({
+  const categoryById = new Map(
+    ((categories as Array<{ id: string; name: string | null; parent_id: string | null }> | null) ?? [])
+      .map((c) => [c.id, c])
+  );
+
+  return ((services as ServiceJoin[] | null) ?? []).map((r) => ({
     id: r.id,
     localId: r.local_id,
     name: r.name,
     platform: r.platform,
-    category: r.provider_categories?.[0]?.name ?? null,
+    category: (r.category_id ? categoryById.get(r.category_id)?.name : null) ?? null,
     price: Number(r.sell_rate),
     min: r.min,
     max: r.max,
