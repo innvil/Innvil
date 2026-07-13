@@ -267,7 +267,7 @@ export interface CustomerOrder {
   link: string;
   qty: number;
   amount: string;
-  status: "Completed" | "Processing" | "In progress" | "Pending" | "Partial" | "Canceled";
+  status: "Completed" | "Processing" | "In progress" | "Pending" | "Partial" | "Canceled" | "Refunded";
   date: string;
   failReason?: string | null;
   comments?: string[] | null;

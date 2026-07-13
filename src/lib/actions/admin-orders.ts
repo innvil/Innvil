@@ -138,7 +138,7 @@ function mapOrderRow(r: OrderRow, emails: Map<string, string | null>): AdminOrde
     remains: r.remains,
     createdAt: r.created_at,
     held: r.provider_response?.held === true && r.status === "pending",
-    failReason: FAILED_STATES.includes(r.status) ? err : null,
+    failReason: (FAILED_STATES.includes(r.status) || (r.provider_response?.held === true && r.status === "pending")) ? err : null,
     comments: Array.isArray(r.provider_payload?.comments) ? r.provider_payload!.comments : null,
   };
 }

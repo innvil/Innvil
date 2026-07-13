@@ -8,6 +8,14 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Auto-refunds + provider-balance hold UX (v0.2.29)
+
+### Date: 2026-07-13
+- **Failed orders now auto-refund by default.** Sync-time provider failures and provider status errors move orders to `refunded` and credit the full charge back automatically.
+- **Insufficient provider API balance remains the only exception.** Those orders stay on hold for 24h, remain customer-visible as processing during that window, and auto-refund after the hold expires.
+- **Owner/customer messaging was aligned.** Owner order details now tell the owner to add balance to the provider and still surface the provider failure reason; customer orders can distinguish refunded terminal outcomes and show the reason when relevant.
+- package.json → 0.2.29. No migration.
+
 ## Session: Live provider progress sync + order stats (v0.2.28)
 
 ### Date: 2026-07-13

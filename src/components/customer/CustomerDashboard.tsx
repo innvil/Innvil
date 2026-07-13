@@ -55,6 +55,7 @@ const statusTone: Record<string, string> = {
   Pending: "fp-violet-soft-bg fp-violet",
   Partial: "fp-gold-soft-bg fp-gold",
   Canceled: "bg-red-500/10 text-red-400",
+  Refunded: "bg-red-500/10 text-red-400",
 };
 
 function ServiceQuickCard({
@@ -802,7 +803,7 @@ function OrderRows({
                   </>
                 )}
               </p>
-              {o.failReason && (o.status === "Canceled") && (
+              {o.failReason && (o.status === "Canceled" || o.status === "Refunded") && (
                 <p className="text-[11px] text-red-400 mt-0.5 truncate">Reason: {o.failReason}</p>
               )}
             </div>

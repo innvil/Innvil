@@ -246,6 +246,7 @@ export interface CustomerOrderVM {
   createdAt: string;
   failReason: string | null; // provider failure reason for failed/canceled orders
   comments: string[] | null; // custom comments, if any
+  held: boolean; // provider-balance hold: show as processing customer-side until auto-refund
 }
 
 const CUSTOMER_FAILED: OrderStatus[] = ["failed", "canceled", "refunded"];
@@ -280,9 +281,11 @@ export async function listCustomerOrders(panelId: string): Promise<CustomerOrder
   return (data ?? []).map((o) => {
     const svcRaw = o.services as { name?: string; local_id?: number } | { name?: string; local_id?: number }[] | null;
     const svc = Array.isArray(svcRaw) ? svcRaw[0] : svcRaw;
-    const pr = o.provider_response as { error?: string } | null;
+    const pr = o.provider_response as { error?: string; held?: boolean } | null;
     const pp = o.provider_payload as { comments?: string[] } | null;
-    const status = o.status as OrderStatus;
+    const rawStatus = o.status as OrderStatus;
+    const held = pr?.held === true && rawStatus === "pending";
+    const status = held ? "processing" : rawStatus;
     return {
       id: o.id as string,
       localId: o.local_id != null ? String(o.local_id) : String(o.id).slice(0, 8),
@@ -296,6 +299,7 @@ export async function listCustomerOrders(panelId: string): Promise<CustomerOrder
       createdAt: o.created_at as string,
       failReason: CUSTOMER_FAILED.includes(status) && typeof pr?.error === "string" ? pr.error : null,
       comments: Array.isArray(pp?.comments) ? pp!.comments : null,
+      held,
     };
   });
 }

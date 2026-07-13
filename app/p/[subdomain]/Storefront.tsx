@@ -54,8 +54,8 @@ const ORDER_STATUS_LABEL: Record<string, CustomerOrder["status"]> = {
   partial: "Partial",
   completed: "Completed",
   canceled: "Canceled",
-  failed: "Canceled",
-  refunded: "Canceled",
+  failed: "Refunded",
+  refunded: "Refunded",
 };
 
 function formatOrderDate(iso: string): string {

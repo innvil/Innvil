@@ -17,6 +17,11 @@ import type { OrderStatus } from "@/src/types/db";
 // failed) are left alone.
 const OPEN_STATUSES: OrderStatus[] = ["pending", "processing", "in_progress"];
 
+function isInsufficientProviderBalance(msg?: string | null): boolean {
+  if (!msg) return false;
+  return /insufficient|not enough (funds|balance|money)|no (funds|balance)|low balance|top ?up|add funds/i.test(msg);
+}
+
 /** Map a provider's free-text status to our enum (null = unknown, leave as-is). */
 export function mapProviderStatus(raw: string): OrderStatus | null {
   const s = (raw || "").toLowerCase();
@@ -67,11 +72,11 @@ export async function expireHeldOrders(admin: SupabaseClient, panelId: string): 
 
   let canceled = 0;
   for (const o of data ?? []) {
-    const pr = o.provider_response as { held?: boolean } | null;
+    const pr = o.provider_response as { held?: boolean; error?: string } | null;
     if (!pr || pr.held !== true) continue;
-    // Atomically claim pending → canceled so only one run refunds.
+    // Atomically claim pending → refunded so only one run refunds.
     const { data: claimed } = await admin
-      .from("orders").update({ status: "canceled" })
+      .from("orders").update({ status: "refunded" })
       .eq("id", o.id).eq("status", "pending").select("id").maybeSingle();
     if (!claimed) continue;
     await admin.rpc("apply_balance_change", {
@@ -81,7 +86,7 @@ export async function expireHeldOrders(admin: SupabaseClient, panelId: string): 
       p_reason: `Order ${o.id} auto-canceled — provider balance not funded within 24h`,
     });
     await admin.from("order_status_history").insert({
-      order_id: o.id, status: "canceled", note: "Auto-canceled after 24h on hold (provider balance).",
+      order_id: o.id, status: "refunded", note: `Auto-refunded after 24h on hold (provider balance).${pr.error ? ` (${pr.error})` : ""}`,
     });
     canceled++;
   }
@@ -140,10 +145,39 @@ export async function syncPanelOrders(
 
       for (const [pid, st] of Object.entries(resp)) {
         const o = byProviderOrderId.get(pid);
-        if (!o || !st || "error" in st) continue;
+        if (!o || !st) continue;
+
+        if ("error" in st) {
+          const reason = String(st.error || "Provider returned a status error");
+          if (isInsufficientProviderBalance(reason)) continue;
+          const { data: claimed } = await admin
+            .from("orders")
+            .update({
+              status: "refunded",
+              provider_response: { error: reason, synced: true },
+            })
+            .eq("id", o.id)
+            .in("status", OPEN_STATUSES)
+            .select("id")
+            .maybeSingle();
+          if (!claimed) continue;
+          await admin.rpc("apply_balance_change", {
+            p_customer: o.customer_id,
+            p_amount: Number(o.charge),
+            p_type: "refund",
+            p_reason: `Order ${o.id} provider status error`,
+          });
+          await admin
+            .from("order_status_history")
+            .insert({ order_id: o.id, status: "refunded", note: `Provider status error — auto-refunded. (${reason})` });
+          updated++;
+          continue;
+        }
 
         const next = mapProviderStatus(st.status);
         if (!next || next === o.status) continue;
+
+        const finalStatus: OrderStatus = next === "failed" ? "refunded" : next;
 
         const remains = Number(st.remains);
         const startCount = Number(st.start_count);
@@ -152,9 +186,10 @@ export async function syncPanelOrders(
         const { data: claimed } = await admin
           .from("orders")
           .update({
-            status: next,
+            status: finalStatus,
             remains: Number.isFinite(remains) ? remains : o.remains,
             start_count: Number.isFinite(startCount) ? startCount : null,
+            provider_response: st as unknown as Record<string, unknown>,
           })
           .eq("id", o.id)
           .in("status", OPEN_STATUSES)
@@ -163,9 +198,9 @@ export async function syncPanelOrders(
         if (!claimed) continue; // another run handled it
 
         // Refund the unfilled portion once, on the way into a terminal state.
-        if (next === "partial" || next === "canceled" || next === "refunded") {
+        if (finalStatus === "partial" || finalStatus === "canceled" || finalStatus === "refunded") {
           let refund = 0;
-          if (next === "refunded") {
+          if (finalStatus === "refunded") {
             refund = Number(o.charge);
           } else if (Number.isFinite(remains) && remains > 0 && o.quantity > 0) {
             refund = round4(Number(o.charge) * Math.min(remains / o.quantity, 1));
@@ -182,7 +217,11 @@ export async function syncPanelOrders(
 
         await admin
           .from("order_status_history")
-          .insert({ order_id: o.id, status: next, note: "Synced from provider" });
+          .insert({
+            order_id: o.id,
+            status: finalStatus,
+            note: next === "failed" ? "Provider marked the order failed — auto-refunded." : "Synced from provider",
+          });
         updated++;
       }
     }

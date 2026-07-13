@@ -1729,7 +1729,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                         <td colSpan={7} className="pb-4">
                           <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 space-y-3 text-xs">
                             {o.held && (
-                              <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Your provider&apos;s API balance was insufficient. Top up your provider, then <strong>Resend to provider</strong>. If left unfunded, this order auto-cancels and refunds the customer 24h after it was placed.</p>
+                              <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Your provider&apos;s API balance was insufficient. Please add balance to the provider, then <strong>Resend to provider</strong>. If left unfunded, this order stays customer-visible as processing and auto-refunds 24h after it was placed{o.failReason ? ` (${o.failReason})` : ""}.</p>
                             )}
                             {o.failReason && !o.held && (
                               <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Provider reason: {o.failReason}</p>
