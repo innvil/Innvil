@@ -8,6 +8,14 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Failed-order sync reconciliation (v0.2.30)
+
+### Date: 2026-07-13
+- **Sync now sweeps orders already stuck in `failed`.** Clicking order-status sync from panel/customer flows no longer skips old failed rows.
+- **Normal failed orders auto-refund on sync.** Failed rows are promoted to `refunded` with a balance credit.
+- **Provider-balance failures stay protected.** If the failed reason indicates insufficient provider API balance, sync converts the order into the held pending state instead of refunding immediately, so the 24h delayed refund rule still applies.
+- package.json → 0.2.30. No migration.
+
 ## Session: Auto-refunds + provider-balance hold UX (v0.2.29)
 
 ### Date: 2026-07-13

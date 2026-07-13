@@ -58,6 +58,71 @@ interface OpenOrder {
 const HELD_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * Older runs could leave orders in `failed` without refunding. Sweep them during
+ * sync: refund normal failures, but move provider-balance failures into the held
+ * pending state so they follow the 24h delayed refund rule.
+ */
+async function reconcileFailedOrders(admin: SupabaseClient, panelId: string): Promise<number> {
+  const { data } = await admin
+    .from("orders")
+    .select("id, customer_id, charge, provider_response")
+    .eq("panel_id", panelId)
+    .eq("status", "failed");
+
+  let updated = 0;
+  for (const o of data ?? []) {
+    const pr = (o.provider_response as { error?: string; held?: boolean; reason?: string } | null) ?? null;
+    const reason = typeof pr?.error === "string" ? pr.error : "Provider marked the order failed";
+
+    if (isInsufficientProviderBalance(reason)) {
+      const nextResponse: Record<string, unknown> = {
+        ...(pr as Record<string, unknown> | null ?? {}),
+        held: true,
+        reason: "provider_balance",
+      };
+      const { data: claimed } = await admin
+        .from("orders")
+        .update({ status: "pending", provider_response: nextResponse })
+        .eq("id", o.id)
+        .eq("status", "failed")
+        .select("id")
+        .maybeSingle();
+      if (!claimed) continue;
+      await admin.from("order_status_history").insert({
+        order_id: o.id,
+        status: "pending",
+        note: `Converted failed order to provider-balance hold. (${reason})`,
+      });
+      updated++;
+      continue;
+    }
+
+    const { data: claimed } = await admin
+      .from("orders")
+      .update({ status: "refunded" })
+      .eq("id", o.id)
+      .eq("status", "failed")
+      .select("id")
+      .maybeSingle();
+    if (!claimed) continue;
+    await admin.rpc("apply_balance_change", {
+      p_customer: o.customer_id,
+      p_amount: Number(o.charge),
+      p_type: "refund",
+      p_reason: `Order ${o.id} provider failed`,
+    });
+    await admin.from("order_status_history").insert({
+      order_id: o.id,
+      status: "refunded",
+      note: `Auto-refunded failed order during sync. (${reason})`,
+    });
+    updated++;
+  }
+
+  return updated;
+}
+
+/**
  * Auto-cancel + refund orders that have been ON HOLD (provider balance insufficient)
  * for over 24h. Returns how many were canceled. Runs as part of each sync pass.
  */
@@ -100,6 +165,7 @@ export async function syncPanelOrders(
 ): Promise<{ checked: number; updated: number }> {
   // First, expire any orders held too long on insufficient provider balance.
   const expired = await expireHeldOrders(admin, panelId);
+  const reconciledFailed = await reconcileFailedOrders(admin, panelId);
 
   const { data: orders } = await admin
     .from("orders")
@@ -110,7 +176,7 @@ export async function syncPanelOrders(
     .not("provider_id", "is", null);
 
   const list = (orders as OpenOrder[] | null) ?? [];
-  if (!list.length) return { checked: 0, updated: expired };
+  if (!list.length) return { checked: 0, updated: expired + reconciledFailed };
 
   // Group by provider (each has its own credentials).
   const byProvider = new Map<string, OpenOrder[]>();
@@ -227,18 +293,17 @@ export async function syncPanelOrders(
     }
   }
 
-  return { checked: list.length, updated: updated + expired };
+  return { checked: list.length, updated: updated + expired + reconciledFailed };
 }
 
 /** Sync open orders across every panel that has any. Used by the cron. */
 export async function syncAllOpenOrders(): Promise<{ panels: number; checked: number; updated: number }> {
   const admin = createAdminClient();
-  // Any panel with an open order (mapped OR held-pending) needs a pass — held
-  // orders have no provider_order_id but still must be expired after 24h.
+  // Any panel with an open order, held order, or failed order needs a pass.
   const { data } = await admin
     .from("orders")
     .select("panel_id")
-    .in("status", OPEN_STATUSES);
+    .in("status", [...OPEN_STATUSES, "failed"]);
 
   const panelIds = [...new Set((data ?? []).map((o) => o.panel_id as string))];
   let checked = 0;
