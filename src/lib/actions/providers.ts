@@ -78,6 +78,27 @@ export async function listProviders(panelId: string): Promise<ProviderRow[]> {
   return (data as ProviderRow[]) ?? [];
 }
 
+export interface OwnerProviderVM extends ProviderRow {
+  panelName: string;
+}
+
+/** Every provider across ALL panels the owner controls (no keys). For the app-level
+ *  Providers page — one place to see which API needs a top-up. */
+export async function listAllOwnerProviders(): Promise<OwnerProviderVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return [];
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+  const { data } = await admin
+    .from("providers")
+    .select(PROVIDER_COLS)
+    .in("panel_id", list.map((p) => p.id))
+    .order("created_at", { ascending: true });
+  return ((data as ProviderRow[] | null) ?? []).map((p) => ({ ...p, panelName: nameById.get(p.panel_id) ?? "Panel" }));
+}
+
 export async function createProvider(input: ProviderInput): Promise<Result<{ id: string }>> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };

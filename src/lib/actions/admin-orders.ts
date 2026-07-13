@@ -79,6 +79,8 @@ export interface AdminOrderVM {
   providerOrderId: string | null;
   remains: number | null;
   createdAt: string;
+  /** True when the order is pending because the PROVIDER's balance was insufficient. */
+  held: boolean;
 }
 
 interface OrderRow {
@@ -95,6 +97,7 @@ interface OrderRow {
   provider_order_id: string | null;
   remains: number | null;
   created_at: string;
+  provider_response: { held?: boolean } | null;
   services: { name?: string } | { name?: string }[] | null;
   customer_accounts: { user_id?: string } | { user_id?: string }[] | null;
 }
@@ -119,6 +122,7 @@ function mapOrderRow(r: OrderRow, emails: Map<string, string | null>): AdminOrde
     providerOrderId: r.provider_order_id,
     remains: r.remains,
     createdAt: r.created_at,
+    held: r.provider_response?.held === true && r.status === "pending",
   };
 }
 
@@ -147,7 +151,7 @@ export async function listPanelOrders(
 
   const base = admin
     .from("orders")
-    .select("id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, services(name), customer_accounts(user_id)")
+    .select("id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, services(name), customer_accounts(user_id)")
     .eq("panel_id", panelId);
   const filtered = opts?.status && opts.status !== "all" ? base.eq("status", opts.status) : base;
 
@@ -175,7 +179,7 @@ export async function listAllOwnerOrders(limit = 200): Promise<OwnerOrderVM[]> {
 
   const { data } = await admin
     .from("orders")
-    .select("id, panel_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, services(name), customer_accounts(user_id)")
+    .select("id, panel_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, services(name), customer_accounts(user_id)")
     .in("panel_id", list.map((p) => p.id))
     .order("created_at", { ascending: false })
     .limit(limit);

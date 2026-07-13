@@ -34,6 +34,12 @@ async function addHistory(admin: SupabaseClient, orderId: string, status: OrderS
   await admin.from("order_status_history").insert({ order_id: orderId, status, note: note ?? null });
 }
 
+/** Whether a provider error message means the PROVIDER's own balance is too low. */
+function isInsufficientBalance(msg?: string | null): boolean {
+  if (!msg) return false;
+  return /insufficient|not enough (funds|balance|money)|no (funds|balance)|low balance|top ?up|add funds/i.test(msg);
+}
+
 /** Refund a charge and mark the order refunded (used when the provider rejects it). */
 async function refundAndFail(
   admin: SupabaseClient,
@@ -187,6 +193,17 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
         return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "processing" };
       }
       // Provider returned an error payload.
+      // If it's an INSUFFICIENT PROVIDER BALANCE, don't refund/fail immediately —
+      // hold the order so the owner can top up their provider. It auto-cancels +
+      // refunds after 24h (see expireHeldOrders) if still unfunded.
+      if (isInsufficientBalance(resp.error)) {
+        await admin.from("orders").update({
+          status: "pending",
+          provider_response: { ...(resp as Record<string, unknown>), held: true, reason: "provider_balance" },
+        }).eq("id", order.id);
+        await addHistory(admin, order.id, "pending", `On hold — provider balance insufficient; auto-cancels in 24h. (${resp.error ?? ""})`);
+        return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "pending" };
+      }
       await admin
         .from("orders")
         .update({ provider_response: resp as Record<string, unknown> })

@@ -8,6 +8,47 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Providers (all panels) sidebar section (v0.2.24)
+
+### Date: 2026-07-13
+- New owner sidebar section **"Providers (all panels)"** (mirrors Orders/Customers
+  all-panels). `providers.ts listAllOwnerProviders()` → OwnerProviderVM[] (ProviderRow
+  + panelName) across every owned panel. `OwnerProviders` in OwnerSections.tsx: cached
+  instant paint + background sync, auto-refreshes stale/missing balances once on load,
+  per-row Refresh. Balances color-coded with red "Top up" (≤0) / amber "Low" (<$10)
+  flags + "balance · <ago>" freshness — one place to see which API needs funding.
+- Wired: sidebar item + `{section === "providers" && <OwnerProviders/>}` in index.tsx.
+  package.json → 0.2.24. No migration.
+
+---
+
+## Session: Auto-credit fix + order holds + earnings section + global customer adjust (v0.2.23)
+
+### Date: 2026-07-13
+Batch of feedback items. **package.json → 0.2.23.** No migration.
+1. **NOWPayments finished top-ups now auto-credit** (was: had to manually commit).
+   Root cause: the adapter hard-failed when the HMAC-over-re-serialized-JSON signature
+   didn't match. Fix: `nowpayments.ts verifyWebhook` now uses the AUTHORITATIVE
+   server-to-server `getPaymentStatus` (owner's API key) as the gate; the HMAC is
+   best-effort only (matches how Cryptomus already works). Finished → credited.
+2. **Orders: insufficient PROVIDER balance → hold, not instant refund.** `placeOrder`
+   detects an insufficient-balance provider error (`isInsufficientBalance`), keeps the
+   order pending + marks `provider_response.held=true` (no refund), history note.
+   `sync.ts expireHeldOrders` auto-cancels + refunds held orders 24h after placement;
+   runs inside every sync pass (cron + owner "Sync statuses"); `syncAllOpenOrders` now
+   also visits panels with only held orders. Owner Orders (per-panel + all-panels) show
+   an "On hold" chip + a warning explaining top-up-then-Resend / 24h auto-cancel.
+   `AdminOrderVM.held` (parsed from provider_response).
+3. **Earnings & receipts** = its own owner sidebar section (was inside Billing). Houses
+   the top-ups − API cost = profit receipt generator (`ReceiptCard`). Billing keeps the
+   Innvil-commission balance only.
+4. **Customers (all panels)** rows now expand on click → manual **Credit +/Debit −**
+   (reason required) via `adjustCustomerBalance`, updating the row balance in place —
+   so the owner can fix payment errors without going panel-by-panel. Copy reiterates
+   the privacy boundary (no login-as-customer / no password reset).
+
+---
+
 ## Session: Pending top-up owner safeguards (v0.2.22)
 
 ### Date: 2026-07-13

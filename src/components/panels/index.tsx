@@ -22,7 +22,7 @@ import {
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
 import { AccountSettings } from "./AccountSettings";
-import { OwnerOrders, OwnerCustomers, OwnerBilling } from "./OwnerSections";
+import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling } from "./OwnerSections";
 import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
@@ -370,8 +370,10 @@ function AppSidebar({ section, setSection, isSuper }: { section: string; setSect
     { k: "home", label: "Dashboard home", icon: LayoutGrid },
     { k: "panels", label: "My Panels", icon: Gauge },
     { k: "billing", label: "Billing", icon: Wallet },
+    { k: "earnings", label: "Earnings & receipts", icon: TrendingUp },
     { k: "orders", label: "Orders (all panels)", icon: ListOrdered },
     { k: "customers", label: "Customers (all panels)", icon: Users },
+    { k: "providers", label: "Providers (all panels)", icon: Wifi },
     { k: "support", label: "Support inbox", icon: MessageSquare },
   ];
 
@@ -1073,14 +1075,19 @@ export function InnvilApp({ setWorld, initialSection }: {
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
         {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} initialTab={panelInitialTab} />}
-        {section === "billing" && (
-          <>
-            <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />
-            <div className="px-8 pb-8 -mt-2 max-w-3xl"><ReceiptCard /></div>
-          </>
+        {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
+        {section === "earnings" && (
+          <div className="p-8 space-y-6 max-w-3xl">
+            <div>
+              <h1 className="fp-display text-2xl">Earnings &amp; receipts</h1>
+              <p className="fp-text-dim text-sm mt-1">Your customers&apos; top-ups, the API cost of what they ordered, and your profit — pick any period and download a receipt.</p>
+            </div>
+            <ReceiptCard />
+          </div>
         )}
         {section === "orders" && <OwnerOrders />}
         {section === "customers" && <OwnerCustomers />}
+        {section === "providers" && <OwnerProviders />}
         {section === "support" && (
           <div className="p-8">
             <Card title="Support inbox — all panels" icon={MessageSquare} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>

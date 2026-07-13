@@ -48,11 +48,54 @@ interface OpenOrder {
   remains: number | null;
 }
 
+// Orders held because the provider's own balance was too low auto-cancel + refund
+// after this window if still unfunded.
+const HELD_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Auto-cancel + refund orders that have been ON HOLD (provider balance insufficient)
+ * for over 24h. Returns how many were canceled. Runs as part of each sync pass.
+ */
+export async function expireHeldOrders(admin: SupabaseClient, panelId: string): Promise<number> {
+  const cutoff = new Date(Date.now() - HELD_TTL_MS).toISOString();
+  const { data } = await admin
+    .from("orders")
+    .select("id, customer_id, charge, provider_response, created_at")
+    .eq("panel_id", panelId)
+    .eq("status", "pending")
+    .lt("created_at", cutoff);
+
+  let canceled = 0;
+  for (const o of data ?? []) {
+    const pr = o.provider_response as { held?: boolean } | null;
+    if (!pr || pr.held !== true) continue;
+    // Atomically claim pending → canceled so only one run refunds.
+    const { data: claimed } = await admin
+      .from("orders").update({ status: "canceled" })
+      .eq("id", o.id).eq("status", "pending").select("id").maybeSingle();
+    if (!claimed) continue;
+    await admin.rpc("apply_balance_change", {
+      p_customer: o.customer_id,
+      p_amount: Number(o.charge),
+      p_type: "refund",
+      p_reason: `Order ${o.id} auto-canceled — provider balance not funded within 24h`,
+    });
+    await admin.from("order_status_history").insert({
+      order_id: o.id, status: "canceled", note: "Auto-canceled after 24h on hold (provider balance).",
+    });
+    canceled++;
+  }
+  return canceled;
+}
+
 /** Sync all open orders for one panel. Returns how many were checked/updated. */
 export async function syncPanelOrders(
   admin: SupabaseClient,
   panelId: string
 ): Promise<{ checked: number; updated: number }> {
+  // First, expire any orders held too long on insufficient provider balance.
+  const expired = await expireHeldOrders(admin, panelId);
+
   const { data: orders } = await admin
     .from("orders")
     .select("id, provider_id, provider_order_id, status, quantity, charge, customer_id, remains")
@@ -62,7 +105,7 @@ export async function syncPanelOrders(
     .not("provider_id", "is", null);
 
   const list = (orders as OpenOrder[] | null) ?? [];
-  if (!list.length) return { checked: 0, updated: 0 };
+  if (!list.length) return { checked: 0, updated: expired };
 
   // Group by provider (each has its own credentials).
   const byProvider = new Map<string, OpenOrder[]>();
@@ -145,17 +188,18 @@ export async function syncPanelOrders(
     }
   }
 
-  return { checked: list.length, updated };
+  return { checked: list.length, updated: updated + expired };
 }
 
 /** Sync open orders across every panel that has any. Used by the cron. */
 export async function syncAllOpenOrders(): Promise<{ panels: number; checked: number; updated: number }> {
   const admin = createAdminClient();
+  // Any panel with an open order (mapped OR held-pending) needs a pass — held
+  // orders have no provider_order_id but still must be expired after 24h.
   const { data } = await admin
     .from("orders")
     .select("panel_id")
-    .in("status", OPEN_STATUSES)
-    .not("provider_order_id", "is", null);
+    .in("status", OPEN_STATUSES);
 
   const panelIds = [...new Set((data ?? []).map((o) => o.panel_id as string))];
   let checked = 0;

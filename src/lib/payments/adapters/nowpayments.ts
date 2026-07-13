@@ -41,30 +41,34 @@ export const nowpaymentsAdapter: GatewayAdapter = {
   },
 
   async verifyWebhook(ctx) {
-    // Authoritative gate #1: HMAC signature over the raw body.
-    const sig = ctx.headers.get("x-nowpayments-sig");
-    if (!verifyIpnSignature(ctx.raw, sig, ctx.secrets.ipnSecret)) return { paid: false };
-
     let payload: Record<string, unknown>;
     try {
       payload = JSON.parse(ctx.raw) as Record<string, unknown>;
     } catch {
       return { paid: false };
     }
-    const status = typeof payload.payment_status === "string" ? payload.payment_status : "";
-    if (!isPaidStatus(status)) return { paid: false };
 
-    // Gate #2 (best-effort): confirm server-to-server that it's really finished.
+    // The HMAC signature is BEST-EFFORT only: NOWPayments signs their own JSON
+    // serialization, which won't always match a re-serialized body (number/format
+    // differences), so a mismatch must NOT block a real payment. The AUTHORITATIVE
+    // gate is asking NOWPayments directly, with the owner's API key, whether this
+    // payment is finished — an attacker can't forge a "finished" payment there.
+    const sig = ctx.headers.get("x-nowpayments-sig");
+    const signatureOk = verifyIpnSignature(ctx.raw, sig, ctx.secrets.ipnSecret);
+
     const paymentId = payload.payment_id != null ? String(payload.payment_id) : "";
     if (paymentId && ctx.secrets.apiKey) {
       try {
         const info = await npGetPaymentStatus(ctx.secrets.apiKey, paymentId);
-        return { paid: !!info && isPaidStatus(info.status) };
+        if (info) return { paid: isPaidStatus(info.status) };
       } catch {
-        // Lookup failed but signature + status already validated → trust the IPN.
-        return { paid: true };
+        // Lookup unavailable — fall through to the signed-body check below.
       }
     }
-    return { paid: true };
+
+    // Fallback (no payment_id or lookup failed): trust the body only if the
+    // signature verified and the status is finished.
+    const status = typeof payload.payment_status === "string" ? payload.payment_status : "";
+    return { paid: signatureOk && isPaidStatus(status) };
   },
 };

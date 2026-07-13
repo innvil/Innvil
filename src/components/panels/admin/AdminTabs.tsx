@@ -1680,7 +1680,12 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                       <td className="py-3 fp-text-dim">{o.customerEmail ?? "—"}</td>
                       <td className="py-3 text-right fp-mono">{o.quantity.toLocaleString()}</td>
                       <td className="py-3 text-right fp-mono">{fmt(o.charge)}</td>
-                      <td className="py-3"><OrderStatusPill status={o.status} /></td>
+                      <td className="py-3">
+                        <div className="flex items-center gap-1.5">
+                          <OrderStatusPill status={o.status} />
+                          {o.held && <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 flex items-center gap-1"><AlertTriangle size={10} /> On hold</span>}
+                        </div>
+                      </td>
                       <td className="py-3 text-right">
                         <button onClick={() => setExpanded(open ? null : o.id)} className="fp-gold text-xs">
                           {open ? "Hide" : "Manage"}
@@ -1691,6 +1696,9 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                       <tr>
                         <td colSpan={7} className="pb-4">
                           <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 space-y-3 text-xs">
+                            {o.held && (
+                              <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Your provider&apos;s API balance was insufficient. Top up your provider, then <strong>Resend to provider</strong>. If left unfunded, this order auto-cancels and refunds the customer 24h after it was placed.</p>
+                            )}
                             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
                               <p><span className="fp-text-faint">Link:</span> <span className="fp-mono break-all">{o.link}</span></p>
                               <p><span className="fp-text-faint">Provider order:</span> <span className="fp-mono">{o.providerOrderId ?? "—"}</span></p>

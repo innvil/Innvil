@@ -127,6 +127,16 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-13 — Auto-credit fix + order holds + earnings + global adjust (v0.2.23)
+- **NOWPayments finished deposits auto-credit again**: `verifyWebhook` now gates on the
+  authoritative server-to-server `getPaymentStatus` (owner API key), HMAC best-effort.
+- **Insufficient PROVIDER balance** on an order → held (pending, no refund) with an
+  "On hold" indicator in both Orders views; `expireHeldOrders` auto-cancels + refunds
+  24h later (inside each sync pass).
+- **Earnings & receipts** is its own owner section (top-ups − API cost = profit +
+  download); Billing keeps just the commission balance.
+- **Customers (all panels)** rows expand → manual Credit/Debit (`adjustCustomerBalance`).
+
 ### 2026-07-12 — Custom domains (v0.2.16)
 - Owners connect their own domain in the Domain tab: real connect/verify/disconnect,
   live status, and the exact DNS record to add. `proxy.ts` routes any non-app host →
