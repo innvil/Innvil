@@ -55,7 +55,7 @@ const ENDPOINTS: Endpoint[] = [
     method: "POST",
     desc: "Use this method to create a new order.",
     request: `${BASE_PLACEHOLDER}?action=add&service=2101&link=https://instagram.com/you&quantity=5000&key=YOUR_API_KEY`,
-    note: "Drip feed (only for services with \"drip\": true): append &runs=5&interval=30. Quantity is split across runs, never multiplied.",
+    note: "For Custom Comments services, send comments as one comment per line. The app derives quantity from the comment count and forwards comments to the provider. Drip feed (only for services with \"drip\": true): append &runs=5&interval=30. Quantity is split across runs, never multiplied.",
     response: `{
   "order": 23501
 }`,

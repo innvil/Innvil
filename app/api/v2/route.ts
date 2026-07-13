@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { round4 } from "@/src/lib/money";
+import { validateOrderLink } from "@/src/lib/order-link";
 import { getProviderCredentials, addOrder, getStatus, getMultiStatus, refillOrder, cancelOrders, ProviderError } from "@/src/lib/providers";
 import type { OrderStatus } from "@/src/types/db";
 
@@ -171,12 +172,19 @@ async function handleAdd(u: ApiUser, params: Record<string, string>) {
   if (u.panelStatus !== "live") return { error: "Panel is not accepting new orders right now." };
 
   const serviceReq = (params.service || "").trim();
-  const link = (params.link || "").trim();
-  const qty = Math.floor(Number(params.quantity));
+  const commentList = (params.comments || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const hasComments = commentList.length > 0;
+  const qty = hasComments ? commentList.length : Math.floor(Number(params.quantity));
 
   if (!serviceReq) return { error: "service is required" };
-  if (!link) return { error: "link is required" };
-  if (!Number.isFinite(qty) || qty <= 0) return { error: "quantity is invalid" };
+  const linkCheck = validateOrderLink(params.link || "");
+  if (!linkCheck.ok) return { error: linkCheck.error };
+  const link = linkCheck.url;
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return hasComments
+      ? { error: "Enter at least 1 comment (one per line)." }
+      : { error: "quantity is invalid" };
+  }
 
   const svc = await findService(u.panelId, serviceReq);
   if (!svc) return { error: "Service not found" };
@@ -208,6 +216,7 @@ async function handleAdd(u: ApiUser, params: Record<string, string>) {
       provider_payload: {
         service: svc.provider_service_id,
         quantity: qty,
+        ...(hasComments ? { comments: commentList } : {}),
       },
     })
     .select("id")
@@ -242,6 +251,7 @@ async function handleAdd(u: ApiUser, params: Record<string, string>) {
         service: svc.provider_service_id as string,
         link,
         quantity: qty,
+        ...(hasComments ? { comments: commentList.join("\n") } : {}),
       });
 
       if ("order" in resp) {

@@ -8,6 +8,13 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Custom comments API acceptance (v0.2.27)
+
+### Date: 2026-07-13
+- **Customer API now accepts custom comments end-to-end.** `/api/v2` derives quantity from comment lines, stores them on the order payload, and forwards newline-separated comments to the provider.
+- **API docs were updated** so the supported custom-comments payload is visible in the customer-facing tab.
+- package.json → 0.2.27. No migration.
+
 ## Session: Clickable preview links + favicon precedence (v0.2.26)
 
 ### Date: 2026-07-13
