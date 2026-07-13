@@ -332,6 +332,7 @@ export interface CustomerWalletSnapshot {
 
 export interface OwnerDepositVM extends DepositVM {
   customerId: string;
+  customerUsername: string | null;
   customerEmail: string | null;
 }
 
@@ -416,6 +417,12 @@ export async function listCustomerDeposits(customerAccountId: string): Promise<O
   const acct = await customerAccountForOwner(user.id, customerAccountId);
   if (!acct) return [];
 
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("display_name")
+    .eq("id", acct.userId)
+    .maybeSingle();
+
   let email: string | null = null;
   try {
     const { data } = await admin.auth.admin.getUserById(acct.userId);
@@ -434,6 +441,7 @@ export async function listCustomerDeposits(customerAccountId: string): Promise<O
   return (data ?? []).map((p) => ({
     id: p.id as string,
     customerId: p.customer_id as string,
+    customerUsername: (profile?.display_name as string | null) ?? null,
     customerEmail: email,
     amount: Number(p.amount),
     currency: p.currency as string,
@@ -464,6 +472,12 @@ export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM
     .in("id", (data ?? []).map((p) => p.customer_id as string));
   const userIdByCustomerId = new Map((accts ?? []).map((a) => [a.id as string, a.user_id as string]));
 
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", [...new Set(Array.from(userIdByCustomerId.values()))]);
+  const usernameByUserId = new Map((profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null]));
+
   const emails = new Map<string, string | null>();
   for (const uid of new Set(Array.from(userIdByCustomerId.values()))) {
     try {
@@ -477,6 +491,7 @@ export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM
   return data.map((p) => ({
     id: p.id as string,
     customerId: p.customer_id as string,
+    customerUsername: usernameByUserId.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
     customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
     amount: Number(p.amount),
     currency: p.currency as string,
@@ -513,6 +528,12 @@ export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDeposit
     .in("id", data.map((p) => p.customer_id as string));
   const userIdByCustomerId = new Map((accts ?? []).map((a) => [a.id as string, a.user_id as string]));
 
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", [...new Set(Array.from(userIdByCustomerId.values()))]);
+  const usernameByUserId = new Map((profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null]));
+
   const emails = new Map<string, string | null>();
   for (const uid of new Set(Array.from(userIdByCustomerId.values()))) {
     try {
@@ -527,6 +548,7 @@ export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDeposit
     id: p.id as string,
     panelName: nameById.get(p.panel_id as string) ?? "Panel",
     customerId: p.customer_id as string,
+    customerUsername: usernameByUserId.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
     customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
     amount: Number(p.amount),
     currency: p.currency as string,

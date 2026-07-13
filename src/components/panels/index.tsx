@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
   Wifi, ShieldCheck, Users, CreditCard, MessageSquare, Palette, Settings, Bell,
@@ -44,7 +44,7 @@ function readOwnerAppCache<T>(section: string): T | null {
   if (ownerAppMemory.has(key)) return ownerAppMemory.get(key) as T;
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(key);
+    const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as T;
     ownerAppMemory.set(key, parsed);
@@ -60,6 +60,7 @@ function writeOwnerAppCache<T>(section: string, value: T) {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // ignore storage failures
   }
@@ -415,7 +416,7 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: strin
   const [ownerBalance, setOwnerBalance] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
     try {
-      const raw = window.sessionStorage.getItem("innvil-owner:billing");
+      const raw = window.sessionStorage.getItem("innvil-owner:billing") ?? window.localStorage.getItem("innvil-owner:billing");
       if (!raw) return null;
       const parsed = JSON.parse(raw) as { innvilBalance?: number; commissionToday?: number };
       if (typeof parsed.innvilBalance === "number") return parsed.innvilBalance;
@@ -1033,16 +1034,18 @@ export function InnvilApp({ setWorld, initialSection }: {
   setWorld: (w: string) => void;
   initialSection?: string;
 }) {
+  const cachedNav = readOwnerAppCache<{ section: string; activePanelId?: string | null; panelTab?: string }>("nav");
   const cachedPanels = readOwnerAppCache<Panel[]>("panels") ?? [];
-  const [section, setSection] = useState(initialSection || "home");
+  const [section, setSection] = useState(cachedNav?.section || initialSection || "home");
   const [activePanel, setActivePanel] = useState<Panel | null>(null);
-  const [panelInitialTab, setPanelInitialTab] = useState<string | undefined>(undefined);
+  const [panelInitialTab, setPanelInitialTab] = useState<string | undefined>(cachedNav?.panelTab);
   const [showAddFunds, setShowAddFunds] = useState(false);
   const [panelList, setPanelList] = useState<Panel[]>(cachedPanels);
   const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
   const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
   const [isSuper, setIsSuper] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
+  const didRestorePanelRef = useRef(false);
 
   useEffect(() => { amSuperAdmin().then(setIsSuper); }, []);
 
@@ -1059,6 +1062,29 @@ export function InnvilApp({ setWorld, initialSection }: {
   useEffect(() => {
     refreshPanels();
   }, [refreshPanels]);
+
+  useEffect(() => {
+    if (didRestorePanelRef.current) return;
+    const nav = readOwnerAppCache<{ section: string; activePanelId?: string | null; panelTab?: string }>("nav");
+    if (!nav || nav.section !== "panelAdmin" || !nav.activePanelId) {
+      didRestorePanelRef.current = true;
+      return;
+    }
+    const found = panelList.find((p) => p.id === nav.activePanelId);
+    if (!found) return;
+    setActivePanel(found);
+    setPanelInitialTab(nav.panelTab);
+    setSection("panelAdmin");
+    didRestorePanelRef.current = true;
+  }, [panelList]);
+
+  useEffect(() => {
+    writeOwnerAppCache("nav", {
+      section,
+      activePanelId: section === "panelAdmin" ? (activePanel?.id ?? null) : null,
+      panelTab: section === "panelAdmin" ? panelInitialTab : undefined,
+    });
+  }, [section, activePanel?.id, panelInitialTab]);
 
   const openPanel = (p: Panel, tab?: string) => { setActivePanel(p); setPanelInitialTab(tab); setSection("panelAdmin"); };
   const goCreate = () => setSection("create");
@@ -1119,7 +1145,14 @@ export function InnvilApp({ setWorld, initialSection }: {
         {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
-        {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} initialTab={panelInitialTab} />}
+        {section === "panelAdmin" && activePanel && (
+          <PanelAdmin
+            panel={activePanel}
+            setWorld={setWorld}
+            initialTab={panelInitialTab}
+            onTabChange={setPanelInitialTab}
+          />
+        )}
         {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
         {section === "earnings" && (
           <div className="p-4 sm:p-8 space-y-6 max-w-3xl">

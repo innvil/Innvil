@@ -105,6 +105,7 @@ export async function rotateCustomerApiKey(panelId: string): Promise<{
 
 export interface PanelApiCustomerRow {
   id: string;
+  username: string | null;
   email: string | null;
   status: string;
   hasKey: boolean;
@@ -140,16 +141,14 @@ export async function getPanelCustomerApiSummary(panelId: string): Promise<{
   const enabled = apiSettings(panel?.settings).enabled;
   const list = (rows ?? []) as Array<{ id: string; user_id: string; status: string; api_key_hash: string | null; updated_at: string }>;
 
-  const emailMap = new Map<string, string | null>();
-  for (const r of list) {
-    if (emailMap.has(r.user_id)) continue;
-    try {
-      const { data } = await admin.auth.admin.getUserById(r.user_id);
-      emailMap.set(r.user_id, data.user?.email ?? null);
-    } catch {
-      emailMap.set(r.user_id, null);
-    }
-  }
+  const userIds = [...new Set(list.map((r) => r.user_id).filter(Boolean))];
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", userIds);
+  const usernameByUserId = new Map<string, string | null>(
+    (profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null])
+  );
 
   return {
     ok: true,
@@ -158,7 +157,8 @@ export async function getPanelCustomerApiSummary(panelId: string): Promise<{
     activeKeys: activeKeys ?? 0,
     rows: list.map((r) => ({
       id: r.id,
-      email: emailMap.get(r.user_id) ?? null,
+      username: usernameByUserId.get(r.user_id) ?? null,
+      email: null,
       status: r.status,
       hasKey: !!r.api_key_hash,
       updatedAt: r.updated_at,

@@ -7,6 +7,36 @@
 for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
+if the above note is already noted, can delete
+additonal note:
+the popup message should also be stylized, the app is luxurious but the pop up seems below ordinay
+Inspect the code base and if you can, compare it to socpanel.com, we have a lot of features that are not in there,
+when we start with full prod, even if still in MVP, but when we are ready to go public, we should update all the ads currently in the landing page,
+to showcase why it they should choose us, it's because we have made everything easier, from auto categoritzation, to easy managing the customers,
+this should be done before we move public, and it should be our SEO point or something
+we should go public once all the fixes we need in the current mvp is all done. The other other features we were planning to add should be a coming soon feature.
+can delete this too once noted and implemented
+
+## Session: Navigation persistence + customer-manage unification (v0.2.34)
+
+### Date: 2026-07-14
+- **Reload now restores current screen** on both sides instead of resetting:
+  - Owner app restores current global section, active panel, and active panel-admin tab.
+  - Customer storefront restores the current dashboard page (Dashboard/New Order/Orders/Wallet/Tickets/API/Profile).
+- **Panel-dashboard loading bottleneck removed** by making panel order reads non-blocking (sync is optional/background), so Overview/Orders stop getting stuck waiting on provider sync.
+- **Customer identity is username-first globally** in owner-facing surfaces:
+  - Orders, Customers, Support, and top-up lists now show customer usernames (profile display_name) first.
+  - Email remains secondary/fallback where available.
+- **Manage Customer expanded**:
+  - "Adjust" actions renamed to **Manage customer**.
+  - Manage view includes username, user ID, customer account ID, email, top-up history, credit/debit, and ban/unban.
+- **Orders -> Customers deep-link**:
+  - Clicking customer username in panel Orders opens the Customers tab and auto-expands that customer in Manage view.
+- **Customer-side profile saves are now real**:
+  - Username/email/password updates from customer Profile are wired to server actions.
+  - Username changes persist to profiles/auth metadata and reflect automatically across owner management views.
+- package.json -> 0.2.34. No migration.
+
 
 ## Session: Sync-status duplicate matcher hardening (v0.2.33)
 

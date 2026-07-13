@@ -36,7 +36,7 @@ function readOwnerCache<T>(section: string): T | null {
   if (ownerSectionMemory.has(key)) return ownerSectionMemory.get(key) as T;
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(key);
+    const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as T;
     ownerSectionMemory.set(key, parsed);
@@ -52,6 +52,7 @@ function writeOwnerCache<T>(section: string, value: T) {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // ignore storage failures
   }
@@ -112,6 +113,7 @@ export function OwnerOrders() {
                   <th className="py-2 font-normal">Panel</th>
                   <th className="py-2 font-normal">Service</th>
                   <th className="py-2 font-normal">Customer</th>
+                  <th className="py-2 font-normal">Link</th>
                   <th className="py-2 font-normal text-right">Charge</th>
                   <th className="py-2 font-normal">Status</th>
                 </tr>
@@ -122,7 +124,22 @@ export function OwnerOrders() {
                     <td className="py-2.5 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
                     <td className="py-2.5">{o.panelName}</td>
                     <td className="py-2.5">{o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}</td>
-                    <td className="py-2.5 fp-text-dim">{o.customerEmail ?? "—"}</td>
+                    <td className="py-2.5 fp-text-dim">{o.customerUsername ?? o.customerEmail ?? "—"}</td>
+                    <td className="py-2.5 max-w-[280px]">
+                      {(() => {
+                        const label = o.link.length > 42 ? `${o.link.slice(0, 42)}…` : o.link;
+                        try {
+                          const href = new URL(o.link).toString();
+                          return (
+                            <a href={href} target="_blank" rel="noreferrer noopener" className="fp-mono text-xs break-all hover:fp-gold underline underline-offset-2" title={o.link}>
+                              {label}
+                            </a>
+                          );
+                        } catch {
+                          return <span className="fp-mono text-xs break-all" title={o.link}>{label}</span>;
+                        }
+                      })()}
+                    </td>
                     <td className="py-2.5 text-right fp-mono">{fmt(o.charge)}</td>
                     <td className="py-2.5">
                       <div className="flex items-center gap-1.5">
@@ -217,18 +234,18 @@ export function OwnerCustomers() {
                   return (
                     <React.Fragment key={c.id}>
                       <tr className="border-b fp-line-soft last:border-0 cursor-pointer hover:fp-panel-raised" onClick={() => openRow(c.id)}>
-                        <td className="py-2.5">{c.email ?? "—"}</td>
+                        <td className="py-2.5">{c.username ?? c.email ?? "—"}</td>
                         <td className="py-2.5 fp-text-dim">{c.panelName}</td>
                         <td className="py-2.5 text-right fp-mono">{c.orders}</td>
                         <td className="py-2.5 text-right fp-mono">{fmt(c.spent)}</td>
                         <td className="py-2.5 text-right fp-mono">{fmt(c.balance)}</td>
-                        <td className="py-2.5 text-right"><span className="fp-gold text-xs">{open ? "Hide" : "Adjust"}</span></td>
+                        <td className="py-2.5 text-right"><span className="fp-gold text-xs">{open ? "Hide" : "Manage customer"}</span></td>
                       </tr>
                       {open && (
                         <tr>
                           <td colSpan={6} className="pb-4">
                             <div className="fp-panel-raised border fp-line-soft rounded-lg p-4">
-                              <p className="fp-text-faint text-[11px] fp-mono uppercase mb-3">Adjust balance · {c.email ?? "customer"} · {c.panelName}</p>
+                              <p className="fp-text-faint text-[11px] fp-mono uppercase mb-3">Adjust balance · {c.username ?? c.email ?? "customer"} · {c.panelName}</p>
                               <div className="flex flex-wrap items-end gap-2">
                                 <div>
                                   <label className="fp-text-dim text-[11px]">Amount (USD)</label>
@@ -392,7 +409,7 @@ export function OwnerTopUps() {
           {rows.slice(0, 20).map((r) => (
             <div key={r.id} className="flex items-center justify-between gap-3 border-b fp-line-soft last:border-0 py-2.5">
               <div className="min-w-0">
-                <p className="text-sm truncate">{r.customerEmail ?? r.customerId.slice(0, 8)}</p>
+                <p className="text-sm truncate">{r.customerUsername ?? r.customerEmail ?? "customer"}</p>
                 <p className="fp-text-faint text-xs truncate">{r.panelName} · {r.method} · {new Date(r.createdAt).toLocaleString()} · <span className={statusTone(r.status)}>{r.status}</span></p>
               </div>
               <span className="fp-mono text-sm fp-gold shrink-0">+{r.amount.toFixed(2)} {r.currency}</span>

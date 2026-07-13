@@ -29,6 +29,7 @@ import {
 } from "@/src/lib/actions/services";
 import {
   listPanelCustomers, adjustCustomerBalance, setCustomerStatus,
+  getCustomerManageDetails,
   type PanelCustomerVM,
 } from "@/src/lib/actions/customers";
 import {
@@ -71,7 +72,8 @@ function getAdminCacheKey(panelId: string, section: string) {
 function readAdminCache<T>(panelId: string, section: string): T | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(getAdminCacheKey(panelId, section));
+    const key = getAdminCacheKey(panelId, section);
+    const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
@@ -81,7 +83,10 @@ function readAdminCache<T>(panelId: string, section: string): T | null {
 function writeAdminCache<T>(panelId: string, section: string, value: T) {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(getAdminCacheKey(panelId, section), JSON.stringify(value));
+    const key = getAdminCacheKey(panelId, section);
+    const payload = JSON.stringify(value);
+    window.sessionStorage.setItem(key, payload);
+    window.localStorage.setItem(key, payload);
   } catch {
     // ignore storage failures
   }
@@ -175,7 +180,7 @@ export function OverviewTab({ panel }: { panel: Panel }) {
                 <tr key={o.id} className="border-b fp-line-soft last:border-0">
                   <td className="py-2.5 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
                   <td className="py-2.5">{o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}</td>
-                  <td className="py-2.5 fp-text-dim">{o.customerEmail ?? "—"}</td>
+                  <td className="py-2.5 fp-text-dim">{o.customerUsername ?? o.customerEmail ?? "—"}</td>
                   <td className="py-2.5 text-right fp-mono">{fmt(o.charge)}</td>
                   <td className="py-2.5"><OrderStatusPill status={o.status} /></td>
                 </tr>
@@ -1543,7 +1548,7 @@ const ORDER_FILTERS: Array<{ k: OrderStatus | "all"; label: string }> = [
   { k: "failed", label: "Failed" },
 ];
 
-export function OrdersTab({ panelId }: { panelId: string }) {
+export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onManageCustomer?: (customerAccountId: string) => void }) {
   const realPanel = isUuid(panelId);
   const [rows, setRows] = useState<AdminOrderVM[] | null>(() =>
     realPanel ? readAdminCache<AdminOrderVM[]>(panelId, "orders") : []
@@ -1579,6 +1584,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
       return (
         o.shortId.includes(needle) ||
         o.serviceName.toLowerCase().includes(needle) ||
+        (o.customerUsername ?? "").toLowerCase().includes(needle) ||
         (o.customerEmail ?? "").toLowerCase().includes(needle) ||
         o.link.toLowerCase().includes(needle)
       );
@@ -1731,6 +1737,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                 <th className="py-2 font-normal">ID</th>
                 <th className="py-2 font-normal">Service</th>
                 <th className="py-2 font-normal">Customer</th>
+                <th className="py-2 font-normal">Link</th>
                 <th className="py-2 font-normal text-right">Qty</th>
                 <th className="py-2 font-normal text-right">Charge</th>
                 <th className="py-2 font-normal">Status</th>
@@ -1752,7 +1759,34 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                           <button onClick={() => setCommentsView(o.comments)} title="View comments" className="ml-1.5 fp-gold align-middle"><FileText size={12} /></button>
                         )}
                       </td>
-                      <td className="py-3 fp-text-dim">{o.customerEmail ?? "—"}</td>
+                      <td className="py-3 fp-text-dim">
+                        {o.customerUsername ? (
+                          <button
+                            onClick={() => onManageCustomer?.(o.customerAccountId)}
+                            className="hover:fp-gold underline underline-offset-2"
+                            title="Open customer management"
+                          >
+                            {o.customerUsername}
+                          </button>
+                        ) : (
+                          o.customerEmail ?? "—"
+                        )}
+                      </td>
+                      <td className="py-3 max-w-[280px]">
+                        {(() => {
+                          const label = o.link.length > 42 ? `${o.link.slice(0, 42)}…` : o.link;
+                          try {
+                            const href = new URL(o.link).toString();
+                            return (
+                              <a href={href} target="_blank" rel="noreferrer noopener" className="fp-mono text-xs break-all hover:fp-gold underline underline-offset-2" title={o.link}>
+                                {label}
+                              </a>
+                            );
+                          } catch {
+                            return <span className="fp-mono text-xs break-all" title={o.link}>{label}</span>;
+                          }
+                        })()}
+                      </td>
                       <td className="py-3 text-right fp-mono">{o.quantity.toLocaleString()}</td>
                       <td className="py-3 text-right fp-mono">{fmt(o.charge)}</td>
                       <td className="py-3">
@@ -1769,7 +1803,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                     </tr>
                     {open && (
                       <tr>
-                        <td colSpan={8} className="pb-4">
+                        <td colSpan={9} className="pb-4">
                           <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 space-y-3 text-xs">
                             {o.held && (
                               <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Your provider&apos;s API balance was insufficient. Please add balance to the provider, then <strong>Resend to provider</strong>. If left unfunded, this order stays customer-visible as processing and auto-refunds 24h after it was placed{o.failReason ? ` (${o.failReason})` : ""}.</p>
@@ -1793,6 +1827,26 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                               }
                             })()}
                             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              <p>
+                                <span className="fp-text-faint">Provider:</span>{" "}
+                                <span>{o.providerName ?? "—"}</span>
+                              </p>
+                              <p className="sm:col-span-2 lg:col-span-2">
+                                <span className="fp-text-faint">Provider link:</span>{" "}
+                                {(() => {
+                                  if (!o.providerLink) return <span className="fp-mono">—</span>;
+                                  try {
+                                    const href = new URL(o.providerLink).toString();
+                                    return (
+                                      <a href={href} target="_blank" rel="noreferrer noopener" className="fp-mono break-all hover:fp-gold underline underline-offset-2">
+                                        {o.providerLink}
+                                      </a>
+                                    );
+                                  } catch {
+                                    return <span className="fp-mono break-all">{o.providerLink}</span>;
+                                  }
+                                })()}
+                              </p>
                               <p><span className="fp-text-faint">Provider order:</span> <span className="fp-mono">{o.providerOrderId ?? "—"}</span></p>
                               <p><span className="fp-text-faint">Provider cost:</span> {fmt(o.providerCost)}</p>
                               <p><span className="fp-text-faint">Profit:</span> <span className="fp-safe">{fmt(o.profit)}</span></p>
@@ -1860,7 +1914,7 @@ const CUSTOMER_STATUS_TONE: Record<string, string> = {
   restricted: "fp-gold-soft-bg fp-gold",
 };
 
-export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow) => void }) {
+export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?: (c: CustomerRow) => void; focusCustomerId?: string | null }) {
   const realPanel = isUuid(panel.id);
   const [rows, setRows] = useState<PanelCustomerVM[] | null>(() =>
     realPanel ? readAdminCache<PanelCustomerVM[]>(panel.id, "customers") : []
@@ -1872,6 +1926,8 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
   const [reason, setReason] = useState("");
   const [depositBusyId, setDepositBusyId] = useState<string | null>(null);
   const [depositRows, setDepositRows] = useState<Record<string, OwnerDepositVM[]>>({});
+  const [detailsBusyId, setDetailsBusyId] = useState<string | null>(null);
+  const [manageDetails, setManageDetails] = useState<Record<string, { userId: string; email: string | null; username: string | null }>>({});
   const rowsRef = useRef<PanelCustomerVM[] | null>(rows);
 
   useEffect(() => { rowsRef.current = rows; }, [rows]);
@@ -1896,12 +1952,39 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
     const nextOpen = openId === id ? null : id;
     setOpenId(nextOpen);
     setAmount(""); setReason(""); setMsg(null);
-    if (!nextOpen || depositRows[id]) return;
-    setDepositBusyId(id);
-    const next = await listCustomerDeposits(id);
-    setDepositRows((prev) => ({ ...prev, [id]: next }));
-    setDepositBusyId(null);
+    if (!nextOpen) return;
+
+    if (!manageDetails[id]) {
+      setDetailsBusyId(id);
+      const info = await getCustomerManageDetails(id);
+      if (info.ok) {
+        setManageDetails((prev) => ({
+          ...prev,
+          [id]: {
+            userId: info.data.userId,
+            email: info.data.email,
+            username: info.data.username,
+          },
+        }));
+      }
+      setDetailsBusyId(null);
+    }
+
+    if (!depositRows[id]) {
+      setDepositBusyId(id);
+      const next = await listCustomerDeposits(id);
+      setDepositRows((prev) => ({ ...prev, [id]: next }));
+      setDepositBusyId(null);
+    }
   };
+
+  useEffect(() => {
+    if (!focusCustomerId) return;
+    const exists = (rows ?? []).some((r) => r.id === focusCustomerId);
+    if (!exists) return;
+    if (openId !== focusCustomerId) openAdjust(focusCustomerId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusCustomerId, rows]);
   const adjust = async (id: string, sign: 1 | -1) => {
     const val = Number(amount);
     if (!val || val <= 0) { setMsg({ text: "Enter a positive amount.", error: true }); return; }
@@ -1982,7 +2065,7 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
                 <th className="py-2 font-normal">Orders</th>
                 <th className="py-2 font-normal">Spent</th>
                 <th className="py-2 font-normal">Status</th>
-                <th className="py-2 font-normal text-right">Balance actions</th>
+                <th className="py-2 font-normal text-right">Manage</th>
               </tr>
             </thead>
             <tbody>
@@ -1991,7 +2074,7 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
                   <tr className="border-b fp-line-soft last:border-0">
                     <td className="py-3 pr-3">
                       <button onClick={() => openAdjust(c.id)} className="text-left hover:fp-gold">
-                        {c.email ?? <span className="fp-text-faint fp-mono">{c.userId.slice(0, 8)}</span>}
+                        {c.username ?? c.email ?? "customer"}
                       </button>
                     </td>
                     <td className="py-3 fp-mono fp-gold">${c.balance.toFixed(2)}</td>
@@ -2002,7 +2085,7 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
                     </td>
                     <td className="py-3">
                       <div className="flex items-center gap-2 justify-end">
-                        <button onClick={() => openAdjust(c.id)} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-1.5 hover:fp-gold-border">Adjust</button>
+                        <button onClick={() => openAdjust(c.id)} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-1.5 hover:fp-gold-border">Manage customer</button>
                         <button onClick={() => toggleBan(c)} className={`text-xs rounded-lg px-3 py-1.5 border ${c.status === "banned" ? "fp-safe border-[rgba(126,200,140,0.3)]" : "text-red-400 border-red-500/30"}`}>
                           {c.status === "banned" ? "Unban" : "Ban"}
                         </button>
@@ -2013,6 +2096,20 @@ export function CustomersTab({ panel }: { panel: Panel; onView?: (c: CustomerRow
                     <tr className="border-b fp-line-soft">
                       <td colSpan={6} className="py-3">
                         <div className="space-y-4">
+                          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+                            <p className="fp-text-faint text-[10px] fp-mono uppercase mb-2">Customer identity</p>
+                            {detailsBusyId === c.id ? (
+                              <p className="fp-text-faint text-sm py-2">Loading customer info…</p>
+                            ) : (
+                              <div className="grid sm:grid-cols-2 gap-2 text-xs">
+                                <p><span className="fp-text-faint">Username:</span> <span className="fp-mono">{manageDetails[c.id]?.username ?? c.username ?? "—"}</span></p>
+                                <p><span className="fp-text-faint">Email:</span> <span className="fp-mono">{manageDetails[c.id]?.email ?? c.email ?? "—"}</span></p>
+                                <p><span className="fp-text-faint">Customer account ID:</span> <span className="fp-mono break-all">{c.id}</span></p>
+                                <p><span className="fp-text-faint">User ID:</span> <span className="fp-mono break-all">{manageDetails[c.id]?.userId ?? c.userId}</span></p>
+                              </div>
+                            )}
+                          </div>
+
                           <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex flex-wrap items-end gap-3">
                             <div>
                               <label className="fp-text-dim text-[10px] fp-mono uppercase">Amount ($)</label>
@@ -2306,7 +2403,7 @@ export function CustomerApiTab({ panelId }: { panelId: string }) {
   const [enabled, setEnabled] = useState(true);
   const [totalCustomers, setTotalCustomers] = useState(0);
   const [activeKeys, setActiveKeys] = useState(0);
-  const [rows, setRows] = useState<Array<{ id: string; email: string | null; status: string; hasKey: boolean; updatedAt: string }>>([]);
+  const [rows, setRows] = useState<Array<{ id: string; username: string | null; email: string | null; status: string; hasKey: boolean; updatedAt: string }>>([]);
 
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/api/v2` : "/api/v2";
 
@@ -2337,8 +2434,9 @@ export function CustomerApiTab({ panelId }: { panelId: string }) {
     setMsg({ text: `Customer API ${next ? "enabled" : "disabled"}.` });
   };
 
-  const revokeKey = async (customerId: string, email: string | null) => {
-    if (!window.confirm(`Revoke API key for ${email ?? "this customer"}? They will need to generate a new one.`)) return;
+  const revokeKey = async (customerId: string, username: string | null, email: string | null) => {
+    const label = username ?? email ?? "this customer";
+    if (!window.confirm(`Revoke API key for ${label}? They will need to generate a new one.`)) return;
     setBusy(true);
     setMsg(null);
     const res = await revokeCustomerApiKey(panelId, customerId);
@@ -2410,13 +2508,13 @@ export function CustomerApiTab({ panelId }: { panelId: string }) {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="border-b fp-line-soft last:border-0">
-                    <td className="py-2.5">{r.email ?? "—"}</td>
+                    <td className="py-2.5">{r.username ?? r.email ?? "—"}</td>
                     <td className="py-2.5 capitalize">{r.status}</td>
                     <td className="py-2.5">{r.hasKey ? <span className="fp-safe">Active</span> : <span className="fp-text-faint">None</span>}</td>
                     <td className="py-2.5">{new Date(r.updatedAt).toLocaleString()}</td>
                     <td className="py-2.5 text-right">
                       {r.hasKey ? (
-                        <button onClick={() => revokeKey(r.id, r.email)} disabled={busy} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-3 py-1.5 disabled:opacity-50">
+                        <button onClick={() => revokeKey(r.id, r.username, r.email)} disabled={busy} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-3 py-1.5 disabled:opacity-50">
                           Revoke
                         </button>
                       ) : (

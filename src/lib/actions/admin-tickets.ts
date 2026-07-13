@@ -20,6 +20,7 @@ export interface OwnerTicketVM {
   status: TicketStatus;
   lastSender: "customer" | "owner";
   unread: boolean; // unread for the owner
+  customerUsername: string | null;
   customerEmail: string | null;
   updatedAt: string;
   lastMessageAt: string;
@@ -35,16 +36,21 @@ async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string)
   return !!data;
 }
 
-/** Resolve a customer_account's login email (best-effort). */
-async function accountEmail(admin: SupabaseClient, accountId: string): Promise<string | null> {
+/** Resolve a customer_account identity (profile username + login email, best-effort). */
+async function accountIdentity(
+  admin: SupabaseClient,
+  accountId: string
+): Promise<{ username: string | null; email: string | null }> {
   const { data: acct } = await admin.from("customer_accounts").select("user_id").eq("id", accountId).maybeSingle();
-  if (!acct?.user_id) return null;
-  try {
-    const { data } = await admin.auth.admin.getUserById(acct.user_id as string);
-    return data.user?.email ?? null;
-  } catch {
-    return null;
-  }
+  if (!acct?.user_id) return { username: null, email: null };
+
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("display_name")
+    .eq("id", acct.user_id as string)
+    .maybeSingle();
+  const username = (profile?.display_name as string | null) ?? null;
+  return { username, email: null };
 }
 
 /** All tickets on a panel the owner controls (newest activity first). */
@@ -61,10 +67,10 @@ export async function listPanelTickets(panelId: string): Promise<OwnerTicketVM[]
 
   const rows = data ?? [];
   // Resolve emails (small N per panel).
-  const emails = new Map<string, string | null>();
+  const who = new Map<string, { username: string | null; email: string | null }>();
   for (const r of rows) {
     const cid = r.customer_id as string;
-    if (!emails.has(cid)) emails.set(cid, await accountEmail(admin, cid));
+    if (!who.has(cid)) who.set(cid, await accountIdentity(admin, cid));
   }
   return rows.map((r) => ({
     id: r.id as string,
@@ -72,7 +78,8 @@ export async function listPanelTickets(panelId: string): Promise<OwnerTicketVM[]
     status: r.status as TicketStatus,
     lastSender: (r.last_sender as "customer" | "owner") ?? "customer",
     unread: !!r.owner_unread,
-    customerEmail: emails.get(r.customer_id as string) ?? null,
+    customerUsername: who.get(r.customer_id as string)?.username ?? null,
+    customerEmail: who.get(r.customer_id as string)?.email ?? null,
     updatedAt: r.updated_at as string,
     lastMessageAt: (r.last_message_at as string) ?? (r.updated_at as string),
   }));
@@ -96,6 +103,7 @@ export async function getOwnerTicket(ticketId: string): Promise<OwnerTicketThrea
     .order("created_at", { ascending: true });
 
   if (ticket.owner_unread) await admin.from("support_tickets").update({ owner_unread: false }).eq("id", ticketId);
+  const who = await accountIdentity(admin, ticket.customer_id as string);
 
   return {
     ticket: {
@@ -104,7 +112,8 @@ export async function getOwnerTicket(ticketId: string): Promise<OwnerTicketThrea
       status: ticket.status as TicketStatus,
       lastSender: (ticket.last_sender as "customer" | "owner") ?? "customer",
       unread: false,
-      customerEmail: await accountEmail(admin, ticket.customer_id as string),
+      customerUsername: who.username,
+      customerEmail: who.email,
       updatedAt: ticket.updated_at as string,
       lastMessageAt: (ticket.last_message_at as string) ?? (ticket.updated_at as string),
     },
@@ -136,7 +145,7 @@ export async function ownerReplyToTicket(ticketId: string, message: string): Pro
 
   // Notify the customer by email (best-effort).
   try {
-    const email = await accountEmail(admin, ticket.customer_id as string);
+    const email = (await accountIdentity(admin, ticket.customer_id as string)).email;
     const { data: panel } = await admin.from("panels").select("name, subdomain").eq("id", ticket.panel_id as string).maybeSingle();
     const app = process.env.NEXT_PUBLIC_APP_URL?.trim() || "";
     const url = app && panel?.subdomain ? `${app}/p/${panel.subdomain}` : undefined;

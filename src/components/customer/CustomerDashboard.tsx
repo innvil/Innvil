@@ -103,7 +103,11 @@ export function CustomerDashboard({
   deposits = customerWallet.deposits,
   tickets = customerTickets,
   recentIds = recentServiceIds,
+  username,
   email,
+  onUpdateUsername,
+  onUpdateEmail,
+  onUpdatePassword,
   onPlaceOrder,
   onAddFunds,
   onDeposit,
@@ -129,7 +133,11 @@ export function CustomerDashboard({
   deposits?: Deposit[];
   tickets?: Ticket[];
   recentIds?: number[];
+  username?: string;
   email?: string;
+  onUpdateUsername?: (nextUsername: string) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateEmail?: (nextEmail: string, currentPassword: string) => Promise<{ ok: boolean; error?: string; message?: string }>;
+  onUpdatePassword?: (currentPassword: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   /** When set, New Order places real orders through this handler. */
   onPlaceOrder?: PlaceOrderHandler;
   onAddFunds?: () => void;
@@ -198,8 +206,27 @@ export function CustomerDashboard({
     setRedirecting(true); // keep the overlay up through navigation — no flash back to the form
     window.location.href = res.url; // hosted checkout
   };
-  const [page, setPage] = useState<CustomerPage>("dashboard");
+  const pageStorageKey = `innvil-customer:${panelId ?? "preview"}:page`;
+  const readSavedPage = (): CustomerPage => {
+    if (typeof window === "undefined") return "dashboard";
+    try {
+      const raw = window.sessionStorage.getItem(pageStorageKey) ?? window.localStorage.getItem(pageStorageKey);
+      if (!raw) return "dashboard";
+      return (NAV.some((n) => n.k === raw) ? raw : "dashboard") as CustomerPage;
+    } catch {
+      return "dashboard";
+    }
+  };
+  const [page, setPage] = useState<CustomerPage>(() => readSavedPage());
   const [menuOpen, setMenuOpen] = useState(false);
+  const [usernameInput, setUsernameInput] = useState(username ?? (email ? email.split("@")[0] : ""));
+  const [emailInput, setEmailInput] = useState(email ?? "");
+  const [emailCurrentPassword, setEmailCurrentPassword] = useState("");
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNext, setPwNext] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [profileBusy, setProfileBusy] = useState<"username" | "email" | "password" | null>(null);
+  const [profileMsg, setProfileMsg] = useState<{ card: "username" | "email" | "password"; ok: boolean; text: string } | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<number[]>(
     () => initialFavoriteIds.filter((id) => services.some((s) => s.id === id))
   );
@@ -208,6 +235,91 @@ export function CustomerDashboard({
   const [keyRegenerated, setKeyRegenerated] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [savedCard, setSavedCard] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPage(readSavedPage());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(pageStorageKey, page);
+      window.localStorage.setItem(pageStorageKey, page);
+    } catch {
+      // ignore storage failures
+    }
+  }, [pageStorageKey, page]);
+
+  useEffect(() => {
+    setUsernameInput(username ?? (email ? email.split("@")[0] : ""));
+  }, [username, email]);
+
+  useEffect(() => {
+    setEmailInput(email ?? "");
+  }, [email]);
+
+  const saveUsername = async () => {
+    const next = usernameInput.trim();
+    if (!next) {
+      setProfileMsg({ card: "username", ok: false, text: "Enter a username." });
+      return;
+    }
+    if (!onUpdateUsername) {
+      setSavedCard("username");
+      return;
+    }
+    setProfileBusy("username");
+    setProfileMsg(null);
+    const res = await onUpdateUsername(next);
+    setProfileBusy(null);
+    if (!res.ok) {
+      setProfileMsg({ card: "username", ok: false, text: res.error ?? "Could not update username." });
+      return;
+    }
+    setSavedCard("username");
+    setProfileMsg({ card: "username", ok: true, text: "Username updated." });
+  };
+
+  const saveEmail = async () => {
+    if (!onUpdateEmail) {
+      setSavedCard("email");
+      return;
+    }
+    setProfileBusy("email");
+    setProfileMsg(null);
+    const res = await onUpdateEmail(emailInput, emailCurrentPassword);
+    setProfileBusy(null);
+    if (!res.ok) {
+      setProfileMsg({ card: "email", ok: false, text: res.error ?? "Could not update email." });
+      return;
+    }
+    setSavedCard("email");
+    setEmailCurrentPassword("");
+    setProfileMsg({ card: "email", ok: true, text: res.message ?? "Email update requested." });
+  };
+
+  const savePassword = async () => {
+    if (pwNext !== pwConfirm) {
+      setProfileMsg({ card: "password", ok: false, text: "Passwords do not match." });
+      return;
+    }
+    if (!onUpdatePassword) {
+      setSavedCard("password");
+      return;
+    }
+    setProfileBusy("password");
+    setProfileMsg(null);
+    const res = await onUpdatePassword(pwCurrent, pwNext);
+    setProfileBusy(null);
+    if (!res.ok) {
+      setProfileMsg({ card: "password", ok: false, text: res.error ?? "Could not update password." });
+      return;
+    }
+    setSavedCard("password");
+    setPwCurrent(""); setPwNext(""); setPwConfirm("");
+    setProfileMsg({ card: "password", ok: true, text: "Password updated." });
+  };
 
   const regenerateApiKey = async () => {
     setApiError(null);
@@ -630,15 +742,17 @@ export function CustomerDashboard({
             <div className="fp-panel border fp-line rounded-2xl p-6">
               <p className="fp-display text-lg mb-5">Username</p>
               <input
-                defaultValue={email ? email.split("@")[0] : "marisol.co"}
+                value={usernameInput}
+                onChange={(e) => setUsernameInput(e.target.value)}
                 className={profileInputCls}
               />
               <div className="flex items-center gap-3 mt-4">
                 <button
-                  onClick={() => setSavedCard("username")}
-                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                  onClick={saveUsername}
+                  disabled={profileBusy === "username"}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60"
                 >
-                  Save username
+                  {profileBusy === "username" ? "Saving…" : "Save username"}
                 </button>
                 {savedCard === "username" && (
                   <span className="text-xs fp-safe flex items-center gap-1">
@@ -646,6 +760,9 @@ export function CustomerDashboard({
                   </span>
                 )}
               </div>
+              {profileMsg?.card === "username" && (
+                <p className={`text-xs mt-2 ${profileMsg.ok ? "fp-safe" : "text-red-400"}`}>{profileMsg.text}</p>
+              )}
             </div>
 
             {/* Email */}
@@ -655,15 +772,16 @@ export function CustomerDashboard({
                 We&apos;ll send a confirmation link to the new address before it takes effect.
               </p>
               <div className="space-y-3">
-                <input defaultValue={email ?? "marisol@example.com"} type="email" className={profileInputCls} />
-                <input placeholder="Current password" type="password" className={profileInputCls} />
+                <input value={emailInput} onChange={(e) => setEmailInput(e.target.value)} type="email" className={profileInputCls} />
+                <input value={emailCurrentPassword} onChange={(e) => setEmailCurrentPassword(e.target.value)} placeholder="Current password" type="password" className={profileInputCls} />
               </div>
               <div className="flex items-center gap-3 mt-4">
                 <button
-                  onClick={() => setSavedCard("email")}
-                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                  onClick={saveEmail}
+                  disabled={profileBusy === "email"}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60"
                 >
-                  Change email
+                  {profileBusy === "email" ? "Saving…" : "Change email"}
                 </button>
                 {savedCard === "email" && (
                   <span className="text-xs fp-safe flex items-center gap-1">
@@ -671,22 +789,26 @@ export function CustomerDashboard({
                   </span>
                 )}
               </div>
+              {profileMsg?.card === "email" && (
+                <p className={`text-xs mt-2 ${profileMsg.ok ? "fp-safe" : "text-red-400"}`}>{profileMsg.text}</p>
+              )}
             </div>
 
             {/* Password */}
             <div className="fp-panel border fp-line rounded-2xl p-6">
               <p className="fp-display text-lg mb-5">Change password</p>
               <div className="space-y-3">
-                <input placeholder="Current password" type="password" className={profileInputCls} />
-                <input placeholder="New password" type="password" className={profileInputCls} />
-                <input placeholder="Confirm new password" type="password" className={profileInputCls} />
+                <input value={pwCurrent} onChange={(e) => setPwCurrent(e.target.value)} placeholder="Current password" type="password" className={profileInputCls} />
+                <input value={pwNext} onChange={(e) => setPwNext(e.target.value)} placeholder="New password" type="password" className={profileInputCls} />
+                <input value={pwConfirm} onChange={(e) => setPwConfirm(e.target.value)} placeholder="Confirm new password" type="password" className={profileInputCls} />
               </div>
               <div className="flex items-center gap-3 mt-4">
                 <button
-                  onClick={() => setSavedCard("password")}
-                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                  onClick={savePassword}
+                  disabled={profileBusy === "password"}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60"
                 >
-                  Update password
+                  {profileBusy === "password" ? "Saving…" : "Update password"}
                 </button>
                 {savedCard === "password" && (
                   <span className="text-xs fp-safe flex items-center gap-1">
@@ -694,6 +816,9 @@ export function CustomerDashboard({
                   </span>
                 )}
               </div>
+              {profileMsg?.card === "password" && (
+                <p className={`text-xs mt-2 ${profileMsg.ok ? "fp-safe" : "text-red-400"}`}>{profileMsg.text}</p>
+              )}
             </div>
 
             {/* Log out */}

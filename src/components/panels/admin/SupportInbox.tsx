@@ -81,7 +81,7 @@ export function SupportInbox({ panelId }: { panelId: string }) {
       <Card title="Support ticket" icon={MessageSquare} right={<span className={`text-xs px-2.5 py-1 rounded-full ${STATUS_STYLE[thread.ticket.status]}`}>{thread.ticket.status}</span>}>
         <button onClick={() => setThread(null)} className="fp-text-faint text-xs flex items-center gap-1 mb-4"><ArrowLeft size={13} /> All tickets</button>
         <p className="fp-display text-lg">{thread.ticket.subject}</p>
-        <p className="fp-text-faint text-xs fp-mono mb-4">{thread.ticket.customerEmail ?? "customer"}</p>
+        <p className="fp-text-faint text-xs fp-mono mb-4">{thread.ticket.customerUsername ?? thread.ticket.customerEmail ?? "customer"}</p>
         <div className="space-y-3 mb-4 max-h-[46vh] overflow-y-auto pr-1">
           {thread.messages.map((m) => (
             <div key={m.id} className={`rounded-xl p-3 text-sm ${m.senderRole === "owner" ? "fp-gold-soft-bg ml-6" : "fp-panel-raised border fp-line-soft mr-6"}`}>
@@ -118,7 +118,7 @@ export function SupportInbox({ panelId }: { panelId: string }) {
               {t.unread && <span className="w-2 h-2 rounded-full fp-gold-bg shrink-0" />}
               <div className="min-w-0">
                 <p className="truncate">{t.subject}</p>
-                <p className="text-xs fp-text-faint fp-mono mt-0.5">{t.customerEmail ?? "customer"} · {timeAgo(t.lastMessageAt)}</p>
+                <p className="text-xs fp-text-faint fp-mono mt-0.5">{t.customerUsername ?? t.customerEmail ?? "customer"} · {timeAgo(t.lastMessageAt)}</p>
               </div>
             </div>
             <span className={`text-xs px-2.5 py-1 rounded-full shrink-0 ${STATUS_STYLE[t.status]}`}>{t.status}</span>

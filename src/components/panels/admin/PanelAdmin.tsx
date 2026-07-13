@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   LayoutGrid, Circle, Palette, Globe, Wifi, Sliders, ShieldCheck,
   ListOrdered, Users, CreditCard, KeyRound, Lock, Bell, MessageSquare, Bot,
@@ -41,8 +41,17 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
 const PRIMARY_TABS = TABS.slice(0, 10);
 const OVERFLOW_TABS = TABS.slice(10);
 
-export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setWorld: (w: string) => void; initialTab?: string }) {
-  const [tab, setTab] = useState(initialTab || "overview");
+export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel: Panel; setWorld: (w: string) => void; initialTab?: string; onTabChange?: (tab: string) => void }) {
+  const readSavedTab = (panelId: string): string | null => {
+    if (typeof window === "undefined") return null;
+    const key = `innvil-admin:${panelId}:active-tab`;
+    try {
+      return window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  };
+  const [tab, setTab] = useState(() => initialTab || readSavedTab(panel.id) || "overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [panelStatus, setPanelStatus] = useState<PanelStatus>(panel.status || "live");
 
@@ -55,6 +64,24 @@ export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setW
   };
   const overflowActive = OVERFLOW_TABS.some((t) => t.k === tab);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerRow | null>(null);
+  const [focusCustomerId, setFocusCustomerId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTab(initialTab || readSavedTab(panel.id) || "overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel.id, initialTab]);
+
+  useEffect(() => {
+    const key = `innvil-admin:${panel.id}:active-tab`;
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(key, tab);
+      window.localStorage.setItem(key, tab);
+    } catch {
+      // ignore storage failures
+    }
+    onTabChange?.(tab);
+  }, [panel.id, tab]);
 
   return (
     <div>
@@ -137,8 +164,16 @@ export function PanelAdmin({ panel, setWorld, initialTab }: { panel: Panel; setW
         {tab === "providers" && <ProvidersTab panelId={panel.id} />}
         {tab === "services" && <ServicesTab panelId={panel.id} />}
         {tab === "floor" && <FloorTab />}
-        {tab === "orders" && <OrdersTab panelId={panel.id} />}
-        {tab === "customers" && <CustomersTab panel={panel} onView={setSelectedCustomer} />}
+        {tab === "orders" && (
+          <OrdersTab
+            panelId={panel.id}
+            onManageCustomer={(customerAccountId) => {
+              setFocusCustomerId(customerAccountId);
+              setTab("customers");
+            }}
+          />
+        )}
+        {tab === "customers" && <CustomersTab panel={panel} onView={setSelectedCustomer} focusCustomerId={focusCustomerId} />}
         {tab === "payments" && <PaymentsTab panelId={panel.id} />}
         {tab === "api" && <CustomerApiTab panelId={panel.id} />}
         {tab === "risk" && <RiskTab />}

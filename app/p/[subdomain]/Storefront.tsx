@@ -17,6 +17,7 @@ import { createDeposit, getCustomerWalletSnapshot, type DepositVM } from "@/src/
 import { formatMoney } from "@/src/lib/money";
 import {
   customerSignIn, customerSignOut,
+  customerUpdateDisplayName, customerUpdateEmail, customerUpdatePassword,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
 import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
@@ -338,7 +339,24 @@ export function Storefront({
         deposits={uiDeposits}
         tickets={[]}
         recentIds={recentIds}
+        username={account?.username ?? undefined}
         email={account.email ?? undefined}
+        onUpdateUsername={async (next) => {
+          const res = await customerUpdateDisplayName(next);
+          if (res.ok) router.refresh();
+          return res.ok ? { ok: true } : { ok: false, error: res.error };
+        }}
+        onUpdateEmail={async (nextEmail, currentPassword) => {
+          const res = await customerUpdateEmail(nextEmail, currentPassword);
+          if (res.ok) router.refresh();
+          return res.ok
+            ? { ok: true, message: res.needsConfirmation ? "Check your inbox to confirm your new email." : "Email updated." }
+            : { ok: false, error: res.error };
+        }}
+        onUpdatePassword={async (currentPassword, nextPassword) => {
+          const res = await customerUpdatePassword(currentPassword, nextPassword);
+          return res.ok ? { ok: true } : { ok: false, error: res.error };
+        }}
         onPlaceOrder={handlePlaceOrder}
         onDeposit={handleDeposit}
         platformMeta={platformMeta}

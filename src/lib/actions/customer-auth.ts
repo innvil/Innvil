@@ -94,6 +94,8 @@ export async function customerResetPassword(
 
 export interface CustomerAccountInfo {
   id: string;
+  userId: string;
+  username: string | null;
   email: string | null;
   balance: number;
   status: CustomerAccountRow["status"];
@@ -115,10 +117,79 @@ export async function getCustomerAccount(panelId: string): Promise<CustomerAccou
     .eq("user_id", user.id)
     .maybeSingle();
   if (!data) return null;
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("display_name")
+    .eq("id", user.id)
+    .maybeSingle();
   return {
     id: data.id,
+    userId: user.id,
+    username: (profile?.display_name as string | null) ?? (user.user_metadata?.display_name as string | null) ?? null,
     email: user.email ?? null,
     balance: Number(data.balance),
     status: data.status,
   };
+}
+
+export async function customerUpdateDisplayName(name: string): Promise<CustomerAuthResult> {
+  const supabase = await createStorefrontClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return { ok: false, error: "Username must be at least 2 characters." };
+  if (trimmed.length > 40) return { ok: false, error: "Username must be 40 characters or fewer." };
+
+  const { error: authErr } = await supabase.auth.updateUser({ data: { display_name: trimmed } });
+  if (authErr) return { ok: false, error: authErr.message };
+
+  const admin = createAdminClient();
+  const { error } = await admin.from("profiles").update({ display_name: trimmed }).eq("id", user.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+export async function customerUpdateEmail(
+  newEmail: string,
+  currentPassword: string
+): Promise<CustomerAuthResult> {
+  const supabase = await createStorefrontClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || !user.email) return { ok: false, error: "Not signed in" };
+
+  const email = newEmail.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Enter a valid email address." };
+  if (!currentPassword) return { ok: false, error: "Enter your current password." };
+
+  const { error: reauthErr } = await supabase.auth.signInWithPassword({ email: user.email, password: currentPassword });
+  if (reauthErr) return { ok: false, error: "Current password is incorrect." };
+
+  const { error } = await supabase.auth.updateUser({ email });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, needsConfirmation: true };
+}
+
+export async function customerUpdatePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<CustomerAuthResult> {
+  const supabase = await createStorefrontClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || !user.email) return { ok: false, error: "Not signed in" };
+  if (!currentPassword) return { ok: false, error: "Enter your current password." };
+  if (newPassword.length < 8) return { ok: false, error: "New password must be at least 8 characters." };
+
+  const { error: reauthErr } = await supabase.auth.signInWithPassword({ email: user.email, password: currentPassword });
+  if (reauthErr) return { ok: false, error: "Current password is incorrect." };
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
