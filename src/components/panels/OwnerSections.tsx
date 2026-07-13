@@ -68,11 +68,11 @@ function SyncBadge({ syncing }: { syncing: boolean }) {
 
 const STATUS_TONE: Record<string, "safe" | "gold" | "violet" | "muted"> = {
   completed: "safe", processing: "gold", in_progress: "gold", pending: "violet",
-  partial: "gold", canceled: "muted", failed: "muted", refunded: "muted",
+  partial: "gold", canceled: "muted", failed: "muted", refunded: "muted", duplicate: "violet",
 };
 const STATUS_LABEL: Record<string, string> = {
   completed: "Completed", processing: "Processing", in_progress: "In progress",
-  pending: "Pending", partial: "Partial", canceled: "Canceled", failed: "Failed", refunded: "Refunded",
+  pending: "Pending", partial: "Partial", canceled: "Canceled", failed: "Failed", refunded: "Refunded", duplicate: "Duplicate",
 };
 
 /* ---------- Orders across all panels ---------- */

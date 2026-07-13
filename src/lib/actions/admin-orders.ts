@@ -235,22 +235,34 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
-  const { data: orders } = await admin
-    .from("orders")
-    .select("panel_id, charge, profit, status")
-    .in("panel_id", list.map((p) => p.id))
-    .gte("created_at", startOfToday.toISOString());
+  const panelIds = list.map((p) => p.id);
+  const [{ data: orders }, { data: refundTx }] = await Promise.all([
+    admin.from("orders").select("panel_id, charge, profit, status").in("panel_id", panelIds).gte("created_at", startOfToday.toISOString()),
+    admin.from("balance_transactions").select("panel_id, amount").in("panel_id", panelIds).eq("type", "refund").gte("created_at", startOfToday.toISOString()),
+  ]);
 
+  // Refunds today per panel (credits back to customers) — subtracted from revenue.
+  const refundByPanel = new Map<string, number>();
+  for (const t of (refundTx as Array<{ panel_id: string; amount: number }> | null) ?? []) {
+    refundByPanel.set(t.panel_id, (refundByPanel.get(t.panel_id) ?? 0) + Number(t.amount));
+  }
+
+  // Gross charges per panel (all orders); net revenue = gross − refunds.
   const perPanel = new Map<string, { revenueToday: number }>();
-  let revenueToday = 0, profitToday = 0, ordersToday = 0;
+  let profitToday = 0, ordersToday = 0;
+  const NON_EARNING: OrderStatus[] = ["refunded", "canceled", "duplicate", "failed"];
   for (const o of (orders as Array<{ panel_id: string; charge: number; profit: number | null; status: OrderStatus }> | null) ?? []) {
     ordersToday++;
-    if (o.status === "refunded") continue;
-    revenueToday += Number(o.charge);
-    profitToday += Number(o.profit ?? 0);
     const p = perPanel.get(o.panel_id) ?? { revenueToday: 0 };
-    p.revenueToday += Number(o.charge);
+    p.revenueToday += Number(o.charge); // gross; refunds subtracted below
     perPanel.set(o.panel_id, p);
+    if (!NON_EARNING.includes(o.status)) profitToday += Number(o.profit ?? 0);
+  }
+  // Net out refunds per panel (revenue minus refund).
+  let revenueToday = 0;
+  for (const [pid, agg] of perPanel) {
+    agg.revenueToday = round4(agg.revenueToday - (refundByPanel.get(pid) ?? 0));
+    revenueToday += agg.revenueToday;
   }
 
   const panelBalances = new Map<string, number>();
@@ -531,4 +543,57 @@ export async function refundOrder(orderId: string, amount?: number): Promise<Res
   await admin.from("orders").update({ status: "refunded" }).eq("id", order.id);
   await addHistory(admin, order.id as string, "refunded", `Refunded ${refund} by owner`);
   return { ok: true };
+}
+
+/**
+ * Owner cancels an order and AUTO-REFUNDS the customer the full charge. Idempotent
+ * (claims non-terminal → canceled so concurrent/bulk cancels can't double-refund).
+ * Best-effort tells the provider to stop if the order was already submitted.
+ */
+export async function cancelAndRefundOrder(orderId: string): Promise<Result> {
+  const r = await authorizeOrder(orderId);
+  if ("error" in r) return { ok: false, error: r.error };
+  const { admin, order } = r;
+
+  const { data: claimed } = await admin
+    .from("orders")
+    .update({ status: "canceled" })
+    .eq("id", order.id)
+    .not("status", "in", "(canceled,refunded)")
+    .select("id, charge, customer_id")
+    .maybeSingle();
+  if (!claimed) return { ok: true }; // already canceled/refunded — no double refund
+
+  await admin.rpc("apply_balance_change", {
+    p_customer: claimed.customer_id,
+    p_amount: Number(claimed.charge),
+    p_type: "refund",
+    p_reason: `Order ${order.id} canceled + refunded by owner`,
+    p_ref_order: order.id,
+  });
+
+  if (order.provider_id && order.provider_order_id) {
+    try {
+      const { data: prov } = await admin.from("providers").select("api_url").eq("id", order.provider_id as string).maybeSingle();
+      if (prov) {
+        const creds = await getProviderCredentials(order.provider_id as string, prov.api_url as string);
+        await cancelOrders(creds, [order.provider_order_id as string]);
+      }
+    } catch { /* best-effort — the refund already happened */ }
+  }
+  await addHistory(admin, order.id as string, "canceled", "Canceled + refunded by owner");
+  return { ok: true };
+}
+
+/** Cancel + refund many orders at once (owner). Returns how many were processed. */
+export async function bulkCancelAndRefund(
+  orderIds: string[]
+): Promise<{ ok: true; canceled: number } | { ok: false; error: string }> {
+  if (!orderIds.length) return { ok: false, error: "No orders selected." };
+  let canceled = 0;
+  for (const id of orderIds) {
+    const res = await cancelAndRefundOrder(id);
+    if (res.ok) canceled++;
+  }
+  return { ok: true, canceled };
 }

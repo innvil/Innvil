@@ -20,7 +20,8 @@ export type OrderStatus =
   | "completed"
   | "canceled"
   | "failed"
-  | "refunded";
+  | "refunded"
+  | "duplicate";
 export type CustomerStatus = "active" | "banned" | "restricted";
 export type PaymentStatus = "pending" | "approved" | "rejected" | "completed";
 export type TicketStatus = "open" | "answered" | "closed";

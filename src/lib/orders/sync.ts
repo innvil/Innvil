@@ -57,6 +57,150 @@ interface OpenOrder {
 // after this window if still unfunded.
 const HELD_TTL_MS = 24 * 60 * 60 * 1000;
 
+type DupCandidate = {
+  id: string;
+  service_id: string;
+  link: string;
+  status: OrderStatus;
+};
+
+const DUP_SOURCE: OrderStatus[] = ["in_progress"];
+const DUP_MUTABLE: OrderStatus[] = ["pending", "processing"];
+
+type ServiceMeta = {
+  id: string;
+  name: string | null;
+  platform: string | null;
+  category_id: string | null;
+};
+
+type DupFingerprint = {
+  link: string;
+  serviceId: string;
+  serviceName: string;
+  platform: string;
+  category: string;
+};
+
+function normalizeDupLink(link: string): string {
+  const raw = (link || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    const host = u.host.toLowerCase().replace(/^www\./, "");
+    const path = (u.pathname || "/").replace(/\/+$/, "") || "/";
+    return `${host}${path}`;
+  } catch {
+    return raw
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .replace(/[?#].*$/, "")
+      .replace(/\/+$/, "");
+  }
+}
+
+function normText(v: string | null | undefined): string {
+  return (v ?? "").trim().toLowerCase();
+}
+
+/**
+ * Reconcile duplicates with a strict rule:
+ * - Keep all `in_progress` orders untouched (already transferred to provider).
+ * - Mark only `pending` / `processing` orders as `duplicate` when they match an
+ *   existing `in_progress` order on the same service + link.
+ */
+async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string): Promise<number> {
+  const { data } = await admin
+    .from("orders")
+    .select("id, service_id, link, status")
+    .eq("panel_id", panelId)
+    .in("status", [...DUP_SOURCE, ...DUP_MUTABLE])
+    .not("service_id", "is", null)
+    .not("link", "is", null)
+    .order("created_at", { ascending: true });
+
+  const rows = (data as DupCandidate[] | null) ?? [];
+  if (!rows.length) return 0;
+
+  const serviceIds = [...new Set(rows.map((r) => r.service_id).filter(Boolean))];
+  const { data: svcRows } = await admin
+    .from("services")
+    .select("id, name, platform, category_id")
+    .in("id", serviceIds);
+  const services = (svcRows as ServiceMeta[] | null) ?? [];
+  const serviceById = new Map(services.map((s) => [s.id, s]));
+
+  const categoryIds = [...new Set(services.map((s) => s.category_id).filter((v): v is string => !!v))];
+  let categoryNameById = new Map<string, string>();
+  if (categoryIds.length) {
+    const { data: cats } = await admin.from("provider_categories").select("id, name").in("id", categoryIds);
+    categoryNameById = new Map(((cats as Array<{ id: string; name: string }> | null) ?? []).map((c) => [c.id, c.name]));
+  }
+
+  const inProgress: DupFingerprint[] = [];
+  const pendingOrProcessing: Array<{ id: string; fp: DupFingerprint }> = [];
+
+  for (const r of rows) {
+    const link = normalizeDupLink(r.link);
+    if (!link) continue;
+    const svc = serviceById.get(r.service_id);
+    const categoryName = svc?.category_id ? (categoryNameById.get(svc.category_id) ?? "") : "";
+    const fp: DupFingerprint = {
+      link,
+      serviceId: r.service_id,
+      serviceName: normText(svc?.name),
+      platform: normText(svc?.platform),
+      category: normText(categoryName),
+    };
+
+    if (DUP_SOURCE.includes(r.status)) {
+      inProgress.push(fp);
+      continue;
+    }
+    if (DUP_MUTABLE.includes(r.status)) {
+      pendingOrProcessing.push({ id: r.id, fp });
+    }
+  }
+
+  if (!inProgress.length || !pendingOrProcessing.length) return 0;
+
+  const matchesInProgress = (cand: DupFingerprint): boolean =>
+    inProgress.some((src) => {
+      if (src.link !== cand.link) return false;
+      if (src.serviceId === cand.serviceId) return true;
+      if (src.serviceName && cand.serviceName && src.serviceName === cand.serviceName) return true;
+      if (src.category && cand.category && src.category === cand.category) return true;
+      if (src.platform && cand.platform && src.platform === cand.platform) return true;
+      return false;
+    });
+
+  const toDuplicate: string[] = [];
+  for (const r of pendingOrProcessing) if (matchesInProgress(r.fp)) toDuplicate.push(r.id);
+
+  if (!toDuplicate.length) return 0;
+
+  let updated = 0;
+  for (const id of toDuplicate) {
+    const { data: claimed } = await admin
+      .from("orders")
+      .update({ status: "duplicate" })
+      .eq("id", id)
+      .in("status", DUP_MUTABLE)
+      .select("id")
+      .maybeSingle();
+    if (!claimed) continue;
+    await admin.from("order_status_history").insert({
+      order_id: id,
+      status: "duplicate",
+      note: "Duplicate detected during sync (matches in-progress service + link).",
+    });
+    updated++;
+  }
+
+  return updated;
+}
+
 /**
  * Older runs could leave orders in `failed` without refunding. Sweep them during
  * sync: refund normal failures, but move provider-balance failures into the held
@@ -166,6 +310,7 @@ export async function syncPanelOrders(
   // First, expire any orders held too long on insufficient provider balance.
   const expired = await expireHeldOrders(admin, panelId);
   const reconciledFailed = await reconcileFailedOrders(admin, panelId);
+  const reconciledDupes = await reconcileDuplicateOrders(admin, panelId);
 
   const { data: orders } = await admin
     .from("orders")
@@ -176,7 +321,7 @@ export async function syncPanelOrders(
     .not("provider_id", "is", null);
 
   const list = (orders as OpenOrder[] | null) ?? [];
-  if (!list.length) return { checked: 0, updated: expired + reconciledFailed };
+  if (!list.length) return { checked: 0, updated: expired + reconciledFailed + reconciledDupes };
 
   // Group by provider (each has its own credentials).
   const byProvider = new Map<string, OpenOrder[]>();
@@ -293,7 +438,7 @@ export async function syncPanelOrders(
     }
   }
 
-  return { checked: list.length, updated: updated + expired + reconciledFailed };
+  return { checked: list.length, updated: updated + expired + reconciledFailed + reconciledDupes };
 }
 
 /** Sync open orders across every panel that has any. Used by the cron. */

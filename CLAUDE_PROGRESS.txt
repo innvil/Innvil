@@ -8,6 +8,36 @@ for future update when we start with seo, make sure to make it an ad that the pa
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
 
+## Session: Sync-status duplicate matcher hardening (v0.2.33)
+
+### Date: 2026-07-13. **Run migration `0011_order_status_duplicate.sql`** if not already applied.
+- **Sync Statuses now includes duplicate reconciliation rules.** The manual Sync button and automatic sync both run the same duplicate pass inside `syncPanelOrders`.
+- **Duplicate link matching is canonicalized** (host + path) so protocol/www/query/hash/trailing-slash differences don’t prevent a match.
+- **In-progress remains untouched; pending/processing are parked as duplicate** when they match an in-progress order by normalized link plus service identity/metadata matching rules.
+- package.json → 0.2.33. No new migration beyond 0011.
+
+## Session: Duplicate orders + mass cancel-refund + net revenue (v0.2.32)
+
+### Date: 2026-07-13. **Run migration `0011_order_status_duplicate.sql`** (adds the
+'duplicate' order status enum value). package.json → 0.2.32.
+- **Duplicate detection.** placeOrder: after charging, if this customer already has a
+  LIVE order (pending/processing/in_progress/partial/completed/duplicate) with the SAME
+  service_id + link, the new order is parked as status **'duplicate'** and NOT sent to
+  the provider (was: went to processing). Owner reviews/cancels it. `OrderStatus` +=
+  'duplicate'; tones/labels added (AdminTabs, OwnerSections).
+- **Mass cancel selector.** OrdersTab: a "Duplicate" filter chip + per-row checkboxes
+  (cancelable rows only) + select-all + a "Cancel & refund selected" bar →
+  `bulkCancelAndRefund(ids)`.
+- **Owner cancel auto-refunds.** New `cancelAndRefundOrder(orderId)` (atomic claim
+  non-terminal→canceled so no double refund; refunds full charge; best-effort provider
+  cancel) + `bulkCancelAndRefund`. Per-order detail now has "Cancel & refund" (vs
+  "Refund only"). requestCancel (provider-only) kept.
+- **Billing = revenue − refunds.** `getOwnerBillingSummary`: revenueToday is now gross
+  charges (all today's orders) minus today's refund transactions (balance_transactions
+  type='refund'), per panel; profit excludes refunded/canceled/duplicate/failed.
+
+---
+
 ## Session: Mobile responsiveness + ANVIL token noted (v0.2.31)
 
 ### Date: 2026-07-13

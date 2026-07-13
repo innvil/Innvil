@@ -40,6 +40,7 @@ import { getPanelBranding, updatePanelBranding, type LandingSection } from "@/sr
 import {
   listPanelOrders, getPanelOverview, getPanelCurrency,
   resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
+  cancelAndRefundOrder, bulkCancelAndRefund,
   type AdminOrderVM, type PanelOverview,
 } from "@/src/lib/actions/admin-orders";
 import { syncOrdersNow } from "@/src/lib/actions/orders";
@@ -95,11 +96,12 @@ const ORDER_STATUS_TONE: Record<string, "safe" | "gold" | "violet" | "muted"> = 
   canceled: "muted",
   failed: "muted",
   refunded: "muted",
+  duplicate: "violet",
 };
 const ORDER_STATUS_LABEL: Record<string, string> = {
   completed: "Completed", processing: "Processing", in_progress: "In progress",
   pending: "Pending", partial: "Partial", canceled: "Canceled",
-  failed: "Failed", refunded: "Refunded",
+  failed: "Failed", refunded: "Refunded", duplicate: "Duplicate",
 };
 function OrderStatusPill({ status }: { status: OrderStatus }) {
   return <Pill tone={ORDER_STATUS_TONE[status] ?? "muted"}>{ORDER_STATUS_LABEL[status] ?? status}</Pill>;
@@ -1535,6 +1537,7 @@ const ORDER_FILTERS: Array<{ k: OrderStatus | "all"; label: string }> = [
   { k: "in_progress", label: "In progress" },
   { k: "completed", label: "Completed" },
   { k: "partial", label: "Partial" },
+  { k: "duplicate", label: "Duplicate" },
   { k: "canceled", label: "Canceled" },
   { k: "refunded", label: "Refunded" },
   { k: "failed", label: "Failed" },
@@ -1553,6 +1556,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
   const [currency, setCurrency] = useState("USD");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [commentsView, setCommentsView] = useState<string[] | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     if (!realPanel) return;
@@ -1623,6 +1627,31 @@ export function OrdersTab({ panelId }: { panelId: string }) {
     setSyncing(false);
   };
 
+  // Selection + mass cancel (owner cancel auto-refunds).
+  const cancelable = (o: AdminOrderVM) => o.status !== "canceled" && o.status !== "refunded";
+  const selectableIds = useMemo(() => filtered.filter(cancelable).map((o) => o.id), [filtered]);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => sel.has(id));
+  const toggleSel = (id: string) => setSel((prev) => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+  const toggleSelectAll = () => setSel((prev) =>
+    allSelected ? new Set([...prev].filter((id) => !selectableIds.includes(id))) : new Set([...prev, ...selectableIds])
+  );
+  const doBulkCancel = async () => {
+    const ids = [...sel];
+    if (!ids.length) return;
+    if (!window.confirm(`Cancel & refund ${ids.length} order(s)? The customers will be refunded.`)) return;
+    setSyncing(true); setMsg(null);
+    const res = await bulkCancelAndRefund(ids);
+    setSyncing(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: `Canceled & refunded ${res.canceled} order(s).` });
+    setSel(new Set());
+    await load();
+  };
+
   if (!realPanel) {
     return (
       <div className="fp-panel-raised border fp-line-soft rounded-xl p-6 text-center fp-text-dim text-sm">
@@ -1675,6 +1704,18 @@ export function OrdersTab({ panelId }: { panelId: string }) {
         </div>
       </div>
 
+      {sel.size > 0 && (
+        <div className="flex items-center justify-between gap-3 mb-3 px-3 py-2.5 rounded-lg fp-gold-soft-bg border fp-gold-border">
+          <span className="text-xs fp-gold">{sel.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSel(new Set())} className="text-xs fp-text-dim hover:fp-text">Clear</button>
+            <button onClick={doBulkCancel} disabled={syncing} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">
+              Cancel &amp; refund selected
+            </button>
+          </div>
+        </div>
+      )}
+
       {rows === null ? (
         <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
       ) : filtered.length === 0 ? (
@@ -1683,9 +1724,10 @@ export function OrdersTab({ panelId }: { panelId: string }) {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[720px]">
+          <table className="w-full text-sm min-w-[760px]">
             <thead>
               <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
+                <th className="py-2 font-normal w-8"><input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="accent-[#C9A574]" aria-label="Select all" /></th>
                 <th className="py-2 font-normal">ID</th>
                 <th className="py-2 font-normal">Service</th>
                 <th className="py-2 font-normal">Customer</th>
@@ -1702,6 +1744,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                 return (
                   <React.Fragment key={o.id}>
                     <tr className="border-b fp-line-soft last:border-0">
+                      <td className="py-3">{cancelable(o) && <input type="checkbox" checked={sel.has(o.id)} onChange={() => toggleSel(o.id)} className="accent-[#C9A574]" aria-label="Select order" />}</td>
                       <td className="py-3 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
                       <td className="py-3">
                         {o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}
@@ -1726,7 +1769,7 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                     </tr>
                     {open && (
                       <tr>
-                        <td colSpan={7} className="pb-4">
+                        <td colSpan={8} className="pb-4">
                           <div className="fp-panel-raised border fp-line-soft rounded-lg p-4 space-y-3 text-xs">
                             {o.held && (
                               <p className="text-red-400 flex items-start gap-1.5"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> Your provider&apos;s API balance was insufficient. Please add balance to the provider, then <strong>Resend to provider</strong>. If left unfunded, this order stays customer-visible as processing and auto-refunds 24h after it was placed{o.failReason ? ` (${o.failReason})` : ""}.</p>
@@ -1769,8 +1812,11 @@ export function OrdersTab({ panelId }: { panelId: string }) {
                               {o.status !== "completed" && o.status !== "refunded" && (
                                 <button disabled={busy} onClick={() => act(o.id, () => markOrderCompleted(o.id), "Marked completed.")} className="fp-panel border fp-line-soft rounded px-2.5 py-1.5 fp-safe hover:opacity-80 disabled:opacity-50">Mark completed</button>
                               )}
+                              {o.status !== "canceled" && o.status !== "refunded" && (
+                                <button disabled={busy} onClick={() => act(o.id, () => cancelAndRefundOrder(o.id), "Canceled & refunded.")} className="fp-panel border border-red-500/30 rounded px-2.5 py-1.5 text-red-400 hover:opacity-80 disabled:opacity-50">Cancel &amp; refund</button>
+                              )}
                               {o.status !== "refunded" && (
-                                <button disabled={busy} onClick={() => doRefund(o)} className="fp-panel border border-red-500/30 rounded px-2.5 py-1.5 text-red-400 hover:opacity-80 disabled:opacity-50">Refund</button>
+                                <button disabled={busy} onClick={() => doRefund(o)} className="fp-panel border border-red-500/30 rounded px-2.5 py-1.5 text-red-400 hover:opacity-80 disabled:opacity-50">Refund only</button>
                               )}
                             </div>
                           </div>

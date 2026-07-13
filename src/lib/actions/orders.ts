@@ -171,6 +171,26 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   }
   const balanceAfter = Number((tx as { balance_after: number }).balance_after);
 
+  // 8b. Duplicate guard: if this customer already has a LIVE order for the exact same
+  //     service + link, park this one as 'duplicate' (don't send it to the provider) so
+  //     the owner can review + mass-cancel/refund it from the Orders tab.
+  const { data: dupe } = await admin
+    .from("orders")
+    .select("id")
+    .eq("panel_id", input.panelId)
+    .eq("customer_id", acct.id)
+    .eq("service_id", svc.id)
+    .eq("link", link)
+    .neq("id", order.id)
+    .in("status", ["pending", "processing", "in_progress", "partial", "completed", "duplicate"])
+    .limit(1)
+    .maybeSingle();
+  if (dupe) {
+    await admin.from("orders").update({ status: "duplicate" }).eq("id", order.id);
+    await addHistory(admin, order.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
+    return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "duplicate" };
+  }
+
   // 9. Forward to the provider (server-side). If unmapped, leave pending for the
   //    owner to route manually. If the provider rejects it, refund and fail.
   if (svc.provider_id && svc.provider_service_id) {
