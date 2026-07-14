@@ -1159,7 +1159,7 @@ export function InnvilApp({ setWorld, initialSection }: {
           <div className="p-4 sm:p-8 space-y-6 max-w-3xl">
             <div>
               <h1 className="fp-display text-2xl">Earnings &amp; receipts</h1>
-              <p className="fp-text-dim text-sm mt-1">Your customers&apos; top-ups, the API cost of what they ordered, and your profit — pick any period and download a receipt.</p>
+              <p className="fp-text-dim text-sm mt-1">Your customers&apos; top-ups, total orders deduction, and your profit — pick any period and download a receipt.</p>
             </div>
             <ReceiptCard />
             <OwnerTopUps />

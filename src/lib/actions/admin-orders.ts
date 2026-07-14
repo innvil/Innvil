@@ -335,6 +335,7 @@ export interface OwnerReceipt {
   depositCount: number;
   orderCount: number;
   perPanel: Array<{ panelName: string; topUps: number; apiCost: number; profit: number }>;
+  topUpRows: Array<{ createdAt: string; amount: number; panelName: string }>;
 }
 
 /**
@@ -343,7 +344,17 @@ export interface OwnerReceipt {
  * the inclusive day boundaries (start-of-day → end-of-day) chosen by the owner.
  */
 export async function getOwnerReceipt(fromISO: string, toISO: string): Promise<OwnerReceipt> {
-  const empty: OwnerReceipt = { from: fromISO, to: toISO, topUps: 0, apiCost: 0, profit: 0, depositCount: 0, orderCount: 0, perPanel: [] };
+  const empty: OwnerReceipt = {
+    from: fromISO,
+    to: toISO,
+    topUps: 0,
+    apiCost: 0,
+    profit: 0,
+    depositCount: 0,
+    orderCount: 0,
+    perPanel: [],
+    topUpRows: [],
+  };
   const { user, admin } = await getAuthedAdmin();
   if (!user) return empty;
   const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
@@ -361,12 +372,18 @@ export async function getOwnerReceipt(fromISO: string, toISO: string): Promise<O
 
   const per = new Map<string, { topUps: number; apiCost: number }>();
   const get = (pid: string) => per.get(pid) ?? per.set(pid, { topUps: 0, apiCost: 0 }).get(pid)!;
+  const topUpRows: Array<{ createdAt: string; amount: number; panelName: string }> = [];
 
   let topUps = 0, apiCost = 0, depositCount = 0, orderCount = 0;
-  for (const d of (deposits as Array<{ panel_id: string; amount: number }> | null) ?? []) {
+  for (const d of (deposits as Array<{ panel_id: string; amount: number; created_at: string }> | null) ?? []) {
     depositCount++;
     topUps += Number(d.amount);
     get(d.panel_id).topUps += Number(d.amount);
+    topUpRows.push({
+      createdAt: d.created_at,
+      amount: Number(d.amount),
+      panelName: nameById.get(d.panel_id) ?? "Panel",
+    });
   }
   for (const o of (orders as Array<{ panel_id: string; provider_cost: number | null; status: OrderStatus }> | null) ?? []) {
     if (o.status === "refunded" || o.status === "failed") continue; // not fulfilled → no API cost counted
@@ -383,6 +400,9 @@ export async function getOwnerReceipt(fromISO: string, toISO: string): Promise<O
       const v = per.get(p.id) ?? { topUps: 0, apiCost: 0 };
       return { panelName: nameById.get(p.id) ?? "Panel", topUps: round4(v.topUps), apiCost: round4(v.apiCost), profit: round4(v.topUps - v.apiCost) };
     }).filter((p) => p.topUps > 0 || p.apiCost > 0),
+    topUpRows: topUpRows
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      .map((r) => ({ ...r, amount: round4(r.amount) })),
   };
 }
 
