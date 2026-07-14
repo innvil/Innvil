@@ -195,11 +195,6 @@ export function Storefront({
     return seen;
   }, [uiOrders]);
 
-  const hasOpenOrders = useMemo(
-    () => liveOrders.some((o) => o.status === "pending" || o.status === "processing" || o.status === "in_progress"),
-    [liveOrders]
-  );
-
   const handlePlaceOrder = async (args: PlaceOrderArgs) => {
     if (!args.service.uuid) return { ok: false, error: "This service can't be ordered yet." };
     const res = await placeOrder({
@@ -273,8 +268,6 @@ export function Storefront({
 
   useEffect(() => {
     if (!signedIn) return;
-    const hasPending = liveDeposits.some((d) => d.status === "pending" || d.status === "approved");
-
     let cancelled = false;
     const poll = async () => {
       const next = await getCustomerWalletSnapshot(panel.id);
@@ -284,12 +277,12 @@ export function Storefront({
     };
 
     poll();
-    const id = window.setInterval(poll, hasPending ? 8000 : 20000);
+    const id = window.setInterval(poll, 12000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [signedIn, liveDeposits, panel.id]);
+  }, [signedIn, panel.id]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -302,12 +295,12 @@ export function Storefront({
     };
 
     pollOrders();
-    const id = window.setInterval(pollOrders, hasOpenOrders ? 12000 : 25000);
+    const id = window.setInterval(pollOrders, 12000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [signedIn, hasOpenOrders, panel.id]);
+  }, [signedIn, panel.id]);
 
   useEffect(() => {
     if (!signedIn) return;

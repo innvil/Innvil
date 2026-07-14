@@ -34,6 +34,14 @@ can delete this too once noted and implemented
 - Storefront now **keeps cached wallet/orders/deposits visible** until a real signed-in server account hydrate is present, then upgrades to live data in background.
 - package.json -> 0.2.43. No migration.
 
+## Session: Storefront polling abort-loop fix (v0.2.44)
+
+### Date: 2026-07-14
+- **Fixed background loading stall** caused by self-retriggering polling effects in storefront dashboard hydration.
+- Wallet/orders polling no longer re-depends on their own live state arrays, preventing continuous cancel/restart loops and aborted server-action requests.
+- Pollers now run on a stable cadence so live data can actually complete and paint.
+- package.json -> 0.2.44. No migration.
+
 ## Session: Storefront redirect-stuck guard + signed-in bootstrap (v0.2.40)
 
 ### Date: 2026-07-14
