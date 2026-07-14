@@ -147,13 +147,15 @@ export function Storefront({
   }, [account]);
 
   useEffect(() => {
-    // Keep cached deposits visible until server account data has hydrated.
-    if (account) setLiveDeposits(initialDeposits);
+    // Don't let empty server defaults wipe populated client snapshot/live state.
+    if (!account) return;
+    if (initialDeposits.length > 0) setLiveDeposits(initialDeposits);
   }, [account, initialDeposits]);
 
   useEffect(() => {
-    // Keep cached orders visible until server account data has hydrated.
-    if (account) setLiveOrders(initialOrders);
+    // Don't let empty server defaults wipe populated client snapshot/live state.
+    if (!account) return;
+    if (initialOrders.length > 0) setLiveOrders(initialOrders);
   }, [account, initialOrders]);
 
   useEffect(() => {

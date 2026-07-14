@@ -69,6 +69,13 @@ can delete this too once noted and implemented
 - Added storefront cookie-token fallback (`ll-store-auth`) in `Storefront.tsx` so `/api/storefront/snapshot` can still be read while runtime session state lags.
 - package.json -> 0.2.46. No migration.
 
+## Session: Storefront hydration disappearance fix (v0.2.47)
+
+### Date: 2026-07-14
+- Fixed the brief-then-gone storefront content by restoring reliable storefront auth refresh in middleware and preventing empty server defaults from clobbering live storefront state after hydrate.
+- Storefront keeps populated snapshot/live orders/deposits visible instead of letting empty initial props overwrite them.
+- package.json -> 0.2.47. No migration.
+
 ## Session: Storefront post-login streaming + hydration hardening (v0.2.39)
 
 ### Date: 2026-07-14

@@ -69,12 +69,16 @@ export async function updateSession(
     }
   );
 
-  // Claims verification is cheaper than a full auth-server user fetch for normal routing.
-  // Fall back to getUser only if claims are unavailable in this environment.
-  try {
-    await supabase.auth.getClaims();
-  } catch {
+  // For storefront traffic, prefer getUser() for the most reliable cookie/session refresh.
+  // Owner routes can still use the faster claims path with fallback.
+  if (storefront) {
     await supabase.auth.getUser();
+  } else {
+    try {
+      await supabase.auth.getClaims();
+    } catch {
+      await supabase.auth.getUser();
+    }
   }
 
   return response;
