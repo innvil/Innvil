@@ -27,6 +27,13 @@ the current storefront would then serve as the admin panel of the child panel.
 
 can delete this too once noted and implemented
 
+## Session: Root-cause cache visibility hardening (v0.2.43)
+
+### Date: 2026-07-14
+- **Fixed hidden cached dashboard content after instant login** by preventing auth/bootstrap races from clobbering cached client snapshot state.
+- Storefront now **keeps cached wallet/orders/deposits visible** until a real signed-in server account hydrate is present, then upgrades to live data in background.
+- package.json -> 0.2.43. No migration.
+
 ## Session: Storefront redirect-stuck guard + signed-in bootstrap (v0.2.40)
 
 ### Date: 2026-07-14

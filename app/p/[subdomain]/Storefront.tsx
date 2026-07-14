@@ -112,21 +112,25 @@ export function Storefront({
   const [apiHasKey, setApiHasKey] = useState(customerApiHasKey);
 
   useEffect(() => {
-    setLiveBalance(account?.balance ?? 0);
-  }, [account?.balance]);
+    // Don't zero out cached UI during auth/bootstrap; only trust server balance when account is present.
+    if (account) setLiveBalance(account.balance);
+  }, [account]);
 
   useEffect(() => {
-    setLiveDeposits(initialDeposits);
-  }, [initialDeposits]);
+    // Keep cached deposits visible until server account data has hydrated.
+    if (account) setLiveDeposits(initialDeposits);
+  }, [account, initialDeposits]);
 
   useEffect(() => {
-    setLiveOrders(initialOrders);
-  }, [initialOrders]);
+    // Keep cached orders visible until server account data has hydrated.
+    if (account) setLiveOrders(initialOrders);
+  }, [account, initialOrders]);
 
   useEffect(() => {
+    if (!account) return;
     setApiEnabled(customerApiEnabled);
     setApiHasKey(customerApiHasKey);
-  }, [customerApiEnabled, customerApiHasKey]);
+  }, [account, customerApiEnabled, customerApiHasKey]);
 
   useEffect(() => {
     if (initialAccount) setOptimisticSignedOut(false);
