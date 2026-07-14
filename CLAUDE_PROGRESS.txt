@@ -27,6 +27,16 @@ the current storefront would then serve as the admin panel of the child panel.
 
 can delete this too once noted and implemented
 
+## Session: Storefront post-login streaming + hydration hardening (v0.2.39)
+
+### Date: 2026-07-14
+- **Storefront login refresh is lighter**: server-side storefront page no longer blocks on signed-in heavy fetches (`orders`, `deposits`, API state) before render.
+- **Signed-in customer extras now hydrate in background** after the dashboard appears, while session/cookie behavior remains intact.
+- **Hydration mismatch hardening**:
+  - customer dashboard initial page state is deterministic on first render (storage-restore happens after mount), preventing SSR/client first-paint divergence.
+  - root layout now suppresses benign html/body hydration attribute mismatches.
+- package.json -> 0.2.39. No migration.
+
 ## Session: Visible login redirect + lighter proxy checks (v0.2.38)
 
 ### Date: 2026-07-14

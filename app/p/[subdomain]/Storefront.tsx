@@ -19,7 +19,7 @@ import {
   customerUpdateDisplayName, customerUpdateEmail, customerUpdatePassword,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
-import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
+import { getCustomerApiState, rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
 import { createStorefrontClient } from "@/src/lib/supabase/client";
 
 const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
@@ -101,6 +101,8 @@ export function Storefront({
   const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
   const [liveDeposits, setLiveDeposits] = useState(initialDeposits);
   const [liveOrders, setLiveOrders] = useState<CustomerOrderVM[]>(initialOrders);
+  const [apiEnabled, setApiEnabled] = useState(customerApiEnabled);
+  const [apiHasKey, setApiHasKey] = useState(customerApiHasKey);
 
   useEffect(() => {
     setLiveBalance(account?.balance ?? 0);
@@ -113,6 +115,11 @@ export function Storefront({
   useEffect(() => {
     setLiveOrders(initialOrders);
   }, [initialOrders]);
+
+  useEffect(() => {
+    setApiEnabled(customerApiEnabled);
+    setApiHasKey(customerApiHasKey);
+  }, [customerApiEnabled, customerApiHasKey]);
 
   useEffect(() => {
     if (initialAccount) setOptimisticSignedOut(false);
@@ -181,7 +188,12 @@ export function Storefront({
 
   const rotateApiKey = async () => {
     const res = await rotateCustomerApiKey(panel.id);
-    return res.ok ? { ok: true, key: res.key } : { ok: false, error: res.error };
+    if (res.ok) {
+      setApiEnabled(true);
+      setApiHasKey(true);
+      return { ok: true, key: res.key };
+    }
+    return { ok: false, error: res.error };
   };
 
   // Deposit history → the dashboard's deposit shape.
@@ -237,6 +249,21 @@ export function Storefront({
       window.clearInterval(id);
     };
   }, [account, hasOpenOrders, panel.id]);
+
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+    const loadApiState = async () => {
+      const next = await getCustomerApiState(panel.id);
+      if (cancelled || !next.ok) return;
+      setApiEnabled(next.enabled);
+      setApiHasKey(next.hasKey);
+    };
+    void loadApiState();
+    return () => {
+      cancelled = true;
+    };
+  }, [account, panel.id]);
 
   // Group services by platform for the showcase
   const groups = useMemo(() => {
@@ -388,8 +415,8 @@ export function Storefront({
         currency={panel.currency}
         paymentMethods={paymentMethods}
         panelId={panel.id}
-        apiEnabled={customerApiEnabled}
-        hasExistingApiKey={customerApiHasKey}
+        apiEnabled={apiEnabled}
+        hasExistingApiKey={apiHasKey}
         apiBaseUrl={apiBaseUrl}
         onRotateApiKey={rotateApiKey}
       />

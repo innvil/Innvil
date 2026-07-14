@@ -219,7 +219,7 @@ export function CustomerDashboard({
       return "dashboard";
     }
   };
-  const [page, setPage] = useState<CustomerPage>(() => readSavedPage());
+  const [page, setPage] = useState<CustomerPage>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
   const [orderFilter, setOrderFilter] = useState<string>("All");
   const [usernameInput, setUsernameInput] = useState(username ?? (email ? email.split("@")[0] : ""));

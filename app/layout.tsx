@@ -41,8 +41,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${fraunces.variable} ${inter.variable} ${ibmPlexMono.variable}`}>
-      <body className="fp-root min-h-screen antialiased">
+    <html lang="en" suppressHydrationWarning className={`${fraunces.variable} ${inter.variable} ${ibmPlexMono.variable}`}>
+      <body suppressHydrationWarning className="fp-root min-h-screen antialiased">
         {children}
       </body>
     </html>

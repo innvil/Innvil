@@ -4,9 +4,6 @@ import { headers } from "next/headers";
 import { Lock, Wrench, FileText } from "lucide-react";
 import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
-import { getCustomerApiState } from "@/src/lib/actions/customer-api";
-import { listCustomerOrders } from "@/src/lib/actions/orders";
-import { listDeposits } from "@/src/lib/actions/payments";
 import type { PanelStatus } from "@/src/types/db";
 import { themeVars } from "@/src/data/themes";
 import { Storefront } from "./Storefront";
@@ -88,18 +85,13 @@ export default async function StorefrontPage({ params }: Params) {
     );
   }
 
-  const [services, account, platformMeta, paymentMethods, apiState] = await Promise.all([
+  const [services, account, platformMeta, paymentMethods] = await Promise.all([
     getStorefrontServices(panel.id),
     getCustomerAccount(panel.id),
     getStorefrontPlatforms(panel.id),
     getPanelPaymentMethods(panel.id),
-    getCustomerApiState(panel.id),
   ]);
   const apiBaseUrl = await getApiBaseUrl(panel.customDomain);
-  // Only signed-in customers have orders/deposits; skip the queries for guests.
-  const [orders, deposits] = account
-    ? await Promise.all([listCustomerOrders(panel.id), listDeposits(panel.id)])
-    : [[], []];
 
   return (
     <div style={themeStyle}>
@@ -107,12 +99,8 @@ export default async function StorefrontPage({ params }: Params) {
         panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description, sections: panel.sections }}
         services={services}
         initialAccount={account}
-        initialOrders={orders}
-        initialDeposits={deposits}
         platformMeta={platformMeta}
         paymentMethods={paymentMethods}
-        customerApiEnabled={apiState.ok ? apiState.enabled : true}
-        customerApiHasKey={apiState.ok ? apiState.hasKey : false}
         apiBaseUrl={apiBaseUrl}
       />
     </div>
