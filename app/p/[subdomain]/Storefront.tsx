@@ -98,8 +98,12 @@ export function Storefront({
   const [optimisticSignedOut, setOptimisticSignedOut] = useState(false);
   const [clientSignedIn, setClientSignedIn] = useState(false);
   const [clientEmail, setClientEmail] = useState<string | null>(null);
+  const [authBooting, setAuthBooting] = useState(true);
+  const [hasCachedSnapshot, setHasCachedSnapshot] = useState(false);
+  const [hasSessionHint, setHasSessionHint] = useState(false);
   const account = optimisticSignedOut ? null : initialAccount; // re-fetched by the server after auth via router.refresh()
-  const signedIn = !!account || clientSignedIn;
+  const showCachedDashboard = authBooting && hasCachedSnapshot && hasSessionHint;
+  const signedIn = !!account || clientSignedIn || showCachedDashboard;
   const fmt = (n: number) => formatMoney(n, panel.currency);
   const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
   const [liveDeposits, setLiveDeposits] = useState<DepositVM[]>(initialDeposits);
@@ -134,6 +138,22 @@ export function Storefront({
       setClientEmail(account.email ?? null);
     }
   }, [account]);
+
+  useEffect(() => {
+    let mounted = true;
+    const bootstrapSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      const user = data.session?.user ?? null;
+      setClientSignedIn(!!user);
+      setClientEmail(user?.email ?? null);
+      setAuthBooting(false);
+    };
+    void bootstrapSession();
+    return () => {
+      mounted = false;
+    };
+  }, [supabase.auth]);
 
   // ---- Live data → customer dashboard shapes -------------------------------
   const uiServices = useMemo(() => services.map(toCustomerService), [services]);
@@ -302,7 +322,9 @@ export function Storefront({
 
   useEffect(() => {
     const cacheKey = `storefront:${panel.id}:snapshot`;
+    const hintKey = `storefront:${panel.id}:session-hint`;
     try {
+      setHasSessionHint(window.localStorage.getItem(hintKey) === "1");
       const raw = window.localStorage.getItem(cacheKey);
       if (raw) {
         const parsed = JSON.parse(raw) as {
@@ -310,9 +332,12 @@ export function Storefront({
           deposits?: DepositVM[];
           orders?: CustomerOrderVM[];
         };
+        setHasCachedSnapshot(true);
         if (typeof parsed.balance === "number") setLiveBalance(parsed.balance);
         if (Array.isArray(parsed.deposits)) setLiveDeposits(parsed.deposits);
         if (Array.isArray(parsed.orders)) setLiveOrders(parsed.orders);
+      } else {
+        setHasCachedSnapshot(false);
       }
     } catch {
       // ignore bad cache
@@ -375,6 +400,12 @@ export function Storefront({
         setAuthPhase("redirect");
         setClientSignedIn(true);
         setClientEmail(email.trim());
+        setHasSessionHint(true);
+        try {
+          window.localStorage.setItem(`storefront:${panel.id}:session-hint`, "1");
+        } catch {
+          // ignore storage failures
+        }
         setBusy(false);
         setAuthPhase("idle");
         router.refresh();
@@ -416,6 +447,12 @@ export function Storefront({
     setOptimisticSignedOut(true);
     setClientSignedIn(false);
     setClientEmail(null);
+    setHasSessionHint(false);
+    try {
+      window.localStorage.removeItem(`storefront:${panel.id}:session-hint`);
+    } catch {
+      // ignore storage failures
+    }
     void supabase.auth.signOut().finally(() => {
       router.refresh();
     });
@@ -479,7 +516,7 @@ export function Storefront({
   if (signedIn) {
     return (
       <CustomerDashboard
-        canOrder={panel.status === "live" && (account?.status ?? "active") === "active"}
+        canOrder={!!account && panel.status === "live" && account.status === "active"}
         inactive={inactive}
         onLogout={logout}
         brandName={panel.name}
