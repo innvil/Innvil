@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "auth" | "redirect">("idle");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -22,18 +23,22 @@ export default function LoginPage() {
   const submit = async () => {
     if (busy) return;
     setError(null);
+    setPhase("idle");
     if (!email || !password) { setError("Enter your email and password."); return; }
     setBusy(true);
+    setPhase("auth");
     try {
       const { error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
-      if (authError) { setError(authError.message); setBusy(false); return; }
+      if (authError) { setError(authError.message); setBusy(false); setPhase("idle"); return; }
+      setPhase("redirect");
       router.replace("/");
     } catch {
       setError("Something went wrong. Please try again.");
       setBusy(false);
+      setPhase("idle");
     }
   };
 
@@ -60,8 +65,14 @@ export default function LoginPage() {
         </div>
         {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
         <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
-          {busy ? <Loader2 size={15} className="animate-spin" /> : <LogIn size={15} />} {busy ? "Please wait…" : "Log in"}
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <LogIn size={15} />}
+          {busy ? (phase === "redirect" ? "Redirecting to dashboard…" : "Signing in…") : "Log in"}
         </button>
+        {busy && (
+          <p className="text-[11px] fp-text-faint mt-2 text-center fp-mono uppercase tracking-wide">
+            {phase === "redirect" ? "Credentials verified · opening dashboard" : "Verifying credentials"}
+          </p>
+        )}
       </form>
     </AuthShell>
   );

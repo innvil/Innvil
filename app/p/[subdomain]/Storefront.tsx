@@ -258,21 +258,33 @@ export function Storefront({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [authPhase, setAuthPhase] = useState<"idle" | "auth" | "redirect">("idle");
   const [error, setError] = useState<string | null>(null);
 
   const submitAuth = async () => {
     if (busy) return;
     setError(null);
+    setAuthPhase("idle");
     if (!email || !password) { setError("Enter your email and password."); return; }
     setBusy(true);
+    setAuthPhase("auth");
+    let redirecting = false;
     try {
       const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-      if (authError) setError(authError.message);
-      else router.refresh();
+      if (authError) {
+        setError(authError.message);
+      } else {
+        redirecting = true;
+        setAuthPhase("redirect");
+        router.refresh();
+      }
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
-      setBusy(false);
+      if (!redirecting) {
+        setBusy(false);
+        setAuthPhase("idle");
+      }
     }
   };
 
@@ -464,8 +476,18 @@ export function Storefront({
             </div>
             {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
             <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
-              {busy ? <span className="inline-flex items-center gap-2"><Loader2 size={15} className="animate-spin" /> Please wait…</span> : "Log in"}
+              {busy ? (
+                <span className="inline-flex items-center gap-2">
+                  <Loader2 size={15} className="animate-spin" />
+                  {authPhase === "redirect" ? "Redirecting to dashboard…" : "Signing in…"}
+                </span>
+              ) : "Log in"}
             </button>
+            {busy && (
+              <p className="text-[11px] fp-text-faint mt-2 text-center fp-mono uppercase tracking-wide">
+                {authPhase === "redirect" ? "Credentials verified · opening dashboard" : "Verifying credentials"}
+              </p>
+            )}
           </form>
           <p className="fp-text-faint text-xs text-center mt-4">
             New here? <Link href={`/p/${panel.subdomain}/signup`} className="fp-violet">Create account</Link>

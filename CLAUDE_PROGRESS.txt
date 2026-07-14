@@ -27,6 +27,18 @@ the current storefront would then serve as the admin panel of the child panel.
 
 can delete this too once noted and implemented
 
+## Session: Visible login redirect + lighter proxy checks (v0.2.38)
+
+### Date: 2026-07-14
+- **Login pause is now visibly staged** on both owner login and storefront login:
+  - `Signing in...` while credentials are verified.
+  - `Redirecting to dashboard...` immediately after auth success, so users see movement during route transition.
+- **Proxy/session checks were made lighter**:
+  - claims-first session touch (`getClaims` with fallback to `getUser`).
+  - skip auth checks for requests with no auth cookie (anonymous/public traffic).
+  - proxy matcher now excludes `/api` routes to avoid unnecessary proxy work.
+- package.json -> 0.2.38. No migration.
+
 ## Session: Login critical-path speed pass (v0.2.37)
 
 ### Date: 2026-07-14

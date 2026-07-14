@@ -2,6 +2,18 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { STOREFRONT_COOKIE_NAME, isStorefrontPath } from "./constants";
 
+const OWNER_COOKIE_RE = /^sb-[a-z0-9_-]+-auth-token(?:\.\d+)?$/i;
+
+function hasAuthCookie(request: NextRequest, storefront: boolean): boolean {
+  const all = request.cookies.getAll();
+  if (storefront) {
+    return all.some(
+      (c) => c.name === STOREFRONT_COOKIE_NAME || c.name.startsWith(`${STOREFRONT_COOKIE_NAME}.`)
+    );
+  }
+  return all.some((c) => OWNER_COOKIE_RE.test(c.name));
+}
+
 /**
  * Refreshes the Supabase auth session on each request and keeps the auth cookies
  * in sync between the browser and Server Components. Called from the root
@@ -30,6 +42,11 @@ export async function updateSession(
 
   const storefront = opts?.storefront ?? isStorefrontPath(request.nextUrl.pathname);
 
+  // Anonymous requests don't need a claims/user check. Let public pages stream.
+  if (!hasAuthCookie(request, storefront)) {
+    return response;
+  }
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -52,8 +69,13 @@ export async function updateSession(
     }
   );
 
-  // Touch the user to trigger a token refresh when needed.
-  await supabase.auth.getUser();
+  // Claims verification is cheaper than a full auth-server user fetch for normal routing.
+  // Fall back to getUser only if claims are unavailable in this environment.
+  try {
+    await supabase.auth.getClaims();
+  } catch {
+    await supabase.auth.getUser();
+  }
 
   return response;
 }
