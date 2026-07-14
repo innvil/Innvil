@@ -22,9 +22,18 @@ this should be done before we move public, and it should be our SEO point or som
 we should go public once all the fixes we need in the current mvp is all done. The other other features we were planning to add should be a coming soon feature.
 after this fixes in the website side, we should start fixing the mobile UI/UX functions, as it is right now,
 a lot of contents are overflowing, the width are bigger than mobile view.
-
+We should also implement child panels, that the rent is decided by the customer - since child panels will be customer's own panel, then they should decide how they price the rent,
+the current storefront would then serve as the admin panel of the child panel.
 
 can delete this too once noted and implemented
+
+## Session: Login critical-path speed pass (v0.2.37)
+
+### Date: 2026-07-14
+- **Root login now authenticates directly in the browser** and redirects immediately, removing a server-action hop from the sign-in critical path.
+- **Storefront (child-panel) login/logout now use direct browser Supabase auth** for faster sign-in/sign-out transitions before dashboard refresh.
+- **Root app bootstrap is now lazily loaded** (`app/page.tsx` dynamic imports) so auth redirect lands faster and the heavier owner dashboard bundle loads afterward.
+- package.json -> 0.2.37. No migration.
 
 ## Session: Navigation persistence + customer-manage unification (v0.2.34)
 

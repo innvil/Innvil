@@ -1,9 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { createClient } from "@/src/lib/supabase/client";
-import { PublicLanding, AuthScreen, InnvilApp } from "@/src/components/panels";
 import PreviewSwitcher from "./PreviewSwitcher";
+
+const PublicLanding = dynamic(
+  () => import("@/src/components/panels").then((m) => m.PublicLanding),
+  { ssr: false }
+);
+const AuthScreen = dynamic(
+  () => import("@/src/components/panels").then((m) => m.AuthScreen),
+  { ssr: false }
+);
+const InnvilApp = dynamic(
+  () => import("@/src/components/panels").then((m) => m.InnvilApp),
+  {
+    ssr: false,
+    loading: () => <div className="fp-root min-h-screen fp-grid-bg" />,
+  }
+);
 
 /* =========================================================
    ROOT — real, auth-driven.

@@ -16,11 +16,11 @@ import { placeOrder, listCustomerOrders, type CustomerOrderVM } from "@/src/lib/
 import { createDeposit, getCustomerWalletSnapshot, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
 import {
-  customerSignIn, customerSignOut,
   customerUpdateDisplayName, customerUpdateEmail, customerUpdatePassword,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
 import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
+import { createStorefrontClient } from "@/src/lib/supabase/client";
 
 const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
 
@@ -93,6 +93,7 @@ export function Storefront({
   apiBaseUrl?: string;
 }) {
   const router = useRouter();
+  const supabase = createStorefrontClient();
   const inactive = panel.status === "inactive";
   const [optimisticSignedOut, setOptimisticSignedOut] = useState(false);
   const account = optimisticSignedOut ? null : initialAccount; // re-fetched by the server after auth via router.refresh()
@@ -265,8 +266,8 @@ export function Storefront({
     if (!email || !password) { setError("Enter your email and password."); return; }
     setBusy(true);
     try {
-      const res = await customerSignIn(panel.id, email, password);
-      if (!res.ok) setError(res.error);
+      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      if (authError) setError(authError.message);
       else router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
@@ -277,7 +278,7 @@ export function Storefront({
 
   const logout = () => {
     setOptimisticSignedOut(true);
-    void customerSignOut().finally(() => {
+    void supabase.auth.signOut().finally(() => {
       router.refresh();
     });
   };

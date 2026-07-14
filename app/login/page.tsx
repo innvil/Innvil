@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LogIn, AlertTriangle, Loader2 } from "lucide-react";
 import { AuthShell, authInputCls } from "@/src/components/auth/AuthShell";
-import { signInAction } from "@/src/lib/actions/auth";
+import { createClient } from "@/src/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
+  const supabase = createClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,8 +25,11 @@ export default function LoginPage() {
     if (!email || !password) { setError("Enter your email and password."); return; }
     setBusy(true);
     try {
-      const res = await signInAction(email, password);
-      if (!res.ok) { setError(res.error); setBusy(false); return; }
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (authError) { setError(authError.message); setBusy(false); return; }
       router.replace("/");
     } catch {
       setError("Something went wrong. Please try again.");
