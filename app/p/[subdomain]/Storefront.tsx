@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -93,13 +93,16 @@ export function Storefront({
   apiBaseUrl?: string;
 }) {
   const router = useRouter();
-  const supabase = createStorefrontClient();
+  const supabase = useMemo(() => createStorefrontClient(), []);
   const inactive = panel.status === "inactive";
   const [optimisticSignedOut, setOptimisticSignedOut] = useState(false);
+  const [clientSignedIn, setClientSignedIn] = useState(false);
+  const [clientEmail, setClientEmail] = useState<string | null>(null);
   const account = optimisticSignedOut ? null : initialAccount; // re-fetched by the server after auth via router.refresh()
+  const signedIn = !!account || clientSignedIn;
   const fmt = (n: number) => formatMoney(n, panel.currency);
   const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
-  const [liveDeposits, setLiveDeposits] = useState(initialDeposits);
+  const [liveDeposits, setLiveDeposits] = useState<DepositVM[]>(initialDeposits);
   const [liveOrders, setLiveOrders] = useState<CustomerOrderVM[]>(initialOrders);
   const [apiEnabled, setApiEnabled] = useState(customerApiEnabled);
   const [apiHasKey, setApiHasKey] = useState(customerApiHasKey);
@@ -124,6 +127,13 @@ export function Storefront({
   useEffect(() => {
     if (initialAccount) setOptimisticSignedOut(false);
   }, [initialAccount]);
+
+  useEffect(() => {
+    if (account) {
+      setClientSignedIn(true);
+      setClientEmail(account.email ?? null);
+    }
+  }, [account]);
 
   // ---- Live data → customer dashboard shapes -------------------------------
   const uiServices = useMemo(() => services.map(toCustomerService), [services]);
@@ -213,7 +223,7 @@ export function Storefront({
   );
 
   useEffect(() => {
-    if (!account) return;
+    if (!signedIn) return;
     let cancelled = false;
     const bootstrapSignedInData = async () => {
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -235,10 +245,10 @@ export function Storefront({
     return () => {
       cancelled = true;
     };
-  }, [account, panel.id]);
+  }, [signedIn, panel.id]);
 
   useEffect(() => {
-    if (!account) return;
+    if (!signedIn) return;
     const hasPending = liveDeposits.some((d) => d.status === "pending" || d.status === "approved");
 
     let cancelled = false;
@@ -255,10 +265,10 @@ export function Storefront({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [account, liveDeposits, panel.id]);
+  }, [signedIn, liveDeposits, panel.id]);
 
   useEffect(() => {
-    if (!account) return;
+    if (!signedIn) return;
 
     let cancelled = false;
     const pollOrders = async () => {
@@ -273,10 +283,10 @@ export function Storefront({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [account, hasOpenOrders, panel.id]);
+  }, [signedIn, hasOpenOrders, panel.id]);
 
   useEffect(() => {
-    if (!account) return;
+    if (!signedIn) return;
     let cancelled = false;
     const loadApiState = async () => {
       const next = await getCustomerApiState(panel.id);
@@ -288,7 +298,42 @@ export function Storefront({
     return () => {
       cancelled = true;
     };
-  }, [account, panel.id]);
+  }, [signedIn, panel.id]);
+
+  useEffect(() => {
+    const cacheKey = `storefront:${panel.id}:snapshot`;
+    try {
+      const raw = window.localStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          balance?: number;
+          deposits?: DepositVM[];
+          orders?: CustomerOrderVM[];
+        };
+        if (typeof parsed.balance === "number") setLiveBalance(parsed.balance);
+        if (Array.isArray(parsed.deposits)) setLiveDeposits(parsed.deposits);
+        if (Array.isArray(parsed.orders)) setLiveOrders(parsed.orders);
+      }
+    } catch {
+      // ignore bad cache
+    }
+  }, [panel.id]);
+
+  useEffect(() => {
+    const cacheKey = `storefront:${panel.id}:snapshot`;
+    try {
+      window.localStorage.setItem(
+        cacheKey,
+        JSON.stringify({
+          balance: liveBalance,
+          deposits: liveDeposits,
+          orders: liveOrders,
+        })
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [panel.id, liveBalance, liveDeposits, liveOrders]);
 
   // Group services by platform for the showcase
   const groups = useMemo(() => {
@@ -312,19 +357,6 @@ export function Storefront({
   const [busy, setBusy] = useState(false);
   const [authPhase, setAuthPhase] = useState<"idle" | "auth" | "redirect">("idle");
   const [error, setError] = useState<string | null>(null);
-  const redirectCheckIntervalRef = useRef<number | null>(null);
-  const hardReloadTimeoutRef = useRef<number | null>(null);
-
-  const clearRedirectTimers = () => {
-    if (redirectCheckIntervalRef.current != null) {
-      window.clearInterval(redirectCheckIntervalRef.current);
-      redirectCheckIntervalRef.current = null;
-    }
-    if (hardReloadTimeoutRef.current != null) {
-      window.clearTimeout(hardReloadTimeoutRef.current);
-      hardReloadTimeoutRef.current = null;
-    }
-  };
 
   const submitAuth = async () => {
     if (busy) return;
@@ -341,19 +373,14 @@ export function Storefront({
       } else {
         redirecting = true;
         setAuthPhase("redirect");
-        const nextUrl = `/p/${panel.subdomain}`;
-        window.location.assign(nextUrl);
-
-        // In rare cases refresh can lag while cookies propagate; retry then hard-reload.
-        clearRedirectTimers();
-        redirectCheckIntervalRef.current = window.setInterval(() => {
-          if (window.location.pathname !== `/p/${panel.subdomain}`) {
-            window.location.assign(nextUrl);
-          }
-        }, 1000);
-        hardReloadTimeoutRef.current = window.setTimeout(() => {
-          window.location.assign(nextUrl);
-        }, 5000);
+        setClientSignedIn(true);
+        setClientEmail(email.trim());
+        setBusy(false);
+        setAuthPhase("idle");
+        router.refresh();
+        window.setTimeout(() => {
+          router.refresh();
+        }, 900);
       }
     } catch {
       setError("Something went wrong. Please try again.");
@@ -366,22 +393,29 @@ export function Storefront({
   };
 
   useEffect(() => {
-    if (!account) return;
-    if (!busy) return;
-    clearRedirectTimers();
-    setBusy(false);
-    setAuthPhase("idle");
-  }, [account, busy]);
-
-  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        setClientSignedIn(false);
+        setClientEmail(null);
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        setClientSignedIn(true);
+        setClientEmail(session?.user?.email ?? null);
+        router.refresh();
+      }
+    });
     return () => {
-      clearRedirectTimers();
+      subscription.unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [router, supabase.auth]);
 
   const logout = () => {
     setOptimisticSignedOut(true);
+    setClientSignedIn(false);
+    setClientEmail(null);
     void supabase.auth.signOut().finally(() => {
       router.refresh();
     });
@@ -442,10 +476,10 @@ export function Storefront({
   );
 
   /* ---------------- Signed-in view — the real customer dashboard ---------------- */
-  if (account) {
+  if (signedIn) {
     return (
       <CustomerDashboard
-        canOrder={panel.status === "live" && account.status === "active"}
+        canOrder={panel.status === "live" && (account?.status ?? "active") === "active"}
         inactive={inactive}
         onLogout={logout}
         brandName={panel.name}
@@ -457,7 +491,7 @@ export function Storefront({
         tickets={[]}
         recentIds={recentIds}
         username={account?.username ?? undefined}
-        email={account.email ?? undefined}
+        email={account?.email ?? clientEmail ?? undefined}
         onUpdateUsername={async (next) => {
           const res = await customerUpdateDisplayName(next);
           if (res.ok) router.refresh();
