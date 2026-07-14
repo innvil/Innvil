@@ -7,6 +7,11 @@
 for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
 to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
 also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
+I am also thinkging for future feature, we will also rent a marketplace for digital products for those who wish's to accept crypto payments for thier digital products,
+I see a lot of online people selling digital produce, like designs, and others. 
+Or maybe, instead of rent, we will make the marketplace ourselves, we can make it like fiverr, where people can buy services, apply for being a seller and such. 
+we should make it Innvil Marketplace, this is also where people can use the ANVIL coin. in this marketplace, our share is 10% from both sides, fiverr rn is accepting 20% both sides, 
+when they accept/use ANVIL coin as their payment method, we will give a 5% total discount both sides. so instead of 10%, our commision will then be 7.5% boths sides total of 15% 
 if the above note is already noted, can delete
 additonal note:
 the popup message should also be stylized, the app is luxurious but the pop up seems below ordinay
@@ -15,6 +20,10 @@ when we start with full prod, even if still in MVP, but when we are ready to go 
 to showcase why it they should choose us, it's because we have made everything easier, from auto categoritzation, to easy managing the customers,
 this should be done before we move public, and it should be our SEO point or something
 we should go public once all the fixes we need in the current mvp is all done. The other other features we were planning to add should be a coming soon feature.
+after this fixes in the website side, we should start fixing the mobile UI/UX functions, as it is right now,
+a lot of contents are overflowing, the width are bigger than mobile view.
+
+
 can delete this too once noted and implemented
 
 ## Session: Navigation persistence + customer-manage unification (v0.2.34)
@@ -36,6 +45,15 @@ can delete this too once noted and implemented
   - Username/email/password updates from customer Profile are wired to server actions.
   - Username changes persist to profiles/auth metadata and reflect automatically across owner management views.
 - package.json -> 0.2.34. No migration.
+
+
+## Session: Duplicate sync + login feedback + release prep (v0.2.35)
+
+### Date: 2026-07-14
+- **Duplicate orders now keep the reason.** Both customer-side placement and sync-time duplicate detection write `Duplicated order` into the order metadata/history so the customer sees a real reason.
+- **False duplicate orders now reconcile to provider status.** Provider-bound orders tagged duplicate are included in sync passes so they can be corrected back to the real provider status.
+- **Login feedback is now explicit.** Owner login and customer storefront login now show an overlay/spinner and disable inputs while signing in, so the transition is visible immediately.
+- package.json -> 0.2.35. No migration.
 
 
 ## Session: Sync-status duplicate matcher hardening (v0.2.33)

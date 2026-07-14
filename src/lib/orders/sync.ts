@@ -13,9 +13,22 @@ import type { OrderStatus } from "@/src/types/db";
    Server-only; runs under the service role (cron or owner-triggered).
    ========================================================= */
 
-// Orders we still poll. Terminal states (completed/partial/canceled/refunded/
-// failed) are left alone.
-const OPEN_STATUSES: OrderStatus[] = ["pending", "processing", "in_progress"];
+// Provider-bound orders we still poll. We now reconcile every order with a
+// provider order id so provider status changes can flow both ways.
+const SYNCABLE_STATUSES: OrderStatus[] = [
+  "pending",
+  "processing",
+  "in_progress",
+  "partial",
+  "completed",
+  "canceled",
+  "failed",
+  "refunded",
+  "duplicate",
+];
+
+const ACTIVE_STATUSES: OrderStatus[] = ["pending", "processing", "in_progress", "partial", "completed"];
+const TERMINAL_STATUSES: OrderStatus[] = ["canceled", "failed", "refunded"];
 
 function isInsufficientProviderBalance(msg?: string | null): boolean {
   if (!msg) return false;
@@ -26,6 +39,7 @@ function isInsufficientProviderBalance(msg?: string | null): boolean {
 export function mapProviderStatus(raw: string): OrderStatus | null {
   const s = (raw || "").toLowerCase();
   if (s.includes("progress")) return "in_progress";
+  if (s.includes("submit")) return "processing";
   if (s.includes("complete")) return "completed";
   if (s.includes("partial")) return "partial";
   if (s.includes("cancel")) return "canceled";
@@ -78,7 +92,6 @@ type DupFingerprint = {
   link: string;
   serviceId: string;
   serviceName: string;
-  platform: string;
   category: string;
 };
 
@@ -108,7 +121,8 @@ function normText(v: string | null | undefined): string {
  * Reconcile duplicates with a strict rule:
  * - Keep all `in_progress` orders untouched (already transferred to provider).
  * - Mark only `pending` / `processing` orders as `duplicate` when they match an
- *   existing `in_progress` order on the same service + link.
+ *   existing `in_progress` order on the same link plus service ID, service name,
+ *   or category.
  */
 async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string): Promise<number> {
   const { data } = await admin
@@ -150,7 +164,6 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
       link,
       serviceId: r.service_id,
       serviceName: normText(svc?.name),
-      platform: normText(svc?.platform),
       category: normText(categoryName),
     };
 
@@ -171,7 +184,6 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
       if (src.serviceId === cand.serviceId) return true;
       if (src.serviceName && cand.serviceName && src.serviceName === cand.serviceName) return true;
       if (src.category && cand.category && src.category === cand.category) return true;
-      if (src.platform && cand.platform && src.platform === cand.platform) return true;
       return false;
     });
 
@@ -184,7 +196,10 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
   for (const id of toDuplicate) {
     const { data: claimed } = await admin
       .from("orders")
-      .update({ status: "duplicate" })
+      .update({
+        status: "duplicate",
+        provider_response: { error: "Duplicated order", duplicate: true, synced: true },
+      })
       .eq("id", id)
       .in("status", DUP_MUTABLE)
       .select("id")
@@ -193,7 +208,7 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
     await admin.from("order_status_history").insert({
       order_id: id,
       status: "duplicate",
-      note: "Duplicate detected during sync (matches in-progress service + link).",
+      note: "Duplicated order — not sent to the provider.",
     });
     updated++;
   }
@@ -316,9 +331,9 @@ export async function syncPanelOrders(
     .from("orders")
     .select("id, provider_id, provider_order_id, status, quantity, charge, customer_id, remains")
     .eq("panel_id", panelId)
-    .in("status", OPEN_STATUSES)
     .not("provider_order_id", "is", null)
-    .not("provider_id", "is", null);
+    .not("provider_id", "is", null)
+    .in("status", SYNCABLE_STATUSES);
 
   const list = (orders as OpenOrder[] | null) ?? [];
   if (!list.length) return { checked: 0, updated: expired + reconciledFailed + reconciledDupes };
@@ -329,23 +344,23 @@ export async function syncPanelOrders(
     (byProvider.get(o.provider_id) ?? byProvider.set(o.provider_id, []).get(o.provider_id)!).push(o);
   }
 
-  let updated = 0;
-  for (const [providerId, group] of byProvider) {
+  const providerResults = await Promise.all([...byProvider.entries()].map(async ([providerId, group]) => {
     const { data: prov } = await admin
       .from("providers")
       .select("api_url")
       .eq("id", providerId)
       .maybeSingle();
-    if (!prov) continue;
+    if (!prov) return 0;
 
     let creds;
     try {
       creds = await getProviderCredentials(providerId, prov.api_url as string);
     } catch {
-      continue; // key missing/unreadable — skip this provider this run
+      return 0; // key missing/unreadable — skip this provider this run
     }
 
     const byProviderOrderId = new Map(group.map((o) => [String(o.provider_order_id), o]));
+    let providerUpdated = 0;
     for (const ids of chunk([...byProviderOrderId.keys()], 100)) {
       let resp;
       try {
@@ -368,7 +383,7 @@ export async function syncPanelOrders(
               provider_response: { error: reason, synced: true },
             })
             .eq("id", o.id)
-            .in("status", OPEN_STATUSES)
+            .eq("status", o.status)
             .select("id")
             .maybeSingle();
           if (!claimed) continue;
@@ -381,7 +396,7 @@ export async function syncPanelOrders(
           await admin
             .from("order_status_history")
             .insert({ order_id: o.id, status: "refunded", note: `Provider status error — auto-refunded. (${reason})` });
-          updated++;
+          providerUpdated++;
           continue;
         }
 
@@ -389,6 +404,9 @@ export async function syncPanelOrders(
         if (!next || next === o.status) continue;
 
         const finalStatus: OrderStatus = next === "failed" ? "refunded" : next;
+  const fromTerminal = TERMINAL_STATUSES.includes(o.status);
+  const toActive = ACTIVE_STATUSES.includes(finalStatus);
+        const toTerminal = TERMINAL_STATUSES.includes(finalStatus);
 
         const remains = Number(st.remains);
         const startCount = Number(st.start_count);
@@ -403,13 +421,26 @@ export async function syncPanelOrders(
             provider_response: st as unknown as Record<string, unknown>,
           })
           .eq("id", o.id)
-          .in("status", OPEN_STATUSES)
+          .eq("status", o.status)
           .select("id")
           .maybeSingle();
         if (!claimed) continue; // another run handled it
 
-        // Refund the unfilled portion once, on the way into a terminal state.
-        if (finalStatus === "partial" || finalStatus === "canceled" || finalStatus === "refunded") {
+        // If the provider reopened a previously canceled/refunded order, put the
+        // charge back onto the customer balance before applying any terminal refund.
+        if (fromTerminal && toActive) {
+          await admin.rpc("apply_balance_change", {
+            p_customer: o.customer_id,
+            p_amount: -Number(o.charge),
+            p_type: "order",
+            p_reason: `Order ${o.id} reopened by provider status sync`,
+          });
+        }
+
+        // Refund the unfilled portion once when moving from an active state into a
+        // terminal state. If the provider flips between terminal states, keep the
+        // balance unchanged.
+        if (!fromTerminal && toTerminal) {
           let refund = 0;
           if (finalStatus === "refunded") {
             refund = Number(o.charge);
@@ -426,17 +457,42 @@ export async function syncPanelOrders(
           }
         }
 
+        if (fromTerminal && finalStatus === "partial") {
+          // A reopened order can come back as partial. Net effect should be the
+          // fulfilled portion, so we restore the charge and then refund the unfilled
+          // remainder using the provider's latest remains value.
+          let refund = 0;
+          if (Number.isFinite(remains) && remains > 0 && o.quantity > 0) {
+            refund = round4(Number(o.charge) * Math.min(remains / o.quantity, 1));
+          }
+          if (refund > 0) {
+            await admin.rpc("apply_balance_change", {
+              p_customer: o.customer_id,
+              p_amount: refund,
+              p_type: "refund",
+              p_reason: `Order ${o.id} partial after reopen`,
+            });
+          }
+        }
+
         await admin
           .from("order_status_history")
           .insert({
             order_id: o.id,
             status: finalStatus,
-            note: next === "failed" ? "Provider marked the order failed — auto-refunded." : "Synced from provider",
+            note: fromTerminal && toActive
+              ? "Provider reopened the order — customer balance re-deducted and status synced."
+              : next === "failed"
+                ? "Provider marked the order failed — auto-refunded."
+                : "Synced from provider",
           });
-        updated++;
+        providerUpdated++;
       }
     }
-  }
+    return providerUpdated;
+  }));
+
+  const updated = providerResults.reduce((sum, value) => sum + value, 0);
 
   return { checked: list.length, updated: updated + expired + reconciledFailed + reconciledDupes };
 }
@@ -444,11 +500,13 @@ export async function syncPanelOrders(
 /** Sync open orders across every panel that has any. Used by the cron. */
 export async function syncAllOpenOrders(): Promise<{ panels: number; checked: number; updated: number }> {
   const admin = createAdminClient();
-  // Any panel with an open order, held order, or failed order needs a pass.
+  // Any panel with a provider-bound order needs a pass so both active and
+  // terminal statuses can be reconciled against the provider.
   const { data } = await admin
     .from("orders")
     .select("panel_id")
-    .in("status", [...OPEN_STATUSES, "failed"]);
+    .not("provider_order_id", "is", null)
+    .not("provider_id", "is", null);
 
   const panelIds = [...new Set((data ?? []).map((o) => o.panel_id as string))];
   let checked = 0;

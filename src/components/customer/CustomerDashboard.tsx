@@ -54,8 +54,10 @@ const statusTone: Record<string, string> = {
   "In progress": "fp-gold-soft-bg fp-gold",
   Pending: "fp-violet-soft-bg fp-violet",
   Partial: "fp-gold-soft-bg fp-gold",
+  Duplicate: "bg-amber-500/10 text-amber-300",
   Canceled: "bg-red-500/10 text-red-400",
   Refunded: "bg-red-500/10 text-red-400",
+  Failed: "bg-red-500/10 text-red-400",
 };
 
 function ServiceQuickCard({
@@ -219,6 +221,7 @@ export function CustomerDashboard({
   };
   const [page, setPage] = useState<CustomerPage>(() => readSavedPage());
   const [menuOpen, setMenuOpen] = useState(false);
+  const [orderFilter, setOrderFilter] = useState<string>("All");
   const [usernameInput, setUsernameInput] = useState(username ?? (email ? email.split("@")[0] : ""));
   const [emailInput, setEmailInput] = useState(email ?? "");
   const [emailCurrentPassword, setEmailCurrentPassword] = useState("");
@@ -368,6 +371,20 @@ export function CustomerDashboard({
     (o) => o.status === "Completed" && o.date.startsWith("Today")
   ).length;
   const canceledCount = orders.filter((o) => o.status === "Canceled").length;
+
+  const orderFilterOptions = [
+    "All",
+    "Pending",
+    "Processing",
+    "In progress",
+    "Completed",
+    "Partial",
+    "Duplicate",
+    "Canceled",
+    "Refunded",
+    "Failed",
+  ] as const;
+  const filteredOrders = orderFilter === "All" ? orders : orders.filter((o) => o.status === orderFilter);
 
   const go = (p: CustomerPage) => {
     if (p === "order") setPrefillServiceId(null);
@@ -554,6 +571,25 @@ export function CustomerDashboard({
         {page === "orders" && (
           <div className="fp-panel border fp-line rounded-2xl p-5">
             <p className="fp-display text-lg mb-4">Order history</p>
+            <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+              {orderFilterOptions.map((status) => {
+                const count = status === "All" ? orders.length : orders.filter((o) => o.status === status).length;
+                const active = orderFilter === status;
+                return (
+                  <button
+                    key={status}
+                    onClick={() => setOrderFilter(status)}
+                    className={`shrink-0 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                      active
+                        ? "fp-violet-soft-bg fp-violet border-[rgba(139,127,255,0.45)]"
+                        : "fp-panel-raised fp-text-dim border-[#262A35] hover:fp-text"
+                    }`}
+                  >
+                    {status} <span className="fp-mono">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
             {orders.length === 0 ? (
               <div className="text-center py-10">
                 <p className="text-sm fp-text-dim mb-3">You haven&apos;t placed any orders yet.</p>
@@ -561,8 +597,15 @@ export function CustomerDashboard({
                   Place your first order
                 </button>
               </div>
+            ) : filteredOrders.length === 0 ? (
+              <div className="text-center py-10">
+                <p className="text-sm fp-text-dim mb-3">No orders match the selected status.</p>
+                <button onClick={() => setOrderFilter("All")} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg">
+                  Show all orders
+                </button>
+              </div>
             ) : (
-              <OrderRows orders={orders} services={services} onReorder={quickOrder} />
+              <OrderRows orders={filteredOrders} services={services} onReorder={quickOrder} />
             )}
           </div>
         )}
@@ -928,7 +971,7 @@ function OrderRows({
                   </>
                 )}
               </p>
-              {o.failReason && (o.status === "Canceled" || o.status === "Refunded") && (
+              {o.failReason && (o.status === "Canceled" || o.status === "Refunded" || o.status === "Duplicate" || o.status === "Failed") && (
                 <p className="text-[11px] text-red-400 mt-0.5 truncate">Reason: {o.failReason}</p>
               )}
             </div>

@@ -34,6 +34,12 @@ export type PlaceOrderResult =
   | { ok: true; orderId: string; charge: number; balance: number; status: OrderStatus }
   | { ok: false; error: string };
 
+type DuplicateServiceMeta = {
+  id: string;
+  name: string | null;
+  category_id: string | null;
+};
+
 async function addHistory(admin: SupabaseClient, orderId: string, status: OrderStatus, note?: string) {
   await admin.from("order_status_history").insert({ order_id: orderId, status, note: note ?? null });
 }
@@ -98,7 +104,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   // 4. Service must belong to this panel and be active.
   const { data: svc } = await admin
     .from("services")
-    .select("id, panel_id, provider_id, provider_service_id, sell_rate, provider_rate, min, max, status")
+    .select("id, panel_id, provider_id, provider_service_id, sell_rate, provider_rate, min, max, status, name, category_id")
     .eq("id", input.serviceId)
     .maybeSingle();
   if (!svc || svc.panel_id !== input.panelId) return { ok: false, error: "Service not found." };
@@ -171,21 +177,60 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   }
   const balanceAfter = Number((tx as { balance_after: number }).balance_after);
 
-  // 8b. Duplicate guard: if this customer already has a LIVE order for the exact same
-  //     service + link, park this one as 'duplicate' (don't send it to the provider) so
-  //     the owner can review + mass-cancel/refund it from the Orders tab.
-  const { data: dupe } = await admin
+  // 8b. Duplicate guard: same link alone is not enough. Park this order as
+  //     'duplicate' only when the same link also matches the same service ID,
+  //     service name, or category on an existing order.
+  const { data: relatedOrders } = await admin
     .from("orders")
-    .select("id")
+    .select("id, service_id, link, status")
     .eq("panel_id", input.panelId)
     .eq("customer_id", acct.id)
-    .eq("service_id", svc.id)
     .eq("link", link)
     .neq("id", order.id)
     .in("status", ["pending", "processing", "in_progress", "partial", "completed", "duplicate"])
-    .limit(1)
-    .maybeSingle();
-  if (dupe) {
+    .limit(50);
+
+  const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; link: string; status: OrderStatus }> | null) ?? [];
+  if (relatedRows.length) {
+    const serviceIds = [...new Set([svc.id, ...relatedRows.map((r) => r.service_id).filter(Boolean)])];
+    const { data: serviceMetaRows } = await admin
+      .from("services")
+      .select("id, name, category_id")
+      .in("id", serviceIds);
+    const serviceMeta = new Map(
+      ((serviceMetaRows as DuplicateServiceMeta[] | null) ?? []).map((row) => [row.id, row])
+    );
+    const categoryIds = [...new Set((serviceMetaRows as DuplicateServiceMeta[] | null ?? []).map((row) => row.category_id).filter((value): value is string => !!value))];
+    let categoryNameById = new Map<string, string>();
+    if (categoryIds.length) {
+      const { data: cats } = await admin.from("provider_categories").select("id, name").in("id", categoryIds);
+      categoryNameById = new Map(((cats as Array<{ id: string; name: string }> | null) ?? []).map((row) => [row.id, row.name]));
+    }
+
+    const currentName = (svc.name ?? "").trim().toLowerCase();
+    const currentCategory = svc.category_id ? (categoryNameById.get(svc.category_id) ?? "") : "";
+
+    const matchesDuplicate = (serviceId: string): boolean => {
+      const meta = serviceMeta.get(serviceId);
+      if (!meta) return false;
+      const nextName = (meta.name ?? "").trim().toLowerCase();
+      const nextCategory = meta.category_id ? (categoryNameById.get(meta.category_id) ?? "") : "";
+      return (
+        serviceId === svc.id ||
+        (currentName && nextName && currentName === nextName) ||
+        (currentCategory && nextCategory && currentCategory === nextCategory)
+      );
+    };
+
+    const dupe = relatedRows.find((row) => matchesDuplicate(row.service_id));
+    if (dupe) {
+      await admin.from("orders").update({ status: "duplicate" }).eq("id", order.id);
+      await addHistory(admin, order.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
+      return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "duplicate" };
+    }
+  }
+
+  if (false) {
     await admin.from("orders").update({ status: "duplicate" }).eq("id", order.id);
     await addHistory(admin, order.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
     return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "duplicate" };

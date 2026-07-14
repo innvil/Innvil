@@ -30,10 +30,12 @@ export function SignUpClient({
   panelId,
   panelName,
   subdomain,
+  logoUrl,
 }: {
   panelId: string;
   panelName: string;
   subdomain: string;
+  logoUrl?: string | null;
 }) {
   const router = useRouter();
   const [username, setUsername] = useState("");
@@ -85,10 +87,15 @@ export function SignUpClient({
   return (
     <div className="fp-root min-h-screen fp-grid-bg fp-noise flex items-center justify-center px-4 py-10">
       <div className="fp-panel border fp-line rounded-2xl p-7 w-full max-w-md">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center"><Sparkles size={16} color="#0A0B0F" /></span>
+        <Link href={`/p/${subdomain}`} className="flex items-center gap-2 mb-2 w-fit">
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={logoUrl} alt={panelName} className="w-8 h-8 rounded-lg object-cover" />
+          ) : (
+            <span className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center"><Sparkles size={16} color="#0A0B0F" /></span>
+          )}
           <p className="fp-display text-lg">{panelName}</p>
-        </div>
+        </Link>
         <h1 className="fp-display text-2xl mb-2">Create account</h1>
         <p className="fp-text-dim text-sm mb-6">Username, email, and password are required. We will send a confirmation email before first login.</p>
 

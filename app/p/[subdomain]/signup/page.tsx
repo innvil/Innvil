@@ -25,6 +25,7 @@ export default async function StorefrontSignUpPage({ params }: Params) {
       panelId={panel.id}
       panelName={panel.name}
       subdomain={panel.subdomain}
+      logoUrl={panel.logoUrl}
     />
   );
 }

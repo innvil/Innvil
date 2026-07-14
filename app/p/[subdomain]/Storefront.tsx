@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Sparkles, Zap, ShieldCheck, Wallet, Clock,
-  AlertTriangle, CheckCircle2, ChevronDown,
+  AlertTriangle, CheckCircle2, ChevronDown, Loader2,
 } from "lucide-react";
 import { PLATFORMS, PlatformKey, CustomerService, CustomerOrder } from "@/src/data/constants";
 import { PlatformGlyph, PlatformButton } from "@/src/components/customer/PlatformIcons";
@@ -55,8 +55,9 @@ const ORDER_STATUS_LABEL: Record<string, CustomerOrder["status"]> = {
   partial: "Partial",
   completed: "Completed",
   canceled: "Canceled",
-  failed: "Refunded",
+  failed: "Failed",
   refunded: "Refunded",
+  duplicate: "Duplicate",
 };
 
 function formatOrderDate(iso: string): string {
@@ -274,6 +275,10 @@ export function Storefront({
     router.refresh();
   };
 
+  const scrollToAuth = () => {
+    document.getElementById("nb-auth")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const inputCls =
     "w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[rgba(139,127,255,0.35)] text-[#EDEAE2]";
 
@@ -384,7 +389,7 @@ export function Storefront({
 
       <header className="border-b fp-line-soft bg-[#0A0B0F]/90 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+          <button onClick={scrollToAuth} className="flex items-center gap-2.5 text-left">
             {panel.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={panel.logoUrl} alt={panel.name} className="w-8 h-8 rounded-lg object-cover" />
@@ -394,9 +399,11 @@ export function Storefront({
               </div>
             )}
             <span className="fp-display text-xl">{panel.name}</span>
-          </div>
+          </button>
           <div className="flex items-center gap-2">
-            <span className="text-sm px-4 py-2 rounded-lg fp-violet-soft-bg fp-violet">Log in</span>
+            <button onClick={scrollToAuth} className="text-sm px-4 py-2 rounded-lg fp-violet-soft-bg fp-violet">
+              Log in
+            </button>
             <Link href={`/p/${panel.subdomain}/signup`} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</Link>
           </div>
         </div>
@@ -430,17 +437,26 @@ export function Storefront({
           </div>
         </div>
 
-        <div id="nb-auth" className="fp-panel border fp-line rounded-2xl p-7 max-w-md w-full md:justify-self-end">
+        <div id="nb-auth" className="fp-panel border fp-line rounded-2xl p-7 max-w-md w-full md:justify-self-end relative">
           <h2 className="fp-display text-2xl mb-5">Welcome back</h2>
+          {busy && (
+            <div className="absolute inset-0 z-10 rounded-2xl bg-[#0E1522]/70 backdrop-blur-[2px] flex items-center justify-center px-4">
+              <div className="flex items-center gap-2 fp-panel border fp-line rounded-full px-4 py-2 text-sm fp-text">
+                <Loader2 size={15} className="animate-spin fp-gold" />
+                Signing you in…
+              </div>
+            </div>
+          )}
           <form
             autoComplete={`section-innvil-customer-${panel.id} on`}
             onSubmit={(e) => {
               e.preventDefault();
               submitAuth();
             }}
+            aria-busy={busy}
           >
-            <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete={`section-innvil-customer-${panel.id} username`} placeholder="Email" className={`${inputCls} mb-3`} />
-            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete={`section-innvil-customer-${panel.id} current-password`} placeholder="Password" className={`${inputCls} mb-2`} />
+            <input disabled={busy} value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete={`section-innvil-customer-${panel.id} username`} placeholder="Email" className={`${inputCls} mb-3`} />
+            <input disabled={busy} value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete={`section-innvil-customer-${panel.id} current-password`} placeholder="Password" className={`${inputCls} mb-2`} />
             <div className="flex justify-end mb-4">
               <Link href={`/p/${panel.subdomain}/forgot-password`} className="fp-text-faint text-xs hover:fp-text">
                 Forgot password?
@@ -448,7 +464,7 @@ export function Storefront({
             </div>
             {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
             <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
-              {busy ? "Please wait…" : "Log in"}
+              {busy ? <span className="inline-flex items-center gap-2"><Loader2 size={15} className="animate-spin" /> Please wait…</span> : "Log in"}
             </button>
           </form>
           <p className="fp-text-faint text-xs text-center mt-4">
