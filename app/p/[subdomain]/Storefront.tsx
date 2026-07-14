@@ -83,6 +83,22 @@ type StorefrontSnapshotResponse = {
   };
 };
 
+function readStorefrontAccessTokenFromCookie(): string | null {
+  try {
+    const raw = document.cookie
+      .split("; ")
+      .find((v) => v.startsWith("ll-store-auth="));
+    if (!raw) return null;
+    const encoded = decodeURIComponent(raw.slice("ll-store-auth=".length));
+    const payload = JSON.parse(atob(encoded.replace(/^base64-/, ""))) as { access_token?: string };
+    return typeof payload.access_token === "string" && payload.access_token
+      ? payload.access_token
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function Storefront({
   panel,
   services,
@@ -243,7 +259,7 @@ export function Storefront({
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    const token = session?.access_token;
+    const token = session?.access_token ?? readStorefrontAccessTokenFromCookie();
     if (!token) return null;
 
     const resp = await fetch("/api/storefront/snapshot", {

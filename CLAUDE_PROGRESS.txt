@@ -62,6 +62,13 @@ can delete this too once noted and implemented
 - Owner `Sync statuses` now explicitly materializes panel order/payment state into `storefront_customer_snapshots` per customer account for that panel.
 - package.json -> 0.2.45. Requires migration 0013 applied in Supabase.
 
+## Session: Storefront snapshot token fallback fix (v0.2.46)
+
+### Date: 2026-07-14
+- Found root display mismatch: snapshot API returned populated orders, but storefront UI still showed zero because client snapshot fetch could miss a token from `supabase.auth.getSession()`.
+- Added storefront cookie-token fallback (`ll-store-auth`) in `Storefront.tsx` so `/api/storefront/snapshot` can still be read while runtime session state lags.
+- package.json -> 0.2.46. No migration.
+
 ## Session: Storefront post-login streaming + hydration hardening (v0.2.39)
 
 ### Date: 2026-07-14
