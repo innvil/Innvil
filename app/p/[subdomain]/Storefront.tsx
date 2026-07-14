@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -214,6 +214,31 @@ export function Storefront({
 
   useEffect(() => {
     if (!account) return;
+    let cancelled = false;
+    const bootstrapSignedInData = async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const [wallet, orders] = await Promise.all([
+          getCustomerWalletSnapshot(panel.id),
+          listCustomerOrders(panel.id),
+        ]);
+        if (cancelled) return;
+        if (wallet) {
+          setLiveBalance(wallet.balance);
+          setLiveDeposits(wallet.deposits);
+        }
+        setLiveOrders(orders);
+        if (orders.length > 0 || attempt === 3) return;
+        await new Promise((resolve) => window.setTimeout(resolve, 800));
+      }
+    };
+    void bootstrapSignedInData();
+    return () => {
+      cancelled = true;
+    };
+  }, [account, panel.id]);
+
+  useEffect(() => {
+    if (!account) return;
     const hasPending = liveDeposits.some((d) => d.status === "pending" || d.status === "approved");
 
     let cancelled = false;
@@ -287,6 +312,19 @@ export function Storefront({
   const [busy, setBusy] = useState(false);
   const [authPhase, setAuthPhase] = useState<"idle" | "auth" | "redirect">("idle");
   const [error, setError] = useState<string | null>(null);
+  const redirectCheckIntervalRef = useRef<number | null>(null);
+  const hardReloadTimeoutRef = useRef<number | null>(null);
+
+  const clearRedirectTimers = () => {
+    if (redirectCheckIntervalRef.current != null) {
+      window.clearInterval(redirectCheckIntervalRef.current);
+      redirectCheckIntervalRef.current = null;
+    }
+    if (hardReloadTimeoutRef.current != null) {
+      window.clearTimeout(hardReloadTimeoutRef.current);
+      hardReloadTimeoutRef.current = null;
+    }
+  };
 
   const submitAuth = async () => {
     if (busy) return;
@@ -303,7 +341,19 @@ export function Storefront({
       } else {
         redirecting = true;
         setAuthPhase("redirect");
-        router.refresh();
+        const nextUrl = `/p/${panel.subdomain}`;
+        window.location.assign(nextUrl);
+
+        // In rare cases refresh can lag while cookies propagate; retry then hard-reload.
+        clearRedirectTimers();
+        redirectCheckIntervalRef.current = window.setInterval(() => {
+          if (window.location.pathname !== `/p/${panel.subdomain}`) {
+            window.location.assign(nextUrl);
+          }
+        }, 1000);
+        hardReloadTimeoutRef.current = window.setTimeout(() => {
+          window.location.assign(nextUrl);
+        }, 5000);
       }
     } catch {
       setError("Something went wrong. Please try again.");
@@ -314,6 +364,21 @@ export function Storefront({
       }
     }
   };
+
+  useEffect(() => {
+    if (!account) return;
+    if (!busy) return;
+    clearRedirectTimers();
+    setBusy(false);
+    setAuthPhase("idle");
+  }, [account, busy]);
+
+  useEffect(() => {
+    return () => {
+      clearRedirectTimers();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const logout = () => {
     setOptimisticSignedOut(true);

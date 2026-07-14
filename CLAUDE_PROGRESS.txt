@@ -27,6 +27,17 @@ the current storefront would then serve as the admin panel of the child panel.
 
 can delete this too once noted and implemented
 
+## Session: Storefront redirect-stuck guard + signed-in bootstrap (v0.2.40)
+
+### Date: 2026-07-14
+- **Fixed storefront login getting stuck on `Redirecting...`**:
+  - successful auth now performs a direct storefront navigation to enforce cookie/session pickup reliably.
+  - added guarded retry + timeout fallback so redirect cannot hang.
+- **Signed-in content now bootstraps immediately in background** after account is present:
+  - force-load wallet snapshot + orders with short retries to populate dashboard content quickly.
+  - normal polling remains active afterward for sync.
+- package.json -> 0.2.40. No migration.
+
 ## Session: Storefront post-login streaming + hydration hardening (v0.2.39)
 
 ### Date: 2026-07-14
