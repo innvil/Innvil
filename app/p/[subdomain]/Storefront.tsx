@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -12,14 +12,14 @@ import { PlatformGlyph, PlatformButton } from "@/src/components/customer/Platfor
 import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
 import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, PublicLandingSection } from "@/src/lib/actions/storefront";
-import { placeOrder, listCustomerOrders, type CustomerOrderVM } from "@/src/lib/actions/orders";
-import { createDeposit, getCustomerWalletSnapshot, type DepositVM } from "@/src/lib/actions/payments";
+import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
+import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
 import {
   customerUpdateDisplayName, customerUpdateEmail, customerUpdatePassword,
   type CustomerAccountInfo,
 } from "@/src/lib/actions/customer-auth";
-import { getCustomerApiState, rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
+import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
 import { createStorefrontClient } from "@/src/lib/supabase/client";
 
 const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
@@ -68,6 +68,20 @@ function formatOrderDate(iso: string): string {
   if (sameDay) return `Today, ${time}`;
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
+
+type StorefrontSnapshotResponse = {
+  ok: boolean;
+  snapshot?: {
+    balance: number;
+    deposits: DepositVM[];
+    orders: CustomerOrderVM[];
+    apiEnabled: boolean;
+    apiHasKey: boolean;
+    accountStatus: string;
+    panelStatus: string;
+    updatedAt: string;
+  };
+};
 
 export function Storefront({
   panel,
@@ -225,6 +239,29 @@ export function Storefront({
     return { ok: false, error: res.error };
   };
 
+  const fetchBackendSnapshot = useCallback(async (): Promise<StorefrontSnapshotResponse["snapshot"] | null> => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return null;
+
+    const resp = await fetch("/api/storefront/snapshot", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ panelId: panel.id }),
+      cache: "no-store",
+    });
+    if (!resp.ok) return null;
+
+    const json = (await resp.json()) as StorefrontSnapshotResponse;
+    if (!json.ok || !json.snapshot) return null;
+    return json.snapshot;
+  }, [panel.id, supabase.auth]);
+
   // Deposit history → the dashboard's deposit shape.
   const DEPOSIT_STATUS_LABEL: Record<string, string> = {
     completed: "Confirmed", pending: "Pending", approved: "Approved", rejected: "Failed",
@@ -246,17 +283,17 @@ export function Storefront({
     let cancelled = false;
     const bootstrapSignedInData = async () => {
       for (let attempt = 0; attempt < 4; attempt++) {
-        const [wallet, orders] = await Promise.all([
-          getCustomerWalletSnapshot(panel.id),
-          listCustomerOrders(panel.id),
-        ]);
+        const snap = await fetchBackendSnapshot();
         if (cancelled) return;
-        if (wallet) {
-          setLiveBalance(wallet.balance);
-          setLiveDeposits(wallet.deposits);
+        if (snap) {
+          setLiveBalance(snap.balance);
+          setLiveDeposits(Array.isArray(snap.deposits) ? snap.deposits : []);
+          setLiveOrders(Array.isArray(snap.orders) ? snap.orders : []);
+          setApiEnabled(snap.apiEnabled);
+          setApiHasKey(snap.apiHasKey);
+          return;
         }
-        setLiveOrders(orders);
-        if (orders.length > 0 || attempt === 3) return;
+        if (attempt === 3) return;
         await new Promise((resolve) => window.setTimeout(resolve, 800));
       }
     };
@@ -264,16 +301,18 @@ export function Storefront({
     return () => {
       cancelled = true;
     };
-  }, [signedIn, panel.id]);
+  }, [signedIn, panel.id, fetchBackendSnapshot]);
 
   useEffect(() => {
     if (!signedIn) return;
     let cancelled = false;
     const poll = async () => {
-      const next = await getCustomerWalletSnapshot(panel.id);
-      if (!next || cancelled) return;
-      setLiveBalance(next.balance);
-      setLiveDeposits(next.deposits);
+      const snap = await fetchBackendSnapshot();
+      if (!snap || cancelled) return;
+      setLiveBalance(snap.balance);
+      setLiveDeposits(Array.isArray(snap.deposits) ? snap.deposits : []);
+      setApiEnabled(snap.apiEnabled);
+      setApiHasKey(snap.apiHasKey);
     };
 
     poll();
@@ -282,16 +321,16 @@ export function Storefront({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [signedIn, panel.id]);
+  }, [signedIn, panel.id, fetchBackendSnapshot]);
 
   useEffect(() => {
     if (!signedIn) return;
 
     let cancelled = false;
     const pollOrders = async () => {
-      const next = await listCustomerOrders(panel.id);
-      if (cancelled) return;
-      setLiveOrders(next);
+      const snap = await fetchBackendSnapshot();
+      if (!snap || cancelled) return;
+      setLiveOrders(Array.isArray(snap.orders) ? snap.orders : []);
     };
 
     pollOrders();
@@ -300,22 +339,7 @@ export function Storefront({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [signedIn, panel.id]);
-
-  useEffect(() => {
-    if (!signedIn) return;
-    let cancelled = false;
-    const loadApiState = async () => {
-      const next = await getCustomerApiState(panel.id);
-      if (cancelled || !next.ok) return;
-      setApiEnabled(next.enabled);
-      setApiHasKey(next.hasKey);
-    };
-    void loadApiState();
-    return () => {
-      cancelled = true;
-    };
-  }, [signedIn, panel.id]);
+  }, [signedIn, panel.id, fetchBackendSnapshot]);
 
   useEffect(() => {
     const cacheKey = `storefront:${panel.id}:snapshot`;

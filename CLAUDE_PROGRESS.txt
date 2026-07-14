@@ -53,6 +53,15 @@ can delete this too once noted and implemented
   - normal polling remains active afterward for sync.
 - package.json -> 0.2.40. No migration.
 
+## Session: Backend snapshot cache + owner-sync bridge (v0.2.45)
+
+### Date: 2026-07-14
+- Added backend storefront snapshot API route (`/api/storefront/snapshot`) authenticated by bearer token to avoid cookie timing races during storefront hydration.
+- Added migration `0013_storefront_snapshot_cache.sql` (table + rebuild function + triggers + backfill + RLS policies).
+- Storefront hydration now reads the backend snapshot path; cache/bootstrap no longer depends on server-action cookie propagation.
+- Owner `Sync statuses` now explicitly materializes panel order/payment state into `storefront_customer_snapshots` per customer account for that panel.
+- package.json -> 0.2.45. Requires migration 0013 applied in Supabase.
+
 ## Session: Storefront post-login streaming + hydration hardening (v0.2.39)
 
 ### Date: 2026-07-14

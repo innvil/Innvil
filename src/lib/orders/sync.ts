@@ -282,6 +282,135 @@ async function reconcileFailedOrders(admin: SupabaseClient, panelId: string): Pr
 }
 
 /**
+ * Best-effort storefront snapshot refresh for every customer in a panel.
+ * This bridges owner-triggered "Sync statuses" to customer storefront cache
+ * so panel-side sync updates are immediately visible storefront-side.
+ */
+async function refreshPanelStorefrontSnapshots(admin: SupabaseClient, panelId: string): Promise<void> {
+  const { data: panel } = await admin
+    .from("panels")
+    .select("id, status, settings")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (!panel) return;
+
+  const apiEnabled = (() => {
+    const settings = panel.settings;
+    if (settings && typeof settings === "object") {
+      const api = (settings as Record<string, unknown>).customerApi;
+      if (api && typeof api === "object") {
+        const enabled = (api as Record<string, unknown>).enabled;
+        if (enabled === false) return false;
+      }
+    }
+    return true;
+  })();
+
+  const { data: accounts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id, status, balance, api_key_hash")
+    .eq("panel_id", panelId);
+
+  const list = (accounts as Array<{
+    id: string;
+    user_id: string;
+    status: string;
+    balance: number;
+    api_key_hash: string | null;
+  }> | null) ?? [];
+
+  for (const acct of list) {
+    try {
+      const [{ data: depositsRaw }, { data: ordersRaw }] = await Promise.all([
+        admin
+          .from("payments")
+          .select("id, amount, currency, status, method, created_at")
+          .eq("panel_id", panelId)
+          .eq("customer_id", acct.id)
+          .order("created_at", { ascending: false })
+          .limit(50),
+        admin
+          .from("orders")
+          .select("id, local_id, service_id, link, quantity, charge, status, created_at, provider_response, provider_payload, services(name, local_id)")
+          .eq("panel_id", panelId)
+          .eq("customer_id", acct.id)
+          .order("created_at", { ascending: false })
+          .limit(200),
+      ]);
+
+      const deposits = ((depositsRaw as Array<{
+        id: string;
+        amount: number;
+        currency: string;
+        status: string;
+        method: string;
+        created_at: string;
+      }> | null) ?? []).map((d) => ({
+        id: d.id,
+        amount: Number(d.amount),
+        currency: d.currency,
+        status: d.status,
+        method: d.method,
+        createdAt: d.created_at,
+      }));
+
+      const orders = ((ordersRaw as Array<{
+        id: string;
+        local_id: number | null;
+        service_id: string | null;
+        link: string;
+        quantity: number;
+        charge: number;
+        status: OrderStatus;
+        created_at: string;
+        provider_response: { held?: boolean; error?: string } | null;
+        provider_payload: { comments?: string[] } | null;
+        services: { name?: string; local_id?: number } | { name?: string; local_id?: number }[] | null;
+      }> | null) ?? []).map((o) => {
+        const svc = Array.isArray(o.services) ? o.services[0] : o.services;
+        const held = o.provider_response?.held === true && o.status === "pending";
+        const effectiveStatus = held ? "processing" : o.status;
+        return {
+          id: o.id,
+          localId: o.local_id != null ? String(o.local_id) : String(o.id).slice(0, 8),
+          serviceId: o.service_id,
+          serviceNo: svc?.local_id ?? null,
+          serviceName: svc?.name ?? "Service",
+          link: o.link,
+          quantity: o.quantity,
+          charge: Number(o.charge),
+          status: effectiveStatus,
+          createdAt: o.created_at,
+          failReason: ["failed", "canceled", "refunded"].includes(effectiveStatus)
+            ? (o.provider_response?.error ?? null)
+            : null,
+          comments: Array.isArray(o.provider_payload?.comments) ? o.provider_payload!.comments : null,
+          held,
+        };
+      });
+
+      await admin
+        .from("storefront_customer_snapshots")
+        .upsert({
+          customer_id: acct.id,
+          panel_id: panelId,
+          user_id: acct.user_id,
+          balance: Number(acct.balance ?? 0),
+          deposits,
+          orders,
+          api_enabled: apiEnabled,
+          api_has_key: !!acct.api_key_hash,
+          account_status: acct.status,
+          panel_status: panel.status,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "customer_id" });
+    } catch {
+      // Keep order sync non-blocking even if snapshot materialization fails.
+    }
+  }
+}
+
+/**
  * Auto-cancel + refund orders that have been ON HOLD (provider balance insufficient)
  * for over 24h. Returns how many were canceled. Runs as part of each sync pass.
  */
@@ -336,7 +465,10 @@ export async function syncPanelOrders(
     .in("status", SYNCABLE_STATUSES);
 
   const list = (orders as OpenOrder[] | null) ?? [];
-  if (!list.length) return { checked: 0, updated: expired + reconciledFailed + reconciledDupes };
+  if (!list.length) {
+    await refreshPanelStorefrontSnapshots(admin, panelId);
+    return { checked: 0, updated: expired + reconciledFailed + reconciledDupes };
+  }
 
   // Group by provider (each has its own credentials).
   const byProvider = new Map<string, OpenOrder[]>();
@@ -493,6 +625,8 @@ export async function syncPanelOrders(
   }));
 
   const updated = providerResults.reduce((sum, value) => sum + value, 0);
+
+  await refreshPanelStorefrontSnapshots(admin, panelId);
 
   return { checked: list.length, updated: updated + expired + reconciledFailed + reconciledDupes };
 }
