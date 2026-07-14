@@ -119,6 +119,7 @@ export interface OrderRow {
   panel_id: string;
   customer_id: string;
   service_id: string | null;
+  service_category_id: string | null;
   provider_id: string | null;
   link: string;
   quantity: number;

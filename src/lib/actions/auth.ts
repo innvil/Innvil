@@ -19,7 +19,10 @@ export async function signInAction(
     password,
   });
   if (error) return { ok: false, error: error.message };
-  if (data.user) await ensureProfile(data.user.id);
+  if (data.user) {
+    // Keep login fast; profile fallback creation can run asynchronously.
+    void ensureProfile(data.user.id).catch(() => undefined);
+  }
   return { ok: true };
 }
 

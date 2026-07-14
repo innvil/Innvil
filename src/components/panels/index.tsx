@@ -496,9 +496,9 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: strin
           <Settings size={14} /> Account settings
         </button>
         <button
-          onClick={async () => {
-            await signOutAction();
+          onClick={() => {
             setWorld("public");
+            void signOutAction();
           }}
           className="fp-text-faint text-xs shrink-0"
         >

@@ -62,8 +62,11 @@ export async function customerSignIn(
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { ok: false, error: error.message };
   if (data.user) {
-    await ensureProfile(data.user.id, "customer");
-    await ensureCustomerAccount(data.user.id, panelId);
+    // Keep sign-in responsive; backfill records asynchronously.
+    void Promise.allSettled([
+      ensureProfile(data.user.id, "customer"),
+      ensureCustomerAccount(data.user.id, panelId),
+    ]);
   }
   return { ok: true };
 }

@@ -94,7 +94,8 @@ export function Storefront({
 }) {
   const router = useRouter();
   const inactive = panel.status === "inactive";
-  const account = initialAccount; // re-fetched by the server after auth via router.refresh()
+  const [optimisticSignedOut, setOptimisticSignedOut] = useState(false);
+  const account = optimisticSignedOut ? null : initialAccount; // re-fetched by the server after auth via router.refresh()
   const fmt = (n: number) => formatMoney(n, panel.currency);
   const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
   const [liveDeposits, setLiveDeposits] = useState(initialDeposits);
@@ -111,6 +112,10 @@ export function Storefront({
   useEffect(() => {
     setLiveOrders(initialOrders);
   }, [initialOrders]);
+
+  useEffect(() => {
+    if (initialAccount) setOptimisticSignedOut(false);
+  }, [initialAccount]);
 
   // ---- Live data → customer dashboard shapes -------------------------------
   const uiServices = useMemo(() => services.map(toCustomerService), [services]);
@@ -270,9 +275,11 @@ export function Storefront({
     }
   };
 
-  const logout = async () => {
-    await customerSignOut();
-    router.refresh();
+  const logout = () => {
+    setOptimisticSignedOut(true);
+    void customerSignOut().finally(() => {
+      router.refresh();
+    });
   };
 
   const scrollToAuth = () => {
@@ -437,16 +444,8 @@ export function Storefront({
           </div>
         </div>
 
-        <div id="nb-auth" className="fp-panel border fp-line rounded-2xl p-7 max-w-md w-full md:justify-self-end relative">
+        <div id="nb-auth" className="fp-panel border fp-line rounded-2xl p-7 max-w-md w-full md:justify-self-end">
           <h2 className="fp-display text-2xl mb-5">Welcome back</h2>
-          {busy && (
-            <div className="absolute inset-0 z-10 rounded-2xl bg-[#0E1522]/70 backdrop-blur-[2px] flex items-center justify-center px-4">
-              <div className="flex items-center gap-2 fp-panel border fp-line rounded-full px-4 py-2 text-sm fp-text">
-                <Loader2 size={15} className="animate-spin fp-gold" />
-                Signing you in…
-              </div>
-            </div>
-          )}
           <form
             autoComplete={`section-innvil-customer-${panel.id} on`}
             onSubmit={(e) => {

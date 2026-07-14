@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LogIn, AlertTriangle, Loader2 } from "lucide-react";
@@ -13,6 +13,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    router.prefetch("/");
+  }, [router]);
 
   const submit = async () => {
     if (busy) return;
@@ -35,36 +39,26 @@ export default function LoginPage() {
       subtitle="Welcome back to your Innvil dashboard."
       footer={<>New to Innvil? <Link href="/signup" className="fp-gold">Create an account</Link></>}
     >
-      <div className="relative">
-        {busy && (
-          <div className="absolute inset-0 z-10 rounded-2xl bg-[#0E1522]/70 backdrop-blur-[2px] flex items-center justify-center">
-            <div className="flex items-center gap-2 fp-panel border fp-line rounded-full px-4 py-2 text-sm fp-text">
-              <Loader2 size={15} className="animate-spin fp-gold" />
-              Signing you in…
-            </div>
-          </div>
-        )}
-        <form
-          autoComplete="section-innvil-owner on"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-          aria-busy={busy}
-        >
-          <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
-          <input disabled={busy} value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete="section-innvil-owner username" placeholder="you@example.com" className={authInputCls} />
-          <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Password</label>
-          <input disabled={busy} value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete="section-innvil-owner current-password" placeholder="••••••••" className={authInputCls} />
-          <div className="text-right mt-2">
-            <Link href="/forgot-password" className="fp-text-faint text-xs hover:fp-text">Forgot password?</Link>
-          </div>
-          {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-          <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <LogIn size={15} />} {busy ? "Please wait…" : "Log in"}
-          </button>
-        </form>
-      </div>
+      <form
+        autoComplete="section-innvil-owner on"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+        aria-busy={busy}
+      >
+        <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
+        <input disabled={busy} value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete="section-innvil-owner username" placeholder="you@example.com" className={authInputCls} />
+        <label className="fp-text-dim text-xs fp-mono uppercase mt-4 block">Password</label>
+        <input disabled={busy} value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete="section-innvil-owner current-password" placeholder="••••••••" className={authInputCls} />
+        <div className="text-right mt-2">
+          <Link href="/forgot-password" className="fp-text-faint text-xs hover:fp-text">Forgot password?</Link>
+        </div>
+        {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+        <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 mt-5 disabled:opacity-60">
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <LogIn size={15} />} {busy ? "Please wait…" : "Log in"}
+        </button>
+      </form>
     </AuthShell>
   );
 }

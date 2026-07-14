@@ -101,7 +101,7 @@ function normalizeDupLink(link: string): string {
   try {
     const u = new URL(raw);
     const host = u.host.toLowerCase().replace(/^www\./, "");
-    const path = (u.pathname || "/").replace(/\/+$/, "") || "/";
+    const path = (u.pathname || "").replace(/\/+$/, "");
     return `${host}${path}`;
   } catch {
     return raw

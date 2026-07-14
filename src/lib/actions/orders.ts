@@ -36,9 +36,26 @@ export type PlaceOrderResult =
 
 type DuplicateServiceMeta = {
   id: string;
-  name: string | null;
   category_id: string | null;
 };
+
+function normalizeDupLink(link: string): string {
+  const raw = (link || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw);
+    const host = u.host.toLowerCase().replace(/^www\./, "");
+    const path = (u.pathname || "").replace(/\/+$/, "");
+    return `${host}${path}`;
+  } catch {
+    return raw
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .replace(/[?#].*$/, "")
+      .replace(/\/+$/, "");
+  }
+}
 
 async function addHistory(admin: SupabaseClient, orderId: string, status: OrderStatus, note?: string) {
   await admin.from("order_status_history").insert({ order_id: orderId, status, note: note ?? null });
@@ -133,7 +150,71 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     return { ok: false, error: "Insufficient balance. Please add funds and try again." };
   }
 
-  // 7. Create the order row first (pending) so the ledger can reference it.
+  // 7. Duplicate guard BEFORE wallet charge/provider send.
+  //    Same-link alone is not enough: it must also match service ID OR category.
+  const normalizedLink = normalizeDupLink(link);
+  const { data: relatedOrders } = await admin
+    .from("orders")
+    .select("id, service_id, service_category_id, link, status")
+    .eq("panel_id", input.panelId)
+    .eq("customer_id", acct.id)
+    .in("status", ["pending", "processing", "in_progress", "partial", "completed"])
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; service_category_id: string | null; link: string; status: OrderStatus }> | null) ?? [];
+  if (relatedRows.length) {
+    const serviceIds = [...new Set(relatedRows.map((r) => r.service_id).filter(Boolean))];
+    const { data: serviceMetaRows } = await admin.from("services").select("id, category_id").in("id", serviceIds);
+    const serviceMeta = new Map(((serviceMetaRows as DuplicateServiceMeta[] | null) ?? []).map((row) => [row.id, row]));
+
+    const matchesDuplicate = (row: { service_id: string; service_category_id: string | null; link: string }): boolean => {
+      if (normalizeDupLink(row.link) !== normalizedLink) return false;
+      if (row.service_id === svc.id) return true;
+      const rowCategory = row.service_category_id ?? serviceMeta.get(row.service_id)?.category_id ?? null;
+      return !!(svc.category_id && rowCategory && rowCategory === svc.category_id);
+    };
+
+    const dupe = relatedRows.find((row) => matchesDuplicate(row));
+    if (dupe) {
+      const drip = input.runs != null && input.interval != null;
+      const { data: duplicateOrder, error: duplicateErr } = await admin
+        .from("orders")
+        .insert({
+          panel_id: input.panelId,
+          customer_id: acct.id,
+          service_id: svc.id,
+          service_category_id: svc.category_id,
+          provider_id: svc.provider_id,
+          link,
+          quantity: qty,
+          charge,
+          provider_cost: providerCost,
+          profit,
+          status: "duplicate",
+          provider_payload: {
+            service: svc.provider_service_id,
+            quantity: qty,
+            ...(drip ? { runs: input.runs, interval: input.interval } : {}),
+            ...(hasComments ? { comments: commentList } : {}),
+          },
+          provider_response: {
+            duplicate: true,
+            reason: "Matched existing order with same link + service/category.",
+            duplicate_of: dupe.id,
+          },
+        })
+        .select("id")
+        .single();
+      if (duplicateErr || !duplicateOrder) {
+        return { ok: false, error: duplicateErr?.message ?? "Could not create duplicate-marked order." };
+      }
+      await addHistory(admin, duplicateOrder.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
+      return { ok: true, orderId: duplicateOrder.id, charge, balance: Number(acct.balance), status: "duplicate" };
+    }
+  }
+
+  // 8. Create the order row first (pending) so the ledger can reference it.
   const drip = input.runs != null && input.interval != null;
   const { data: order, error: oErr } = await admin
     .from("orders")
@@ -141,6 +222,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       panel_id: input.panelId,
       customer_id: acct.id,
       service_id: svc.id,
+      service_category_id: svc.category_id,
       provider_id: svc.provider_id,
       link,
       quantity: qty,
@@ -158,18 +240,19 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
     .select("id")
     .single();
   if (oErr || !order) return { ok: false, error: oErr?.message ?? "Could not create the order." };
-  await addHistory(admin, order.id, "pending");
+  const orderId = order.id;
+  await addHistory(admin, orderId, "pending");
 
-  // 8. Debit the wallet atomically (raises 'insufficient balance' under lock).
+  // 9. Debit the wallet atomically (raises 'insufficient balance' under lock).
   const { data: tx, error: bErr } = await admin.rpc("apply_balance_change", {
     p_customer: acct.id,
     p_amount: -charge,
     p_type: "order",
-    p_reason: `Order ${order.id}`,
-    p_ref_order: order.id,
+    p_reason: `Order ${orderId}`,
+    p_ref_order: orderId,
   });
   if (bErr || !tx) {
-    await admin.from("orders").delete().eq("id", order.id);
+    await admin.from("orders").delete().eq("id", orderId);
     const msg = /insufficient/i.test(bErr?.message ?? "")
       ? "Insufficient balance. Please add funds and try again."
       : bErr?.message ?? "Could not charge your wallet.";
@@ -177,66 +260,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   }
   const balanceAfter = Number((tx as { balance_after: number }).balance_after);
 
-  // 8b. Duplicate guard: same link alone is not enough. Park this order as
-  //     'duplicate' only when the same link also matches the same service ID,
-  //     service name, or category on an existing order.
-  const { data: relatedOrders } = await admin
-    .from("orders")
-    .select("id, service_id, link, status")
-    .eq("panel_id", input.panelId)
-    .eq("customer_id", acct.id)
-    .eq("link", link)
-    .neq("id", order.id)
-    .in("status", ["pending", "processing", "in_progress", "partial", "completed", "duplicate"])
-    .limit(50);
-
-  const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; link: string; status: OrderStatus }> | null) ?? [];
-  if (relatedRows.length) {
-    const serviceIds = [...new Set([svc.id, ...relatedRows.map((r) => r.service_id).filter(Boolean)])];
-    const { data: serviceMetaRows } = await admin
-      .from("services")
-      .select("id, name, category_id")
-      .in("id", serviceIds);
-    const serviceMeta = new Map(
-      ((serviceMetaRows as DuplicateServiceMeta[] | null) ?? []).map((row) => [row.id, row])
-    );
-    const categoryIds = [...new Set((serviceMetaRows as DuplicateServiceMeta[] | null ?? []).map((row) => row.category_id).filter((value): value is string => !!value))];
-    let categoryNameById = new Map<string, string>();
-    if (categoryIds.length) {
-      const { data: cats } = await admin.from("provider_categories").select("id, name").in("id", categoryIds);
-      categoryNameById = new Map(((cats as Array<{ id: string; name: string }> | null) ?? []).map((row) => [row.id, row.name]));
-    }
-
-    const currentName = (svc.name ?? "").trim().toLowerCase();
-    const currentCategory = svc.category_id ? (categoryNameById.get(svc.category_id) ?? "") : "";
-
-    const matchesDuplicate = (serviceId: string): boolean => {
-      const meta = serviceMeta.get(serviceId);
-      if (!meta) return false;
-      const nextName = (meta.name ?? "").trim().toLowerCase();
-      const nextCategory = meta.category_id ? (categoryNameById.get(meta.category_id) ?? "") : "";
-      return (
-        serviceId === svc.id ||
-        (currentName && nextName && currentName === nextName) ||
-        (currentCategory && nextCategory && currentCategory === nextCategory)
-      );
-    };
-
-    const dupe = relatedRows.find((row) => matchesDuplicate(row.service_id));
-    if (dupe) {
-      await admin.from("orders").update({ status: "duplicate" }).eq("id", order.id);
-      await addHistory(admin, order.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
-      return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "duplicate" };
-    }
-  }
-
-  if (false) {
-    await admin.from("orders").update({ status: "duplicate" }).eq("id", order.id);
-    await addHistory(admin, order.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
-    return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "duplicate" };
-  }
-
-  // 9. Forward to the provider (server-side). If unmapped, leave pending for the
+  // 10. Forward to the provider (server-side). If unmapped, leave pending for the
   //    owner to route manually. If the provider rejects it, refund and fail.
   if (svc.provider_id && svc.provider_service_id) {
     const { data: prov } = await admin
@@ -245,7 +269,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       .eq("id", svc.provider_id)
       .maybeSingle();
     if (!prov) {
-      await refundAndFail(admin, order.id, acct.id, charge, "Provider not found");
+      await refundAndFail(admin, orderId, acct.id, charge, "Provider not found");
       return { ok: false, error: "The provider for this service is unavailable. You were refunded." };
     }
     try {
@@ -265,7 +289,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
             status: "processing",
             provider_response: resp as Record<string, unknown>,
           })
-          .eq("id", order.id);
+          .eq("id", orderId)
         await addHistory(admin, order.id, "processing", "Submitted to provider");
         return { ok: true, orderId: order.id, charge, balance: balanceAfter, status: "processing" };
       }
