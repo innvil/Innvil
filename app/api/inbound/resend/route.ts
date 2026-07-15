@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { forwardInboundEmail, type InboundEmailPayload } from "@/src/lib/email/resend";
+import { simpleParser } from "mailparser";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -25,6 +26,87 @@ function asLooseString(v: unknown): string {
   );
 }
 
+function walkObject(
+  node: unknown,
+  visitor: (keyPath: string, value: unknown) => void,
+  keyPath = "",
+  depth = 0
+) {
+  if (depth > 10 || node == null) return;
+  visitor(keyPath, node);
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      walkObject(node[i], visitor, `${keyPath}[${i}]`, depth + 1);
+    }
+    return;
+  }
+  if (typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      walkObject(v, visitor, keyPath ? `${keyPath}.${k}` : k, depth + 1);
+    }
+  }
+}
+
+function looksLikeMime(raw: string): boolean {
+  const s = raw.slice(0, 1000);
+  return /(^|\n)(from:|to:|subject:|mime-version:|content-type:)/i.test(s);
+}
+
+function tryDecodeBase64(input: string): string {
+  const compact = input.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=_-]+$/.test(compact) || compact.length < 80) return "";
+  try {
+    const normalized = compact.replace(/-/g, "+").replace(/_/g, "/");
+    const out = Buffer.from(normalized, "base64").toString("utf8");
+    return out;
+  } catch {
+    return "";
+  }
+}
+
+async function extractBodyFromUnknownPayload(root: Record<string, unknown>): Promise<{ text: string; html: string }> {
+  let text = "";
+  let html = "";
+  const rawCandidates: string[] = [];
+
+  walkObject(root, (path, value) => {
+    if (text && html) return;
+    const key = path.toLowerCase();
+    const str = asLooseString(value).trim();
+    if (!str) return;
+
+    if (!text && /(text_body|textbody|plain_text|plaintext|\.text$|\.text\.|text\/plain|snippet)/i.test(key)) {
+      text = str;
+      return;
+    }
+    if (!html && /(html_body|htmlbody|\.html$|\.html\.|text\/html)/i.test(key)) {
+      html = str;
+      return;
+    }
+    if (/(raw|mime|original|source|rfc822|message_raw|email_raw|raw_email)/i.test(key)) {
+      rawCandidates.push(str);
+    }
+  });
+
+  if (text || html) return { text, html };
+
+  for (const candidate of rawCandidates) {
+    const maybeDecoded = tryDecodeBase64(candidate);
+    const payload = looksLikeMime(candidate) ? candidate : looksLikeMime(maybeDecoded) ? maybeDecoded : "";
+    if (!payload) continue;
+    try {
+      const parsed = await simpleParser(payload);
+      text = (parsed.text ?? "").trim();
+      html = typeof parsed.html === "string" ? parsed.html.trim() : "";
+      if (text || html) return { text, html };
+    } catch {
+      // ignore parse errors, try next candidate
+    }
+  }
+
+  return { text: "", html: "" };
+}
+
 function asStringArray(v: unknown): string[] {
   if (Array.isArray(v)) {
     return v
@@ -43,7 +125,7 @@ function asStringArray(v: unknown): string[] {
   return [];
 }
 
-function pickEmailEvent(body: unknown): InboundEmailPayload | null {
+async function pickEmailEvent(body: unknown): Promise<InboundEmailPayload | null> {
   if (!body || typeof body !== "object") return null;
   const root = body as Record<string, unknown>;
   const data = (root.data && typeof root.data === "object") ? (root.data as Record<string, unknown>) : root;
@@ -56,7 +138,7 @@ function pickEmailEvent(body: unknown): InboundEmailPayload | null {
       ? asStringArray(root.to)
       : asStringArray(headers.to);
   const subject = asLooseString(data.subject) || asLooseString(root.subject) || asLooseString(headers.subject);
-  const text =
+  let text =
     asLooseString(data.text) ||
     asLooseString(root.text) ||
     asLooseString(data.textBody) ||
@@ -65,7 +147,7 @@ function pickEmailEvent(body: unknown): InboundEmailPayload | null {
     asLooseString(root.text_body) ||
     asLooseString((data as Record<string, unknown>).plainText) ||
     asLooseString((root as Record<string, unknown>).plainText);
-  const html =
+  let html =
     asLooseString(data.html) ||
     asLooseString(root.html) ||
     asLooseString(data.htmlBody) ||
@@ -73,6 +155,12 @@ function pickEmailEvent(body: unknown): InboundEmailPayload | null {
     asLooseString(data.html_body) ||
     asLooseString(root.html_body);
   const receivedAt = asString(data.created_at) || asString(root.created_at) || new Date().toISOString();
+
+  if (!text && !html) {
+    const deep = await extractBodyFromUnknownPayload(root);
+    text = deep.text;
+    html = deep.html;
+  }
 
   if (!from || !to.length) return null;
   return { from, to, subject, text, html, receivedAt };
@@ -93,7 +181,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Invalid JSON payload" }, { status: 400 });
   }
 
-  const email = pickEmailEvent(parsed);
+  const email = await pickEmailEvent(parsed);
   if (!email) {
     return NextResponse.json({ ok: false, error: "No inbound email data found" }, { status: 400 });
   }
