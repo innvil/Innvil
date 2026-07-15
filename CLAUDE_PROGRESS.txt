@@ -3,29 +3,14 @@
 # (Renamed Ledgerline → Veyra → **Innvil** on 2026-07-09; older entries below keep
 #  the old names as a historical record.)
 
----Note: 
-for future update when we start with seo, make sure to make it an ad that the panel owner have no way of logging in to the customer accounts
-to protect the customers, panel owners also don't have a way to reset user/customer password, just adjust balance for when there is an error in payments.
-also for SEO messaging: custom domain is reversible — owner can disconnect custom domain anytime and storefront automatically falls back to the included subdomain.
-I am also thinkging for future feature, we will also rent a marketplace for digital products for those who wish's to accept crypto payments for thier digital products,
-I see a lot of online people selling digital produce, like designs, and others. 
-Or maybe, instead of rent, we will make the marketplace ourselves, we can make it like fiverr, where people can buy services, apply for being a seller and such. 
-we should make it Innvil Marketplace, this is also where people can use the ANVIL coin. in this marketplace, our share is 10% from both sides, fiverr rn is accepting 20% both sides, 
-when they accept/use ANVIL coin as their payment method, we will give a 5% total discount both sides. so instead of 10%, our commision will then be 7.5% boths sides total of 15% 
-if the above note is already noted, can delete
-additonal note:
-the popup message should also be stylized, the app is luxurious but the pop up seems below ordinay
-Inspect the code base and if you can, compare it to socpanel.com, we have a lot of features that are not in there,
-when we start with full prod, even if still in MVP, but when we are ready to go public, we should update all the ads currently in the landing page,
-to showcase why it they should choose us, it's because we have made everything easier, from auto categoritzation, to easy managing the customers,
-this should be done before we move public, and it should be our SEO point or something
-we should go public once all the fixes we need in the current mvp is all done. The other other features we were planning to add should be a coming soon feature.
-after this fixes in the website side, we should start fixing the mobile UI/UX functions, as it is right now,
-a lot of contents are overflowing, the width are bigger than mobile view.
-We should also implement child panels, that the rent is decided by the customer - since child panels will be customer's own panel, then they should decide how they price the rent,
-the current storefront would then serve as the admin panel of the child panel.
+## Session: Builder SEO naming + future roadmap consolidation (v0.2.51)
 
-can delete this too once noted and implemented
+### Date: 2026-07-15
+- Updated live SEO metadata naming from "SMM Panel Maker" to "White-label SMM Panel Builder" in root metadata/Open Graph (`app/layout.tsx`) and aligned launch keywords to SMM-builder intent.
+- Added and expanded `FUTURE_PLANS.txt` with approved Design with AI roadmap (all 10 features), SMM-first preset niche expansion, Innvil Foundry naming architecture, taxonomy boundaries (Automator = panel add-on; Analytics/Marketplace = separate products), and go-public SEO strategy.
+- Added explicit Design with AI skill-export requirement: on implementation kickoff, compile Claude/Copilot-developed skills into Innvil-owned website skill packs (rules, guardrails, validators, regression prompts, safety constraints).
+- Cleaned relevant non-preview branding leftovers in active docs/public copy (`README.md`, `CLAUDE.md`, `app/terms/page.tsx`, `src/components/panels/index.tsx`, `src/components/customer/CustomerLanding.tsx`, `src/data/constants.ts`, `supabase/migrations/0001_init.sql`) while preserving historical references in progress/changelog artifacts.
+- package.json -> 0.2.51. No migration.
 
 ## Session: Tiered top-up reflection + instant modal population (v0.2.48)
 

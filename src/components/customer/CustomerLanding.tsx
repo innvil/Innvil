@@ -11,7 +11,7 @@ import { PlatformGlyph, PlatformButton } from "./PlatformIcons";
 /* =========================================================
    PANEL CUSTOMER LANDING — white-label, per panel
    Focused on Create Account / Log In only.
-   No Ledgerline branding anywhere.
+  No Innvil branding anywhere.
    ========================================================= */
 
 const FAQS = [

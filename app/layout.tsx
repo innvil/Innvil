@@ -23,14 +23,14 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Innvil — The SMM Panel Maker",
-  description: "Launch your own white-label SMM panel. Create as many independent panels as you want, each with its own subdomain, storefront, customer dashboard, and wallet. 5% commission only — no monthly rent.",
-  keywords: ["SMM panel", "social media marketing", "panel maker", "white-label", "no-code"],
+  title: "Innvil — The White-label SMM Panel Builder",
+  description: "Build your own white-label SMM panel. Create as many independent panels as you want, each with its own subdomain, storefront, customer dashboard, and wallet. 5% commission only — no monthly rent.",
+  keywords: ["white-label smm panel builder", "white-label smm panel building", "create smm panel", "smm panel software", "no-code smm panel builder"],
   authors: [{ name: "Innvil" }],
   icons: { icon: "/favicon.svg" },
   openGraph: {
-    title: "Innvil — The SMM Panel Maker",
-    description: "Launch your own white-label SMM panel. 5% commission only.",
+    title: "Innvil — The White-label SMM Panel Builder",
+    description: "Build your own white-label SMM panel. 5% commission only.",
     type: "website",
   },
 };

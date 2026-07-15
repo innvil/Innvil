@@ -1,0 +1,207 @@
+INNVIL FUTURE PLANS (POST-MVP)
+
+1) Design with AI Add-on (Post-MVP)
+
+Objective
+- Ship a paid Design with AI feature for panel owners that generates high-quality storefront themes, sections, and copy using strict Innvil-safe rules.
+- Keep results fast, consistent, and production-safe.
+- Position this as an add-on revenue stream (separate from the 5% core commission model).
+
+Hard scope boundary (non-negotiable)
+- Design with AI is UI-only.
+- It may design or format landing pages and panel dashboard interfaces.
+- It must never change backend rules, business logic, database behavior, permissions, payment/order flows, or security policies.
+
+Approved paid Design with AI implementation set
+- Design Preset Packs library (priority #1).
+- Brand Import Mode (URL/logo to theme direction).
+- Multi-Variant Generation (3-5 options per prompt).
+- Section-Level Regenerate (partial rebuild without touching all sections).
+- Lock-and-Protect controls (prevent AI overwrite of locked areas).
+- Built-in Conversion Modes (signup/deposit/support/retention-oriented layouts).
+- AI Design QA Gate before publish (contrast/spacing/mobile/CTA checks).
+- Draft History + Compare + Rollback.
+- Team Workflow (review/approve/publish permissions).
+- Performance-aware design scoring (quality + page weight/perf risk).
+
+Preset-pack niche expansion (SMM-first)
+- Phase 1 (prime launch focus): SMM agencies, resellers, creators, local service brands, ecommerce growth stores.
+- Phase 2 (adjacent digital businesses): coaching/courses, templates/assets, micro-SaaS, paid communities.
+- Phase 3 (post-GA bundles): panel + automator preset packs, then analytics/marketplace-specific packs once those products are live.
+
+Skill export requirement for implementation kickoff
+- When Design with AI implementation starts, Claude and Copilot-developed design skills must be compiled and exported into Innvil-owned website skill packs.
+- Export pack contents must include:
+	- system/prompt rules,
+	- brand and UX guardrails,
+	- validation rules,
+	- regression test prompts,
+	- safety constraints,
+	- model-agnostic formatting for runtime reuse.
+
+Non-negotiable trust boundaries
+- Panel owners must not have any "login as customer" capability in production.
+- Panel owners must not be able to reset customer passwords.
+- Owner-side customer controls should stay limited to account moderation and balance adjustments (for payment/error correction flows).
+
+Important platform rule
+- Do not assume a personal GitHub Copilot subscription can be embedded as the website runtime AI backend for end-users.
+- Treat editor Copilot and website AI as separate products with separate licensing and billing.
+- Before launch, verify official terms and allowed usage for any chosen provider.
+
+Architecture direction (production-safe)
+- API provider: use a dedicated model API account owned by Innvil (for example Azure OpenAI/OpenAI/Anthropic or equivalent that allows serving end-users).
+- Server-only AI calls: never expose provider keys in the browser; all prompts go through Innvil server actions/routes.
+- Structured output contract: model must return strict JSON schema (not free-form CSS dump).
+- Component allowlist renderer: convert AI JSON into approved Innvil components/tokens only.
+- Validation pipeline: reject or auto-fix outputs that break schema, accessibility, or brand constraints.
+- Versioned drafts: save generated design drafts with version history and rollback.
+
+Quality strategy (near-consistent, not "guaranteed")
+- Hard constraints first, creativity second.
+- Multi-pass generation:
+	1. Planner pass (layout/content plan).
+	2. Builder pass (schema-conformant design JSON).
+	3. Critic pass (lint for contrast, spacing, copy quality, forbidden patterns).
+	4. Repair pass (auto-fix violations).
+- Deterministic post-processing:
+	- clamp spacing/typography scales,
+	- normalize color contrast,
+	- sanitize links and HTML,
+	- enforce mobile-safe breakpoints.
+- Human approval gate before publish (owner must click Publish).
+
+What to store as Innvil "skills" (portable knowledge)
+- Brand tokens and visual system rules.
+- Section templates and composition rules by niche.
+- Copywriting style guides (tone, CTA quality, banned claims).
+- UX guardrails for conversion-first storefronts.
+- Regression test prompts and expected output signatures.
+
+Do not rely on chat memory directly
+- The current chat memory system is not a direct runtime feature for the public website.
+- Reimplement needed intelligence as:
+	- explicit system instructions,
+	- retrieval from Innvil-owned docs/templates,
+	- validators and test suites.
+
+Suggested implementation model in Innvil
+- Add-on flag: panels.settings.design_ai = enabled/disabled.
+- Usage limits by plan: generations per month, revisions per generation, and team seats.
+- Billing model options:
+	- fixed monthly rent (recommended for predictable owner pricing),
+	- or hybrid (small base + usage overage).
+- Cache strategy: prompt hash + catalog/version hash to avoid paying twice for same result.
+
+Security and compliance checklist
+- Prompt/input sanitization and rate limiting.
+- Output sanitization (XSS-safe rendering).
+- No secret leakage in prompts/logs.
+- Full audit trail: who generated, edited, approved, and published.
+- Regional/privacy controls as needed (retention windows, deletion requests).
+
+Data model draft
+- ai_design_projects (panel_id, status, current_version_id)
+- ai_design_versions (project_id, prompt, model, output_json, quality_score, created_by)
+- ai_design_publish_logs (version_id, published_by, published_at)
+- ai_design_usage (panel_id, month, generations_count, token_cost_estimate)
+- ai_design_presets (niche, layout_template, style_constraints)
+
+Rollout phases
+- Phase A: Internal alpha
+	- Generate from preset prompts only.
+	- Manual admin review required.
+- Phase B: Owner beta (limited)
+	- Prompt input + 3 revision attempts.
+	- Draft and rollback enabled.
+- Phase C: Public add-on
+	- Full self-serve flow, billing, quotas, analytics.
+	- A/B testing for conversion impact.
+
+Acceptance criteria for launch
+- Median generation time under target threshold.
+- At least 90% outputs pass validator without manual engineering intervention.
+- No unsafe HTML/script output escapes renderer.
+- Mobile and desktop previews both pass layout checks.
+- Publish and rollback are one-click and reliable.
+
+2) Marketplace direction notes (carry-over)
+
+KYC and payments
+- Consider KYC-based one-time card deposit that is auto-converted to crypto for marketplace usage.
+
+Pricing ideas to evaluate
+- One-time store setup payment around $30-$50.
+- Headstart promo: 90 days 0% transaction fee (except listing fee).
+- First withdrawal threshold: $500-$1,000.
+- Future withdrawal minimum: $100.
+- Listing fee can replace monthly rent.
+- Escrow remains mandatory for scam/spam protection.
+
+Token and commission angle
+- If ANVIL is used as payment method, apply reduced commission according to token incentive policy.
+
+Marketplace operating model direction
+- Evaluate two directions explicitly before implementation:
+	- rent marketplace tooling to sellers who bring their own products/payments,
+	- or build a full Innvil Marketplace (Fiverr-style buyer/seller platform).
+- If full marketplace path is selected:
+	- keep escrow-first transaction flow,
+	- define two-sided commission policy clearly,
+	- apply ANVIL payment incentives through explicit fee rules.
+
+3) Child panel model (post-MVP, planned)
+
+- Add child panels where a customer can run their own panel under a parent ecosystem.
+- Rent/pricing for a child panel should be owner-configurable at the child-panel level.
+- The current customer storefront model can evolve into the child-panel admin surface for that child owner.
+
+3.1) Product taxonomy and naming architecture
+
+- Product-family umbrella name: Innvil Foundry.
+- Do not use "Innvil Builder" as a product-family name.
+- Use relevant product names per product line as they launch.
+
+Panel products
+- Core panel product: White-label SMM Panel Builder.
+- Automator: panel product add-on.
+- Design with AI: panel product add-on (UI-only boundary remains enforced).
+
+Separate products
+- Analytics: standalone product line.
+- Marketplace: standalone product line.
+
+4) SEO and go-public messaging guardrails
+
+- Before public launch, refresh landing-page ad/SEO content to emphasize Innvil advantages over legacy panels.
+- Prime SEO point while current product is primary: White-label SMM Panel Builder / white-label SMM panel building.
+- Primary keyword cluster (launch focus):
+	- white-label smm panel builder,
+	- white-label smm panel building,
+	- create smm panel,
+	- smm panel software,
+	- no-code smm panel builder.
+- Secondary keyword cluster (only after relevant GA launches):
+	- automator for smm panels,
+	- analytics for smm businesses,
+	- marketplace for digital services.
+- SEO content lanes for ranking strength:
+	- legacy-panel comparison pages,
+	- feature proof pages with operational outcomes,
+	- trust pages (owner cannot log in as customer, owner cannot reset customer password, custom-domain reversibility).
+- Include explicit trust messaging:
+	- owners cannot log in to customer accounts,
+	- owners cannot reset customer passwords,
+	- custom domains are reversible (disconnect anytime, storefront falls back to included subdomain automatically).
+- Include competitive positioning research notes (for example baseline comparisons against legacy panels such as SocPanel) and convert them into honest, evidence-based marketing claims.
+- Public launch gate: go public only after current MVP fixes are complete; all non-ready modules should be clearly labeled as coming soon.
+
+5) Product-quality reminders before public launch
+
+- Upgrade popup/dialog visual quality to match the premium app style.
+- Prepare stronger landing-page SEO/ad messaging focused on Innvil advantages:
+	- easier automation,
+	- easier customer management,
+	- cleaner operational flow than legacy panels.
+- Keep "coming soon" labels for non-MVP modules until they are truly production-ready.
+- Fix mobile overflow and width issues before public MVP launch.

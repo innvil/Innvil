@@ -2,7 +2,7 @@
 
 ## Overview
 
-Innvil is a **no-code SMM (Social Media Marketing) panel maker** built with Next.js + Supabase + Vercel. Users create independent, white-label SMM panels with their own subdomain, storefront, customer dashboard, and wallet. Innvil charges a **5% commission only** on completed orders — no monthly rent, no setup fees.
+Innvil is a **no-code white-label SMM panel builder** built with Next.js + Supabase + Vercel. Users create independent, white-label SMM panels with their own subdomain, storefront, customer dashboard, and wallet. Innvil charges a **5% commission only** on completed orders — no monthly rent, no setup fees.
 
 ---
 
@@ -29,7 +29,7 @@ Innvil is a **no-code SMM (Social Media Marketing) panel maker** built with Next
 
 | Term | Definition |
 |------|------------|
-| **Innvil** | The platform itself — the panel maker |
+| **Innvil** | The platform itself — the panel builder |
 | **Panel** | A white-label SMM storefront created by a user |
 | **Panel Owner** | A user who creates and manages a panel |
 | **Customer** | End user who registers on a panel to order SMM services |
@@ -692,6 +692,43 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
   - [ ] Provider performance: orders by provider, failure rate, avg completion, profit by provider
 - **§10 Panel Settings**
   - [ ] Settings pages: general, branding/logo/name, domain/custom domain, + placeholders (language, notifications, integrations, manager/staff roles) structured for later expansion
+
+### Phase 4.w: Design with AI Add-on (NOTED, not built)
+
+> Post-MVP paid add-on for panel owners to generate storefront themes/sections/copy
+> with controlled quality and safety.
+
+- Runtime model access should use an Innvil-owned API account/provider that allows
+  serving end-users; do not assume personal editor subscriptions can be embedded as
+  website runtime AI backends.
+- Hard boundary: Design with AI is interface-only (landing-page/panel-dashboard
+  design and formatting) and must never mutate backend rules, business logic,
+  permissions, payment/order flows, or database behavior.
+- All AI requests must be server-side only (no provider secrets in browser).
+- Generation contract: strict JSON schema output + component allowlist renderer.
+- Quality pass chain: planner -> builder -> critic -> repair, then publish approval.
+- Persist versioned drafts with rollback and generation audit logs.
+- "Skills" should be implemented as Innvil-owned prompt rules, retrieval docs,
+  validators, and regression tests (not chat-memory coupling).
+
+### Phase 4.v: Trust boundaries + go-public SEO messaging (NOTED, not built)
+
+- Customer-account trust boundary:
+  - panel owners must not have login-as-customer capability in production;
+  - panel owners must not have customer password reset capability;
+  - owner remediation is limited to moderation + balance adjustments.
+- SEO/ad messaging before public launch should explicitly highlight:
+  - easier operations than legacy SMM panels,
+  - customer-account protections above,
+  - custom-domain reversibility (disconnect falls back to included subdomain).
+- Public launch gate: ship only when current MVP fixes are complete; keep non-ready
+  modules clearly labeled as "coming soon".
+
+### Phase 4.u: Child panels (NOTED, not built)
+
+- Introduce child panels where customers can run their own panel experience.
+- Child-panel rent/pricing should be configurable by the child-panel operator.
+- The current storefront UX can evolve into the child-panel admin surface.
 
 ### Phase 4.x: Automation Add-on ("Automator") — PAID feature (NOTED, not built)
 

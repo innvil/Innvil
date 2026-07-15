@@ -67,7 +67,7 @@ function writeOwnerAppCache<T>(section: string, value: T) {
 }
 
 /* =========================================================
-   A. LEDGERLINE PUBLIC LANDING PAGE
+  A. INNVIL PUBLIC LANDING PAGE
    ========================================================= */
 
 function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => void }) {
@@ -105,13 +105,13 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         <div className="max-w-6xl mx-auto px-6 pt-20 pb-24 grid md:grid-cols-2 gap-14 items-center">
           <div>
             <Pill tone="violet" icon={Sparkles}>0% monthly rent · 5% commission only</Pill>
-            <p className="fp-text-faint text-xs fp-mono mt-3">We build the panel maker. You bring your own provider.</p>
+            <p className="fp-text-faint text-xs fp-mono mt-3">We build the panel builder platform. You bring your own provider.</p>
             <h1 className="fp-display text-5xl md:text-6xl leading-[1.05] mt-6">
               Launch your own<br />
               <span className="fp-grad-text">white-label SMM panel.</span>
             </h1>
             <p className="fp-text-dim text-base mt-6 max-w-md leading-relaxed">
-              Innvil is a no-code panel maker. Create as many independent SMM panels as you
+              Innvil is a no-code panel builder. Create as many independent SMM panels as you
               want, each with its own subdomain, storefront, customer dashboard, and wallet —
               yours to brand, price, and grow.
             </p>
@@ -221,7 +221,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
 
       <footer className="border-t fp-line-soft">
         <div className="max-w-6xl mx-auto px-6 py-10 flex flex-wrap items-center justify-between gap-4 fp-text-faint text-xs">
-          <span>© 2026 Innvil — the SMM panel maker.</span>
+          <span>© 2026 Innvil — the white-label SMM panel builder.</span>
           <div className="flex items-center gap-5">
             <a href="/terms" className="hover:fp-text">Terms</a>
             <a href="/privacy" className="hover:fp-text">Privacy</a>
@@ -363,7 +363,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
 }
 
 /* =========================================================
-   C. LEDGERLINE APP SHELL (dashboard)
+  C. INNVIL APP SHELL (dashboard)
    ========================================================= */
 
 const APP_NAV = [

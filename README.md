@@ -4,7 +4,7 @@
 
 Innvil removes the technical and operational barriers between an idea and a
 profitable business. Launching a new white-label brand should take minutes, not
-weeks. Today it ships as a **no-code SMM (social-media-marketing) panel maker** —
+weeks. Today it ships as a **no-code white-label SMM panel builder** —
 the first application built on the platform — and is evolving into a complete
 **business operating system**: automation, analytics, customer management,
 payments, provider orchestration, AI-powered workflows, billing, subscriptions,

@@ -82,7 +82,7 @@ export const revenueData = [
   { m: "Jul", v: 18420 },
 ];
 
-export const ledgerlineBalance = {
+export const innvilBalance = {
   balance: 128.4,
   ordersToday: 302.8,
   commissionPending: 15.14,
@@ -145,12 +145,12 @@ export const allPanelsAdmin: Array<{
   status: PanelStatus;
   verified: boolean;
 }> = [
-  { name: "NovaBoost", owner: "kg@ledgerline", status: "live", verified: true },
-  { name: "PulseSMM", owner: "jrmz@ledgerline", status: "live", verified: true },
-  { name: "Untitled Panel", owner: "kg@ledgerline", status: "draft", verified: false },
-  { name: "GrowFast Panel", owner: "haloworks@ledgerline", status: "suspended", verified: false },
-  { name: "GrowSocials", owner: "grow@ledgerline", status: "inactive", verified: true },
-  { name: "SMMPro", owner: "smmpro@ledgerline", status: "maintenance", verified: true },
+  { name: "NovaBoost", owner: "kg@innvil", status: "live", verified: true },
+  { name: "PulseSMM", owner: "jrmz@innvil", status: "live", verified: true },
+  { name: "Untitled Panel", owner: "kg@innvil", status: "draft", verified: false },
+  { name: "GrowFast Panel", owner: "haloworks@innvil", status: "suspended", verified: false },
+  { name: "GrowSocials", owner: "grow@innvil", status: "inactive", verified: true },
+  { name: "SMMPro", owner: "smmpro@innvil", status: "maintenance", verified: true },
 ];
 
 export const providersData: Array<{
@@ -301,6 +301,6 @@ export const recentServiceIds: number[] = [2101, 2201, 2110, 2401, 2701];
 export const auditLogs: Array<{ a: string; t: string }> = [
   { a: "Super Admin logged in as owner of NovaBoost", t: "3m ago" },
   { a: "Suspended GrowFast Panel — policy violation", t: "1h ago" },
-  { a: "Verified panel owner haloworks@ledgerline", t: "4h ago" },
+  { a: "Verified panel owner haloworks@innvil", t: "4h ago" },
   { a: "Manually adjusted @nova_agency balance +$10.00", t: "1d ago" },
 ];
