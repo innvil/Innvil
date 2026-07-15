@@ -2184,6 +2184,23 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
 }
 
 export function PaymentsTab({ panelId }: { panelId: string }) {
+  type DiscountTierDraft = { minAmount: string; discountPct: string };
+  const parseDiscountRulesConfig = (raw: string | undefined): DiscountTierDraft[] => {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const minAmount = String((item as Record<string, unknown>).minAmount ?? "");
+        const discountPct = String((item as Record<string, unknown>).discountPct ?? "");
+        return [{ minAmount, discountPct }];
+      });
+    } catch {
+      return [];
+    }
+  };
+
   const realPanel = isUuid(panelId);
   const fallbackMeta: PaymentsMeta = {
     catalog: [],
@@ -2197,6 +2214,7 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
   );
   const [openId, setOpenId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [discountRules, setDiscountRules] = useState<DiscountTierDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -2231,20 +2249,56 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
       if (next) {
         const conn = connectedMap.get(id);
         setValues({ ...(conn?.config ?? {}) });
+        const parsedRules = parseDiscountRulesConfig(conn?.config?.discountRules);
+        if (parsedRules.length > 0) {
+          setDiscountRules(parsedRules);
+        } else if (conn?.config?.discountPct) {
+          setDiscountRules([{ minAmount: "0", discountPct: conn.config.discountPct }]);
+        } else {
+          setDiscountRules([]);
+        }
       } else {
         setValues({});
+        setDiscountRules([]);
       }
       return next;
     });
     setMsg(null);
   };
   const save = async (id: string, label: string) => {
+    const normalizedRules = discountRules.flatMap((r) => {
+      const min = String(r.minAmount ?? "").trim();
+      const pct = String(r.discountPct ?? "").trim();
+      if (!min && !pct) return [];
+      const minNum = Number(min);
+      const pctNum = Number(pct);
+      if (!Number.isFinite(minNum) || minNum < 0 || !Number.isFinite(pctNum) || pctNum < 0 || pctNum > 100) return [];
+      return [{ minAmount: minNum, discountPct: pctNum }];
+    }).sort((a, b) => a.minAmount - b.minAmount);
+
+    const hasInvalidRule = discountRules.some((r) => {
+      const min = String(r.minAmount ?? "").trim();
+      const pct = String(r.discountPct ?? "").trim();
+      if (!min && !pct) return false;
+      const minNum = Number(min);
+      const pctNum = Number(pct);
+      return !Number.isFinite(minNum) || minNum < 0 || !Number.isFinite(pctNum) || pctNum < 0 || pctNum > 100;
+    });
+    if (hasInvalidRule) {
+      setMsg({ text: "Each tier needs min amount >= 0 and discount between 0 and 100.", error: true });
+      return;
+    }
+
+    const payload: Record<string, string> = { ...values };
+    payload.discountRules = JSON.stringify(normalizedRules);
+    delete payload.discountPct;
+
     setBusy(true); setMsg(null);
-    const res = await connectGateway(panelId, id, values);
+    const res = await connectGateway(panelId, id, payload);
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setMsg({ text: `${label} connected.` });
-    setOpenId(null); setValues({});
+    setOpenId(null); setValues({}); setDiscountRules([]);
     refresh();
   };
   const remove = async (id: string, label: string) => {
@@ -2320,6 +2374,9 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
               const isOpen = openId === c.id && c.available;
               const minTopup = Number(conn?.config?.minTopup);
               const hasMinTopup = Number.isFinite(minTopup);
+              const ruleCount = parseDiscountRulesConfig(conn?.config?.discountRules).length;
+              const discountPct = Number(conn?.config?.discountPct);
+              const hasDiscountPct = Number.isFinite(discountPct);
               return (
                 <div key={c.id} className="border fp-line-soft rounded-xl overflow-hidden">
                   <div className="flex items-center justify-between gap-3 px-4 py-3 fp-panel-raised">
@@ -2330,6 +2387,16 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
                         {conn && hasMinTopup && (
                           <span className="text-[10px] fp-gold-soft-bg fp-gold px-2 py-0.5 rounded-full">
                             Min ${minTopup.toFixed(2)}
+                          </span>
+                        )}
+                        {conn && ruleCount > 0 && (
+                          <span className="text-[10px] fp-safe-soft-bg fp-safe px-2 py-0.5 rounded-full">
+                            {ruleCount} promo tier{ruleCount === 1 ? "" : "s"}
+                          </span>
+                        )}
+                        {conn && ruleCount === 0 && hasDiscountPct && (
+                          <span className="text-[10px] fp-safe-soft-bg fp-safe px-2 py-0.5 rounded-full">
+                            +{discountPct}% promo
                           </span>
                         )}
                       </p>
@@ -2373,6 +2440,53 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
                           )}
                         </div>
                       ))}
+                      <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="fp-text-dim text-xs fp-mono uppercase">Top-up promo tiers</p>
+                          <button
+                            onClick={() => setDiscountRules((prev) => [...prev, { minAmount: "", discountPct: "" }])}
+                            className="text-xs fp-gold border fp-line-soft rounded-lg px-2.5 py-1"
+                          >
+                            Add tier
+                          </button>
+                        </div>
+                        <p className="fp-text-faint text-[11px]">Example: min 100, discount 5 means any top-up 100+ gets +5% bonus.</p>
+                        {discountRules.length === 0 ? (
+                          <p className="fp-text-faint text-xs">No per-method override. Global category tiers (if any) will apply.</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {discountRules.map((r, idx) => (
+                              <div key={`${c.id}-tier-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                                <input
+                                  value={r.minAmount}
+                                  onChange={(e) => setDiscountRules((prev) => prev.map((row, i) => (i === idx ? { ...row, minAmount: e.target.value } : row)))}
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  placeholder="Min top-up"
+                                  className={inputCls}
+                                />
+                                <input
+                                  value={r.discountPct}
+                                  onChange={(e) => setDiscountRules((prev) => prev.map((row, i) => (i === idx ? { ...row, discountPct: e.target.value } : row)))}
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  step="0.01"
+                                  placeholder="Discount %"
+                                  className={inputCls}
+                                />
+                                <button
+                                  onClick={() => setDiscountRules((prev) => prev.filter((_, i) => i !== idx))}
+                                  className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2.5"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                       <div className="flex gap-2">
                         <button onClick={() => save(c.id, c.label)} disabled={busy} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-50">
                           {busy ? "Saving…" : conn ? "Update" : `Connect ${c.label}`}

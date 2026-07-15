@@ -873,16 +873,38 @@ function CreatePanelWizard({ onCreate }: {
 
 /* --- Billing lives in ./OwnerSections (OwnerBilling — real cross-panel figures) --- */
 
-function AddFundsModal({ onClose }: { onClose: () => void }) {
+function AddFundsModal({
+  onClose,
+  initialPolicy,
+  initialInnvilBalance,
+}: {
+  onClose: () => void;
+  initialPolicy: OwnerTopupPolicy | null;
+  initialInnvilBalance: number | null;
+}) {
+  const pickDiscountRule = (value: number, rules: Array<{ minAmount: number; discountPct: number }>) => {
+    if (!Number.isFinite(value) || value <= 0 || rules.length === 0) return null;
+    let picked: { minAmount: number; discountPct: number } | null = null;
+    for (const r of rules) {
+      if (value >= r.minAmount) picked = r;
+      else break;
+    }
+    return picked;
+  };
+
   const [step, setStep] = useState("amount");
   const [amount, setAmount] = useState("50");
   const [method, setMethod] = useState("");
   const [busy, setBusy] = useState(false);
-  const [policy, setPolicy] = useState<OwnerTopupPolicy | null>(null);
-  const [innvilBalance, setInnvilBalance] = useState<number | null>(null);
+  const [policy, setPolicy] = useState<OwnerTopupPolicy | null>(initialPolicy);
+  const [innvilBalance, setInnvilBalance] = useState<number | null>(initialInnvilBalance);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (policy) {
+      if (!method) setMethod(policy.methods[0]?.id ?? "");
+      return;
+    }
     let alive = true;
     setBusy(true);
     Promise.all([getOwnerTopupPolicy(), getOwnerBillingSummary()]).then(([nextPolicy, summary]) => {
@@ -897,12 +919,16 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
       setError("Could not load payment methods right now.");
     });
     return () => { alive = false; };
-  }, []);
+  }, [policy, method]);
 
   const methodMeta = policy?.methods.find((m) => m.id === method) ?? null;
   const normalizedAmount = Number(amount);
   const firstTopup = (innvilBalance ?? 0) <= 0;
   const minTopup = firstTopup ? (policy?.firstTopupMin ?? 10) : (policy?.minTopup ?? 5);
+  const methodRules = [...(methodMeta?.discountRules ?? [])].sort((a, b) => a.minAmount - b.minAmount);
+  const appliedRule = pickDiscountRule(normalizedAmount, methodRules);
+  const bonusAmount = appliedRule ? Math.round((normalizedAmount * (appliedRule.discountPct / 100)) * 10000) / 10000 : 0;
+  const creditedAmount = Number.isFinite(normalizedAmount) ? Math.round((normalizedAmount + bonusAmount) * 10000) / 10000 : 0;
 
   const continueToMethod = () => {
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
@@ -949,6 +975,25 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
               Minimum top-up: <span className="fp-text">${minTopup.toFixed(2)}</span>
               {firstTopup ? " (first top-up)" : ""}
             </p>
+            {methodMeta && methodRules.length > 0 && (
+              <details className="fp-panel-raised border fp-line-soft rounded-lg p-3 mb-4">
+                <summary className="cursor-pointer fp-text-dim text-xs">
+                  Promo tiers ({methodMeta.label})
+                </summary>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {methodRules.map((r) => (
+                    <div key={`${r.minAmount}-${r.discountPct}`} className="text-xs fp-text-faint border fp-line-soft rounded-md px-2 py-1.5">
+                      Top-up ≥ <span className="fp-text">${r.minAmount.toFixed(2)}</span> → <span className="fp-safe">+{r.discountPct}%</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            {appliedRule && Number.isFinite(normalizedAmount) && normalizedAmount > 0 && (
+              <p className="fp-safe text-xs mb-4">
+                You pay ${normalizedAmount.toFixed(2)} + bonus ${bonusAmount.toFixed(2)} = ${creditedAmount.toFixed(2)} credited
+              </p>
+            )}
             <div className="flex gap-2 mb-6">
               {[25, 50, 100, 250].map((v) => (
                 <button
@@ -989,6 +1034,9 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
                   <div>
                     <p className="text-sm font-medium">{m.label}</p>
                     <p className="fp-text-faint text-xs mt-0.5">{m.note}</p>
+                    {m.discountRules.length > 0 && (
+                      <p className="fp-safe text-[11px] mt-1">{m.discountRules.length} promo tier{m.discountRules.length === 1 ? "" : "s"} available</p>
+                    )}
                   </div>
                   {method === m.id && <CheckCircle2 size={16} className="fp-gold" />}
                 </button>
@@ -1019,6 +1067,22 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
               <span className="fp-text-dim text-sm">Amount</span>
               <span className="fp-display text-lg fp-gold">${amount || "0"}</span>
             </div>
+            {appliedRule && (
+              <div className="fp-panel-raised border fp-line-soft rounded-xl p-4 mb-6 space-y-1">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="fp-text-dim">Applied tier</span>
+                  <span className="fp-safe">Top-up ≥ ${appliedRule.minAmount.toFixed(2)} · +{appliedRule.discountPct}%</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="fp-text-dim">Bonus</span>
+                  <span className="fp-safe">+${bonusAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="fp-text-dim">Total credited</span>
+                  <span className="fp-gold">${creditedAmount.toFixed(2)}</span>
+                </div>
+              </div>
+            )}
             <button onClick={onClose} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm">
               Go to {methodMeta?.label ?? "checkout"}
             </button>
@@ -1040,6 +1104,12 @@ export function InnvilApp({ setWorld, initialSection }: {
   const [activePanel, setActivePanel] = useState<Panel | null>(null);
   const [panelInitialTab, setPanelInitialTab] = useState<string | undefined>(cachedNav?.panelTab);
   const [showAddFunds, setShowAddFunds] = useState(false);
+  const [ownerTopupPolicy, setOwnerTopupPolicy] = useState<OwnerTopupPolicy | null>(
+    readOwnerAppCache<OwnerTopupPolicy>("owner-topup-policy")
+  );
+  const [ownerInnvilBalance, setOwnerInnvilBalance] = useState<number | null>(
+    readOwnerAppCache<number>("owner-topup-balance")
+  );
   const [panelList, setPanelList] = useState<Panel[]>(cachedPanels);
   const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
   const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
@@ -1049,6 +1119,20 @@ export function InnvilApp({ setWorld, initialSection }: {
   const didRestorePanelRef = useRef(false);
 
   useEffect(() => { amSuperAdmin().then(setIsSuper); }, []);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([getOwnerTopupPolicy(), getOwnerBillingSummary()]).then(([nextPolicy, summary]) => {
+      if (!alive) return;
+      setOwnerTopupPolicy(nextPolicy);
+      setOwnerInnvilBalance(summary.innvilBalance);
+      writeOwnerAppCache("owner-topup-policy", nextPolicy);
+      writeOwnerAppCache("owner-topup-balance", summary.innvilBalance);
+    }).catch(() => {
+      // ignore prefetch errors; modal can still fetch as fallback
+    });
+    return () => { alive = false; };
+  }, []);
 
   const refreshPanels = useCallback(async () => {
     setLoadingPanels(panelList.length === 0);
@@ -1186,7 +1270,13 @@ export function InnvilApp({ setWorld, initialSection }: {
           </div>
         )}
       </div>
-      {showAddFunds && <AddFundsModal onClose={() => setShowAddFunds(false)} />}
+      {showAddFunds && (
+        <AddFundsModal
+          onClose={() => setShowAddFunds(false)}
+          initialPolicy={ownerTopupPolicy}
+          initialInnvilBalance={ownerInnvilBalance}
+        />
+      )}
     </div>
   );
 }

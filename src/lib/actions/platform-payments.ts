@@ -36,12 +36,94 @@ export interface OwnerTopupMethod {
   id: string;
   label: string;
   note: string;
+  category: PaymentDiscountCategory;
+  discountRules: TopupDiscountRule[];
 }
 
 export interface OwnerTopupPolicy {
   minTopup: number;
   firstTopupMin: number;
   methods: OwnerTopupMethod[];
+}
+
+export type PaymentDiscountCategory = "card" | "ewallet" | "crypto" | "bank";
+
+export interface TopupDiscountRule {
+  minAmount: number;
+  discountPct: number;
+}
+
+export interface TopupDiscountDefaults {
+  card: TopupDiscountRule[];
+  ewallet: TopupDiscountRule[];
+  crypto: TopupDiscountRule[];
+  bank: TopupDiscountRule[];
+}
+
+const DISCOUNT_CATEGORIES: PaymentDiscountCategory[] = ["card", "ewallet", "crypto", "bank"];
+
+function parseDiscount(raw: unknown): number | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return Number.NaN;
+  return Math.round(n * 1000) / 1000;
+}
+
+function parseAmount(raw: unknown): number | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return Number.NaN;
+  return Math.round(n * 10000) / 10000;
+}
+
+function normalizeRules(rules: TopupDiscountRule[]): TopupDiscountRule[] {
+  const out = rules
+    .filter((r) => Number.isFinite(r.minAmount) && r.minAmount >= 0 && Number.isFinite(r.discountPct) && r.discountPct >= 0 && r.discountPct <= 100)
+    .map((r) => ({
+      minAmount: Math.round(r.minAmount * 10000) / 10000,
+      discountPct: Math.round(r.discountPct * 1000) / 1000,
+    }))
+    .sort((a, b) => a.minAmount - b.minAmount);
+
+  const dedup: TopupDiscountRule[] = [];
+  for (const r of out) {
+    const prev = dedup[dedup.length - 1];
+    if (prev && prev.minAmount === r.minAmount) {
+      dedup[dedup.length - 1] = r;
+      continue;
+    }
+    dedup.push(r);
+  }
+  return dedup;
+}
+
+function parseRules(raw: unknown): TopupDiscountRule[] {
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  const parsed: TopupDiscountRule[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const minAmount = parseAmount((item as Record<string, unknown>).minAmount);
+    const discountPct = parseDiscount((item as Record<string, unknown>).discountPct);
+    if (minAmount == null || discountPct == null) continue;
+    if (Number.isNaN(minAmount) || Number.isNaN(discountPct)) continue;
+    parsed.push({ minAmount, discountPct });
+  }
+  return normalizeRules(parsed);
+}
+
+function emptyDiscountDefaults(): TopupDiscountDefaults {
+  return { card: [], ewallet: [], crypto: [], bank: [] };
 }
 
 async function requireSuperAdmin(): Promise<boolean> {
@@ -161,23 +243,118 @@ export async function disconnectPlatformGateway(gateway: string): Promise<Result
   return { ok: true };
 }
 
+/** Super-admin: read global top-up discount defaults by payment category. */
+export async function getPlatformTopupDiscountDefaults(): Promise<TopupDiscountDefaults> {
+  if (!(await requireSuperAdmin())) return emptyDiscountDefaults();
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("platform_topup_discount_defaults")
+    .select("category, discount_pct, discount_rules")
+    .in("category", DISCOUNT_CATEGORIES as unknown as string[]);
+
+  const out = emptyDiscountDefaults();
+  for (const row of data ?? []) {
+    const k = row.category as PaymentDiscountCategory;
+    if (!DISCOUNT_CATEGORIES.includes(k)) continue;
+    const rules = parseRules(row.discount_rules);
+    if (rules.length > 0) {
+      out[k] = rules;
+      continue;
+    }
+    const legacy = parseDiscount(row.discount_pct);
+    out[k] = legacy == null || Number.isNaN(legacy) ? [] : [{ minAmount: 0, discountPct: legacy }];
+  }
+  return out;
+}
+
+/** Super-admin: set global top-up discount defaults by payment category. */
+export async function setPlatformTopupDiscountDefaults(
+  values: Record<PaymentDiscountCategory, Array<{ minAmount: string; discountPct: string }>>
+): Promise<Result> {
+  if (!(await requireSuperAdmin())) return { ok: false, error: "Super admin only." };
+  const admin = createAdminClient();
+
+  const rows = DISCOUNT_CATEGORIES.map((category) => ({
+    category,
+    discount_rules: normalizeRules(
+      (values[category] ?? []).flatMap((r) => {
+        const minAmount = parseAmount(r.minAmount);
+        const discountPct = parseDiscount(r.discountPct);
+        if (minAmount == null || discountPct == null) return [];
+        if (Number.isNaN(minAmount) || Number.isNaN(discountPct)) return [];
+        return [{ minAmount, discountPct }];
+      })
+    ),
+  }));
+
+  const hasInvalid = DISCOUNT_CATEGORIES.some((category) => {
+    const arr = values[category] ?? [];
+    return arr.some((r) => {
+      const minAmount = parseAmount(r.minAmount);
+      const discountPct = parseDiscount(r.discountPct);
+      if (String(r.minAmount ?? "").trim() === "" && String(r.discountPct ?? "").trim() === "") return false;
+      return minAmount == null || discountPct == null || Number.isNaN(minAmount) || Number.isNaN(discountPct);
+    });
+  });
+  if (hasInvalid) {
+    return { ok: false, error: "Each rule needs a min amount >= 0 and a discount between 0 and 100." };
+  }
+
+  const rowsWithLegacy = rows.map((r) => {
+    const zeroRule = r.discount_rules.find((x) => x.minAmount === 0);
+    return {
+      category: r.category,
+      discount_pct: zeroRule ? zeroRule.discountPct : null,
+      discount_rules: r.discount_rules,
+    };
+  });
+
+  const { error } = await admin
+    .from("platform_topup_discount_defaults")
+    .upsert(rowsWithLegacy, { onConflict: "category" });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 /** Owner-facing top-up policy and currently active platform methods. */
 export async function getOwnerTopupPolicy(): Promise<OwnerTopupPolicy> {
   const { user } = await getAuthedAdmin();
   if (!user) return { minTopup: OWNER_TOPUP_MIN, firstTopupMin: OWNER_FIRST_TOPUP_MIN, methods: [] };
 
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("platform_payment_gateways")
-    .select("gateway, status")
-    .in("gateway", PLATFORM_GATEWAY_IDS as unknown as string[])
-    .eq("status", "active");
+  const [{ data }, { data: defaults }] = await Promise.all([
+    admin
+      .from("platform_payment_gateways")
+      .select("gateway, status")
+      .in("gateway", PLATFORM_GATEWAY_IDS as unknown as string[])
+      .eq("status", "active"),
+    admin
+      .from("platform_topup_discount_defaults")
+      .select("category, discount_pct, discount_rules")
+      .in("category", DISCOUNT_CATEGORIES as unknown as string[]),
+  ]);
+
+  const defaultByCategory = new Map<PaymentDiscountCategory, TopupDiscountRule[]>(
+    (defaults ?? []).flatMap((row) => {
+      const category = row.category as PaymentDiscountCategory;
+      if (!DISCOUNT_CATEGORIES.includes(category)) return [];
+      const parsed = parseRules(row.discount_rules);
+      if (parsed.length > 0) return [[category, parsed] as const];
+      const legacy = parseDiscount(row.discount_pct);
+      return [[
+        category,
+        legacy == null || Number.isNaN(legacy) ? [] : [{ minAmount: 0, discountPct: legacy }],
+      ] as const];
+    })
+  );
 
   const methods = (data ?? []).flatMap((r) => {
     const id = r.gateway as string;
     const cat = catalogEntry(id);
     if (!cat) return [];
-    return [{ id, label: cat.label, note: cat.note } satisfies OwnerTopupMethod];
+    const category = cat.category as PaymentDiscountCategory;
+    const discountRules = defaultByCategory.get(category) ?? [];
+    return [{ id, label: cat.label, note: cat.note, category, discountRules } satisfies OwnerTopupMethod];
   });
 
   return {

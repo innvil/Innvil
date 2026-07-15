@@ -27,6 +27,18 @@ the current storefront would then serve as the admin panel of the child panel.
 
 can delete this too once noted and implemented
 
+## Session: Tiered top-up reflection + instant modal population (v0.2.48)
+
+### Date: 2026-07-15
+- Added tiered discount conditions end-to-end for customer deposits and owner top-ups:
+  - super-admin category defaults support multiple min-amount tiers,
+  - panel-owner gateway config supports per-method tier overrides,
+  - customer storefront applies the highest matching tier by entered amount.
+- Fixed owner Billing -> Add funds flow so super-admin tiers are reflected there too (`getOwnerTopupPolicy` now includes method category + discount rules).
+- Removed the owner modal "wait then populate" behavior by prefetching top-up policy + balance in the app shell and passing preloaded data into the modal, so tiers render immediately on click.
+- Fixed percentage math bug in owner top-up preview (`discountPct` now treated as percent, not multiplier).
+- package.json -> 0.2.48. Migration `0014_topup_discounts.sql` included.
+
 ## Session: Root-cause cache visibility hardening (v0.2.43)
 
 ### Date: 2026-07-14

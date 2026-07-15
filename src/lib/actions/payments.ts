@@ -9,8 +9,10 @@ import {
   getAdapter,
   getGatewayContext,
   GATEWAY_CATALOG,
+  catalogEntry,
   type CatalogEntry,
   type GatewayField,
+  type PaymentCategory,
 } from "@/src/lib/payments";
 
 /** Read a panel's operating currency from its settings (default USD). */
@@ -61,6 +63,116 @@ export interface PaymentsMeta {
 }
 
 const DEFAULT_GATEWAY_MIN_TOPUP = 1;
+
+interface TopupDiscountRule {
+  minAmount: number;
+  discountPct: number;
+}
+
+function normalizeDiscountPct(raw: unknown): number | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return round4(n);
+}
+
+function normalizeAmount(raw: unknown): number | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return round4(n);
+}
+
+function normalizeRules(rules: TopupDiscountRule[]): TopupDiscountRule[] {
+  const out = rules
+    .filter((r) => Number.isFinite(r.minAmount) && r.minAmount >= 0 && Number.isFinite(r.discountPct) && r.discountPct >= 0 && r.discountPct <= 100)
+    .map((r) => ({ minAmount: round4(r.minAmount), discountPct: round4(r.discountPct) }))
+    .sort((a, b) => a.minAmount - b.minAmount);
+
+  const dedup: TopupDiscountRule[] = [];
+  for (const r of out) {
+    const prev = dedup[dedup.length - 1];
+    if (prev && prev.minAmount === r.minAmount) {
+      dedup[dedup.length - 1] = r;
+      continue;
+    }
+    dedup.push(r);
+  }
+  return dedup;
+}
+
+function tryParseDiscountRules(raw: unknown): { rules: TopupDiscountRule[]; valid: boolean } {
+  if (raw == null) return { rules: [], valid: true };
+  const str = typeof raw === "string" ? raw.trim() : "";
+  if (!str) return { rules: [], valid: true };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(str);
+  } catch {
+    return { rules: [], valid: false };
+  }
+  if (!Array.isArray(parsed)) return { rules: [], valid: false };
+
+  const rules: TopupDiscountRule[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") return { rules: [], valid: false };
+    const obj = item as Record<string, unknown>;
+    const minAmount = normalizeAmount(obj.minAmount);
+    const discountPct = normalizeDiscountPct(obj.discountPct);
+    if (minAmount == null || discountPct == null) return { rules: [], valid: false };
+    rules.push({ minAmount, discountPct });
+  }
+  return { rules: normalizeRules(rules), valid: true };
+}
+
+function pickDiscountPct(amount: number, rules: TopupDiscountRule[]): number | null {
+  if (!Number.isFinite(amount) || amount <= 0 || rules.length === 0) return null;
+  let picked: number | null = null;
+  for (const r of rules) {
+    if (amount >= r.minAmount) picked = r.discountPct;
+    else break;
+  }
+  return picked;
+}
+
+async function getGlobalDiscountRules(category: PaymentCategory): Promise<TopupDiscountRule[]> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("platform_topup_discount_defaults")
+    .select("discount_pct, discount_rules")
+    .eq("category", category)
+    .maybeSingle();
+
+  const parsed = tryParseDiscountRules(data?.discount_rules ? JSON.stringify(data.discount_rules) : "");
+  if (parsed.valid && parsed.rules.length > 0) return parsed.rules;
+
+  const legacy = normalizeDiscountPct(data?.discount_pct);
+  return legacy == null ? [] : [{ minAmount: 0, discountPct: legacy }];
+}
+
+async function resolveGatewayDiscountPct(
+  gateway: string,
+  gwConfig: Record<string, unknown> | null,
+  amount: number
+): Promise<number | null> {
+  const parsedRules = tryParseDiscountRules(gwConfig?.discountRules);
+  if (parsedRules.valid && parsedRules.rules.length > 0) {
+    const byRules = pickDiscountPct(amount, parsedRules.rules);
+    if (byRules != null) return byRules;
+  }
+
+  const panelOverride = normalizeDiscountPct(gwConfig?.discountPct);
+  if (panelOverride != null) return panelOverride;
+
+  const cat = catalogEntry(gateway)?.category;
+  if (!cat) return null;
+  const globalRules = await getGlobalDiscountRules(cat);
+  return pickDiscountPct(amount, globalRules);
+}
 
 function normalizeMinTopup(raw: unknown): number {
   const n = Number(raw);
@@ -160,6 +272,28 @@ export async function connectGateway(
       return { ok: false, error: "Minimum top-up must be a number greater than 0." };
     }
     config.minTopup = String(round4(parsed));
+  }
+
+  const rawDiscountPct = (values.discountPct ?? "").trim();
+  const parsedRules = tryParseDiscountRules(values.discountRules);
+  if (!parsedRules.valid) {
+    return { ok: false, error: "Discount rules are invalid." };
+  }
+  if (parsedRules.rules.length > 0) {
+    config.discountRules = JSON.stringify(parsedRules.rules);
+    const zeroRule = parsedRules.rules.find((r) => r.minAmount === 0);
+    if (zeroRule) config.discountPct = String(zeroRule.discountPct);
+    else delete config.discountPct;
+  } else if (rawDiscountPct) {
+    const parsed = normalizeDiscountPct(rawDiscountPct);
+    if (parsed == null) {
+      return { ok: false, error: "Top-up discount must be between 0 and 100." };
+    }
+    config.discountPct = String(parsed);
+    delete config.discountRules;
+  } else {
+    delete config.discountPct;
+    delete config.discountRules;
   }
 
   const { data: existing } = await admin
@@ -271,6 +405,7 @@ export async function createDeposit(
     .maybeSingle();
   const gwConfig = (gwRow?.config as Record<string, unknown> | null) ?? null;
   const gatewayMinTopup = normalizeMinTopup(gwConfig?.minTopup);
+  const discountPct = await resolveGatewayDiscountPct(gw, gwConfig, amt);
 
   const adapter = getAdapter(gw);
   if (!adapter) return { ok: false, error: "That payment method isn't available." };
@@ -281,6 +416,7 @@ export async function createDeposit(
   if (!ctx) return { ok: false, error: "This payment method isn't fully configured." };
 
   const currency = readPanelCurrency(panel.settings);
+  const bonusAmount = discountPct != null ? round4((amt * discountPct) / 100) : 0;
   const { data: pay, error } = await admin
     .from("payments")
     .insert({
@@ -288,6 +424,7 @@ export async function createDeposit(
       customer_id: acct.id,
       method: adapter.label,
       amount: amt,
+      bonus_amount: bonusAmount,
       currency,
       status: "pending",
       gateway: gw,
@@ -354,14 +491,14 @@ export async function listDeposits(panelId: string): Promise<DepositVM[]> {
 
   const { data } = await admin
     .from("payments")
-    .select("id, amount, currency, status, method, created_at")
+    .select("id, amount, bonus_amount, currency, status, method, created_at")
     .eq("customer_id", acct.id)
     .order("created_at", { ascending: false })
     .limit(50);
 
   return (data ?? []).map((p) => ({
     id: p.id as string,
-    amount: Number(p.amount),
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
     currency: p.currency as string,
     status: p.status as string,
     method: p.method as string,
@@ -433,7 +570,7 @@ export async function listCustomerDeposits(customerAccountId: string): Promise<O
 
   const { data } = await admin
     .from("payments")
-    .select("id, customer_id, amount, currency, status, method, created_at")
+    .select("id, customer_id, amount, bonus_amount, currency, status, method, created_at")
     .eq("customer_id", customerAccountId)
     .order("created_at", { ascending: false })
     .limit(25);
@@ -443,7 +580,7 @@ export async function listCustomerDeposits(customerAccountId: string): Promise<O
     customerId: p.customer_id as string,
     customerUsername: (profile?.display_name as string | null) ?? null,
     customerEmail: email,
-    amount: Number(p.amount),
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
     currency: p.currency as string,
     status: p.status as string,
     method: p.method as string,
@@ -459,7 +596,7 @@ export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM
 
   const { data } = await admin
     .from("payments")
-    .select("id, customer_id, amount, currency, status, method, created_at")
+    .select("id, customer_id, amount, bonus_amount, currency, status, method, created_at")
     .eq("panel_id", panelId)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -493,7 +630,7 @@ export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM
     customerId: p.customer_id as string,
     customerUsername: usernameByUserId.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
     customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
-    amount: Number(p.amount),
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
     currency: p.currency as string,
     status: p.status as string,
     method: p.method as string,
@@ -516,7 +653,7 @@ export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDeposit
 
   const { data } = await admin
     .from("payments")
-    .select("id, panel_id, customer_id, amount, currency, status, method, created_at")
+    .select("id, panel_id, customer_id, amount, bonus_amount, currency, status, method, created_at")
     .in("panel_id", list.map((p) => p.id))
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -550,7 +687,7 @@ export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDeposit
     customerId: p.customer_id as string,
     customerUsername: usernameByUserId.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
     customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
-    amount: Number(p.amount),
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
     currency: p.currency as string,
     status: p.status as string,
     method: p.method as string,
@@ -636,13 +773,13 @@ export async function commitPendingPayment(
     .update({ status: "completed", approved_by: user.id })
     .eq("id", paymentId)
     .in("status", ["pending", "approved"])
-    .select("customer_id, amount, method")
+    .select("customer_id, amount, bonus_amount, method")
     .maybeSingle();
   if (!claimed) return { ok: false, error: "Could not claim this payment for completion." };
 
   const { data: tx, error } = await admin.rpc("apply_balance_change", {
     p_customer: claimed.customer_id,
-    p_amount: Number(claimed.amount),
+    p_amount: Number(claimed.amount) + Number(claimed.bonus_amount ?? 0),
     p_type: "deposit",
     p_reason: `${claimed.method} manual commit ${paymentId}`,
     p_admin: user.id,

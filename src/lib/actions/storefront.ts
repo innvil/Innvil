@@ -118,11 +118,18 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
 }
 
 /** Payment methods a panel has connected (public — id/label/category only). */
+export interface TopupDiscountRule {
+  minAmount: number;
+  discountPct: number;
+}
+
 export interface PublicPaymentMethod {
   id: string; // gateway id
   label: string;
   category: string; // "crypto" | "card" | "ewallet" | "bank"
   minTopup: number;
+  discountPct: number | null;
+  discountRules: TopupDiscountRule[];
 }
 
 function normalizeMinTopup(raw: unknown): number {
@@ -131,25 +138,104 @@ function normalizeMinTopup(raw: unknown): number {
   return Math.round(n * 10000) / 10000;
 }
 
+function normalizeDiscountPct(raw: unknown): number | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return Math.round(n * 10000) / 10000;
+}
+
+function normalizeAmount(raw: unknown): number | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 10000) / 10000;
+}
+
+function normalizeRules(rules: TopupDiscountRule[]): TopupDiscountRule[] {
+  const out = rules
+    .filter((r) => Number.isFinite(r.minAmount) && r.minAmount >= 0 && Number.isFinite(r.discountPct) && r.discountPct >= 0 && r.discountPct <= 100)
+    .map((r) => ({ minAmount: Math.round(r.minAmount * 10000) / 10000, discountPct: Math.round(r.discountPct * 10000) / 10000 }))
+    .sort((a, b) => a.minAmount - b.minAmount);
+  const dedup: TopupDiscountRule[] = [];
+  for (const r of out) {
+    const prev = dedup[dedup.length - 1];
+    if (prev && prev.minAmount === r.minAmount) {
+      dedup[dedup.length - 1] = r;
+      continue;
+    }
+    dedup.push(r);
+  }
+  return dedup;
+}
+
+function parseRules(raw: unknown): TopupDiscountRule[] {
+  let value: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  const rules: TopupDiscountRule[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const minAmount = normalizeAmount(obj.minAmount);
+    const discountPct = normalizeDiscountPct(obj.discountPct);
+    if (minAmount == null || discountPct == null) continue;
+    rules.push({ minAmount, discountPct });
+  }
+  return normalizeRules(rules);
+}
+
 export async function getPanelPaymentMethods(panelId: string): Promise<PublicPaymentMethod[]> {
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("panel_payment_gateways")
-    .select("gateway, status, config")
-    .eq("panel_id", panelId)
-    .eq("status", "active");
+  const [{ data }, { data: defaults }] = await Promise.all([
+    admin
+      .from("panel_payment_gateways")
+      .select("gateway, status, config")
+      .eq("panel_id", panelId)
+      .eq("status", "active"),
+    admin
+      .from("platform_topup_discount_defaults")
+      .select("category, discount_pct, discount_rules"),
+  ]);
   const { GATEWAY_CATALOG } = await import("@/src/lib/payments/adapters");
   const byId = new Map(GATEWAY_CATALOG.map((c) => [c.id, c]));
+  const defaultByCategory = new Map<string, TopupDiscountRule[]>(
+    (defaults ?? []).map((r) => {
+      const parsed = parseRules(r.discount_rules);
+      if (parsed.length > 0) return [String(r.category), parsed];
+      const legacy = normalizeDiscountPct(r.discount_pct);
+      return [String(r.category), legacy == null ? [] : [{ minAmount: 0, discountPct: legacy }]];
+    })
+  );
   return (data ?? [])
     .flatMap((r) => {
       const cat = byId.get(r.gateway as string);
       if (!cat) return [];
       const cfg = (r.config as Record<string, unknown> | null) ?? null;
+      const panelRules = parseRules(cfg?.discountRules);
+      const panelLegacy = normalizeDiscountPct(cfg?.discountPct);
+      const effectiveRules = panelRules.length > 0
+        ? panelRules
+        : panelLegacy != null
+          ? [{ minAmount: 0, discountPct: panelLegacy }]
+          : (defaultByCategory.get(cat.category) ?? []);
+      const baseRule = effectiveRules.find((x) => x.minAmount === 0);
       return [{
         id: cat.id,
         label: cat.label,
         category: cat.category,
         minTopup: normalizeMinTopup(cfg?.minTopup),
+        discountPct: baseRule?.discountPct ?? null,
+        discountRules: effectiveRules,
       } satisfies PublicPaymentMethod];
     });
 }

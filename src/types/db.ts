@@ -163,6 +163,7 @@ export interface PaymentRow {
   customer_id: string;
   method: string;
   amount: number;
+  bonus_amount: number;
   currency: string;
   status: PaymentStatus;
   gateway: string | null;

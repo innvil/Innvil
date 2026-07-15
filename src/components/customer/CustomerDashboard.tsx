@@ -18,7 +18,29 @@ import { formatMoney, currencySymbol } from "@/src/lib/money";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
 type Ticket = { id: string; subj: string; status: string; updated: string };
-export type PaymentMethod = { id: string; label: string; category: string; minTopup: number };
+type TopupDiscountRule = { minAmount: number; discountPct: number };
+export type PaymentMethod = {
+  id: string;
+  label: string;
+  category: string;
+  minTopup: number;
+  discountPct: number | null;
+  discountRules: TopupDiscountRule[];
+};
+
+function roundMoney(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function pickDiscountRule(amount: number, rules: TopupDiscountRule[]): TopupDiscountRule | null {
+  if (!Number.isFinite(amount) || amount <= 0 || rules.length === 0) return null;
+  let picked: TopupDiscountRule | null = null;
+  for (const r of rules) {
+    if (amount >= r.minAmount) picked = r;
+    else break;
+  }
+  return picked;
+}
 
 const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
   { key: "crypto", label: "Crypto" },
@@ -185,6 +207,16 @@ export function CustomerDashboard({
   const activeGateway = payGateway && catMethods.some((m) => m.id === payGateway) ? payGateway : "";
   const activeMethod = catMethods.find((m) => m.id === activeGateway) ?? null;
   const minTopup = activeMethod?.minTopup ?? 1;
+  const discountRules = useMemo(
+    () => [...(activeMethod?.discountRules ?? [])].sort((a, b) => a.minAmount - b.minAmount),
+    [activeMethod]
+  );
+  const discountPct = activeMethod?.discountPct ?? null;
+  const depositAmt = Number(depositAmount) || 0;
+  const appliedRule = pickDiscountRule(depositAmt, discountRules);
+  const appliedDiscountPct = appliedRule?.discountPct ?? discountPct;
+  const discountBonus = roundMoney(depositAmt * ((appliedDiscountPct ?? 0) / 100));
+  const creditedAmount = roundMoney(depositAmt + discountBonus);
 
   useEffect(() => {
     if (!payGateway && catMethods.length === 1) {
@@ -669,6 +701,28 @@ export function CustomerDashboard({
                   {activeMethod && (
                     <p className="fp-text-faint text-xs">
                       Method: <span className="fp-text">{activeMethod.label}</span> · Minimum: <span className="fp-gold">{fmt(minTopup)}</span>
+                      {discountRules.length > 0 && <> · Promo: <span className="fp-safe">Tiered</span></>}
+                      {discountRules.length === 0 && discountPct != null && <> · Promo: <span className="fp-safe">+{discountPct}%</span></>}
+                    </p>
+                  )}
+
+                  {discountRules.length > 0 && (
+                    <details className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2">
+                      <summary className="cursor-pointer text-xs fp-text-dim">Show promo tiers</summary>
+                      <div className="mt-2 grid sm:grid-cols-2 gap-2">
+                        {discountRules.map((r) => (
+                          <div key={`${r.minAmount}-${r.discountPct}`} className="text-xs fp-text-faint border fp-line-soft rounded-md px-2.5 py-1.5">
+                            Top-up ≥ <span className="fp-text fp-mono">{fmt(r.minAmount)}</span> → <span className="fp-safe">+{r.discountPct}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+
+                  {appliedDiscountPct != null && depositAmt > 0 && (
+                    <p className="fp-safe text-xs">
+                      Top-up {fmt(depositAmt)} + bonus {fmt(discountBonus)} = you receive {fmt(creditedAmount)}
+                      {appliedRule && <span className="fp-text-faint"> · Applied tier: ≥ {fmt(appliedRule.minAmount)}</span>}
                     </p>
                   )}
 

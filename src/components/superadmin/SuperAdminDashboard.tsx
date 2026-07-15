@@ -13,7 +13,8 @@ import {
 } from "@/src/lib/actions/superadmin";
 import {
   getPlatformPaymentsMeta, connectPlatformGateway, disconnectPlatformGateway,
-  type PlatformGatewayMeta,
+  getPlatformTopupDiscountDefaults, setPlatformTopupDiscountDefaults,
+  type PlatformGatewayMeta, type PaymentDiscountCategory,
 } from "@/src/lib/actions/platform-payments";
 
 const inputCls =
@@ -134,11 +135,25 @@ function GatewayCard({ g, onSaved }: { g: PlatformGatewayMeta; onSaved: () => vo
 function PaymentsTab() {
   const [meta, setMeta] = useState<PlatformGatewayMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [discounts, setDiscounts] = useState<Record<PaymentDiscountCategory, Array<{ minAmount: string; discountPct: string }>>>({
+    card: [],
+    ewallet: [],
+    crypto: [],
+    bank: [],
+  });
+  const [savingDiscounts, setSavingDiscounts] = useState(false);
+  const [discountMsg, setDiscountMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const load = () => {
     setError(null);
-    return getPlatformPaymentsMeta()
-      .then((next) => {
-        setMeta(next);
+    return Promise.all([getPlatformPaymentsMeta(), getPlatformTopupDiscountDefaults()])
+      .then(([nextMeta, nextDiscounts]) => {
+        setMeta(nextMeta);
+        setDiscounts({
+          card: nextDiscounts.card.map((r) => ({ minAmount: String(r.minAmount), discountPct: String(r.discountPct) })),
+          ewallet: nextDiscounts.ewallet.map((r) => ({ minAmount: String(r.minAmount), discountPct: String(r.discountPct) })),
+          crypto: nextDiscounts.crypto.map((r) => ({ minAmount: String(r.minAmount), discountPct: String(r.discountPct) })),
+          bank: nextDiscounts.bank.map((r) => ({ minAmount: String(r.minAmount), discountPct: String(r.discountPct) })),
+        });
         setError(null);
       })
       .catch((e) => {
@@ -148,6 +163,19 @@ function PaymentsTab() {
   };
   useEffect(() => { load(); }, []);
 
+  const saveDiscounts = async () => {
+    setSavingDiscounts(true);
+    setDiscountMsg(null);
+    const res = await setPlatformTopupDiscountDefaults(discounts);
+    setSavingDiscounts(false);
+    if (!res.ok) {
+      setDiscountMsg({ text: res.error, error: true });
+      return;
+    }
+    setDiscountMsg({ text: "Global top-up discounts saved." });
+    load();
+  };
+
   return (
     <div className="space-y-5 max-w-2xl">
       <p className="fp-text-dim text-sm">
@@ -156,6 +184,85 @@ function PaymentsTab() {
         <span className="fp-text"> $5</span>, and the first top-up per panel is fixed at
         <span className="fp-text"> $10</span>. Binance Pay is coming later.
       </p>
+      <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
+        <p className="text-sm font-medium">Global customer top-up discounts</p>
+        <p className="fp-text-faint text-xs">
+          Add tier rules per category (example: if top-up is 100+, give 5%). These apply platform-wide unless a panel owner overrides per method.
+        </p>
+        <div className="space-y-3">
+          {([
+            ["card", "Card"],
+            ["ewallet", "E-wallet"],
+            ["crypto", "Crypto"],
+            ["bank", "Bank"],
+          ] as Array<[PaymentDiscountCategory, string]>).map(([k, label]) => (
+            <div key={k} className="fp-panel-raised border fp-line-soft rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="fp-text-dim text-xs fp-mono uppercase">{label} tiers</label>
+                <button
+                  onClick={() => setDiscounts((prev) => ({
+                    ...prev,
+                    [k]: [...prev[k], { minAmount: "", discountPct: "" }],
+                  }))}
+                  className="text-xs fp-gold border fp-line-soft rounded-lg px-2.5 py-1"
+                >
+                  Add tier
+                </button>
+              </div>
+              {discounts[k].length === 0 ? (
+                <p className="fp-text-faint text-xs">No default tiers. Panel owners can still add their own per-method tiers.</p>
+              ) : (
+                <div className="space-y-2">
+                  {discounts[k].map((r, idx) => (
+                    <div key={`${k}-${idx}`} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                      <input
+                        value={r.minAmount}
+                        onChange={(e) => setDiscounts((prev) => ({
+                          ...prev,
+                          [k]: prev[k].map((row, i) => (i === idx ? { ...row, minAmount: e.target.value } : row)),
+                        }))}
+                        placeholder="Min top-up amount"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className={inputCls}
+                      />
+                      <input
+                        value={r.discountPct}
+                        onChange={(e) => setDiscounts((prev) => ({
+                          ...prev,
+                          [k]: prev[k].map((row, i) => (i === idx ? { ...row, discountPct: e.target.value } : row)),
+                        }))}
+                        placeholder="Discount %"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        className={inputCls}
+                      />
+                      <button
+                        onClick={() => setDiscounts((prev) => ({
+                          ...prev,
+                          [k]: prev[k].filter((_, i) => i !== idx),
+                        }))}
+                        className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2.5"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        {discountMsg && (
+          <p className={`text-xs ${discountMsg.error ? "text-red-400" : "fp-safe"}`}>{discountMsg.text}</p>
+        )}
+        <button onClick={saveDiscounts} disabled={savingDiscounts} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+          {savingDiscounts ? "Saving…" : "Save discounts"}
+        </button>
+      </div>
       {meta === null ? (
         <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
       ) : (
