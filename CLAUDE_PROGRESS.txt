@@ -2362,6 +2362,12 @@ If visible customer UI progress is preferred:
 - Manual sync from the admin UI (`syncOrdersNow`) is untouched.
 - Ensure `CRON_SECRET` remains set in Vercel environment variables for protected cron calls.
 
+### Deployment compatibility follow-up
+
+- Vercel Hobby plan rejected `*/10 * * * *` cron (`more than once per day` limit).
+- Updated schedule to `0 3 * * *` (daily) so production deploy can succeed on Hobby.
+- For sub-daily auto-sync (e.g. every 10 min), use Vercel Pro or move scheduling to Supabase cron / external scheduler.
+
 Note: Delete only once saved in_progress
 1: Every time relevant, update the package.json to a tag relevant to the fix.
 2: Add a commit point, whenever you think that it's time to commit, tell me before we continue to the next agenda.
