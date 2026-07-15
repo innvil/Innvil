@@ -62,6 +62,27 @@ export async function forwardInboundEmail(payload: InboundEmailPayload): Promise
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
 
+  const htmlToText = (html: string): string =>
+    html
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+      .replace(/<\/(p|div|h1|h2|h3|h4|h5|h6|li|tr|td)\s*>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/\r/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+
+  const plainBody =
+    payload.text?.trim() ||
+    htmlToText(payload.html || "") ||
+    "(No readable body was provided by the sender.)";
+
   const htmlBody = `
   <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;margin:0 auto;padding:20px;color:#1f2937">
     <h2 style="margin:0 0 14px;font-size:18px;color:#111827">Forwarded inbound email</h2>
@@ -70,7 +91,7 @@ export async function forwardInboundEmail(payload: InboundEmailPayload): Promise
     <p style="margin:0 0 6px"><strong>Received:</strong> ${escapedText(payload.receivedAt)}</p>
     <p style="margin:0 0 16px"><strong>Subject:</strong> ${escapedText(payload.subject || "(no subject)")}</p>
     <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#fafafa">
-      ${payload.html?.trim() ? payload.html : `<pre style="white-space:pre-wrap;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace">${escapedText(payload.text || "")}</pre>`}
+      <pre style="white-space:pre-wrap;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace;color:#1f2937">${escapedText(plainBody)}</pre>
     </div>
   </div>`;
 
@@ -83,6 +104,7 @@ export async function forwardInboundEmail(payload: InboundEmailPayload): Promise
         to: forwardTo,
         subject: `[Forwarded] ${payload.subject || "(no subject)"}`,
         html: htmlBody,
+        text: `Forwarded inbound email\n\nFrom: ${payload.from}\nTo: ${payload.to.join(", ")}\nReceived: ${payload.receivedAt}\nSubject: ${payload.subject || "(no subject)"}\n\n${plainBody}`,
         reply_to: payload.from || undefined,
       }),
       cache: "no-store",

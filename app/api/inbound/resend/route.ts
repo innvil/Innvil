@@ -8,8 +8,37 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+function asLooseString(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) {
+    return v.map((x) => asLooseString(x)).filter(Boolean).join("\n");
+  }
+  if (!v || typeof v !== "object") return "";
+  const o = v as Record<string, unknown>;
+  return (
+    asLooseString(o.text) ||
+    asLooseString(o.value) ||
+    asLooseString(o.content) ||
+    asLooseString(o.body) ||
+    ""
+  );
+}
+
 function asStringArray(v: unknown): string[] {
-  if (Array.isArray(v)) return v.map((x) => String(x)).filter(Boolean);
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => {
+        if (typeof x === "string") return x;
+        if (x && typeof x === "object") {
+          const o = x as Record<string, unknown>;
+          return asLooseString(o.email) || asLooseString(o.address) || asLooseString(o.value);
+        }
+        return String(x ?? "");
+      })
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
   if (typeof v === "string") return v.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
   return [];
 }
@@ -26,9 +55,23 @@ function pickEmailEvent(body: unknown): InboundEmailPayload | null {
     : asStringArray(root.to).length
       ? asStringArray(root.to)
       : asStringArray(headers.to);
-  const subject = asString(data.subject) || asString(root.subject) || asString(headers.subject);
-  const text = asString(data.text) || asString(root.text) || asString(data.textBody) || asString(root.textBody);
-  const html = asString(data.html) || asString(root.html) || asString(data.htmlBody) || asString(root.htmlBody);
+  const subject = asLooseString(data.subject) || asLooseString(root.subject) || asLooseString(headers.subject);
+  const text =
+    asLooseString(data.text) ||
+    asLooseString(root.text) ||
+    asLooseString(data.textBody) ||
+    asLooseString(root.textBody) ||
+    asLooseString(data.text_body) ||
+    asLooseString(root.text_body) ||
+    asLooseString((data as Record<string, unknown>).plainText) ||
+    asLooseString((root as Record<string, unknown>).plainText);
+  const html =
+    asLooseString(data.html) ||
+    asLooseString(root.html) ||
+    asLooseString(data.htmlBody) ||
+    asLooseString(root.htmlBody) ||
+    asLooseString(data.html_body) ||
+    asLooseString(root.html_body);
   const receivedAt = asString(data.created_at) || asString(root.created_at) || new Date().toISOString();
 
   if (!from || !to.length) return null;
