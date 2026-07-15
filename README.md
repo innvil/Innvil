@@ -73,7 +73,44 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 # Protects the order-status sync endpoint (if triggered externally).
 CRON_SECRET=...
+
+# Resend (existing outbound mail)
+RESEND_API_KEY=...
+RESEND_FROM="Innvil <noreply@innvil.cloud>"
+
+# Inbound forwarding (creat@innvil.cloud -> your Gmail)
+RESEND_FORWARD_TO=yourname@gmail.com
+RESEND_FORWARD_FROM="Innvil Inbox <noreply@innvil.cloud>"
+RESEND_INBOUND_ADDRESS=creat@innvil.cloud
+RESEND_INBOUND_TOKEN=generate-a-long-random-token
 ```
+
+Inbound webhook endpoint:
+
+`POST /api/inbound/resend?token=<RESEND_INBOUND_TOKEN>`
+
+Use this URL in Resend's inbound webhook settings for your domain.
+
+### Rotate local secrets
+
+You can rotate local `.env.local` secrets with:
+
+```bash
+npm run rotate:env
+```
+
+Useful options:
+
+```bash
+# rotate inbound token + cron secret
+npm run rotate:env -- --recommended
+
+# rotate inbound token + cron + provider key
+npm run rotate:env -- --all
+```
+
+After rotating keys that are used in production, copy the new values into Vercel
+Environment Variables as well.
 
 > Order-status syncing is scheduled via **Supabase** (see the `supabase/migrations`).
 > `vercel.json` intentionally carries no cron.

@@ -9,15 +9,82 @@ export async function sendEmail(opts: {
   to: string | null | undefined;
   subject: string;
   html: string;
+  text?: string;
+  replyTo?: string | null;
 }): Promise<void> {
   const key = process.env.RESEND_API_KEY?.trim();
   const from = process.env.RESEND_FROM?.trim() || "Innvil <noreply@innvil.cloud>";
   if (!key || !opts.to) return;
   try {
+    const payload: Record<string, unknown> = {
+      from,
+      to: opts.to,
+      subject: opts.subject,
+      html: opts.html,
+    };
+    if (opts.text) payload.text = opts.text;
+    if (opts.replyTo) payload.reply_to = opts.replyTo;
+
     await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: opts.to, subject: opts.subject, html: opts.html }),
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+  } catch {
+    // best-effort — never throw
+  }
+}
+
+export interface InboundEmailPayload {
+  from: string;
+  to: string[];
+  subject: string;
+  text: string;
+  html: string;
+  receivedAt: string;
+}
+
+/**
+ * Forwards an inbound email to a configured mailbox (e.g., Gmail).
+ * Required env:
+ * - RESEND_FORWARD_TO (destination mailbox)
+ */
+export async function forwardInboundEmail(payload: InboundEmailPayload): Promise<void> {
+  const forwardTo = process.env.RESEND_FORWARD_TO?.trim();
+  const from = process.env.RESEND_FORWARD_FROM?.trim() || "Innvil Inbox <noreply@innvil.cloud>";
+  const key = process.env.RESEND_API_KEY?.trim();
+  if (!forwardTo || !key) return;
+
+  const escapedText = (v: string) =>
+    v
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  const htmlBody = `
+  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;margin:0 auto;padding:20px;color:#1f2937">
+    <h2 style="margin:0 0 14px;font-size:18px;color:#111827">Forwarded inbound email</h2>
+    <p style="margin:0 0 6px"><strong>From:</strong> ${escapedText(payload.from)}</p>
+    <p style="margin:0 0 6px"><strong>To:</strong> ${escapedText(payload.to.join(", "))}</p>
+    <p style="margin:0 0 6px"><strong>Received:</strong> ${escapedText(payload.receivedAt)}</p>
+    <p style="margin:0 0 16px"><strong>Subject:</strong> ${escapedText(payload.subject || "(no subject)")}</p>
+    <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#fafafa">
+      ${payload.html?.trim() ? payload.html : `<pre style="white-space:pre-wrap;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace">${escapedText(payload.text || "")}</pre>`}
+    </div>
+  </div>`;
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from,
+        to: forwardTo,
+        subject: `[Forwarded] ${payload.subject || "(no subject)"}`,
+        html: htmlBody,
+        reply_to: payload.from || undefined,
+      }),
       cache: "no-store",
     });
   } catch {
