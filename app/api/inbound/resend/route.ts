@@ -9,6 +9,10 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+}
+
 function asLooseString(v: unknown): string {
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
@@ -107,6 +111,21 @@ async function extractBodyFromUnknownPayload(root: Record<string, unknown>): Pro
   return { text: "", html: "" };
 }
 
+async function extractBodyFromRawDownload(rawDownloadUrl: string): Promise<{ text: string; html: string }> {
+  try {
+    const rawRes = await fetch(rawDownloadUrl, { cache: "no-store" });
+    if (!rawRes.ok) return { text: "", html: "" };
+    const rawEmail = await rawRes.text();
+    const parsed = await simpleParser(rawEmail, { skipImageLinks: true });
+    return {
+      text: (parsed.text ?? "").trim(),
+      html: typeof parsed.html === "string" ? parsed.html.trim() : "",
+    };
+  } catch {
+    return { text: "", html: "" };
+  }
+}
+
 function asStringArray(v: unknown): string[] {
   if (Array.isArray(v)) {
     return v
@@ -181,15 +200,73 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Invalid JSON payload" }, { status: 400 });
   }
 
-  const email = await pickEmailEvent(parsed);
-  if (!email) {
-    return NextResponse.json({ ok: false, error: "No inbound email data found" }, { status: 400 });
+  const root = asRecord(parsed);
+  const eventType = asString(root.type);
+  const data = asRecord(root.data);
+  if (eventType && eventType !== "email.received") {
+    return NextResponse.json({ ok: true, skipped: true, reason: "Not an email.received event" });
   }
 
+  const emailId = asString(data.email_id);
+  const eventTo = asStringArray(data.to);
+  const eventReceivedFor = asStringArray(data.received_for);
+  const targetRecipients = [...eventTo, ...eventReceivedFor].map((x) => x.toLowerCase());
   const inboundAddress = (process.env.RESEND_INBOUND_ADDRESS?.trim() || "creat@innvil.cloud").toLowerCase();
-  const isForConfiguredInbox = email.to.some((addr) => addr.toLowerCase() === inboundAddress);
+  const isForConfiguredInbox = targetRecipients.includes(inboundAddress);
   if (!isForConfiguredInbox) {
     return NextResponse.json({ ok: true, skipped: true, reason: "Recipient does not match configured inbox" });
+  }
+
+  const resendKey = process.env.RESEND_API_KEY?.trim();
+  if (!resendKey) {
+    return NextResponse.json({ ok: false, error: "RESEND_API_KEY is missing" }, { status: 500 });
+  }
+
+  if (!emailId) {
+    return NextResponse.json({ ok: false, error: "Missing email_id in webhook payload" }, { status: 400 });
+  }
+
+  const receivedRes = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${resendKey}` },
+    cache: "no-store",
+  });
+
+  if (!receivedRes.ok) {
+    return NextResponse.json({ ok: false, error: "Failed to retrieve inbound email" }, { status: 502 });
+  }
+
+  const receivedJson = (await receivedRes.json()) as unknown;
+  const receivedRoot = asRecord(receivedJson);
+  const received = asRecord(receivedRoot.data && typeof receivedRoot.data === "object" ? receivedRoot.data : receivedRoot);
+
+  let text = asLooseString(received.text).trim();
+  let html = asLooseString(received.html).trim();
+
+  if (!text && !html) {
+    const raw = asRecord(received.raw);
+    const rawDownloadUrl = asString(raw.download_url);
+    if (rawDownloadUrl) {
+      const parsedRaw = await extractBodyFromRawDownload(rawDownloadUrl);
+      text = parsedRaw.text;
+      html = parsedRaw.html;
+    }
+  }
+
+  if (!text && !html) {
+    const deep = await extractBodyFromUnknownPayload(received);
+    text = deep.text;
+    html = deep.html;
+  }
+
+  const from = asString(received.from) || asString(data.from);
+  const to = asStringArray(received.to).length ? asStringArray(received.to) : eventTo;
+  const subject = asLooseString(received.subject) || asLooseString(data.subject);
+  const receivedAt = asString(received.created_at) || asString(data.created_at) || new Date().toISOString();
+
+  const email: InboundEmailPayload = { from, to, subject, text, html, receivedAt };
+  if (!email.from || !email.to.length) {
+    return NextResponse.json({ ok: false, error: "No inbound email data found" }, { status: 400 });
   }
 
   await forwardInboundEmail(email);
