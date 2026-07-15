@@ -2342,6 +2342,26 @@ If visible customer UI progress is preferred:
 
 *Last updated: 2026-07-07*
 
+---
+
+## Session: Auto order-sync scheduling fix (2026-07-15)
+
+### Summary
+
+- Diagnosed why provider status auto-sync was not running periodically.
+- Root cause: `vercel.json` had no `crons` configuration, so `/api/cron/sync-orders` was never scheduled.
+- Added a 10-minute Vercel cron trigger for `/api/cron/sync-orders`.
+- Verified manual owner-triggered sync path remains unchanged.
+
+### Files changed
+
+- `vercel.json` — added `crons` schedule (`*/10 * * * *`) for `/api/cron/sync-orders`
+
+### Notes
+
+- Manual sync from the admin UI (`syncOrdersNow`) is untouched.
+- Ensure `CRON_SECRET` remains set in Vercel environment variables for protected cron calls.
+
 Note: Delete only once saved in_progress
 1: Every time relevant, update the package.json to a tag relevant to the fix.
 2: Add a commit point, whenever you think that it's time to commit, tell me before we continue to the next agenda.
