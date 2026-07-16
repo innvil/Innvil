@@ -112,8 +112,75 @@ npm run rotate:env -- --all
 After rotating keys that are used in production, copy the new values into Vercel
 Environment Variables as well.
 
-> Order-status syncing is scheduled via **Supabase** (see the `supabase/migrations`).
+> Order-status syncing is scheduled via **Supabase cron**, not Vercel.
 > `vercel.json` intentionally carries no cron.
+
+### Supabase-hosted order sync cron
+
+Automatic provider-status syncing only happens if your Supabase project is set up
+to call the app's sync endpoint on a schedule. The repo now includes
+`supabase/migrations/0015_supabase_order_sync_cron.sql`, which schedules a
+10-minute Supabase cron job that GETs `/api/cron/sync-orders?secret=...`.
+
+Before applying that migration in Supabase, create these Vault secrets:
+
+```sql
+do $$
+declare
+  secret_id uuid;
+begin
+  select id into secret_id
+  from vault.decrypted_secrets
+  where name = 'app_url'
+  order by created_at desc
+  limit 1;
+
+  if secret_id is null then
+    perform vault.create_secret('https://your-app-url', 'app_url');
+  else
+    perform vault.update_secret(secret_id, 'https://your-app-url', 'app_url', null);
+  end if;
+end
+$$;
+
+do $$
+declare
+  secret_id uuid;
+begin
+  select id into secret_id
+  from vault.decrypted_secrets
+  where name = 'cron_secret'
+  order by created_at desc
+  limit 1;
+
+  if secret_id is null then
+    perform vault.create_secret('your-cron-secret', 'cron_secret');
+  else
+    perform vault.update_secret(secret_id, 'your-cron-secret', 'cron_secret', null);
+  end if;
+end
+$$;
+```
+
+Use the same `cron_secret` value as your app's `CRON_SECRET` environment
+variable, and set `app_url` to the public base URL of the deployed app.
+
+After the migration runs, verify the job exists:
+
+```sql
+select jobid, jobname, schedule, command
+from cron.job
+where jobname = 'innvil-order-sync-every-10-min';
+```
+
+To inspect recent delivery results or failures:
+
+```sql
+select *
+from net._http_response
+order by created desc
+limit 20;
+```
 
 ## Project structure
 

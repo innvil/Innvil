@@ -3,23 +3,33 @@ import { syncAllOpenOrders } from "@/src/lib/orders/sync";
 
 /* =========================================================
    Order-status sync cron.
-   Vercel Cron hits this on a schedule (see vercel.json). Gate with CRON_SECRET:
-   Vercel sends `Authorization: Bearer <CRON_SECRET>` when that env var is set;
-   we also accept `?secret=` for manual/local triggering. If CRON_SECRET is unset
-   (local dev), it's open so you can hit it in a browser to test.
+   This endpoint is hit by an external scheduler (Supabase cron in production).
+   Gate with CRON_SECRET: callers can send `Authorization: Bearer <CRON_SECRET>`;
+   GET also accepts `?secret=` for manual/local triggering. If CRON_SECRET is
+   unset (local dev), it's open so you can hit it in a browser to test.
    ========================================================= */
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(req: Request) {
+function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
+  if (!secret) return true;
+
+  const auth = req.headers.get("authorization");
+  if (auth === `Bearer ${secret}`) return true;
+
+  if (req.method === "GET") {
     const q = new URL(req.url).searchParams.get("secret");
-    if (auth !== `Bearer ${secret}` && q !== secret) {
-      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-    }
+    if (q === secret) return true;
+  }
+
+  return false;
+}
+
+async function runSync(req: Request) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   try {
@@ -31,4 +41,12 @@ export async function GET(req: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function GET(req: Request) {
+  return runSync(req);
+}
+
+export async function POST(req: Request) {
+  return runSync(req);
 }
