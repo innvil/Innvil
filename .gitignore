@@ -46,6 +46,3 @@ coverage/
 # Local progress file (should not be committed)
 CLAUDE_PROGRESS.txt
 panel-preview.jsx
-.env.local
-.vercel
-.env*
