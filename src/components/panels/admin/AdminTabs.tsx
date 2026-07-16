@@ -1548,6 +1548,8 @@ const ORDER_FILTERS: Array<{ k: OrderStatus | "all"; label: string }> = [
   { k: "failed", label: "Failed" },
 ];
 
+const ORDERS_AUTO_REFRESH_MS = 30_000;
+
 export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onManageCustomer?: (customerAccountId: string) => void }) {
   const realPanel = isUuid(panelId);
   const [rows, setRows] = useState<AdminOrderVM[] | null>(() =>
@@ -1562,16 +1564,32 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [commentsView, setCommentsView] = useState<string[] | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const loadingRef = useRef(false);
 
   const load = useCallback(async () => {
-    if (!realPanel) return;
-    const [list, cur] = await Promise.all([listPanelOrders(panelId), getPanelCurrency(panelId)]);
-    setRows(list);
-    setCurrency(cur);
-    writeAdminCache(panelId, "orders", list);
+    if (!realPanel || loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const [list, cur] = await Promise.all([listPanelOrders(panelId), getPanelCurrency(panelId)]);
+      setRows(list);
+      setCurrency(cur);
+      writeAdminCache(panelId, "orders", list);
+    } finally {
+      loadingRef.current = false;
+    }
   }, [panelId, realPanel]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!realPanel) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (syncing || busyId) return;
+      void load();
+    }, ORDERS_AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [busyId, load, realPanel, syncing]);
 
   const fmt = (n: number) => formatMoney(n, currency);
 

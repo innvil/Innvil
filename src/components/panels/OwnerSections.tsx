@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi } from "lucide-react";
 import { Card, Pill } from "@/src/components/ui";
 import { formatMoney } from "@/src/lib/money";
@@ -25,6 +25,7 @@ function shortAgo(iso: string | null | undefined): string {
 }
 
 const OWNER_CACHE_PREFIX = "innvil-owner";
+const OWNER_AUTO_REFRESH_MS = 30_000;
 const ownerSectionMemory = new Map<string, unknown>();
 
 function getOwnerCacheKey(section: string) {
@@ -81,20 +82,33 @@ export function OwnerOrders({ onManageCustomer }: { onManageCustomer?: (customer
   const cachedRows = readOwnerCache<OwnerOrderVM[]>("orders");
   const [rows, setRows] = useState<OwnerOrderVM[] | null>(cachedRows);
   const [syncing, setSyncing] = useState(Boolean(cachedRows));
-  useEffect(() => {
-    let alive = true;
-    setSyncing(rows !== null);
-    listAllOwnerOrders().then((next) => {
-      if (!alive) return;
+  const refreshingRef = useRef(false);
+
+  const refreshOrders = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setSyncing(true);
+    try {
+      const next = await listAllOwnerOrders();
       setRows(next);
       writeOwnerCache("orders", next);
+    } finally {
       setSyncing(false);
-    }).catch(() => {
-      if (!alive) return;
-      setSyncing(false);
-    });
-    return () => { alive = false; };
+      refreshingRef.current = false;
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshOrders();
+  }, [refreshOrders]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void refreshOrders();
+    }, OWNER_AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshOrders]);
   const fmt = (n: number) => formatMoney(n, "USD");
 
   return (
@@ -180,21 +194,34 @@ export function OwnerCustomers({ focusCustomerId }: { focusCustomerId?: string |
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const refreshingRef = useRef(false);
 
-  useEffect(() => {
-    let alive = true;
-    setSyncing(rows !== null);
-    listAllOwnerCustomers().then((next) => {
-      if (!alive) return;
+  const refreshCustomers = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setSyncing(true);
+    try {
+      const next = await listAllOwnerCustomers();
       setRows(next);
       writeOwnerCache("customers", next);
+    } finally {
       setSyncing(false);
-    }).catch(() => {
-      if (!alive) return;
-      setSyncing(false);
-    });
-    return () => { alive = false; };
+      refreshingRef.current = false;
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshCustomers();
+  }, [refreshCustomers]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (busy) return;
+      void refreshCustomers();
+    }, OWNER_AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [busy, refreshCustomers]);
   const fmt = (n: number) => formatMoney(n, "USD");
 
   const openRow = (id: string) => {
