@@ -168,6 +168,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
             { icon: Tag, t: "Auto-categorization", d: "Services are sorted into platform categories and sub-categories (Instagram → Followers, Views…) automatically." },
             { icon: Percent, t: "Markup your way", d: "Percentage, multiplier, or fixed markup above the provider floor — set once, edit any service anytime." },
             { icon: RefreshCw, t: "One-click sync", d: "Refresh prices, min/max limits, and availability from your provider whenever they change." },
+            { icon: ListOrdered, t: "Batch API orders", d: "Accept up to 100 API orders in one request with per-row success/error results for fast retries and automation workflows." },
             { icon: Sliders, t: "Full catalog control", d: "Rename, describe, re-price, enable or disable any service — a clean tree, not a spreadsheet." },
             { icon: ShieldCheck, t: "Keys never exposed", d: "Provider API keys are encrypted and only ever used server-side. They never touch the browser." },
           ].map((f) => (

@@ -29,6 +29,9 @@ and marketing.
 - **Automated order pipeline** — a customer order charges their wallet, is
   forwarded to the mapped provider, and its status is polled and reconciled
   automatically (partial/canceled orders auto-refund the unfilled portion).
+- **Customer API with batch order intake** — API users can submit single orders
+  or up to 100 orders per request with per-item success/error results, plus
+  bulk status and cancel operations.
 - **Bring-your-own payments (per panel)** — a pluggable multi-gateway system.
   Cryptomus (crypto), Razorpay (India), and Stripe (global) are connectable today;
   more are on the catalog. Deposits auto-credit the wallet via signed webhooks —

@@ -61,6 +61,22 @@ const ENDPOINTS: Endpoint[] = [
 }`,
   },
   {
+    k: "create-batch",
+    label: "Create batch orders",
+    method: "POST",
+    desc: "Use this method to create up to 100 orders in one request. Each row returns either an order id or an error.",
+    request: `${BASE_PLACEHOLDER}?action=add_multiple&key=YOUR_API_KEY\n\nBody:\n{\n  "orders": [\n    { "service": 101, "link": "https://x.com/username/status/123", "quantity": 1000 },\n    { "service": 102, "link": "https://instagram.com/p/abc", "quantity": 500 }\n  ]\n}`,
+    response: `{
+  "count": 2,
+  "success": 1,
+  "failed": 1,
+  "orders": [
+    { "index": 0, "order": "d0f6c0e2-9f7a-4da8-9f3a-8e68f2f17a81" },
+    { "index": 1, "error": "Insufficient balance" }
+  ]
+}`,
+  },
+  {
     k: "status",
     label: "Status",
     method: "GET",

@@ -66,7 +66,18 @@ async function parseParams(req: NextRequest): Promise<Record<string, string>> {
     try {
       const json = await req.json();
       if (json && typeof json === "object") {
-        return Object.fromEntries(Object.entries(json).map(([k, v]) => [k, String(v)]));
+        return Object.fromEntries(
+          Object.entries(json).map(([k, v]) => [
+            k,
+            typeof v === "string"
+              ? v
+              : v == null
+                ? ""
+                : typeof v === "object"
+                  ? JSON.stringify(v)
+                  : String(v),
+          ])
+        );
       }
     } catch {
       // fallback to query string below
@@ -168,36 +179,49 @@ async function findService(panelId: string, reqService: string) {
   return data;
 }
 
-async function handleAdd(u: ApiUser, params: Record<string, string>) {
-  if (u.panelStatus !== "live") return { error: "Panel is not accepting new orders right now." };
+type AddInput = {
+  service: string;
+  link: string;
+  quantity?: string;
+  comments?: string;
+};
 
-  const serviceReq = (params.service || "").trim();
-  const commentList = (params.comments || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+type AddResult =
+  | { ok: true; order: string; charge: number }
+  | { ok: false; error: string };
+
+async function processAddInput(u: ApiUser, input: AddInput, balanceHint: number): Promise<AddResult> {
+  if (u.panelStatus !== "live") {
+    return { ok: false, error: "Panel is not accepting new orders right now." };
+  }
+
+  const serviceReq = (input.service || "").trim();
+  const commentList = (input.comments || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const hasComments = commentList.length > 0;
-  const qty = hasComments ? commentList.length : Math.floor(Number(params.quantity));
+  const qty = hasComments ? commentList.length : Math.floor(Number(input.quantity));
 
-  if (!serviceReq) return { error: "service is required" };
-  const linkCheck = validateOrderLink(params.link || "");
-  if (!linkCheck.ok) return { error: linkCheck.error };
+  if (!serviceReq) return { ok: false, error: "service is required" };
+  const linkCheck = validateOrderLink(input.link || "");
+  if (!linkCheck.ok) return { ok: false, error: linkCheck.error };
   const link = linkCheck.url;
   if (!Number.isFinite(qty) || qty <= 0) {
     return hasComments
-      ? { error: "Enter at least 1 comment (one per line)." }
-      : { error: "quantity is invalid" };
+      ? { ok: false, error: "Enter at least 1 comment (one per line)." }
+      : { ok: false, error: "quantity is invalid" };
   }
 
   const svc = await findService(u.panelId, serviceReq);
-  if (!svc) return { error: "Service not found" };
-  if ((svc.status as string) !== "active") return { error: "Service is unavailable" };
+  if (!svc) return { ok: false, error: "Service not found" };
+  if ((svc.status as string) !== "active") return { ok: false, error: "Service is unavailable" };
 
   if (qty < Number(svc.min) || qty > Number(svc.max)) {
-    return { error: `Quantity must be between ${svc.min} and ${svc.max}` };
+    return { ok: false, error: `Quantity must be between ${svc.min} and ${svc.max}` };
   }
 
   const charge = round4((qty / 1000) * Number(svc.sell_rate));
   const providerCost = round4((qty / 1000) * Number(svc.provider_rate));
   const profit = round4(charge - providerCost);
-  if (u.balance < charge) return { error: "Insufficient balance" };
+  if (balanceHint < charge) return { ok: false, error: "Insufficient balance" };
 
   const admin = createAdminClient();
   const { data: order, error } = await admin
@@ -221,7 +245,7 @@ async function handleAdd(u: ApiUser, params: Record<string, string>) {
     })
     .select("id")
     .single();
-  if (error || !order) return { error: error?.message ?? "Could not create order" };
+  if (error || !order) return { ok: false, error: error?.message ?? "Could not create order" };
 
   await addHistory(order.id as string, "pending", "API order submitted");
 
@@ -234,7 +258,10 @@ async function handleAdd(u: ApiUser, params: Record<string, string>) {
   });
   if (debitErr) {
     await admin.from("orders").delete().eq("id", order.id);
-    return { error: /insufficient/i.test(debitErr.message) ? "Insufficient balance" : debitErr.message };
+    return {
+      ok: false,
+      error: /insufficient/i.test(debitErr.message) ? "Insufficient balance" : debitErr.message,
+    };
   }
 
   if (svc.provider_id && svc.provider_service_id) {
@@ -281,7 +308,78 @@ async function handleAdd(u: ApiUser, params: Record<string, string>) {
     }
   }
 
-  return { order: String(order.id) };
+  return { ok: true, order: String(order.id), charge };
+}
+
+async function handleAdd(u: ApiUser, params: Record<string, string>) {
+  const result = await processAddInput(
+    u,
+    {
+      service: params.service || "",
+      link: params.link || "",
+      quantity: params.quantity || "",
+      comments: params.comments || "",
+    },
+    u.balance
+  );
+
+  if (!result.ok) return { error: result.error };
+  return { order: result.order };
+}
+
+type BatchAddInput = {
+  service: string | number;
+  link: string;
+  quantity?: string | number;
+  comments?: string;
+};
+
+async function handleAddMultiple(u: ApiUser, params: Record<string, string>) {
+  const raw = (params.orders || "").trim();
+  if (!raw) return { error: "orders is required" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { error: "orders must be valid JSON" };
+  }
+
+  if (!Array.isArray(parsed)) return { error: "orders must be a JSON array" };
+  if (!parsed.length) return { error: "orders cannot be empty" };
+  if (parsed.length > 100) return { error: "Maximum 100 orders per batch" };
+
+  let runningBalance = Number(u.balance || 0);
+  const results: Array<{ index: number; order?: string; error?: string }> = [];
+
+  for (let i = 0; i < parsed.length; i++) {
+    const row = parsed[i] as BatchAddInput;
+    const result = await processAddInput(
+      u,
+      {
+        service: String(row?.service ?? ""),
+        link: String(row?.link ?? ""),
+        quantity: row?.quantity == null ? "" : String(row.quantity),
+        comments: row?.comments == null ? "" : String(row.comments),
+      },
+      runningBalance
+    );
+
+    if (!result.ok) {
+      results.push({ index: i, error: result.error });
+      continue;
+    }
+
+    runningBalance = round4(runningBalance - result.charge);
+    results.push({ index: i, order: result.order });
+  }
+
+  return {
+    count: parsed.length,
+    success: results.filter((r) => !!r.order).length,
+    failed: results.filter((r) => !!r.error).length,
+    orders: results,
+  };
 }
 
 async function findOrderForAccount(accountId: string, ref: string) {
@@ -454,6 +552,9 @@ async function process(req: NextRequest) {
   if (action === "services") return NextResponse.json(await handleServices(u));
   if (action === "balance") return NextResponse.json({ balance: u.balance.toFixed(4), currency: u.panelCurrency });
   if (action === "add") return NextResponse.json(await handleAdd(u, params));
+  if (action === "add_multiple" || action === "addmany" || action === "bulk_add") {
+    return NextResponse.json(await handleAddMultiple(u, params));
+  }
   if (action === "status") return NextResponse.json(await handleStatus(u, params));
   if (action === "refill") return NextResponse.json(await handleRefill(u, params));
   if (action === "cancel") return NextResponse.json(await handleCancel(u, params));
