@@ -5,6 +5,9 @@ export function round4(n: number): number {
   return Math.round((n + Number.EPSILON) * 10000) / 10000;
 }
 
+/** Innvil's platform commission on completed-order revenue (5%, no monthly rent). */
+export const INNVIL_COMMISSION_RATE = 0.05;
+
 /* ---------------------------------------------------------------------------
    Currency — each panel operates in one well-known currency (default USD).
    --------------------------------------------------------------------------- */

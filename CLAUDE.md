@@ -127,13 +127,29 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Commission settlement — billing loop closes (v0.2.56)
+- **Innvil's 5% commission is now actually DEDUCTED** (was display-only). Per completed
+  order, `settle_order_commission()` draws 5% of the charge off the panel's
+  `innvil_balance` — atomic + idempotent via new `orders.commission_amount`
+  (NULL = unsettled). The sync engine (`settlePanelCommission` in `src/lib/orders/sync.ts`)
+  sweeps completed+unsettled orders every pass (cron + owner "Sync statuses"), so it
+  catches completions from provider sync AND manual mark-completed.
+- **Out-of-credit rule:** when a panel's Innvil balance hits $0 the sync auto-moves a
+  `live` panel to `inactive` (browsable, no new orders — `placeOrder` already blocks
+  non-live) and flags `settings.innvil_suspended`. A top-up reactivates it: the platform
+  webhook (`reactivatePanelIfFunded`) and super-admin `adjustPanelBalance` clear the flag
+  and restore `live` (owner's own inactive/suspended choices are never overridden).
+- Shared `INNVIL_COMMISSION_RATE` in `src/lib/money.ts`; the Billing estimate now reads
+  from it so display and actual deduction can't drift. **Run migration
+  `0017_commission_settlement.sql`.**
+
 ### 2026-07-19 — Owner→Innvil top-up flow / P3 (v0.2.55)
 - Owner **Add Funds** now really pays Innvil via the super-admin's Cryptomus/NOWPayments
   platform gateways and credits the panel's Innvil balance. `createPlatformDeposit`
   (recomputes credit = paid + promo bonus) → gateway checkout → webhook
   `/api/webhooks/platform/[gateway]` → `credit_panel_innvil_balance` (atomic).
   **Run migration `0016_platform_deposits.sql`.** Innvil balance is per-panel; the modal
-  has a panel selector. Still pending: commission DEDUCTION as panels sell.
+  has a panel selector. (Commission DEDUCTION shipped in v0.2.56 above.)
 
 ### 2026-07-13 — Auto-credit fix + order holds + earnings + global adjust (v0.2.23)
 - **NOWPayments finished deposits auto-credit again**: `verifyWebhook` now gates on the

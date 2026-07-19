@@ -125,7 +125,7 @@ export async function adjustPanelBalance(
   const { user } = await getAuthedAdmin();
   const { data: row } = await admin
     .from("panels")
-    .select("id, name, settings")
+    .select("id, name, status, settings")
     .eq("id", panelId)
     .maybeSingle();
   if (!row) return { ok: false, error: "Panel not found." };
@@ -135,8 +135,18 @@ export async function adjustPanelBalance(
   const next = round4(current + delta);
   if (next < 0) return { ok: false, error: "Balance cannot go below 0." };
 
-  const updated = { ...settings, innvil_balance: next };
-  const { error } = await admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  const updated: Record<string, unknown> = { ...settings, innvil_balance: next };
+  const patch: Record<string, unknown> = { settings: updated };
+  // Keep panel status in lockstep with the Innvil-credit rule the sync engine uses:
+  // funding an auto-suspended panel reactivates it; draining it to $0 pauses new orders.
+  if (next > 0 && settings.innvil_suspended === true) {
+    delete updated.innvil_suspended;
+    if (row.status === "inactive") patch.status = "live";
+  } else if (next <= 0 && row.status === "live") {
+    updated.innvil_suspended = true;
+    patch.status = "inactive";
+  }
+  const { error } = await admin.from("panels").update(patch).eq("id", panelId);
   if (error) return { ok: false, error: error.message };
 
   await admin.from("audit_logs").insert({

@@ -19,6 +19,7 @@ order.
 | `0014_topup_discounts.sql` | `payments.bonus_amount` + `platform_topup_discount_defaults` (super-admin per-category top-up promo tiers) |
 | `0015_supabase_order_sync_cron.sql` | `pg_cron` + `pg_net`, `trigger_order_sync()`, schedules the order-status sync every 10 min |
 | `0016_platform_deposits.sql` | `platform_deposits` (owner → Innvil top-ups) + `credit_panel_innvil_balance()` (atomic funding of `panels.settings.innvil_balance`) |
+| `0017_commission_settlement.sql` | `orders.commission_amount` + `settle_order_commission()` — draws Innvil's 5% commission off `innvil_balance` per completed order (idempotent; the sync engine sweeps completed+unsettled orders) |
 
 > Numbers `0006`/`0007` were intentionally skipped — the sequence has gaps, that's fine.
 > Migrations run in **filename order**; always number a new one after the current highest.
@@ -26,7 +27,7 @@ order.
 ## Applying the migrations (fresh project)
 
 **Option A — SQL editor (quickest):** open each file, paste into the Supabase
-Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0016`).
+Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0017`).
 
 **Option B — Supabase CLI:**
 

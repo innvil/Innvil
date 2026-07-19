@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getProviderCredentials, getMultiStatus } from "@/src/lib/providers";
-import { round4 } from "@/src/lib/money";
+import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -446,6 +446,57 @@ export async function expireHeldOrders(admin: SupabaseClient, panelId: string): 
   return canceled;
 }
 
+/**
+ * Settle Innvil's 5% platform commission for a panel. For every `completed`
+ * order that hasn't been charged yet, deduct 5% of its charge from the panel's
+ * Innvil balance (atomic + idempotent via orders.commission_amount). This is the
+ * draw-down half of the billing loop that owner→Innvil top-ups (0016) fund.
+ *
+ * If the balance runs dry, a `live` panel is auto-moved to `inactive` (still
+ * browsable, no new orders) and flagged `innvil_suspended` so a later top-up can
+ * reactivate it. Returns how many orders were settled this pass.
+ */
+async function settlePanelCommission(admin: SupabaseClient, panelId: string): Promise<number> {
+  const { data } = await admin
+    .from("orders")
+    .select("id")
+    .eq("panel_id", panelId)
+    .eq("status", "completed")
+    .is("commission_amount", null)
+    .limit(1000);
+
+  let settled = 0;
+  for (const r of (data as Array<{ id: string }> | null) ?? []) {
+    const { error } = await admin.rpc("settle_order_commission", {
+      p_order: r.id,
+      p_rate: INNVIL_COMMISSION_RATE,
+    });
+    if (!error) settled++;
+  }
+
+  // Enforce the "out of Innvil credit" rule once the balance is up to date.
+  const { data: panel } = await admin
+    .from("panels")
+    .select("status, settings")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (panel && panel.status === "live") {
+    const settings = (panel.settings && typeof panel.settings === "object")
+      ? (panel.settings as Record<string, unknown>)
+      : {};
+    const balance = Number(settings.innvil_balance ?? 0);
+    if (!(balance > 0)) {
+      await admin
+        .from("panels")
+        .update({ status: "inactive", settings: { ...settings, innvil_suspended: true } })
+        .eq("id", panelId)
+        .eq("status", "live");
+    }
+  }
+
+  return settled;
+}
+
 /** Sync all open orders for one panel. Returns how many were checked/updated. */
 export async function syncPanelOrders(
   admin: SupabaseClient,
@@ -466,6 +517,7 @@ export async function syncPanelOrders(
 
   const list = (orders as OpenOrder[] | null) ?? [];
   if (!list.length) {
+    await settlePanelCommission(admin, panelId);
     await refreshPanelStorefrontSnapshots(admin, panelId);
     return { checked: 0, updated: expired + reconciledFailed + reconciledDupes };
   }
@@ -626,6 +678,9 @@ export async function syncPanelOrders(
 
   const updated = providerResults.reduce((sum, value) => sum + value, 0);
 
+  // Settle commission after this pass's completions land, then materialize snapshots
+  // (so any auto-inactive from a drained balance is reflected storefront-side).
+  await settlePanelCommission(admin, panelId);
   await refreshPanelStorefrontSnapshots(admin, panelId);
 
   return { checked: list.length, updated: updated + expired + reconciledFailed + reconciledDupes };

@@ -5,7 +5,7 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import {
   getProviderCredentials, addOrder, refillOrder, cancelOrders, ProviderError,
 } from "@/src/lib/providers";
-import { round4 } from "@/src/lib/money";
+import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
 import { syncPanelOrders } from "@/src/lib/orders/sync";
 import type { OrderStatus } from "@/src/types/db";
 
@@ -256,7 +256,7 @@ export interface OwnerBillingSummary {
   perPanel: Array<{ panelId: string; panelName: string; revenueToday: number; commissionToday: number; innvilBalance: number }>;
 }
 
-const COMMISSION_RATE = 0.05;
+const COMMISSION_RATE = INNVIL_COMMISSION_RATE;
 
 /** Real cross-panel revenue + a 5% commission estimate for the Billing page. */
 export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {

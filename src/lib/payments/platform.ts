@@ -88,7 +88,7 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
     .maybeSingle();
   if (!claimed) return NextResponse.json({ ok: true }, { status: 200 });
 
-  const { error } = await admin.rpc("credit_panel_innvil_balance", {
+  const { data: newBalance, error } = await admin.rpc("credit_panel_innvil_balance", {
     p_panel: claimed.panel_id,
     p_amount: Number(claimed.credit_amount),
   });
@@ -96,5 +96,38 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
     await admin.from("platform_deposits").update({ status: "pending" }).eq("id", deposit.id);
     return NextResponse.json({ ok: false }, { status: 500 });
   }
+
+  // A top-up unsticks a panel that was auto-suspended for a drained Innvil balance.
+  await reactivatePanelIfFunded(admin, claimed.panel_id, Number(newBalance));
   return NextResponse.json({ ok: true }, { status: 200 });
+}
+
+/**
+ * Reactivate a panel that the commission draw-down auto-moved to `inactive` for a
+ * zero Innvil balance. Only touches panels we flagged (`innvil_suspended`) so an
+ * owner's own `inactive`/`suspended` choice is never overridden.
+ */
+async function reactivatePanelIfFunded(
+  admin: ReturnType<typeof createAdminClient>,
+  panelId: string,
+  balance: number
+): Promise<void> {
+  if (!(balance > 0)) return;
+  const { data: panel } = await admin
+    .from("panels")
+    .select("status, settings")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (!panel) return;
+  const settings = (panel.settings && typeof panel.settings === "object")
+    ? (panel.settings as Record<string, unknown>)
+    : {};
+  if (settings.innvil_suspended !== true) return;
+
+  const rest = { ...settings };
+  delete rest.innvil_suspended;
+  await admin
+    .from("panels")
+    .update({ status: panel.status === "inactive" ? "live" : panel.status, settings: rest })
+    .eq("id", panelId);
 }
