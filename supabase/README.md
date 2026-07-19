@@ -7,11 +7,26 @@ order.
 |------|--------------|
 | `0001_init.sql` | Extensions (pgcrypto), enums, all tables, indexes, `updated_at` triggers, `handle_new_user` trigger, `apply_balance_change()` ledger function, provider key `set/get_provider_key()` functions |
 | `0002_rls.sql` | Enables RLS on every table, `is_super_admin()` / `is_panel_member()` / `owns_customer()` helpers, per-table policies, provider `api_key_enc` column revoke, service-role-only grants |
+| `0003_category_hierarchy.sql` | Adds `provider_categories.parent_id` for the 2-level platform → type category tree |
+| `0004_service_local_id.sql` | Adds `services.local_id` (per-panel service numbers starting at 1) |
+| `0005_payment_gateways.sql` | `panel_payment_gateways` table + `set/get_gateway_key()` (pgcrypto) + RLS — per-panel bring-your-own gateway |
+| `0008_platform_payment_gateways.sql` | `platform_payment_gateways` (super-admin gateways owners pay Innvil with) + `set/get_platform_gateway_key()`, super-admin RLS |
+| `0009_support_tickets.sql` | `support_tickets` + `support_ticket_messages` + RLS |
+| `0010_order_local_id.sql` | Adds `orders.local_id` (per-panel sequential order numbers) |
+| `0011_order_status_duplicate.sql` | Adds the `duplicate` value to the `order_status` enum |
+| `0012_order_duplicate_guards.sql` | `normalize_order_link()` + DB-level duplicate-order prevention (same customer + panel + normalized link + service/category) |
+| `0013_storefront_snapshot_cache.sql` | `storefront_customer_snapshots` — server-backed customer-dashboard hydrate cache (avoids cookie-timing races) |
+| `0014_topup_discounts.sql` | `payments.bonus_amount` + `platform_topup_discount_defaults` (super-admin per-category top-up promo tiers) |
+| `0015_supabase_order_sync_cron.sql` | `pg_cron` + `pg_net`, `trigger_order_sync()`, schedules the order-status sync every 10 min |
+| `0016_platform_deposits.sql` | `platform_deposits` (owner → Innvil top-ups) + `credit_panel_innvil_balance()` (atomic funding of `panels.settings.innvil_balance`) |
+
+> Numbers `0006`/`0007` were intentionally skipped — the sequence has gaps, that's fine.
+> Migrations run in **filename order**; always number a new one after the current highest.
 
 ## Applying the migrations (fresh project)
 
 **Option A — SQL editor (quickest):** open each file, paste into the Supabase
-Dashboard → SQL Editor, run `0001` then `0002`.
+Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0016`).
 
 **Option B — Supabase CLI:**
 

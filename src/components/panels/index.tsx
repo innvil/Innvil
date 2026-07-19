@@ -28,7 +28,7 @@ import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/aut
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
-import { getOwnerTopupPolicy, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
+import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
 
@@ -878,10 +878,12 @@ function AddFundsModal({
   onClose,
   initialPolicy,
   initialInnvilBalance,
+  panels,
 }: {
   onClose: () => void;
   initialPolicy: OwnerTopupPolicy | null;
   initialInnvilBalance: number | null;
+  panels: Panel[];
 }) {
   const pickDiscountRule = (value: number, rules: Array<{ minAmount: number; discountPct: number }>) => {
     if (!Number.isFinite(value) || value <= 0 || rules.length === 0) return null;
@@ -896,10 +898,20 @@ function AddFundsModal({
   const [step, setStep] = useState("amount");
   const [amount, setAmount] = useState("50");
   const [method, setMethod] = useState("");
+  const [panelId, setPanelId] = useState<string>(panels[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState<OwnerTopupPolicy | null>(initialPolicy);
   const [innvilBalance, setInnvilBalance] = useState<number | null>(initialInnvilBalance);
   const [error, setError] = useState<string | null>(null);
+
+  const goToCheckout = async () => {
+    if (!panelId) { setError("Create a panel first, then top up its Innvil balance."); return; }
+    if (!method) { setError("Choose a payment method."); return; }
+    setBusy(true); setError(null);
+    const res = await createPlatformDeposit(panelId, Number(amount), method);
+    if (!res.ok) { setError(res.error); setBusy(false); return; }
+    window.location.href = res.url; // gateway checkout — keep busy through redirect
+  };
 
   useEffect(() => {
     if (policy) {
@@ -963,6 +975,18 @@ function AddFundsModal({
           <>
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Add funds</p>
             <h3 className="fp-display text-xl mb-6">Top up your Innvil balance</h3>
+            {panels.length > 1 ? (
+              <div className="mb-5">
+                <label className="fp-text-dim text-xs fp-mono uppercase">Fund which panel</label>
+                <select value={panelId} onChange={(e) => setPanelId(e.target.value)} className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm mt-1.5 outline-none focus:fp-gold-border">
+                  {panels.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+            ) : panels.length === 1 ? (
+              <p className="fp-text-faint text-xs mb-4">Funding <span className="fp-text">{panels[0].name}</span>&apos;s Innvil balance.</p>
+            ) : (
+              <p className="text-xs text-red-400 mb-4">Create a panel first, then top up its Innvil balance.</p>
+            )}
             <label className="fp-text-dim text-xs fp-mono uppercase">Amount (USD)</label>
             <div className="flex items-center gap-2 mt-2 mb-5">
               <span className="fp-display text-2xl fp-gold">$</span>
@@ -1084,8 +1108,10 @@ function AddFundsModal({
                 </div>
               </div>
             )}
-            <button onClick={onClose} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm">
-              Go to {methodMeta?.label ?? "checkout"}
+            {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
+            <button onClick={goToCheckout} disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm disabled:opacity-60 flex items-center justify-center gap-2">
+              {busy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+              {busy ? "Redirecting…" : `Go to ${methodMeta?.label ?? "checkout"}`}
             </button>
           </>
         )}
@@ -1276,6 +1302,7 @@ export function InnvilApp({ setWorld, initialSection }: {
           onClose={() => setShowAddFunds(false)}
           initialPolicy={ownerTopupPolicy}
           initialInnvilBalance={ownerInnvilBalance}
+          panels={panelList}
         />
       )}
     </div>

@@ -3,6 +3,7 @@
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { getAdapter, catalogEntry } from "@/src/lib/payments/adapters";
+import { getPlatformGatewayContext } from "@/src/lib/payments/platform";
 
 /* =========================================================
    PLATFORM PAYMENTS (super-admin only)
@@ -362,4 +363,77 @@ export async function getOwnerTopupPolicy(): Promise<OwnerTopupPolicy> {
     firstTopupMin: OWNER_FIRST_TOPUP_MIN,
     methods,
   };
+}
+
+/** Highest applicable promo tier for an amount (highest minAmount the amount qualifies for). */
+function applicableDiscountPct(amount: number, rules: TopupDiscountRule[]): number {
+  const qualifying = rules.filter((r) => amount >= r.minAmount).sort((a, b) => a.minAmount - b.minAmount);
+  return qualifying.length ? qualifying[qualifying.length - 1].discountPct : 0;
+}
+
+/**
+ * Owner starts an Innvil top-up for a specific panel: creates a pending
+ * platform_deposit, opens the super-admin's gateway checkout, and returns the URL.
+ * The webhook credits panels.settings.innvil_balance (credit = paid + promo bonus).
+ */
+export async function createPlatformDeposit(
+  panelId: string,
+  amount: number,
+  gateway: string
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: panel } = await admin.from("panels").select("id, owner_id, settings").eq("id", panelId).maybeSingle();
+  if (!panel || panel.owner_id !== user.id) return { ok: false, error: "Panel not found." };
+
+  const policy = await getOwnerTopupPolicy();
+  const method = policy.methods.find((m) => m.id === gateway);
+  if (!method) return { ok: false, error: "That payment method isn't available right now." };
+
+  const settings = (panel.settings && typeof panel.settings === "object") ? (panel.settings as Record<string, unknown>) : {};
+  const balance = Number(settings.innvil_balance ?? 0);
+  const minTopup = (Number.isFinite(balance) ? balance : 0) <= 0 ? policy.firstTopupMin : policy.minTopup;
+
+  const paid = Math.round(Number(amount) * 10000) / 10000;
+  if (!Number.isFinite(paid) || paid <= 0) return { ok: false, error: "Enter a valid amount." };
+  if (paid < minTopup) return { ok: false, error: `Minimum top-up is $${minTopup.toFixed(2)}.` };
+
+  const bonusPct = applicableDiscountPct(paid, method.discountRules);
+  const credit = Math.round((paid + (paid * bonusPct) / 100) * 10000) / 10000;
+
+  const adapter = getAdapter(gateway);
+  if (!adapter) return { ok: false, error: "That gateway isn't implemented." };
+  const ctx = await getPlatformGatewayContext(gateway);
+  if (!ctx || Object.keys(ctx.secrets).length === 0) {
+    return { ok: false, error: "This method isn't fully configured yet. Please contact support." };
+  }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "";
+  if (!appUrl) return { ok: false, error: "Payments aren't configured (NEXT_PUBLIC_APP_URL)." };
+
+  const { data: deposit, error } = await admin
+    .from("platform_deposits")
+    .insert({ panel_id: panelId, owner_id: user.id, gateway, paid_amount: paid, credit_amount: credit, currency: "USD", status: "pending" })
+    .select("id")
+    .single();
+  if (error || !deposit) return { ok: false, error: error?.message ?? "Could not start the deposit." };
+
+  try {
+    const { url, ref } = await adapter.createCheckout({
+      amount: paid,
+      currency: "USD",
+      orderId: deposit.id as string,
+      callbackUrl: `${appUrl}/api/webhooks/platform/${gateway}`,
+      returnUrl: `${appUrl}/`,
+      config: ctx.config,
+      secrets: ctx.secrets,
+      customerEmail: user.email ?? null,
+    });
+    await admin.from("platform_deposits").update({ gateway_ref: ref }).eq("id", deposit.id);
+    return { ok: true, url };
+  } catch (e) {
+    await admin.from("platform_deposits").delete().eq("id", deposit.id);
+    return { ok: false, error: e instanceof Error ? e.message : "Could not reach the payment gateway." };
+  }
 }

@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-19 — Owner→Innvil top-up flow / P3 (v0.2.55)
+- Owner **Add Funds** now really pays Innvil via the super-admin's Cryptomus/NOWPayments
+  platform gateways and credits the panel's Innvil balance. `createPlatformDeposit`
+  (recomputes credit = paid + promo bonus) → gateway checkout → webhook
+  `/api/webhooks/platform/[gateway]` → `credit_panel_innvil_balance` (atomic).
+  **Run migration `0016_platform_deposits.sql`.** Innvil balance is per-panel; the modal
+  has a panel selector. Still pending: commission DEDUCTION as panels sell.
+
 ### 2026-07-13 — Auto-credit fix + order holds + earnings + global adjust (v0.2.23)
 - **NOWPayments finished deposits auto-credit again**: `verifyWebhook` now gates on the
   authoritative server-to-server `getPaymentStatus` (owner API key), HMAC best-effort.
@@ -723,6 +731,31 @@ The customer dashboard should feel closer to a modern SaaS product than a legacy
   - custom-domain reversibility (disconnect falls back to included subdomain).
 - Public launch gate: ship only when current MVP fixes are complete; keep non-ready
   modules clearly labeled as "coming soon".
+
+### Phase 4.v.1: Pre-launch landing pages + storefront designs (NOTED, for MVP)
+
+> When we go public, do a dedicated landing + storefront design pass.
+
+- **Main Innvil landing = FULL feature parity.** Surface every built feature (panels,
+  bring-your-own-provider, custom domains, wallet, support tickets, earnings/receipts,
+  duplicate detection + mass cancel, provider-balance visibility, mobile, etc.). Use
+  **socpanel.com** as the structural reference for the main marketing landing.
+- **Lead with what socpanel does NOT have** (differentiators):
+  - **0% monthly rent — 5% commission on completed orders only** (socpanel charges
+    monthly rent regardless of sales). Headline differentiator.
+  - No setup fee; unlimited panels per account; subdomain live in minutes.
+  - **Bring-your-own-provider** — Innvil never resells; owner keeps 95%.
+  - **Custom-domain reversibility** — disconnect anytime → auto-falls back to the
+    included subdomain (no lock-in).
+  - **Customer privacy boundary** — owners can't log into customer accounts or reset
+    customer passwords; only balance adjustments (trust/safety).
+  - **Modular business OS**, not just a panel — Automator, Analytics add-on, Design
+    Shop, downloadable earnings receipts.
+  - **ANVIL rewards token** (future) — rewards on top-ups + discounts on paid features.
+  - Modern, mobile-first SaaS UX.
+- **Richer per-panel storefront landing + more Design-Shop templates.** Expand the
+  default storefront landing content and add premium themes/templates. Base panel/
+  storefront designs on: **smmcost.com, smmcity.com, worldofsmm.com, prm4u.com**.
 
 ### Phase 4.u: Child panels (NOTED, not built)
 
