@@ -9,7 +9,7 @@ import {
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
-  AlertTriangle, Wrench, Eye, EyeOff,
+  AlertTriangle, Wrench, Eye, EyeOff, Trash2, PlayCircle,
 } from "lucide-react";
 import {
   Card, StatCard, FloorLedger, RevenueChart, StatusBadge,
@@ -26,9 +26,11 @@ import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling, OwnerTopUps 
 import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
-import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
+import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
+import { getLandingVideo } from "@/src/lib/actions/platform-settings";
+import { toVideoEmbed } from "@/src/lib/video";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
 
@@ -80,10 +82,11 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
           </div>
           <span className="fp-display text-lg tracking-wide">Innvil</span>
         </div>
-        <nav className="hidden md:flex items-center gap-8 text-sm fp-text-dim">
+        <nav className="hidden md:flex items-center gap-7 text-sm fp-text-dim">
           <a href="#how" className="hover:fp-text">How it works</a>
           <a href="#features" className="hover:fp-text">Features</a>
-          <a href="#floor" className="hover:fp-text">Price floor</a>
+          <a href="#platform" className="hover:fp-text">Platform</a>
+          <a href="#why" className="hover:fp-text">Why Innvil</a>
           <a href="#pricing" className="hover:fp-text">Pricing</a>
         </nav>
         <div className="flex items-center gap-3">
@@ -98,6 +101,14 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
 }
 
 export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
+  const [videoUrl, setVideoUrl] = useState("");
+  useEffect(() => {
+    let alive = true;
+    getLandingVideo().then((v) => { if (alive) setVideoUrl(v.url); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const video = toVideoEmbed(videoUrl);
+
   return (
     <div>
       <TopNav world="public" setWorld={setWorld} />
@@ -132,6 +143,31 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
           <FloorLedger />
         </div>
       </section>
+
+      {video.kind !== "none" && (
+        <section id="walkthrough" className="max-w-5xl mx-auto px-6 py-20 border-t fp-line-soft">
+          <div className="text-center mb-10">
+            <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3 flex items-center justify-center gap-1.5">
+              <PlayCircle size={13} /> Watch
+            </p>
+            <h2 className="fp-display text-3xl">See how easy it is to launch a panel.</h2>
+            <p className="fp-text-dim text-sm mt-3">A quick walkthrough — from sign-up to a live storefront.</p>
+          </div>
+          <div className="fp-panel border fp-line rounded-2xl overflow-hidden aspect-video">
+            {video.kind === "file" ? (
+              <video src={video.src} controls playsInline className="w-full h-full object-contain bg-black" />
+            ) : (
+              <iframe
+                src={video.src}
+                title="Innvil walkthrough"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                className="w-full h-full"
+              />
+            )}
+          </div>
+        </section>
+      )}
 
       <section id="how" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">How it works</p>
@@ -183,6 +219,36 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         </div>
       </section>
 
+      <section id="platform" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
+        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">The whole platform</p>
+        <h2 className="fp-display text-3xl mb-4">Everything to run the business — not just take orders.</h2>
+        <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
+          Wallets, payments, support, receipts, and safety tooling ship with every panel.
+          The parts most SMM panels charge extra for — or don&apos;t have at all — are already here.
+        </p>
+        <div className="grid md:grid-cols-3 gap-6">
+          {[
+            { icon: Globe, t: "Custom domains, reversible", d: "Connect your own domain with automatic SSL. Disconnect anytime and your storefront falls back to the included subdomain — no lock-in." },
+            { icon: Wallet, t: "Wallets + crypto deposits", d: "Every panel has a customer wallet. Take deposits via Cryptomus or NOWPayments (300+ coins) — funds credit automatically on confirmation." },
+            { icon: MessageSquare, t: "Support tickets, both sides", d: "Customers open and reply to tickets in their dashboard; you answer from the panel's Support inbox, with unread badges and email notices." },
+            { icon: FileText, t: "Earnings & downloadable receipts", d: "See top-ups minus provider cost as real profit, and export a self-contained receipt for any date range." },
+            { icon: Copy, t: "Duplicate detection + mass cancel", d: "Repeat orders on the same link land in a Duplicate slot instead of your provider. Cancel in bulk — every owner cancel auto-refunds the customer." },
+            { icon: Activity, t: "Provider balance in view", d: "Fetch and cache each connected provider's balance so you never run dry mid-fulfilment. Low-balance orders hold and auto-refund after 24h." },
+            { icon: RefreshCw, t: "Automatic order-status sync", d: "Orders track your provider automatically — completed, partial, canceled — and refund the unfilled portion. No manual chasing." },
+            { icon: KeyRound, t: "Customer-facing API", d: "Every customer gets an API key and the full v2 endpoints, including batch ordering up to 100 rows for automation workflows." },
+            { icon: Gauge, t: "Fast, mobile-first UX", d: "Owner and customer experiences are built mobile-first and feel like a modern SaaS product, not a legacy panel." },
+          ].map((f) => (
+            <div key={f.t} className="fp-panel border fp-line rounded-2xl p-6">
+              <span className="w-10 h-10 rounded-xl fp-gold-soft-bg fp-gold flex items-center justify-center mb-4">
+                <f.icon size={18} />
+              </span>
+              <h3 className="fp-display text-lg mb-2">{f.t}</h3>
+              <p className="fp-text-dim text-sm leading-relaxed">{f.d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section id="floor" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <div className="grid md:grid-cols-2 gap-14 items-center">
           <div>
@@ -198,6 +264,33 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
             </p>
           </div>
           <FloorLedger compact />
+        </div>
+      </section>
+
+      <section id="why" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
+        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Why Innvil</p>
+        <h2 className="fp-display text-3xl mb-4">Built differently from a rented panel.</h2>
+        <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
+          Most panels rent you a storefront and bill you every month whether you sell or not.
+          Innvil aligns with your growth — and hands you the parts they hold back.
+        </p>
+        <div className="grid md:grid-cols-3 gap-6">
+          {[
+            { icon: Percent, t: "0% monthly rent", d: "5% on completed orders only — nothing until an order actually delivers. No monthly bill, no setup fee.", lead: true },
+            { icon: Wifi, t: "Bring your own provider", d: "We never resell SMM services or mark up your provider. You keep 95% of every order and your margin is yours.", lead: false },
+            { icon: Globe, t: "No domain lock-in", d: "Disconnect your custom domain anytime and the storefront reverts to your included subdomain. You're never held hostage.", lead: false },
+            { icon: Lock, t: "Real customer-privacy boundary", d: "You can't log into customer accounts or reset their passwords — only adjust balances. A trust guarantee legacy panels don't give.", lead: false },
+            { icon: LayoutGrid, t: "A business OS, not just a panel", d: "Wallet, tickets, receipts and duplicate tooling today; Automator, Analytics and a Design Shop as opt-in add-ons next.", lead: false },
+            { icon: Gift, t: "ANVIL rewards — coming soon", d: "Earn rewards on every top-up and unlock discounts on paid features as the platform grows.", lead: false },
+          ].map((f) => (
+            <div key={f.t} className={`fp-panel border rounded-2xl p-6 ${f.lead ? "fp-gold-border" : "fp-line"}`}>
+              <span className={`w-10 h-10 rounded-xl flex items-center justify-center mb-4 ${f.lead ? "fp-gold-bg text-[#0A0B0F]" : "fp-gold-soft-bg fp-gold"}`}>
+                <f.icon size={18} />
+              </span>
+              <h3 className="fp-display text-lg mb-2">{f.t}</h3>
+              <p className="fp-text-dim text-sm leading-relaxed">{f.d}</p>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -589,14 +682,20 @@ function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel
 }
 
 /* --- My Panels --- */
-function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
+// Owners get these four; `suspended` is Innvil-support-only (enforced server-side too).
+const OWNER_STATUS_OPTIONS: PanelStatus[] = ["draft", "live", "inactive", "maintenance"];
+
+function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: {
   panels: Panel[];
   loading: boolean;
   syncing: boolean;
   goCreate: () => void;
   openPanel: (p: Panel) => void;
+  onChanged: () => void | Promise<void>;
 }) {
   const [panelStatuses, setPanelStatuses] = useState<Record<string, PanelStatus>>({});
+  const [statusError, setStatusError] = useState<Record<string, string>>({});
+  const [confirmDelete, setConfirmDelete] = useState<Panel | null>(null);
 
   useEffect(() => {
     setPanelStatuses(
@@ -606,10 +705,12 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
 
   const handleStatusChange = async (panelId: string, newStatus: PanelStatus) => {
     const prevStatus = panelStatuses[panelId];
+    setStatusError((prev) => ({ ...prev, [panelId]: "" }));
     setPanelStatuses((prev) => ({ ...prev, [panelId]: newStatus })); // optimistic
     const res = await updatePanelStatus(panelId, newStatus);
     if (!res.ok) {
       setPanelStatuses((prev) => ({ ...prev, [panelId]: prevStatus })); // rollback
+      setStatusError((prev) => ({ ...prev, [panelId]: res.error }));
     }
   };
 
@@ -633,8 +734,14 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
               <StatusDropdown
                 currentStatus={panelStatuses[p.id] ?? p.status}
                 onChange={(newStatus) => handleStatusChange(p.id, newStatus)}
+                options={OWNER_STATUS_OPTIONS}
               />
             </div>
+            {statusError[p.id] && (
+              <p className="text-xs text-red-400 flex items-start gap-1 mb-2">
+                <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {statusError[p.id]}
+              </p>
+            )}
             <p className="fp-text-faint text-xs fp-mono flex items-center gap-1">
               <Globe size={11} /> {panelDisplayDomain(p.subdomain, p.domain)}
             </p>
@@ -680,6 +787,14 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
               >
                 <ExternalLink size={12} /> Visit
               </a>
+              <button
+                onClick={() => setConfirmDelete({ ...p, status: panelStatuses[p.id] ?? p.status })}
+                aria-label="Delete panel"
+                title="Delete panel"
+                className="fp-panel-raised border border-red-500/25 text-xs px-2.5 py-2 rounded-lg text-red-400/80 hover:text-red-400 hover:border-red-500/50 flex items-center"
+              >
+                <Trash2 size={13} />
+              </button>
             </div>
           </div>
         ))}
@@ -690,6 +805,78 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel }: {
           <Plus size={22} />
           <span className="text-sm">Create a new panel</span>
         </button>
+      </div>
+
+      {confirmDelete && (
+        <DeletePanelModal
+          panel={confirmDelete}
+          onClose={() => setConfirmDelete(null)}
+          onDeleted={async () => { setConfirmDelete(null); await onChanged(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* --- Delete Panel (with caution) --- */
+function DeletePanelModal({ panel, onClose, onDeleted }: {
+  panel: Panel;
+  onClose: () => void;
+  onDeleted: () => void | Promise<void>;
+}) {
+  const [confirmText, setConfirmText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const armed = confirmText.trim().toLowerCase() === panel.subdomain.toLowerCase();
+
+  const remove = async () => {
+    if (!armed || busy) return;
+    setBusy(true);
+    setError(null);
+    const res = await deletePanel(panel.id, confirmText);
+    if (!res.ok) { setError(res.error); setBusy(false); return; }
+    await onDeleted();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center px-4">
+      <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/70" />
+      <div className="relative fp-panel border border-red-500/30 rounded-2xl w-full max-w-md p-6">
+        <div className="flex items-center gap-2.5 mb-4">
+          <span className="w-9 h-9 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center"><Trash2 size={16} /></span>
+          <p className="fp-display text-lg">Delete this panel?</p>
+        </div>
+        <p className="fp-text-dim text-sm leading-relaxed mb-3">
+          <span className="fp-text">{panel.name}</span> and <span className="fp-text">everything under it</span> —
+          customers, orders, services, providers, wallet balances, tickets and deposits — will be
+          permanently removed. <span className="text-red-400">This cannot be undone.</span>
+        </p>
+        <label className="fp-text-dim text-xs fp-mono uppercase">
+          Type <span className="fp-gold">{panel.subdomain}</span> to confirm
+        </label>
+        <input
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && remove()}
+          autoFocus
+          placeholder={panel.subdomain}
+          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:border-red-500/50 fp-mono"
+        />
+        {error && (
+          <p className="text-xs text-red-400 flex items-center gap-1.5 mb-3"><AlertTriangle size={12} /> {error}</p>
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={remove}
+            disabled={!armed || busy}
+            className="flex-1 bg-red-500/90 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+          >
+            <Trash2 size={14} /> {busy ? "Deleting…" : "Delete permanently"}
+          </button>
+          <button onClick={onClose} disabled={busy} className="fp-panel-raised border fp-line-soft px-4 py-2.5 rounded-lg text-sm fp-text-dim">
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1255,7 +1442,7 @@ export function InnvilApp({ setWorld, initialSection }: {
         <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} />
         {section === "account" && <AccountSettings />}
         {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
-        {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} />}
+        {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} onChanged={refreshPanels} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
         {section === "panelAdmin" && activePanel && (
           <PanelAdmin

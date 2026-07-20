@@ -71,6 +71,10 @@ export async function createPanel(input: {
   return { ok: true, panel: toPanel(data as PanelRow) };
 }
 
+// Owners control these four themselves. `suspended` is Innvil-support-only (a
+// trust/safety action), so an owner can never self-suspend or self-unsuspend.
+const OWNER_SETTABLE: PanelStatus[] = ["draft", "live", "inactive", "maintenance"];
+
 export async function updatePanelStatus(
   panelId: string,
   status: PanelStatus
@@ -78,16 +82,62 @@ export async function updatePanelStatus(
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
 
+  if (!OWNER_SETTABLE.includes(status))
+    return { ok: false, error: "That status can only be set by Innvil support." };
+
   // Verify ownership before mutating (admin client bypasses RLS).
   const { data: owned } = await admin
     .from("panels")
-    .select("id")
+    .select("id, status, settings")
     .eq("id", panelId)
     .eq("owner_id", user.id)
     .maybeSingle();
   if (!owned) return { ok: false, error: "Panel not found" };
 
+  // A suspended panel is frozen until Innvil restores it — the owner can't flip it.
+  if (owned.status === "suspended")
+    return { ok: false, error: "This panel is suspended — contact Innvil support to restore it." };
+
+  // Going live requires Innvil credit. If the billing loop paused this panel for a
+  // drained balance, a top-up (not a status flip) is what brings it back.
+  if (status === "live") {
+    const settings = (owned.settings && typeof owned.settings === "object")
+      ? (owned.settings as Record<string, unknown>)
+      : {};
+    const balance = Number(settings.innvil_balance ?? 0);
+    if (settings.innvil_suspended === true && !(balance > 0))
+      return { ok: false, error: "Top up your Innvil balance to bring this panel back live." };
+  }
+
   const { error } = await admin.from("panels").update({ status }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * Permanently delete a panel and everything under it (customers, orders, services,
+ * providers, wallets, tickets, deposits — all cascade). Irreversible, so the caller
+ * must echo back the panel's exact subdomain as a typed confirmation.
+ */
+export async function deletePanel(
+  panelId: string,
+  confirmation: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: owned } = await admin
+    .from("panels")
+    .select("id, subdomain")
+    .eq("id", panelId)
+    .eq("owner_id", user.id)
+    .maybeSingle();
+  if (!owned) return { ok: false, error: "Panel not found" };
+
+  if ((confirmation ?? "").trim().toLowerCase() !== owned.subdomain.toLowerCase())
+    return { ok: false, error: `Type the panel's subdomain (${owned.subdomain}) to confirm deletion.` };
+
+  const { error } = await admin.from("panels").delete().eq("id", panelId).eq("owner_id", user.id);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }

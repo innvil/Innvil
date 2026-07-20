@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
+  PlayCircle, Trash2,
 } from "lucide-react";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
@@ -11,6 +12,8 @@ import {
   getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance,
   type PlatformOverview, type SuperAdminPanelVM,
 } from "@/src/lib/actions/superadmin";
+import { getLandingVideo, setLandingVideo } from "@/src/lib/actions/platform-settings";
+import { toVideoEmbed } from "@/src/lib/video";
 import {
   getPlatformPaymentsMeta, connectPlatformGateway, disconnectPlatformGateway,
   getPlatformTopupDiscountDefaults, setPlatformTopupDiscountDefaults,
@@ -413,11 +416,91 @@ function PanelsTab() {
   );
 }
 
+/* ---------------- Landing walkthrough video ---------------- */
+function LandingTab() {
+  const [url, setUrl] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  const load = () => getLandingVideo().then((v) => { setUrl(v.url); setSaved(v.url); }).catch(() => {});
+  useEffect(() => { load(); }, []);
+
+  const save = async (next: string) => {
+    setBusy(true); setMsg(null);
+    const res = await setLandingVideo(next);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setSaved(next);
+    setMsg({ text: next ? "Walkthrough video saved — it's now on the public landing." : "Walkthrough video removed." });
+  };
+
+  const preview = toVideoEmbed(url);
+
+  return (
+    <div className="space-y-5 max-w-2xl">
+      <p className="fp-text-dim text-sm">
+        Add a short tutorial/walkthrough that shows how easy it is to create a panel. It appears in a
+        <span className="fp-text"> &ldquo;See how it works&rdquo;</span> section on the public Innvil landing.
+        Host it on YouTube or Vimeo (or anywhere with a direct <span className="fp-mono">.mp4</span> link) and paste the URL.
+      </p>
+
+      <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
+        <label className="fp-text-dim text-xs fp-mono uppercase">Walkthrough video URL</label>
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://youtube.com/watch?v=…  ·  https://vimeo.com/…  ·  https://cdn.example.com/walkthrough.mp4"
+          className={inputCls}
+        />
+        {msg && (
+          <p className={`text-xs flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>
+            {msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}
+          </p>
+        )}
+        <div className="flex items-center gap-2">
+          <button onClick={() => save(url)} disabled={busy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+            {busy ? "Saving…" : "Save video"}
+          </button>
+          {saved && (
+            <button
+              onClick={() => { setUrl(""); save(""); }}
+              disabled={busy}
+              className="text-xs text-red-400 px-3 py-2 rounded-lg border border-red-500/30 flex items-center gap-1.5"
+            >
+              <Trash2 size={12} /> Remove
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Preview</p>
+        {preview.kind === "none" ? (
+          <div className="fp-panel border border-dashed fp-line rounded-2xl aspect-video flex flex-col items-center justify-center gap-2 fp-text-faint">
+            <PlayCircle size={26} />
+            <span className="text-xs">Paste a valid video URL to preview it here.</span>
+          </div>
+        ) : (
+          <div className="fp-panel border fp-line rounded-2xl overflow-hidden aspect-video">
+            {preview.kind === "file" ? (
+              <video src={preview.src} controls playsInline className="w-full h-full object-contain bg-black" />
+            ) : (
+              <iframe src={preview.src} title="Walkthrough preview" allowFullScreen className="w-full h-full" />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Shell ---------------- */
 const TABS = [
   { k: "overview", label: "Overview", icon: LayoutGrid },
   { k: "panels", label: "Panels", icon: Wallet },
   { k: "payments", label: "Platform payments", icon: CreditCard },
+  { k: "landing", label: "Landing video", icon: PlayCircle },
 ];
 
 export function SuperAdminDashboard() {
@@ -465,6 +548,7 @@ export function SuperAdminDashboard() {
         )}
         {tab === "panels" && <PanelsTab />}
         {tab === "payments" && <PaymentsTab />}
+        {tab === "landing" && <LandingTab />}
       </div>
     </div>
   );

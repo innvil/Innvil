@@ -82,11 +82,17 @@ export function StatusBadge({ status }: { status: "draft" | "live" | "inactive" 
 export function StatusDropdown({
   currentStatus,
   onChange,
+  options,
 }: {
   currentStatus: "draft" | "live" | "inactive" | "suspended" | "maintenance";
   onChange: (status: "draft" | "live" | "inactive" | "suspended" | "maintenance") => void;
+  /** Restrict the selectable statuses (e.g. owners can't self-suspend). Defaults to all. */
+  options?: PanelStatus[];
 }) {
   const [open, setOpen] = useState(false);
+
+  const entries = (Object.entries(PANEL_STATUSES) as [PanelStatus, typeof PANEL_STATUSES[PanelStatus]][])
+    .filter(([key]) => !options || options.includes(key));
 
   return (
     <div className="relative">
@@ -99,7 +105,7 @@ export function StatusDropdown({
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-2 w-72 fp-panel border fp-line rounded-xl shadow-2xl z-50 overflow-hidden">
-          {(Object.entries(PANEL_STATUSES) as [PanelStatus, typeof PANEL_STATUSES[PanelStatus]][]).map(([key, cfg]) => (
+          {entries.map(([key, cfg]) => (
             <button
               key={key}
               onClick={() => { onChange(key); setOpen(false); }}

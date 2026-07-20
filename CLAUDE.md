@@ -127,6 +127,36 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Owner status control + landing video + panel delete (v0.2.58)
+- **Owner-controlled panel status** — the My Panels `StatusDropdown` now offers only the four
+  owner-settable statuses (draft/live/inactive/maintenance); `suspended` is Innvil-support-only.
+  `updatePanelStatus` enforces it server-side: rejects `suspended`, refuses to change an
+  already-suspended panel, and blocks going `live` while the panel is Innvil-credit-suspended
+  (top up instead). Inline error surfaced per card. `StatusDropdown` gained an optional
+  `options` filter (defaults to all — other usages unchanged).
+- **Landing walkthrough video** — super admin sets a tutorial video URL (YouTube/Vimeo/direct
+  .mp4) under **/superadmin → Landing video**; the public landing renders it in a "See how
+  easy it is" section (`toVideoEmbed` in `src/lib/video.ts`; hidden when unset). Stored in the
+  new `platform_settings` table via `getLandingVideo`/`setLandingVideo`
+  (`src/lib/actions/platform-settings.ts`). **Run migration `0018_platform_settings.sql`.**
+- **Delete panel (with caution)** — each My Panels card has a delete affordance opening a
+  confirm modal that requires typing the panel's subdomain; `deletePanel` re-checks ownership
+  + the typed subdomain, then deletes (all `panel_id` FKs cascade). Irreversible, spelled out
+  in the modal.
+
+### 2026-07-20 — Main landing: feature parity + differentiators (v0.2.57)
+- Expanded the Innvil public landing (`PublicLanding` in `src/components/panels/index.tsx`)
+  for the public MVP. Two new sections: **#platform** ("Everything to run the business")
+  — a 9-card grid of BUILT features (custom domains/reversible, wallets + crypto deposits,
+  support tickets, earnings receipts, duplicate detection + mass cancel, provider-balance
+  visibility, auto order-status sync, customer API, mobile-first) — and **#why** ("Built
+  differently from a rented panel") — the socpanel differentiators: 0% rent/5%, bring-your-
+  own-provider, no domain lock-in, customer-privacy boundary, business-OS, ANVIL (coming soon).
+- TopNav gains Platform + Why Innvil anchors. Copy only claims shipped features. No new deps,
+  no migration. (Couldn't fetch socpanel/smmcost live — classifier outage on WebFetch; built
+  from the Phase 4.v.1 differentiators. Refine section order against the live sites later.)
+- Still TODO for MVP: richer per-panel storefront landing + Design-Shop premium templates.
+
 ### 2026-07-20 — Commission settlement — billing loop closes (v0.2.56)
 - **Innvil's 5% commission is now actually DEDUCTED** (was display-only). Per completed
   order, `settle_order_commission()` draws 5% of the charge off the panel's
