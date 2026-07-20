@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi } from "lucide-react";
+import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi, CheckCircle2 } from "lucide-react";
 import { Card, Pill } from "@/src/components/ui";
 import { formatMoney } from "@/src/lib/money";
 import { listAllOwnerOrders, getOwnerBillingSummary, type OwnerOrderVM, type OwnerBillingSummary } from "@/src/lib/actions/admin-orders";
@@ -502,18 +502,22 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
             <Wallet size={16} className="fp-gold" />
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Innvil balance — all panels</p>
           </div>
-          <span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Auto-billing coming soon</span>
+          <span className="text-xs fp-safe-soft-bg fp-safe px-2.5 py-1 rounded-full flex items-center gap-1"><CheckCircle2 size={11} /> Auto-billing active</span>
         </div>
         <p className="fp-display text-4xl fp-gold">{data ? fmt(data.innvilBalance) : "—"}</p>
-        <p className="fp-text-faint text-xs mt-1">Your available Innvil balance across every panel you own.</p>
-        <div className="grid grid-cols-2 gap-4 mt-6">
+        <p className="fp-text-faint text-xs mt-1">Your available Innvil balance across every panel you own — drawn down automatically as orders complete.</p>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-6">
           <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
             <p className="fp-text-faint text-xs fp-mono uppercase">Revenue today (all panels)</p>
             <p className="fp-display text-xl mt-1">{data ? fmt(data.revenueToday) : "—"}</p>
           </div>
           <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
-            <p className="fp-text-faint text-xs fp-mono uppercase">Commission today</p>
+            <p className="fp-text-faint text-xs fp-mono uppercase">Commission today (est.)</p>
             <p className="fp-display text-xl mt-1 fp-violet">{data ? fmt(data.commissionToday) : "—"}</p>
+          </div>
+          <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
+            <p className="fp-text-faint text-xs fp-mono uppercase">Commission charged</p>
+            <p className="fp-display text-xl mt-1 fp-gold">{data ? fmt(data.commissionCharged) : "—"}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 mt-6">
@@ -528,9 +532,11 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
           </span>
         </div>
         <p className="fp-text-faint text-[11px] mt-4 leading-relaxed">
-          Automatic commission settlement (a prepaid Innvil balance that&apos;s drawn down as your panels sell)
-          is coming soon. Amounts above are live figures from your real orders. Your provider is billed by you
-          directly — Innvil never touches that relationship.
+          Commission settles automatically: 5% of each completed order is drawn from your prepaid Innvil
+          balance. <span className="fp-text">Commission today</span> is an estimate of what today&apos;s revenue
+          will settle to; <span className="fp-text">Commission charged</span> is what&apos;s actually been
+          deducted so far. If a panel&apos;s balance runs out it pauses new orders until you top up. Your
+          provider is billed by you directly — Innvil never touches that relationship.
         </p>
       </Card>
 
@@ -542,7 +548,9 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
             <div key={p.panelId} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3">
               <div>
                 <p className="text-sm">{p.panelName}</p>
-                <p className="fp-text-faint text-xs">Commission today: {fmt(p.commissionToday)}</p>
+                <p className="fp-text-faint text-xs">
+                  Commission today: {fmt(p.commissionToday)} · charged: {fmt(p.commissionCharged)}
+                </p>
               </div>
               <span className="fp-mono text-sm">{fmt(p.innvilBalance)}</span>
             </div>

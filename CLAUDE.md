@@ -127,6 +127,26 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Status polish: real Status History (v0.2.64)
+- The panel Status tab's **Status History** card was hardcoded mock ("2 hours ago / Yesterday /
+  3 days ago"). Now REAL: every status change writes a `panel.status_changed` event to `audit_logs`
+  — from `updatePanelStatus` (owner, meta by:owner), the sync auto-inactive (by:system,
+  reason:innvil_out_of_credit), the top-up `reactivatePanelIfFunded` + super-admin `adjustPanelBalance`
+  (reason:innvil_topup). `getPanelStatusHistory(panelId)` (panels.ts) reads them newest-first + appends
+  a synthesized "Panel created" baseline from `panels.created_at` (so it's never empty; infers creation
+  status from the oldest log's `from`). `StatusTab` now takes `panelId`, fetches on mount + re-fetches
+  ~800ms after a change, and renders real relative times (`relTime`: just now / Xm / Xh / yesterday /
+  Xd / date) with the absolute time on hover. Also restricted the tab's StatusDropdown to the four
+  owner-settable statuses (matches My Panels). No migration (uses existing `audit_logs`).
+
+### 2026-07-20 — MVP polish: Billing shows real commission charged (v0.2.63)
+- Owner **Billing** now reflects the live commission settlement (which shipped v0.2.56 but the UI still
+  said "coming soon"). `getOwnerBillingSummary` (`admin-orders.ts`) gained `commissionCharged` (lifetime
+  sum of `orders.commission_amount`, total + per-panel; degrades to 0 if 0017 isn't applied). UI
+  (`OwnerSections.tsx OwnerBilling`): badge "Auto-billing coming soon" → **"Auto-billing active"**; new
+  **"Commission charged"** stat next to "Commission today (est.)"; note rewritten to explain estimate vs
+  actually-deducted + the out-of-credit pause; per-panel row shows both today + charged. Roadmap #2 item.
+
 ### 2026-07-20 — Main landing pass: commission wheel + trust band + FAQ (v0.2.62)
 - Landing page pass (roadmap #1), modeled on socpanel/prm4u/worldofsmm. Added to `PublicLanding`
   (`src/components/panels/index.tsx`): (1) an honest **"by the numbers" band** below the hero

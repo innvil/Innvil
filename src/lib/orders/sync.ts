@@ -486,11 +486,20 @@ async function settlePanelCommission(admin: SupabaseClient, panelId: string): Pr
       : {};
     const balance = Number(settings.innvil_balance ?? 0);
     if (!(balance > 0)) {
-      await admin
+      const { data: flipped } = await admin
         .from("panels")
         .update({ status: "inactive", settings: { ...settings, innvil_suspended: true } })
         .eq("id", panelId)
-        .eq("status", "live");
+        .eq("status", "live")
+        .select("id")
+        .maybeSingle();
+      if (flipped) {
+        await admin.from("audit_logs").insert({
+          panel_id: panelId,
+          action: "panel.status_changed",
+          meta: { from: "live", to: "inactive", by: "system", reason: "innvil_out_of_credit" },
+        });
+      }
     }
   }
 

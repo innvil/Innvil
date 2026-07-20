@@ -251,16 +251,17 @@ export interface OwnerBillingSummary {
   revenueToday: number;
   profitToday: number;
   commissionToday: number; // 5% of today's panel-price revenue (estimate)
+  commissionCharged: number; // lifetime commission actually settled off innvil_balance (sum of orders.commission_amount)
   ordersToday: number;
   panels: number;
-  perPanel: Array<{ panelId: string; panelName: string; revenueToday: number; commissionToday: number; innvilBalance: number }>;
+  perPanel: Array<{ panelId: string; panelName: string; revenueToday: number; commissionToday: number; commissionCharged: number; innvilBalance: number }>;
 }
 
 const COMMISSION_RATE = INNVIL_COMMISSION_RATE;
 
 /** Real cross-panel revenue + a 5% commission estimate for the Billing page. */
 export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
-  const empty: OwnerBillingSummary = { innvilBalance: 0, revenueToday: 0, profitToday: 0, commissionToday: 0, ordersToday: 0, panels: 0, perPanel: [] };
+  const empty: OwnerBillingSummary = { innvilBalance: 0, revenueToday: 0, profitToday: 0, commissionToday: 0, commissionCharged: 0, ordersToday: 0, panels: 0, perPanel: [] };
   const { user, admin } = await getAuthedAdmin();
   if (!user) return empty;
   const { data: panels } = await admin.from("panels").select("id, name, settings").eq("owner_id", user.id);
@@ -270,10 +271,21 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
   const panelIds = list.map((p) => p.id);
-  const [{ data: orders }, { data: refundTx }] = await Promise.all([
+  const [{ data: orders }, { data: refundTx }, { data: settledRows }] = await Promise.all([
     admin.from("orders").select("panel_id, charge, profit, status").in("panel_id", panelIds).gte("created_at", startOfToday.toISOString()),
     admin.from("balance_transactions").select("panel_id, amount").in("panel_id", panelIds).eq("type", "refund").gte("created_at", startOfToday.toISOString()),
+    // Lifetime commission actually settled off innvil_balance (0017). Degrades to 0 if the column isn't there yet.
+    admin.from("orders").select("panel_id, commission_amount").in("panel_id", panelIds).not("commission_amount", "is", null),
   ]);
+
+  // Sum settled commission per panel + overall.
+  const commissionByPanel = new Map<string, number>();
+  let commissionCharged = 0;
+  for (const r of (settledRows as Array<{ panel_id: string; commission_amount: number }> | null) ?? []) {
+    const amt = Number(r.commission_amount) || 0;
+    commissionByPanel.set(r.panel_id, (commissionByPanel.get(r.panel_id) ?? 0) + amt);
+    commissionCharged += amt;
+  }
 
   // Refunds today per panel (credits back to customers) — subtracted from revenue.
   const refundByPanel = new Map<string, number>();
@@ -314,6 +326,7 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
     revenueToday: round4(revenueToday),
     profitToday: round4(profitToday),
     commissionToday: round4(revenueToday * COMMISSION_RATE),
+    commissionCharged: round4(commissionCharged),
     ordersToday,
     panels: list.length,
     perPanel: list.map((p) => ({
@@ -321,6 +334,7 @@ export async function getOwnerBillingSummary(): Promise<OwnerBillingSummary> {
       panelName: p.name,
       revenueToday: round4(perPanel.get(p.id)?.revenueToday ?? 0),
       commissionToday: round4((perPanel.get(p.id)?.revenueToday ?? 0) * COMMISSION_RATE),
+      commissionCharged: round4(commissionByPanel.get(p.id) ?? 0),
       innvilBalance: panelBalances.get(p.id) ?? 0,
     })),
   };

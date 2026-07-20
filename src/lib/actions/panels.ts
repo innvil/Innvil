@@ -111,7 +111,86 @@ export async function updatePanelStatus(
 
   const { error } = await admin.from("panels").update({ status }).eq("id", panelId);
   if (error) return { ok: false, error: error.message };
+
+  // Record the change so the Status History card shows real events (best-effort).
+  if (owned.status !== status) {
+    await admin.from("audit_logs").insert({
+      panel_id: panelId,
+      actor_id: user.id,
+      action: "panel.status_changed",
+      meta: { from: owned.status, to: status, by: "owner" },
+    });
+  }
   return { ok: true };
+}
+
+export interface PanelStatusEvent {
+  status: PanelStatus;
+  label: string;
+  at: string; // ISO timestamp
+  note?: string;
+}
+
+const STATUS_EVENT_LABEL: Record<string, string> = {
+  draft: "Changed to Draft",
+  live: "Changed to Live",
+  inactive: "Changed to Inactive",
+  suspended: "Suspended",
+  maintenance: "Changed to Maintenance",
+};
+
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/** Real status history for a panel — logged status changes + a synthesized creation event. */
+export async function getPanelStatusHistory(panelId: string): Promise<PanelStatusEvent[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+
+  const { data: panel } = await admin
+    .from("panels")
+    .select("owner_id, status, created_at")
+    .eq("id", panelId)
+    .maybeSingle();
+  if (!panel || panel.owner_id !== user.id) return [];
+
+  const { data: logs } = await admin
+    .from("audit_logs")
+    .select("meta, created_at")
+    .eq("panel_id", panelId)
+    .eq("action", "panel.status_changed")
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  const events: PanelStatusEvent[] = [];
+  let creationStatus = panel.status as PanelStatus; // fallback if there are no changes yet
+
+  for (const l of (logs as Array<{ meta: Record<string, unknown> | null; created_at: string }> | null) ?? []) {
+    const meta = l.meta ?? {};
+    const to = typeof meta.to === "string" ? (meta.to as PanelStatus) : null;
+    const from = typeof meta.from === "string" ? (meta.from as PanelStatus) : null;
+    const reason = typeof meta.reason === "string" ? meta.reason : undefined;
+    if (to) {
+      events.push({
+        status: to,
+        label: STATUS_EVENT_LABEL[to] ?? `Changed to ${cap(to)}`,
+        at: l.created_at,
+        note:
+          reason === "innvil_out_of_credit" ? "Out of Innvil credit" :
+          reason === "innvil_topup" ? "Reactivated after top-up" :
+          undefined,
+      });
+    }
+    if (from) creationStatus = from; // logs are newest→oldest, so the last 'from' seen is the creation status
+  }
+
+  // Synthesized baseline — the panel's creation (so the card is never empty).
+  events.push({
+    status: creationStatus,
+    label: `Panel created${creationStatus ? ` as ${cap(creationStatus)}` : ""}`,
+    at: panel.created_at,
+  });
+
+  return events;
 }
 
 /**

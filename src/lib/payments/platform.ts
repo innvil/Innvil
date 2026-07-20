@@ -126,8 +126,13 @@ async function reactivatePanelIfFunded(
 
   const rest = { ...settings };
   delete rest.innvil_suspended;
-  await admin
-    .from("panels")
-    .update({ status: panel.status === "inactive" ? "live" : panel.status, settings: rest })
-    .eq("id", panelId);
+  const nextStatus = panel.status === "inactive" ? "live" : panel.status;
+  await admin.from("panels").update({ status: nextStatus, settings: rest }).eq("id", panelId);
+  if (nextStatus !== panel.status) {
+    await admin.from("audit_logs").insert({
+      panel_id: panelId,
+      action: "panel.status_changed",
+      meta: { from: panel.status, to: nextStatus, by: "system", reason: "innvil_topup" },
+    });
+  }
 }

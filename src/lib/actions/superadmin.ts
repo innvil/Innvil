@@ -156,6 +156,16 @@ export async function adjustPanelBalance(
     meta: { delta: round4(delta), balance: next, reason: reason?.trim() || null },
   });
 
+  // Surface any status flip in the panel's Status History too.
+  if (typeof patch.status === "string" && patch.status !== row.status) {
+    await admin.from("audit_logs").insert({
+      panel_id: panelId,
+      actor_id: user?.id ?? null,
+      action: "panel.status_changed",
+      meta: { from: row.status, to: patch.status, by: "system", reason: next > 0 ? "innvil_topup" : "innvil_out_of_credit" },
+    });
+  }
+
   return { ok: true, data: { balance: next } };
 }
 

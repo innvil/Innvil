@@ -37,7 +37,7 @@ import {
   listCustomerDeposits, commitPendingPayment, cancelPendingPayment,
   type PaymentsMeta, type OwnerDepositVM,
 } from "@/src/lib/actions/payments";
-import { getPanelBranding, updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
+import { getPanelBranding, updatePanelBranding, getPanelStatusHistory, type LandingSection, type PanelStatusEvent } from "@/src/lib/actions/panels";
 import {
   listPanelOrders, getPanelOverview, getPanelCurrency,
   resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
@@ -193,14 +193,58 @@ export function OverviewTab({ panel }: { panel: Panel }) {
   );
 }
 
+const STATUS_DOT_COLOR: Record<string, string> = {
+  live: "#6FCF97",
+  inactive: "#C9A574",
+  maintenance: "#8B7FFF",
+  suspended: "#E5647D",
+  draft: "#9497A3",
+};
+
+/** Real, human relative time from a timestamp (e.g. "just now", "2h ago", "3 days ago"). */
+function relTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diff = Date.now() - then;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day === 1) return "yesterday";
+  if (day < 30) return `${day} days ago`;
+  return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+const OWNER_STATUS_OPTIONS: PanelStatus[] = ["draft", "live", "inactive", "maintenance"];
+
 export function StatusTab({
+  panelId,
   panelStatus,
   setPanelStatus,
 }: {
+  panelId: string;
   panelStatus: PanelStatus;
   setPanelStatus: (s: PanelStatus) => void;
 }) {
   const currentStatusConfig = PANEL_STATUSES[panelStatus] || PANEL_STATUSES.live;
+  const realPanel = isUuid(panelId);
+  const [history, setHistory] = useState<PanelStatusEvent[] | null>(null);
+
+  const loadHistory = useCallback(() => {
+    if (!realPanel) return;
+    getPanelStatusHistory(panelId).then(setHistory).catch(() => setHistory([]));
+  }, [panelId, realPanel]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  // Change status, then re-fetch once the new event has been written.
+  const handleChange = (s: PanelStatus) => {
+    setPanelStatus(s);
+    window.setTimeout(loadHistory, 800);
+  };
+
   return (
     <div className="space-y-6 max-w-3xl">
       <Card title="Panel Status" icon={Circle}>
@@ -209,7 +253,7 @@ export function StatusTab({
             <StatusBadge status={panelStatus} />
             <span className="text-sm fp-text-dim">Current status</span>
           </div>
-          <StatusDropdown currentStatus={panelStatus} onChange={setPanelStatus} />
+          <StatusDropdown currentStatus={panelStatus} onChange={handleChange} options={OWNER_STATUS_OPTIONS} />
         </div>
         <p className="text-sm fp-text-dim leading-relaxed">{currentStatusConfig.description}</p>
       </Card>
@@ -332,21 +376,30 @@ export function StatusTab({
       </Card>
 
       <Card title="Status History" icon={History}>
-        <div className="space-y-3">
-          {[
-            { color: "#6FCF97", label: "Changed to Live", time: "2 hours ago" },
-            { color: "#C9A574", label: "Changed to Inactive Mode", time: "Yesterday" },
-            { color: "#9497A3", label: "Panel created as Draft", time: "3 days ago" },
-          ].map((h, i) => (
-            <div key={i} className="flex items-center justify-between text-sm">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full" style={{ background: h.color }} />
-                <span>{h.label}</span>
+        {!realPanel ? (
+          <p className="fp-text-faint text-sm py-2">History appears once this panel is saved.</p>
+        ) : history === null ? (
+          <p className="fp-text-faint text-sm py-2">Loading history…</p>
+        ) : history.length === 0 ? (
+          <p className="fp-text-faint text-sm py-2">No status changes recorded yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {history.map((h, i) => (
+              <div key={i} className="flex items-center justify-between text-sm gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-2 h-2 rounded-full shrink-0" style={{ background: STATUS_DOT_COLOR[h.status] ?? "#9497A3" }} />
+                  <span className="truncate">
+                    {h.label}
+                    {h.note && <span className="fp-text-faint"> · {h.note}</span>}
+                  </span>
+                </div>
+                <span className="fp-text-faint text-xs fp-mono shrink-0" title={new Date(h.at).toLocaleString()}>
+                  {relTime(h.at)}
+                </span>
               </div>
-              <span className="fp-text-faint text-xs fp-mono">{h.time}</span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );

@@ -158,7 +158,7 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel
 
       <div className="p-4 sm:p-8 space-y-6">
         {tab === "overview" && <OverviewTab panel={panel} />}
-        {tab === "status" && <StatusTab panelStatus={panelStatus} setPanelStatus={changeStatus} />}
+        {tab === "status" && <StatusTab panelId={panel.id} panelStatus={panelStatus} setPanelStatus={changeStatus} />}
         {tab === "branding" && <BrandingTab panel={panel} />}
         {tab === "domain" && <DomainTab panel={panel} />}
         {tab === "providers" && <ProvidersTab panelId={panel.id} />}
