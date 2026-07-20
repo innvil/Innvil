@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Landing: surface delete + owner status control (v0.2.59)
+- Reviewed the reference sites (prm4u, smmcost, worldofsmm, socpanel) and surfaced two just-built
+  capabilities on the public landing: **How it works** step 04 reframed from "Go live" to
+  **"You control the status"** (owner sets draft/live/inactive/maintenance anytime; going live is a
+  given, so we lead with owner control + reversibility). Added a **"Create & delete freely"** card
+  to the #platform grid (spin up test panels, delete unwanted ones cleanly — no clutter/lock-in).
+- Content-only; no new deps or migration.
+
 ### 2026-07-20 — Owner status control + landing video + panel delete (v0.2.58)
 - **Owner-controlled panel status** — the My Panels `StatusDropdown` now offers only the four
   owner-settable statuses (draft/live/inactive/maintenance); `suspended` is Innvil-support-only.

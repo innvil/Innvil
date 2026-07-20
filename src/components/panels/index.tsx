@@ -174,10 +174,10 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         <h2 className="fp-display text-3xl mb-12">One account. Any number of panels.</h2>
         <div className="grid md:grid-cols-4 gap-6">
           {[
-            { n: "01", t: "Create a panel", d: "Name it, pick a subdomain, choose a theme. Live in minutes.", icon: Rocket },
+            { n: "01", t: "Create a panel", d: "Name it, pick a subdomain, choose a theme. Ready in minutes.", icon: Rocket },
             { n: "02", t: "Connect your provider", d: "Bring your own SMM provider via API. We never sell you services.", icon: Wifi },
             { n: "03", t: "Brand & price it", d: "Custom domain, your colors, your markup above the provider floor.", icon: Palette },
-            { n: "04", t: "Go live", d: "Customers see your panel, not ours. You keep 95% of every order.", icon: TrendingUp },
+            { n: "04", t: "You control the status", d: "Set each panel to draft, live, inactive, or maintenance yourself — anytime. Going live is one switch, and every change is reversible.", icon: Gauge },
           ].map((s) => (
             <div key={s.n} className="fp-panel border fp-line rounded-2xl p-6">
               <div className="flex items-center justify-between mb-6">
@@ -229,6 +229,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         <div className="grid md:grid-cols-3 gap-6">
           {[
             { icon: Globe, t: "Custom domains, reversible", d: "Connect your own domain with automatic SSL. Disconnect anytime and your storefront falls back to the included subdomain — no lock-in." },
+            { icon: Trash2, t: "Create & delete freely", d: "Spin up test panels to experiment, then delete unwanted ones in one guarded step — the whole panel and its data removed cleanly. No clutter, no lock-in." },
             { icon: Wallet, t: "Wallets + crypto deposits", d: "Every panel has a customer wallet. Take deposits via Cryptomus or NOWPayments (300+ coins) — funds credit automatically on confirmation." },
             { icon: MessageSquare, t: "Support tickets, both sides", d: "Customers open and reply to tickets in their dashboard; you answer from the panel's Support inbox, with unread badges and email notices." },
             { icon: FileText, t: "Earnings & downloadable receipts", d: "See top-ups minus provider cost as real profit, and export a self-contained receipt for any date range." },
