@@ -6,6 +6,8 @@ import type { PanelRow, PanelStatus } from "@/src/types/db";
 
 /** Map a DB panel row to the view-model shape the admin UI already uses. */
 function toPanel(row: PanelRow): Panel {
+  const settings = (row.settings && typeof row.settings === "object") ? (row.settings as Record<string, unknown>) : {};
+  const balance = Number(settings.innvil_balance ?? 0);
   return {
     id: row.id,
     name: row.name,
@@ -14,6 +16,7 @@ function toPanel(row: PanelRow): Panel {
     status: row.status,
     ordersToday: 0, // TODO: aggregate from orders once §4/§9 land
     theme: row.theme ?? "—",
+    innvilBalance: Number.isFinite(balance) ? balance : 0,
   };
 }
 
@@ -71,19 +74,29 @@ export async function createPanel(input: {
   return { ok: true, panel: toPanel(data as PanelRow) };
 }
 
-// Owners control these four themselves. `suspended` is Innvil-support-only (a
-// trust/safety action), so an owner can never self-suspend or self-unsuspend.
-const OWNER_SETTABLE: PanelStatus[] = ["draft", "live", "inactive", "maintenance"];
+// Owners set only these three. `inactive` is applied AUTOMATICALLY when a panel
+// runs out of Innvil credit (billing loop), and `suspended` is Innvil-support-only
+// (trust/safety) — neither can be set by hand.
+const OWNER_SETTABLE: PanelStatus[] = ["draft", "live", "maintenance"];
+
+export type UpdatePanelStatusResult =
+  | { ok: true; status: PanelStatus; note?: string }
+  | { ok: false; error: string };
 
 export async function updatePanelStatus(
   panelId: string,
   status: PanelStatus
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<UpdatePanelStatusResult> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
 
   if (!OWNER_SETTABLE.includes(status))
-    return { ok: false, error: "That status can only be set by Innvil support." };
+    return {
+      ok: false,
+      error: status === "inactive"
+        ? "Inactive is applied automatically when a panel runs out of Innvil credit — you can't set it by hand."
+        : "That status can only be set by Innvil support.",
+    };
 
   // Verify ownership before mutating (admin client bypasses RLS).
   const { data: owned } = await admin
@@ -98,30 +111,43 @@ export async function updatePanelStatus(
   if (owned.status === "suspended")
     return { ok: false, error: "This panel is suspended — contact Innvil support to restore it." };
 
-  // Going live requires Innvil credit. If the billing loop paused this panel for a
-  // drained balance, a top-up (not a status flip) is what brings it back.
+  const settings = (owned.settings && typeof owned.settings === "object")
+    ? (owned.settings as Record<string, unknown>)
+    : {};
+  let effective: PanelStatus = status;
+  let nextSettings = settings;
+  let note: string | undefined;
+
+  // Owners can always click Live — but with no Innvil balance the panel runs in
+  // preview: it goes Inactive (browsable, no orders) and is flagged so a top-up
+  // auto-activates it. Funding it while flagged clears the flag and goes truly live.
   if (status === "live") {
-    const settings = (owned.settings && typeof owned.settings === "object")
-      ? (owned.settings as Record<string, unknown>)
-      : {};
     const balance = Number(settings.innvil_balance ?? 0);
-    if (settings.innvil_suspended === true && !(balance > 0))
-      return { ok: false, error: "Top up your Innvil balance to bring this panel back live." };
+    if (!(balance > 0)) {
+      effective = "inactive";
+      nextSettings = { ...settings, innvil_suspended: true };
+      note = "No Innvil balance yet — your panel is live in preview (Inactive). Add funds to start accepting orders.";
+    } else if (settings.innvil_suspended) {
+      nextSettings = { ...settings };
+      delete nextSettings.innvil_suspended;
+    }
   }
 
-  const { error } = await admin.from("panels").update({ status }).eq("id", panelId);
+  const update: Record<string, unknown> = { status: effective };
+  if (nextSettings !== settings) update.settings = nextSettings;
+  const { error } = await admin.from("panels").update(update).eq("id", panelId);
   if (error) return { ok: false, error: error.message };
 
   // Record the change so the Status History card shows real events (best-effort).
-  if (owned.status !== status) {
+  if (owned.status !== effective) {
     await admin.from("audit_logs").insert({
       panel_id: panelId,
       actor_id: user.id,
       action: "panel.status_changed",
-      meta: { from: owned.status, to: status, by: "owner" },
+      meta: { from: owned.status, to: effective, by: "owner", reason: note ? "live_preview_no_credit" : undefined },
     });
   }
-  return { ok: true };
+  return { ok: true, status: effective, note };
 }
 
 export interface PanelStatusEvent {
@@ -177,6 +203,7 @@ export async function getPanelStatusHistory(panelId: string): Promise<PanelStatu
         note:
           reason === "innvil_out_of_credit" ? "Out of Innvil credit" :
           reason === "innvil_topup" ? "Reactivated after top-up" :
+          reason === "live_preview_no_credit" ? "Preview — add funds to accept orders" :
           undefined,
       });
     }

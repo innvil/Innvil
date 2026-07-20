@@ -82,17 +82,19 @@ export function StatusBadge({ status }: { status: "draft" | "live" | "inactive" 
 export function StatusDropdown({
   currentStatus,
   onChange,
-  options,
+  settable,
+  lockedNote,
 }: {
   currentStatus: "draft" | "live" | "inactive" | "suspended" | "maintenance";
   onChange: (status: "draft" | "live" | "inactive" | "suspended" | "maintenance") => void;
-  /** Restrict the selectable statuses (e.g. owners can't self-suspend). Defaults to all. */
-  options?: PanelStatus[];
+  /** Statuses the actor may set. Others are shown but disabled/unclickable. Defaults to all settable. */
+  settable?: PanelStatus[];
+  /** Optional per-status note shown under a locked option (e.g. why Live is unavailable). */
+  lockedNote?: Partial<Record<PanelStatus, string>>;
 }) {
   const [open, setOpen] = useState(false);
 
-  const entries = (Object.entries(PANEL_STATUSES) as [PanelStatus, typeof PANEL_STATUSES[PanelStatus]][])
-    .filter(([key]) => !options || options.includes(key));
+  const entries = Object.entries(PANEL_STATUSES) as [PanelStatus, typeof PANEL_STATUSES[PanelStatus]][];
 
   return (
     <div className="relative">
@@ -105,18 +107,24 @@ export function StatusDropdown({
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-2 w-72 fp-panel border fp-line rounded-xl shadow-2xl z-50 overflow-hidden">
-          {entries.map(([key, cfg]) => (
-            <button
-              key={key}
-              onClick={() => { onChange(key); setOpen(false); }}
-              className={`w-full text-left px-4 py-3 hover:fp-gold-soft-bg transition-colors ${currentStatus === key ? "bg-[rgba(201,165,116,0.08)]" : ""}`}
-            >
-              <div className="flex items-center justify-between">
-                <StatusBadge status={key} />
-              </div>
-              <p className="text-xs fp-text-dim mt-1 leading-relaxed">{cfg.description}</p>
-            </button>
-          ))}
+          {entries.map(([key, cfg]) => {
+            const locked = settable ? !settable.includes(key) : false;
+            const note = locked ? lockedNote?.[key] : undefined;
+            return (
+              <button
+                key={key}
+                disabled={locked}
+                onClick={() => { if (locked) return; onChange(key); setOpen(false); }}
+                className={`w-full text-left px-4 py-3 transition-colors ${locked ? "opacity-45 cursor-not-allowed" : "hover:fp-gold-soft-bg"} ${currentStatus === key ? "bg-[rgba(201,165,116,0.08)]" : ""}`}
+              >
+                <div className="flex items-center justify-between">
+                  <StatusBadge status={key} />
+                  {locked && <Lock size={11} className="fp-text-faint" />}
+                </div>
+                <p className="text-xs fp-text-dim mt-1 leading-relaxed">{note ?? cfg.description}</p>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

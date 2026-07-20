@@ -60,7 +60,8 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel
     const prev = panelStatus;
     setPanelStatus(next);
     const res = await updatePanelStatus(panel.id, next);
-    if (!res.ok) setPanelStatus(prev);
+    if (!res.ok) { setPanelStatus(prev); return; }
+    setPanelStatus(res.status); // server may downgrade Live → Inactive (preview) when unfunded
   };
   const overflowActive = OVERFLOW_TABS.some((t) => t.k === tab);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerRow | null>(null);
@@ -158,7 +159,7 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel
 
       <div className="p-4 sm:p-8 space-y-6">
         {tab === "overview" && <OverviewTab panel={panel} />}
-        {tab === "status" && <StatusTab panelId={panel.id} panelStatus={panelStatus} setPanelStatus={changeStatus} />}
+        {tab === "status" && <StatusTab panelId={panel.id} panelStatus={panelStatus} setPanelStatus={changeStatus} innvilBalance={panel.innvilBalance} />}
         {tab === "branding" && <BrandingTab panel={panel} />}
         {tab === "domain" && <DomainTab panel={panel} />}
         {tab === "providers" && <ProvidersTab panelId={panel.id} />}

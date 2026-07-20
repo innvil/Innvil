@@ -318,7 +318,8 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         <h2 className="fp-display text-3xl mb-4">The fairest commission in SMM.</h2>
         <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
           No monthly rent, no setup fee. Innvil takes a flat 5% — and only when an order actually
-          completes. Cancel or refund it, and that order costs you nothing.
+          completes. Cancel or refund it, and that order costs you nothing. Build and <span className="fp-text">preview
+          your live storefront for free</span> — you only fund a panel when you&apos;re ready to take orders.
         </p>
         <div className="grid md:grid-cols-2 gap-12 items-center">
           {/* Commission wheel — you keep 95%, Innvil 5% (completed only) */}
@@ -349,9 +350,9 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
           <div>
             <div className="space-y-5 mb-8">
               {[
-                { v: "5%", t: "On completed orders only", d: "0% on canceled or refunded orders — you're billed on real revenue, never on rent." },
-                { v: "$10", t: "One-time to activate a panel", d: "Your first top-up funds the panel's commission balance; $5 minimum after that." },
-                { v: "$0", t: "Rent, setup & hidden fees", d: "Unlimited panels per account, subdomain included, custom domain optional." },
+                { v: "5%", t: "On completed orders only", d: "0% on canceled or refunded orders — you're billed on real revenue you earned, never on rent." },
+                { v: "$0", t: "Rent & setup fees", d: "No monthly bill, no onboarding cost. You only ever pay the 5% on what actually completes." },
+                { v: "∞", t: "Panels per account", d: "Spin up unlimited white-label panels — subdomain included, custom domain optional." },
               ].map((f) => (
                 <div key={f.t} className="flex gap-4">
                   <span className="fp-display text-2xl fp-gold w-14 shrink-0">{f.v}</span>
@@ -381,7 +382,8 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
           {[
             { q: "What is an SMM panel, and what does Innvil do?", a: "An SMM panel is a storefront that sells social-media marketing services — followers, likes, views, comments. Innvil is the no-code builder for one: you create a white-label panel with its own subdomain, storefront, customer dashboard and wallet. Innvil never sells the services itself." },
             { q: "Do I need technical knowledge to launch a panel?", a: "No. Name your panel, pick a subdomain, choose a theme, connect your provider's API key, and you're live in minutes — no code, no server to manage." },
-            { q: "How does the pricing work?", a: "There's no monthly rent and no setup fee. Innvil takes a flat 5% commission, and only on orders that actually complete — 0% on anything canceled or refunded. Your first top-up to activate a panel is $10 (then $5 minimum)." },
+            { q: "How does the pricing work?", a: "There's no monthly rent and no setup fee. Innvil takes a flat 5% commission, and only on orders that actually complete — 0% on anything canceled or refunded." },
+            { q: "How do I activate my panel and take it live?", a: "You can set a panel Live any time — even before adding funds. With no Innvil balance it runs in preview (Inactive): your storefront is fully browsable so you can see exactly how it looks live, but customers can't place orders yet. To start accepting orders, open Billing → Add funds and top up (first top-up $10, then $5 minimum) — the panel activates and any live-preview panels flip to fully live automatically. The 5% commission draws from that balance as orders complete, and if it runs out the panel returns to preview until you top up again." },
             { q: "Do I need my own provider?", a: "Yes — Innvil is bring-your-own-provider. You connect your own SMM provider over their API; Innvil imports the catalog, applies your markup, forwards orders, and syncs statuses. You keep 95% of every order." },
             { q: "Can I use my own domain?", a: "Every panel includes a free subdomain, and you can connect a custom domain with automatic SSL. Disconnect it anytime and the storefront falls back to the included subdomain — no lock-in." },
             { q: "How many panels can I create?", a: "As many as you want. One account runs unlimited panels — spin up test panels, delete the ones you don't need, all from one dashboard." },
@@ -768,8 +770,14 @@ function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel
 }
 
 /* --- My Panels --- */
-// Owners get these four; `suspended` is Innvil-support-only (enforced server-side too).
-const OWNER_STATUS_OPTIONS: PanelStatus[] = ["draft", "live", "inactive", "maintenance"];
+// Owners set draft / live / maintenance. `inactive` (automatic, out of credit) and
+// `suspended` (support-only) are shown but locked. Live is always clickable — with no
+// Innvil balance the server runs it in preview (Inactive) until funds are added.
+const OWNER_SETTABLE: PanelStatus[] = ["draft", "live", "maintenance"];
+const LOCKED_STATUS_NOTE = {
+  inactive: "Applied automatically when a panel runs out of Innvil credit.",
+  suspended: "Set by Innvil support only.",
+} as const;
 
 function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: {
   panels: Panel[];
@@ -781,6 +789,7 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: 
 }) {
   const [panelStatuses, setPanelStatuses] = useState<Record<string, PanelStatus>>({});
   const [statusError, setStatusError] = useState<Record<string, string>>({});
+  const [statusNote, setStatusNote] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<Panel | null>(null);
 
   useEffect(() => {
@@ -792,12 +801,17 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: 
   const handleStatusChange = async (panelId: string, newStatus: PanelStatus) => {
     const prevStatus = panelStatuses[panelId];
     setStatusError((prev) => ({ ...prev, [panelId]: "" }));
+    setStatusNote((prev) => ({ ...prev, [panelId]: "" }));
     setPanelStatuses((prev) => ({ ...prev, [panelId]: newStatus })); // optimistic
     const res = await updatePanelStatus(panelId, newStatus);
     if (!res.ok) {
       setPanelStatuses((prev) => ({ ...prev, [panelId]: prevStatus })); // rollback
       setStatusError((prev) => ({ ...prev, [panelId]: res.error }));
+      return;
     }
+    // The server may downgrade Live → Inactive (preview) when there's no balance.
+    setPanelStatuses((prev) => ({ ...prev, [panelId]: res.status }));
+    if (res.note) setStatusNote((prev) => ({ ...prev, [panelId]: res.note as string }));
   };
 
   return (
@@ -820,12 +834,18 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: 
               <StatusDropdown
                 currentStatus={panelStatuses[p.id] ?? p.status}
                 onChange={(newStatus) => handleStatusChange(p.id, newStatus)}
-                options={OWNER_STATUS_OPTIONS}
+                settable={OWNER_SETTABLE}
+                lockedNote={LOCKED_STATUS_NOTE}
               />
             </div>
             {statusError[p.id] && (
               <p className="text-xs text-red-400 flex items-start gap-1 mb-2">
                 <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {statusError[p.id]}
+              </p>
+            )}
+            {statusNote[p.id] && !statusError[p.id] && (
+              <p className="text-xs fp-gold flex items-start gap-1 mb-2">
+                <Clock size={11} className="mt-0.5 shrink-0" /> {statusNote[p.id]}
               </p>
             )}
             <p className="fp-text-faint text-xs fp-mono flex items-center gap-1">

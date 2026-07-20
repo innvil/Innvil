@@ -217,19 +217,29 @@ function relTime(iso: string): string {
   return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 
-const OWNER_STATUS_OPTIONS: PanelStatus[] = ["draft", "live", "inactive", "maintenance"];
+// Owners set draft / live / maintenance; inactive (automatic) + suspended
+// (support-only) are shown locked. Live is always clickable — with no balance the
+// server runs it in preview (Inactive) until funds are added.
+const OWNER_SETTABLE: PanelStatus[] = ["draft", "live", "maintenance"];
+const LOCKED_STATUS_NOTE = {
+  inactive: "Applied automatically when a panel runs out of Innvil credit.",
+  suspended: "Set by Innvil support only.",
+} as const;
 
 export function StatusTab({
   panelId,
   panelStatus,
   setPanelStatus,
+  innvilBalance = 0,
 }: {
   panelId: string;
   panelStatus: PanelStatus;
   setPanelStatus: (s: PanelStatus) => void;
+  innvilBalance?: number;
 }) {
   const currentStatusConfig = PANEL_STATUSES[panelStatus] || PANEL_STATUSES.live;
   const realPanel = isUuid(panelId);
+  const funded = (innvilBalance ?? 0) > 0;
   const [history, setHistory] = useState<PanelStatusEvent[] | null>(null);
 
   const loadHistory = useCallback(() => {
@@ -253,9 +263,23 @@ export function StatusTab({
             <StatusBadge status={panelStatus} />
             <span className="text-sm fp-text-dim">Current status</span>
           </div>
-          <StatusDropdown currentStatus={panelStatus} onChange={handleChange} options={OWNER_STATUS_OPTIONS} />
+          <StatusDropdown
+            currentStatus={panelStatus}
+            onChange={handleChange}
+            settable={OWNER_SETTABLE}
+            lockedNote={LOCKED_STATUS_NOTE}
+          />
         </div>
         <p className="text-sm fp-text-dim leading-relaxed">{currentStatusConfig.description}</p>
+        {realPanel && !funded && (
+          <div className="mt-4 p-3 rounded-lg fp-gold-soft-bg border border-[rgba(201,165,116,0.25)] flex items-start gap-2">
+            <Clock size={12} className="fp-gold shrink-0 mt-0.5" />
+            <p className="text-xs fp-gold leading-relaxed">
+              No Innvil balance yet. You can set this panel <span className="fp-text">Live to preview</span> your storefront,
+              but it runs in <span className="fp-text">Inactive</span> (browse-only) mode until you add funds (Billing → Add funds) to accept orders.
+            </p>
+          </div>
+        )}
       </Card>
 
       {/* Status-specific cards */}

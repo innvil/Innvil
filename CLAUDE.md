@@ -127,6 +127,35 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Live-to-preview: unfunded Live runs as Inactive (v0.2.66)
+- Reversed the hard block from v0.2.65: owners can **always click Live** now. With **no Innvil
+  balance the server runs it in preview** — `updatePanelStatus` sets the panel `inactive` (browsable,
+  no orders) + flags `innvil_suspended`, so a later top-up auto-activates it to fully live. Funding a
+  flagged panel while going live clears the flag. It now returns `{ ok, status (effective), note }` so
+  the UI reflects the Live→Inactive downgrade; a `live_preview_no_credit` audit reason shows in Status
+  History as "Preview — add funds to accept orders".
+- `StatusDropdown` `settable` is back to `[draft, live, maintenance]` (Live no longer balance-gated);
+  `inactive`/`suspended` stay shown-but-locked with `lockedNote`. My Panels shows the returned note;
+  the Status-tab hint reworded to "set Live to preview, runs Inactive until funded".
+- **Landing ad:** commission section + the activation FAQ now sell "build and preview your live
+  storefront for free — only fund a panel when you're ready to take orders."
+- No migration.
+
+### 2026-07-20 — Activation gate: Live needs funds; lock inactive/suspended (v0.2.65)
+- **Going Live now requires a funded Innvil balance** ("activating" a panel = funding it).
+  `updatePanelStatus` rejects `live` when `innvil_balance <= 0` (was only blocking the
+  already-suspended case). `toPanel` now exposes `innvilBalance` on the `Panel` view-model
+  (from settings), so the UI can gate too.
+- **Owners set only draft / live / maintenance.** `OWNER_SETTABLE` dropped `inactive` (it's
+  applied automatically when credit runs out) — `inactive` + `suspended` are now **shown but
+  locked** (greyed, Lock icon, unclickable) in `StatusDropdown` via a new `settable` prop
+  (replaces the old `options` filter) + `lockedNote`. When unfunded, **Live is also locked**
+  with "Add funds to activate…". StatusTab shows an activation hint card when unfunded; both
+  My Panels and the Status tab pass `settable` computed from the panel's balance.
+- **Landing:** moved the "$10 to activate" detail OUT of the #pricing wheel (now 5% / $0 / ∞
+  panels) and INTO a new **FAQ** entry "How do I activate my panel and take it live?".
+- No migration.
+
 ### 2026-07-20 — Status polish: real Status History (v0.2.64)
 - The panel Status tab's **Status History** card was hardcoded mock ("2 hours ago / Yesterday /
   3 days ago"). Now REAL: every status change writes a `panel.status_changed` event to `audit_logs`
