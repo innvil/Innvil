@@ -6,8 +6,9 @@ import Link from "next/link";
 import {
   Sparkles, Zap, ShieldCheck, Wallet, Clock,
   AlertTriangle, CheckCircle2, ChevronDown, Loader2,
+  TrendingUp, CreditCard, Search, UserPlus,
 } from "lucide-react";
-import { PLATFORMS, PlatformKey, CustomerService, CustomerOrder } from "@/src/data/constants";
+import { PlatformKey, CustomerService, CustomerOrder } from "@/src/data/constants";
 import { PlatformGlyph, PlatformButton } from "@/src/components/customer/PlatformIcons";
 import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
@@ -22,7 +23,22 @@ import {
 import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
 import { createStorefrontClient } from "@/src/lib/supabase/client";
 
-const KNOWN = new Set<string>(PLATFORMS.map((p) => p.key));
+// Nice display labels for the platform keys the import produces. Owner-set labels
+// (platformMeta) win; then this map; then a title-cased fallback for anything new.
+// Real platforms ALWAYS get their own named tab — only truly platform-less services
+// (key "other", e.g. website traffic) fall into the "Other" bucket.
+const PLATFORM_LABELS: Record<string, string> = {
+  instagram: "Instagram", tiktok: "TikTok", youtube: "YouTube", x: "X",
+  facebook: "Facebook", telegram: "Telegram", spotify: "Spotify", linkedin: "LinkedIn",
+  twitch: "Twitch", discord: "Discord", reddit: "Reddit", pinterest: "Pinterest",
+  snapchat: "Snapchat", threads: "Threads", soundcloud: "SoundCloud", kick: "Kick",
+  rumble: "Rumble", bluesky: "Bluesky", other: "Other",
+};
+function labelForPlatform(key: string, meta?: StorefrontPlatformMeta): string {
+  const custom = meta?.[key]?.label;
+  if (custom && custom.trim()) return custom;
+  return PLATFORM_LABELS[key] ?? (key.charAt(0).toUpperCase() + key.slice(1));
+}
 
 /** Map a live storefront service to the customer UI's service shape. */
 function toCustomerService(s: StorefrontService, i: number): CustomerService {
@@ -403,17 +419,38 @@ export function Storefront({
   const groups = useMemo(() => {
     const m = new Map<string, StorefrontService[]>();
     for (const s of services) {
-      const k = s.platform && KNOWN.has(s.platform) ? s.platform : "other";
+      // Trust the import's platform assignment: any real platform (linkedin, twitch,
+      // reddit, …) keeps its own group. Only genuinely platform-less services — which
+      // the import already tags "other" (e.g. website traffic) — land in "Other".
+      const k = s.platform && s.platform.trim() && s.platform !== "other" ? s.platform : "other";
       const arr = m.get(k) ?? [];
       arr.push(s);
       m.set(k, arr);
     }
     return m;
   }, [services]);
-  const platformKeys = useMemo(() => [...groups.keys()], [groups]);
+  const platformKeys = useMemo(() => {
+    // Real platforms keep their discovery order; the catch-all "Other" always sits last.
+    return [...groups.keys()].sort((a, b) => (a === "other" ? 1 : b === "other" ? -1 : 0));
+  }, [groups]);
   const [activeP, setActiveP] = useState("");
   const active = activeP || platformKeys[0] || "";
   const shown = (groups.get(active) ?? []).slice(0, 10);
+
+  // Real, honest storefront stats derived from this panel's live catalog.
+  const platformCount = useMemo(() => platformKeys.filter((k) => k !== "other").length, [platformKeys]);
+  const lowestPrice = useMemo(() => {
+    const prices = services.map((s) => s.price).filter((p) => Number.isFinite(p) && p > 0);
+    return prices.length ? Math.min(...prices) : 0;
+  }, [services]);
+  const landingStats = useMemo(() => {
+    const out: Array<{ label: string; value: string }> = [{ label: "Services", value: services.length.toLocaleString() }];
+    if (platformCount > 0) out.push({ label: "Platforms", value: String(platformCount) });
+    if (lowestPrice > 0) out.push({ label: "Starting from", value: `${fmt(lowestPrice)}/1k` });
+    out.push({ label: "Delivery", value: "24/7" });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [services.length, platformCount, lowestPrice]);
 
   // Auth
   const [email, setEmail] = useState("");
@@ -522,9 +559,10 @@ export function Storefront({
           <PlatformButton
             key={k}
             platform={k as PlatformKey}
-            label={PLATFORMS.find((p) => p.key === k)?.label ?? k}
+            label={labelForPlatform(k, platformMeta)}
             active={active === k}
             onClick={() => setActiveP(k)}
+            pathOverride={platformMeta?.[k]?.icon ?? null}
           />
         )
       )}
@@ -636,9 +674,9 @@ export function Storefront({
           <h1 className="fp-display text-4xl md:text-5xl leading-tight mb-5">{panel.headline || "Grow every platform from one wallet."}</h1>
           <p className="fp-text-dim text-lg mb-8 leading-relaxed">{panel.description || `Instant delivery, transparent pricing, and one balance for all your social growth on ${panel.name}.`}</p>
           <div className="flex gap-3 flex-wrap mb-10">
-            {PLATFORMS.filter((p) => groups.has(p.key)).map((p) => (
-              <span key={p.key} className="w-11 h-11 rounded-xl fp-panel-raised border border-[#262A35] flex items-center justify-center fp-text-dim" title={p.label}>
-                <PlatformGlyph platform={p.key} size={18} />
+            {platformKeys.filter((k) => k !== "other").map((k) => (
+              <span key={k} className="w-11 h-11 rounded-xl fp-panel-raised border border-[#262A35] flex items-center justify-center fp-text-dim" title={labelForPlatform(k, platformMeta)}>
+                <PlatformGlyph platform={k} size={18} pathOverride={platformMeta?.[k]?.icon ?? null} />
               </span>
             ))}
           </div>
@@ -698,12 +736,48 @@ export function Storefront({
       </main>
 
       {services.length > 0 && (
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 pb-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {landingStats.map((s) => (
+              <div key={s.label} className="fp-panel border fp-line rounded-2xl p-4 text-center">
+                <p className="fp-display text-2xl fp-gold">{s.value}</p>
+                <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mt-1">{s.label}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {services.length > 0 && (
         <section className="max-w-6xl mx-auto px-4 sm:px-6 py-12 border-t fp-line-soft">
           <h2 className="fp-display text-2xl mb-6 text-center">Services for every platform</h2>
           <div className="mb-6 flex justify-center">{PlatformTabs}</div>
           <div className="max-w-2xl mx-auto">{ServiceList}</div>
         </section>
       )}
+
+      {/* How it works — default section on every panel */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">
+        <h2 className="fp-display text-2xl md:text-3xl text-center mb-2">How it works</h2>
+        <p className="fp-text-dim text-sm text-center mb-10 max-w-xl mx-auto">From sign-up to real growth in four simple steps.</p>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { n: "1", icon: UserPlus, t: "Create an account", d: `Sign up on ${panel.name} in seconds — just an email.` },
+            { n: "2", icon: Wallet, t: "Add funds", d: "Top up your wallet with the payment methods this panel supports." },
+            { n: "3", icon: Search, t: "Pick a service", d: "Choose a platform and service, paste your link, set a quantity." },
+            { n: "4", icon: TrendingUp, t: "Watch it grow", d: "Delivery starts fast and runs automatically until it's complete." },
+          ].map((s) => (
+            <div key={s.n} className="fp-panel border fp-line rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <span className="w-10 h-10 rounded-xl fp-violet-soft-bg fp-violet flex items-center justify-center"><s.icon size={18} /></span>
+                <span className="fp-mono text-xs fp-text-faint">0{s.n}</span>
+              </div>
+              <p className="text-sm font-medium mb-1">{s.t}</p>
+              <p className="fp-text-dim text-sm leading-relaxed">{s.d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {/* Why us — default section on every panel */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">
@@ -756,6 +830,22 @@ export function Storefront({
           )}
         </section>
       ))}
+
+      {/* Secure payments — trust strip (only methods the owner actually connected) */}
+      {paymentMethods.length > 0 && (
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 py-10 border-t fp-line-soft">
+          <p className="fp-text-faint text-xs fp-mono uppercase tracking-[0.14em] text-center mb-5 flex items-center justify-center gap-1.5">
+            <ShieldCheck size={13} /> Secure payments
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2.5">
+            {paymentMethods.map((m) => (
+              <span key={m.id} className="fp-panel-raised border fp-line-soft rounded-lg px-3.5 py-2 text-xs fp-text-dim flex items-center gap-1.5">
+                <CreditCard size={13} className="fp-text-faint" /> {m.label}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* CTA band — default section */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 py-14 border-t fp-line-soft">

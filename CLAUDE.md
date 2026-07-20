@@ -127,6 +127,27 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Fix: real platforms no longer dumped into "Other" (v0.2.61)
+- Storefront guest-landing showcase (`app/p/[subdomain]/Storefront.tsx`) was bucketing services by a
+  stale hardcoded 7-item `PLATFORMS`/`KNOWN` set, so any real platform beyond those 7 (LinkedIn,
+  Twitch, Discord, Reddit, Pinterest, …) fell into **"Other"**. Now it buckets by the import's actual
+  stored `platform` key — every real platform gets its own named tab; only truly platform-less
+  services (import already tags them `other`, e.g. website traffic) go to "Other" (sorted last).
+  Proper labels via a `PLATFORM_LABELS` map (owner `platformMeta` label wins, then map, then
+  title-case), and hero/tab glyphs use the owner's custom logo (`platformMeta[key].icon`). The
+  ordering flow (`NewOrder`) already did this correctly — this only aligns the storefront landing.
+
+### 2026-07-20 — Richer per-panel storefront landing (v0.2.60)
+- Expanded the customer-facing storefront guest landing (`app/p/[subdomain]/Storefront.tsx`) toward
+  the reference SMM sites (prm4u/worldofsmm/smmcost). Three new default sections, all white-label +
+  data-driven: a **live stats strip** (Services / Platforms / Starting-from lowest price / 24-7 — all
+  derived from the panel's real catalog, nothing fabricated), a **"How it works"** 4-step flow
+  (create account → add funds → pick a service → watch it grow), and a **"Secure payments"** trust row
+  that lists only the gateways the owner actually connected (hidden when none). Flow is now
+  hero → stats → services → how-it-works → why → FAQ → owner blocks → payments → CTA → footer.
+- Content-only; no new deps or migration. Still pending for per-panel (agenda #3 second half):
+  more Design-Shop premium templates.
+
 ### 2026-07-20 — Landing: surface delete + owner status control (v0.2.59)
 - Reviewed the reference sites (prm4u, smmcost, worldofsmm, socpanel) and surfaced two just-built
   capabilities on the public landing: **How it works** step 04 reframed from "Go live" to
