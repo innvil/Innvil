@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Main landing pass: commission wheel + trust band + FAQ (v0.2.62)
+- Landing page pass (roadmap #1), modeled on socpanel/prm4u/worldofsmm. Added to `PublicLanding`
+  (`src/components/panels/index.tsx`): (1) an honest **"by the numbers" band** below the hero
+  (5% · $0 rent · ∞ panels · Minutes) — NOT fabricated usage stats, since Innvil is pre-launch;
+  (2) rebuilt **#pricing** into "The fairest commission in SMM" with an inline-SVG **commission
+  donut** (You keep 95% / Innvil 5% completed-only) + the three real numbers (5% completed-only,
+  $10 activate/$5 min, $0 rent/setup) + legend; (3) a **#faq** accordion (8 Q&As: what/how/pricing/
+  provider/domain/multi-panel/payments/privacy-boundary) + FAQ nav anchor.
+- No new deps (donut is hand-rolled SVG), no migration. FAQ copy is written to double as SEO
+  structured-data source for roadmap #3.
+
 ### 2026-07-20 — Fix: real platforms no longer dumped into "Other" (v0.2.61)
 - Storefront guest-landing showcase (`app/p/[subdomain]/Storefront.tsx`) was bucketing services by a
   stale hardcoded 7-item `PLATFORMS`/`KNOWN` set, so any real platform beyond those 7 (LinkedIn,

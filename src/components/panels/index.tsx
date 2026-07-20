@@ -88,6 +88,7 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
           <a href="#platform" className="hover:fp-text">Platform</a>
           <a href="#why" className="hover:fp-text">Why Innvil</a>
           <a href="#pricing" className="hover:fp-text">Pricing</a>
+          <a href="#faq" className="hover:fp-text">FAQ</a>
         </nav>
         <div className="flex items-center gap-3">
           <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
@@ -141,6 +142,23 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
             </div>
           </div>
           <FloorLedger />
+        </div>
+      </section>
+
+      {/* By the numbers — honest facts about the offer (not fabricated usage stats) */}
+      <section className="max-w-6xl mx-auto px-6 pt-2 pb-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { v: "5%", l: "Flat commission — completed orders only" },
+            { v: "$0", l: "Monthly rent & setup fees" },
+            { v: "∞", l: "Panels per account" },
+            { v: "Minutes", l: "To a live subdomain" },
+          ].map((s) => (
+            <div key={s.l} className="fp-panel border fp-line rounded-2xl p-5 text-center">
+              <p className="fp-display text-3xl fp-gold">{s.v}</p>
+              <p className="fp-text-faint text-xs mt-1.5 leading-snug">{s.l}</p>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -297,20 +315,87 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
 
       <section id="pricing" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Pricing</p>
-        <h2 className="fp-display text-3xl mb-10">One number. That&apos;s the whole model.</h2>
-        <div className="fp-panel border fp-gold-border rounded-2xl p-10 max-w-xl">
-          <p className="fp-display text-6xl fp-gold">5%</p>
-          <p className="fp-text-dim text-sm mt-2">commission on completed orders — nothing else, ever.</p>
-          <ul className="mt-6 space-y-2 text-sm">
-            {["No monthly rent", "No setup fee", "Unlimited panels per account", "Subdomain included, custom domain optional"].map((t) => (
-              <li key={t} className="flex gap-2">
-                <CheckCircle2 size={16} className="fp-safe shrink-0 mt-0.5" /> {t}
-              </li>
-            ))}
-          </ul>
-          <Link href="/signup" className="fp-btn-primary font-semibold px-6 py-3 rounded-lg mt-8 flex items-center gap-2 w-fit">
-            Create your panel <ArrowRight size={16} />
-          </Link>
+        <h2 className="fp-display text-3xl mb-4">The fairest commission in SMM.</h2>
+        <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
+          No monthly rent, no setup fee. Innvil takes a flat 5% — and only when an order actually
+          completes. Cancel or refund it, and that order costs you nothing.
+        </p>
+        <div className="grid md:grid-cols-2 gap-12 items-center">
+          {/* Commission wheel — you keep 95%, Innvil 5% (completed only) */}
+          <div className="flex items-center justify-center">
+            <div className="relative">
+              <svg width="240" height="240" viewBox="0 0 240 240" role="img" aria-label="You keep 95%, Innvil takes 5%">
+                <circle cx="120" cy="120" r="90" fill="none" stroke="#262A35" strokeWidth="26" />
+                <circle
+                  cx="120" cy="120" r="90" fill="none" stroke="#C9A574" strokeWidth="26" strokeLinecap="round"
+                  strokeDasharray={`${0.95 * 2 * Math.PI * 90} ${2 * Math.PI * 90}`}
+                  transform="rotate(-90 120 120)"
+                />
+                <circle
+                  cx="120" cy="120" r="90" fill="none" stroke="#8B7FFF" strokeWidth="26" strokeLinecap="round"
+                  strokeDasharray={`${0.05 * 2 * Math.PI * 90} ${2 * Math.PI * 90}`}
+                  strokeDashoffset={`${-0.95 * 2 * Math.PI * 90}`}
+                  transform="rotate(-90 120 120)"
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <p className="fp-display text-5xl fp-gold">95%</p>
+                <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">stays yours</p>
+              </div>
+            </div>
+          </div>
+
+          {/* The three numbers that make up the model */}
+          <div>
+            <div className="space-y-5 mb-8">
+              {[
+                { v: "5%", t: "On completed orders only", d: "0% on canceled or refunded orders — you're billed on real revenue, never on rent." },
+                { v: "$10", t: "One-time to activate a panel", d: "Your first top-up funds the panel's commission balance; $5 minimum after that." },
+                { v: "$0", t: "Rent, setup & hidden fees", d: "Unlimited panels per account, subdomain included, custom domain optional." },
+              ].map((f) => (
+                <div key={f.t} className="flex gap-4">
+                  <span className="fp-display text-2xl fp-gold w-14 shrink-0">{f.v}</span>
+                  <div>
+                    <p className="text-sm font-medium mb-0.5">{f.t}</p>
+                    <p className="fp-text-dim text-sm leading-relaxed">{f.d}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Link href="/signup" className="fp-btn-primary font-semibold px-6 py-3 rounded-lg flex items-center gap-2 w-fit">
+              Create your panel <ArrowRight size={16} />
+            </Link>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-center gap-6 mt-12 text-xs fp-text-dim">
+          <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-[#C9A574]" /> You keep 95%</span>
+          <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-[#8B7FFF]" /> Innvil 5% — completed orders only</span>
+        </div>
+      </section>
+
+      <section id="faq" className="max-w-3xl mx-auto px-6 py-20 border-t fp-line-soft">
+        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3 text-center">FAQ</p>
+        <h2 className="fp-display text-3xl mb-10 text-center">Your questions, answered.</h2>
+        <div className="space-y-2">
+          {[
+            { q: "What is an SMM panel, and what does Innvil do?", a: "An SMM panel is a storefront that sells social-media marketing services — followers, likes, views, comments. Innvil is the no-code builder for one: you create a white-label panel with its own subdomain, storefront, customer dashboard and wallet. Innvil never sells the services itself." },
+            { q: "Do I need technical knowledge to launch a panel?", a: "No. Name your panel, pick a subdomain, choose a theme, connect your provider's API key, and you're live in minutes — no code, no server to manage." },
+            { q: "How does the pricing work?", a: "There's no monthly rent and no setup fee. Innvil takes a flat 5% commission, and only on orders that actually complete — 0% on anything canceled or refunded. Your first top-up to activate a panel is $10 (then $5 minimum)." },
+            { q: "Do I need my own provider?", a: "Yes — Innvil is bring-your-own-provider. You connect your own SMM provider over their API; Innvil imports the catalog, applies your markup, forwards orders, and syncs statuses. You keep 95% of every order." },
+            { q: "Can I use my own domain?", a: "Every panel includes a free subdomain, and you can connect a custom domain with automatic SSL. Disconnect it anytime and the storefront falls back to the included subdomain — no lock-in." },
+            { q: "How many panels can I create?", a: "As many as you want. One account runs unlimited panels — spin up test panels, delete the ones you don't need, all from one dashboard." },
+            { q: "What payment methods can my customers use?", a: "Each owner connects their own gateways. Crypto is supported today via Cryptomus and NOWPayments (300+ coins), with more gateways rolling out. Your customers top up a wallet and order from the balance." },
+            { q: "Can I log into my customers' accounts?", a: "No — and that's deliberate. Owners can't sign into customer accounts or reset customer passwords; you can only adjust balances. It's a privacy guarantee most legacy panels don't offer." },
+          ].map((f) => (
+            <details key={f.q} className="fp-panel border fp-line rounded-xl px-4 py-3 group">
+              <summary className="cursor-pointer text-sm font-medium flex items-center justify-between list-none gap-3">
+                {f.q}
+                <ChevronDown size={15} className="fp-text-faint group-open:rotate-180 transition-transform shrink-0" />
+              </summary>
+              <p className="fp-text-dim text-sm mt-2 leading-relaxed">{f.a}</p>
+            </details>
+          ))}
         </div>
       </section>
 
