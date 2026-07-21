@@ -9,7 +9,7 @@ import {
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
-  AlertTriangle, Wrench, Eye, EyeOff, Trash2, PlayCircle,
+  AlertTriangle, Wrench, Eye, EyeOff, Trash2, PlayCircle, LifeBuoy,
 } from "lucide-react";
 import {
   Card, StatCard, FloorLedger, RevenueChart, StatusBadge,
@@ -22,7 +22,7 @@ import {
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
 import { AccountSettings } from "./AccountSettings";
-import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling, OwnerTopUps } from "./OwnerSections";
+import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling, OwnerTopUps, OwnerContactSupport, OwnerPanelSupport } from "./OwnerSections";
 import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
@@ -149,7 +149,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
       <section className="max-w-6xl mx-auto px-6 pt-2 pb-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { v: "5%", l: "Flat commission — completed orders only" },
+            { v: "5% → 1%", l: "Commission drops as your sales grow" },
             { v: "$0", l: "Monthly rent & setup fees" },
             { v: "∞", l: "Panels per account" },
             { v: "Minutes", l: "To a live subdomain" },
@@ -373,6 +373,29 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
           <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-[#C9A574]" /> You keep 95%</span>
           <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm bg-[#8B7FFF]" /> Innvil 5% — completed orders only</span>
         </div>
+
+        <div className="fp-panel border fp-gold-border rounded-2xl p-6 md:p-8 mt-14">
+          <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Volume discounts</p>
+          <h3 className="fp-display text-2xl mb-3">5% isn&apos;t forever. It drops as you grow.</h3>
+          <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-6">
+            The more your panel sells, the less Innvil takes — all the way down to
+            <span className="fp-gold"> 1%</span>. Doing 1,000+ completed orders a day? Contact support and
+            we&apos;ll lower your rate. And we never take more than <span className="fp-text">$100 from one panel in a day.</span>
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { d: "1,000 / day", r: "4%" },
+              { d: "2,500 / day", r: "3%" },
+              { d: "5,000 / day", r: "2%" },
+              { d: "10,000 / day", r: "1%" },
+            ].map((b) => (
+              <div key={b.d} className="fp-panel-raised border fp-line-soft rounded-xl p-4 text-center">
+                <p className="fp-display text-2xl fp-gold">{b.r}</p>
+                <p className="fp-text-faint text-xs fp-mono mt-1">{b.d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section id="faq" className="max-w-3xl mx-auto px-6 py-20 border-t fp-line-soft">
@@ -382,7 +405,8 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
           {[
             { q: "What is an SMM panel, and what does Innvil do?", a: "An SMM panel is a storefront that sells social-media marketing services — followers, likes, views, comments. Innvil is the no-code builder for one: you create a white-label panel with its own subdomain, storefront, customer dashboard and wallet. Innvil never sells the services itself." },
             { q: "Do I need technical knowledge to launch a panel?", a: "No. Name your panel, pick a subdomain, choose a theme, connect your provider's API key, and you're live in minutes — no code, no server to manage." },
-            { q: "How does the pricing work?", a: "There's no monthly rent and no setup fee. Innvil takes a flat 5% commission, and only on orders that actually complete — 0% on anything canceled or refunded." },
+            { q: "How does the pricing work?", a: "There's no monthly rent and no setup fee. Innvil takes 5% commission, and only on orders that actually complete — 0% on anything canceled or refunded. That 5% also drops as you scale (see below), and we never take more than $100 from one panel in a single day." },
+            { q: "Does the commission drop as I grow?", a: "Yes — 5% isn't forever. The more a panel sells, the lower its rate: roughly 4% at 1,000 completed orders/day, 3% at 2,500, 2% at 5,000, and 1% at 10,000+. Cross 1,000 orders/day and you can contact support to have your rate reduced. On top of that, Innvil never takes more than $100 from one panel per day — so the effective rate keeps falling the more you sell." },
             { q: "How do I activate my panel and take it live?", a: "You can set a panel Live any time — even before adding funds. With no Innvil balance it runs in preview (Inactive): your storefront is fully browsable so you can see exactly how it looks live, but customers can't place orders yet. To start accepting orders, open Billing → Add funds and top up (first top-up $10, then $5 minimum) — the panel activates and any live-preview panels flip to fully live automatically. The 5% commission draws from that balance as orders complete, and if it runs out the panel returns to preview until you top up again." },
             { q: "Do I need my own provider?", a: "Yes — Innvil is bring-your-own-provider. You connect your own SMM provider over their API; Innvil imports the catalog, applies your markup, forwards orders, and syncs statuses. You keep 95% of every order." },
             { q: "Can I use my own domain?", a: "Every panel includes a free subdomain, and you can connect a custom domain with automatic SSL. Disconnect it anytime and the storefront falls back to the included subdomain — no lock-in." },
@@ -559,8 +583,17 @@ const APP_NAV = [
   { k: "support", label: "Support inbox", icon: MessageSquare },
 ];
 
+// The last nav item is role-dependent: the super admin (Innvil owner) MANAGES the
+// panel owners' support messages ("Panel Support"); every other owner contacts support.
+function navItemsFor(isSuper: boolean) {
+  return [
+    ...APP_NAV,
+    { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
+  ];
+}
+
 function AppSidebar({ section, setSection, isSuper }: { section: string; setSection: (s: string) => void; isSuper?: boolean }) {
-  const items = APP_NAV;
+  const items = navItemsFor(!!isSuper);
 
   return (
     <aside className="w-60 shrink-0 fp-void-2 border-r fp-line-soft min-h-screen p-5 hidden md:flex flex-col">
@@ -1525,7 +1558,7 @@ export function InnvilApp({ setWorld, initialSection }: {
               <button onClick={() => setMobileNav(false)} className="fp-text-dim hover:fp-text p-1"><X size={18} /></button>
             </div>
             <nav className="space-y-1 flex-1">
-              {APP_NAV.map((it) => (
+              {navItemsFor(isSuper).map((it) => (
                 <button
                   key={it.k}
                   onClick={() => { setSection(it.k); setMobileNav(false); }}
@@ -1584,11 +1617,13 @@ export function InnvilApp({ setWorld, initialSection }: {
             <Card title="Support inbox — all panels" icon={MessageSquare} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>
               <p className="fp-text-dim text-sm leading-relaxed">
                 A unified ticket inbox across all your panels — view, reply, close, reopen, with optional
-                auto-reply — is coming soon.
+                auto-reply — is coming soon. Need help from Innvil?{" "}
+                <button onClick={() => setSection("contact")} className="fp-gold">Contact support</button>.
               </p>
             </Card>
           </div>
         )}
+        {section === "contact" && (isSuper ? <OwnerPanelSupport /> : <OwnerContactSupport />)}
       </div>
       {showAddFunds && (
         <AddFundsModal

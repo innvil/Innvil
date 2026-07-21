@@ -127,6 +127,42 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Commission volume discounts + $100/day cap (v0.2.69)
+- **Marketing hook to pull socpanel renters: "5% isn't forever."** Per-panel commission can be
+  discounted down to **1%** as a panel scales, and Innvil never takes more than **$100/panel/day**.
+- **Internal brackets** (guideline for support + future AI), by completed orders/day:
+  1k → 4% · 2.5k → 3% · 5k → 2% · 10k → 1% (`commissionBracketRate` in `src/lib/money.ts` +
+  `INNVIL_MIN_COMMISSION_RATE` 0.01, `INNVIL_COMMISSION_CAP_PER_DAY` 100).
+- **Settlement (migration `0020_commission_brackets.sql`):** `settle_order_commission()` now reads the
+  panel's `settings.commission_rate` (default 5%) and enforces the **$100/panel/day cap** via new
+  `orders.commission_settled_at` (once the day's cap is hit, further completions settle at $0). Same
+  signature — sync.ts unchanged.
+- **Super admin:** `/superadmin → Panels` gains a **Commission** column — current rate, a set control
+  (clamped 1–5%), and each panel's orders-today with the suggested bracket. `setPanelCommissionRate`
+  (audit-logged) in `superadmin.ts`; `SuperAdminPanelVM` now carries `commissionRate` + `ordersToday`.
+- **Owner Billing** note + **landing** updated: by-the-numbers tile "5% → 1%", a volume-discount
+  bracket strip in #pricing, and a new "Does the commission drop as I grow?" FAQ. Owners doing
+  1,000+ orders/day are told to contact support for a lower rate.
+- NOTE: the Billing "Commission today (est.)" still estimates at a flat 5% (per-panel rate + cap are
+  applied at settlement; "Commission charged" is the real figure).
+
+### 2026-07-20 — Owner → Innvil support contact (v0.2.68)
+- Panel owners can now **contact Innvil support**. New owner sidebar item **"Contact support"**
+  (`OwnerContactSupport` in `OwnerSections.tsx`): a subject+message form plus their own past
+  messages with open/resolved status. Distinct from the owner↔customer "Support inbox".
+- **Delivery:** `sendOwnerSupportMessage` (`src/lib/actions/platform-support.ts`) stores the
+  message in the new `platform_support_messages` table AND best-effort emails support (reply-to =
+  owner) via Resend. Destination = `platform_settings.support_email` if set, else the
+  **super-admin account email(s)** (resolved via `auth.admin.getUserById`).
+- **Super admin:** new **Support** tab in `/superadmin` — sets the support destination email
+  (`get/setSupportEmail` in `platform-settings.ts`), lists all owner messages with sender/date,
+  "Reply by email" (mailto), and mark resolved / reopen (`setPlatformSupportStatus`).
+- **Role split in the owner sidebar** (`navItemsFor(isSuper)`): the super-admin account (Innvil owner)
+  sees **"Panel Support"** — `OwnerPanelSupport`, the same owner-message inbox — instead of "Contact
+  support" (they ARE support). Every non-super-admin owner keeps **"Contact support"**.
+- **Run migration `0019_platform_support.sql`.** Email needs `RESEND_API_KEY` (best-effort; the
+  in-app super-admin list always works regardless).
+
 ### 2026-07-20 — Live-to-preview: unfunded Live runs as Inactive (v0.2.66)
 - Reversed the hard block from v0.2.65: owners can **always click Live** now. With **no Innvil
   balance the server runs it in preview** — `updatePanelStatus` sets the panel `inactive` (browsable,

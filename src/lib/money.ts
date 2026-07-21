@@ -5,8 +5,25 @@ export function round4(n: number): number {
   return Math.round((n + Number.EPSILON) * 10000) / 10000;
 }
 
-/** Innvil's platform commission on completed-order revenue (5%, no monthly rent). */
+/** Innvil's default platform commission on completed-order revenue (5%, no monthly rent). */
 export const INNVIL_COMMISSION_RATE = 0.05;
+/** Lowest commission rate a high-volume panel can be discounted to (1%). */
+export const INNVIL_MIN_COMMISSION_RATE = 0.01;
+/** Hard cap on commission Innvil takes from ONE panel in a single day. Mirror of the SQL (0020). */
+export const INNVIL_COMMISSION_CAP_PER_DAY = 100;
+
+/**
+ * Internal volume-discount brackets by completed orders/day — the guideline support
+ * (and future AI support) uses to grant a panel a lower commission rate. Public
+ * messaging says "down to 2%"; internally we can go to 1% for the biggest panels.
+ */
+export function commissionBracketRate(ordersPerDay: number): number {
+  if (ordersPerDay >= 10000) return 0.01;
+  if (ordersPerDay >= 5000) return 0.02;
+  if (ordersPerDay >= 2500) return 0.03;
+  if (ordersPerDay >= 1000) return 0.04;
+  return INNVIL_COMMISSION_RATE;
+}
 
 /* ---------------------------------------------------------------------------
    Currency — each panel operates in one well-known currency (default USD).

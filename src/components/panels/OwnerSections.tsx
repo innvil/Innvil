@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi, CheckCircle2 } from "lucide-react";
+import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi, CheckCircle2, LifeBuoy, Send } from "lucide-react";
 import { Card, Pill } from "@/src/components/ui";
 import { formatMoney } from "@/src/lib/money";
 import { listAllOwnerOrders, getOwnerBillingSummary, type OwnerOrderVM, type OwnerBillingSummary } from "@/src/lib/actions/admin-orders";
+import { sendOwnerSupportMessage, listOwnerSupportMessages, listPlatformSupportMessages, setPlatformSupportStatus, type PlatformSupportMessage } from "@/src/lib/actions/platform-support";
 import { listAllOwnerCustomers, adjustCustomerBalance, type OwnerCustomerVM } from "@/src/lib/actions/customers";
 import { listAllOwnerProviders, fetchProviderBalance, type OwnerProviderVM } from "@/src/lib/actions/providers";
 import { listAllOwnerDeposits, type OwnerAllDepositVM } from "@/src/lib/actions/payments";
@@ -538,6 +539,11 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
           deducted so far. If a panel&apos;s balance runs out it pauses new orders until you top up. Your
           provider is billed by you directly — Innvil never touches that relationship.
         </p>
+        <p className="fp-text-faint text-[11px] mt-2 leading-relaxed">
+          <span className="fp-gold">Selling in volume?</span> The 5% drops as you grow — a panel doing 1,000+
+          completed orders/day can contact Innvil support for a lower rate (as low as 1%). Innvil never takes
+          more than $100 from one panel in a day.
+        </p>
       </Card>
 
       <Card title="By panel today" icon={ListOrdered}>
@@ -555,6 +561,150 @@ export function OwnerBilling({ onAddFunds }: { onAddFunds: () => void }) {
               <span className="fp-mono text-sm">{fmt(p.innvilBalance)}</span>
             </div>
           ))
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------- Contact Innvil support ---------------- */
+export function OwnerContactSupport() {
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [history, setHistory] = useState<PlatformSupportMessage[] | null>(null);
+
+  const load = () => listOwnerSupportMessages().then(setHistory).catch(() => setHistory([]));
+  useEffect(() => { load(); }, []);
+
+  const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setMsg(null);
+    const res = await sendOwnerSupportMessage(subject, body);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: "Sent — the Innvil team will get back to you by email." });
+    setSubject("");
+    setBody("");
+    load();
+  };
+
+  const inputCls = "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border";
+
+  return (
+    <div className="p-4 sm:p-8 space-y-6 max-w-3xl">
+      <h1 className="fp-display text-2xl">Contact support</h1>
+
+      <Card title="Message the Innvil team" icon={LifeBuoy}>
+        <p className="fp-text-dim text-sm mb-4 leading-relaxed">
+          Questions about billing, a panel, or anything else? Send us a message and we&apos;ll reply to your
+          account email. This goes straight to Innvil — it&apos;s separate from your customers&apos; tickets.
+        </p>
+        <label className="fp-text-dim text-xs fp-mono uppercase">Subject</label>
+        <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="What do you need help with?" className={`${inputCls} mt-1.5 mb-3`} maxLength={200} />
+        <label className="fp-text-dim text-xs fp-mono uppercase">Message</label>
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={6} placeholder="Describe your question or issue…" className={`${inputCls} mt-1.5 mb-3 resize-y`} maxLength={5000} />
+        {msg && (
+          <p className={`text-xs flex items-center gap-1.5 mb-3 ${msg.error ? "text-red-400" : "fp-safe"}`}>
+            {msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}
+          </p>
+        )}
+        <button onClick={submit} disabled={busy} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm disabled:opacity-60">
+          <Send size={15} /> {busy ? "Sending…" : "Send message"}
+        </button>
+      </Card>
+
+      <Card title="Your messages" icon={History}>
+        {history === null ? (
+          <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
+        ) : history.length === 0 ? (
+          <p className="fp-text-faint text-sm py-4 text-center">You haven&apos;t contacted support yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {history.map((m) => (
+              <details key={m.id} className="fp-panel-raised border fp-line-soft rounded-xl px-4 py-3 group">
+                <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium truncate">{m.subject}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <Pill tone={m.status === "resolved" ? "safe" : "muted"}>{m.status === "resolved" ? "Resolved" : "Open"}</Pill>
+                    <span className="fp-text-faint text-xs fp-mono">{fmtDate(m.createdAt)}</span>
+                  </span>
+                </summary>
+                <p className="fp-text-dim text-sm mt-2 leading-relaxed whitespace-pre-line">{m.body}</p>
+              </details>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------- Panel Support (super admin only — manage owner messages) ---------------- */
+export function OwnerPanelSupport() {
+  const [rows, setRows] = useState<PlatformSupportMessage[] | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = () => listPlatformSupportMessages().then(setRows).catch(() => setRows([]));
+  useEffect(() => { load(); }, []);
+
+  const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const setStatus = async (id: string, status: "open" | "resolved") => {
+    setBusyId(id);
+    const res = await setPlatformSupportStatus(id, status);
+    setBusyId(null);
+    if (res.ok) setRows((prev) => (prev ?? []).map((r) => (r.id === id ? { ...r, status } : r)));
+  };
+
+  const openCount = (rows ?? []).filter((r) => r.status !== "resolved").length;
+
+  return (
+    <div className="p-4 sm:p-8 space-y-6 max-w-3xl">
+      <div className="flex items-center justify-between">
+        <h1 className="fp-display text-2xl">Panel Support</h1>
+        <button onClick={load} className="text-xs fp-gold">Refresh</button>
+      </div>
+      <p className="fp-text-dim text-sm">
+        Messages from panel owners contacting Innvil. {openCount > 0 && <span className="fp-gold">{openCount} open.</span>}{" "}
+        Reply by email or mark resolved. The support destination email is set under <span className="fp-text">/superadmin → Support</span>.
+      </p>
+
+      <Card title="Owner messages" icon={LifeBuoy}>
+        {rows === null ? (
+          <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="fp-text-faint text-sm py-4 text-center">No support messages yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((m) => (
+              <div key={m.id} className="fp-panel-raised border fp-line-soft rounded-xl p-4">
+                <div className="flex items-center justify-between gap-3 mb-1.5">
+                  <p className="text-sm font-medium truncate">{m.subject}</p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Pill tone={m.status === "resolved" ? "safe" : "muted"}>{m.status === "resolved" ? "Resolved" : "Open"}</Pill>
+                    <span className="fp-text-faint text-xs fp-mono">{fmtDate(m.createdAt)}</span>
+                  </div>
+                </div>
+                <p className="fp-text-faint text-xs fp-mono mb-2">{m.ownerEmail ?? "unknown sender"}</p>
+                <p className="fp-text-dim text-sm leading-relaxed whitespace-pre-line mb-3">{m.body}</p>
+                <div className="flex items-center gap-2">
+                  {m.ownerEmail && (
+                    <a href={`mailto:${m.ownerEmail}?subject=${encodeURIComponent("Re: " + m.subject)}`} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-1.5">Reply by email</a>
+                  )}
+                  {m.status === "resolved" ? (
+                    <button onClick={() => setStatus(m.id, "open")} disabled={busyId === m.id} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60">Reopen</button>
+                  ) : (
+                    <button onClick={() => setStatus(m.id, "resolved")} disabled={busyId === m.id} className="text-xs fp-safe-soft-bg fp-safe rounded-lg px-3 py-1.5 disabled:opacity-60 flex items-center gap-1"><CheckCircle2 size={12} /> Mark resolved</button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </Card>
     </div>

@@ -11,6 +11,7 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 type Result = { ok: true } | { ok: false; error: string };
 
 const LANDING_VIDEO_KEY = "landing_video";
+const SUPPORT_EMAIL_KEY = "support_email";
 
 async function isSuperAdmin(): Promise<boolean> {
   const { user, admin } = await getAuthedAdmin();
@@ -54,6 +55,33 @@ export async function setLandingVideo(url: string): Promise<Result> {
   const { error } = await admin
     .from("platform_settings")
     .upsert({ key: LANDING_VIDEO_KEY, value: { url: trimmed }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/** Where owner→Innvil support messages are emailed. "" = fall back to super-admin account emails. */
+export async function getSupportEmail(): Promise<{ email: string }> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("platform_settings")
+    .select("value")
+    .eq("key", SUPPORT_EMAIL_KEY)
+    .maybeSingle();
+  const value = (data?.value ?? {}) as Record<string, unknown>;
+  return { email: typeof value.email === "string" ? value.email : "" };
+}
+
+/** Set (or clear, with "") the support destination email. Super admin only. */
+export async function setSupportEmail(email: string): Promise<Result> {
+  if (!(await isSuperAdmin())) return { ok: false, error: "Super admin only." };
+  const trimmed = (email ?? "").trim();
+  if (trimmed && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed))
+    return { ok: false, error: "Enter a valid email address." };
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("platform_settings")
+    .upsert({ key: SUPPORT_EMAIL_KEY, value: { email: trimmed }, updated_at: new Date().toISOString() }, { onConflict: "key" });
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }

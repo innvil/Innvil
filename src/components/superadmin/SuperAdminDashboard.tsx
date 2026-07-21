@@ -4,15 +4,17 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
-  PlayCircle, Trash2,
+  PlayCircle, Trash2, LifeBuoy,
 } from "lucide-react";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
-  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance,
+  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance, setPanelCommissionRate,
   type PlatformOverview, type SuperAdminPanelVM,
 } from "@/src/lib/actions/superadmin";
-import { getLandingVideo, setLandingVideo } from "@/src/lib/actions/platform-settings";
+import { commissionBracketRate } from "@/src/lib/money";
+import { getLandingVideo, setLandingVideo, getSupportEmail, setSupportEmail } from "@/src/lib/actions/platform-settings";
+import { listPlatformSupportMessages, setPlatformSupportStatus, type PlatformSupportMessage } from "@/src/lib/actions/platform-support";
 import { toVideoEmbed } from "@/src/lib/video";
 import {
   getPlatformPaymentsMeta, connectPlatformGateway, disconnectPlatformGateway,
@@ -293,6 +295,7 @@ function PanelsTab() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [amountById, setAmountById] = useState<Record<string, string>>({});
   const [reasonById, setReasonById] = useState<Record<string, string>>({});
+  const [rateById, setRateById] = useState<Record<string, string>>({});
 
   const fmt = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
   const load = () => {
@@ -335,11 +338,32 @@ function PanelsTab() {
     setNotice(`Updated balance for panel ${panelId.slice(0, 8)}.`);
   };
 
+  const applyRate = async (panelId: string) => {
+    setNotice(null);
+    setError(null);
+    const pct = Number((rateById[panelId] ?? "").trim());
+    if (!Number.isFinite(pct) || pct < 1 || pct > 5) {
+      setError("Commission must be between 1% and 5%.");
+      return;
+    }
+    setBusyKey(`${panelId}:rate`);
+    const res = await setPanelCommissionRate(panelId, pct / 100);
+    setBusyKey(null);
+    if (!res.ok) { setError(res.error); return; }
+    setRows((prev) => (prev ?? []).map((r) => (r.id === panelId ? { ...r, commissionRate: res.data.rate } : r)));
+    setRateById((prev) => ({ ...prev, [panelId]: "" }));
+    setNotice(`Set commission to ${(res.data.rate * 100).toFixed(0)}% for panel ${panelId.slice(0, 8)}.`);
+  };
+
   return (
     <div className="space-y-5">
       <p className="fp-text-dim text-sm">
-        Manage panel balances directly for payment correction cases. Credits and debits are audit-logged.
+        Manage panel balances and commission rates. Credits, debits and rate changes are audit-logged.
       </p>
+      <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs fp-text-dim">
+        <span className="fp-text">Volume-discount brackets</span> (per panel, by completed orders/day):
+        1k → 4% · 2.5k → 3% · 5k → 2% · 10k → 1%. Innvil never takes more than <span className="fp-gold">$100/panel/day</span>.
+      </div>
       {notice && <p className="text-xs fp-safe flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
       {error && <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
 
@@ -349,13 +373,14 @@ function PanelsTab() {
         <p className="fp-text-faint text-sm py-6 text-center">No panels found.</p>
       ) : (
         <div className="fp-panel border fp-line rounded-2xl p-4 overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm">
+          <table className="w-full min-w-[1140px] text-sm">
             <thead>
               <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
                 <th className="py-2 font-normal">Panel</th>
                 <th className="py-2 font-normal">Owner</th>
                 <th className="py-2 font-normal">Status</th>
                 <th className="py-2 font-normal text-right">Innvil balance</th>
+                <th className="py-2 font-normal">Commission</th>
                 <th className="py-2 font-normal">Amount</th>
                 <th className="py-2 font-normal">Reason</th>
                 <th className="py-2 font-normal text-right">Actions</th>
@@ -371,6 +396,28 @@ function PanelsTab() {
                   <td className="py-2.5 fp-text-dim">{r.ownerEmail ?? r.ownerId.slice(0, 8)}</td>
                   <td className="py-2.5"><Pill tone={r.status === "live" ? "safe" : "muted"}>{r.status}</Pill></td>
                   <td className="py-2.5 text-right fp-mono fp-gold">{fmt(r.balance)}</td>
+                  <td className="py-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="fp-mono text-xs fp-gold w-9">{(r.commissionRate * 100).toFixed(0)}%</span>
+                      <input
+                        value={rateById[r.id] ?? ""}
+                        onChange={(e) => setRateById((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                        placeholder="%"
+                        inputMode="decimal"
+                        className="w-12 fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs fp-mono outline-none focus:fp-gold-border"
+                      />
+                      <button
+                        onClick={() => applyRate(r.id)}
+                        disabled={busyKey !== null}
+                        className="text-xs fp-gold-soft-bg fp-gold px-2 py-1.5 rounded-lg disabled:opacity-60"
+                      >
+                        Set
+                      </button>
+                    </div>
+                    <p className="fp-text-faint text-[11px] fp-mono mt-1">
+                      {r.ordersToday.toLocaleString()}/day → suggests {(commissionBracketRate(r.ordersToday) * 100).toFixed(0)}%
+                    </p>
+                  </td>
                   <td className="py-2.5">
                     <input
                       value={amountById[r.id] ?? ""}
@@ -495,12 +542,104 @@ function LandingTab() {
   );
 }
 
+/* ---------------- Owner support ---------------- */
+function SupportTab() {
+  const [email, setEmail] = useState("");
+  const [savedEmail, setSavedEmail] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailMsg, setEmailMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [rows, setRows] = useState<PlatformSupportMessage[] | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const loadEmail = () => getSupportEmail().then((r) => { setEmail(r.email); setSavedEmail(r.email); }).catch(() => {});
+  const loadRows = () => listPlatformSupportMessages().then(setRows).catch(() => setRows([]));
+  useEffect(() => { loadEmail(); loadRows(); }, []);
+
+  const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  const saveEmail = async () => {
+    setSavingEmail(true); setEmailMsg(null);
+    const res = await setSupportEmail(email);
+    setSavingEmail(false);
+    if (!res.ok) { setEmailMsg({ text: res.error, error: true }); return; }
+    setSavedEmail(email.trim());
+    setEmailMsg({ text: email.trim() ? "Support email saved." : "Cleared — messages fall back to super-admin account emails." });
+  };
+
+  const setStatus = async (id: string, status: "open" | "resolved") => {
+    setBusyId(id);
+    const res = await setPlatformSupportStatus(id, status);
+    setBusyId(null);
+    if (res.ok) setRows((prev) => (prev ?? []).map((r) => (r.id === id ? { ...r, status } : r)));
+  };
+
+  const openCount = (rows ?? []).filter((r) => r.status !== "resolved").length;
+
+  return (
+    <div className="space-y-5 max-w-2xl">
+      <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
+        <p className="text-sm font-medium">Support destination email</p>
+        <p className="fp-text-faint text-xs">
+          Owner support messages are emailed here. Leave blank to fall back to the super-admin account email(s).
+        </p>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="support@yourdomain.com" className={inputCls} />
+        {emailMsg && (
+          <p className={`text-xs flex items-center gap-1.5 ${emailMsg.error ? "text-red-400" : "fp-safe"}`}>
+            {emailMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {emailMsg.text}
+          </p>
+        )}
+        <button onClick={saveEmail} disabled={savingEmail || email.trim() === savedEmail.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+          {savingEmail ? "Saving…" : "Save email"}
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">Owner messages {openCount > 0 && <span className="fp-gold">· {openCount} open</span>}</p>
+        <button onClick={loadRows} className="text-xs fp-gold">Refresh</button>
+      </div>
+
+      {rows === null ? (
+        <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="fp-text-faint text-sm py-6 text-center">No support messages yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((m) => (
+            <div key={m.id} className="fp-panel border fp-line rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-3 mb-1.5">
+                <p className="text-sm font-medium truncate">{m.subject}</p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Pill tone={m.status === "resolved" ? "safe" : "muted"}>{m.status === "resolved" ? "Resolved" : "Open"}</Pill>
+                  <span className="fp-text-faint text-xs fp-mono">{fmtDate(m.createdAt)}</span>
+                </div>
+              </div>
+              <p className="fp-text-faint text-xs fp-mono mb-2">{m.ownerEmail ?? "unknown sender"}</p>
+              <p className="fp-text-dim text-sm leading-relaxed whitespace-pre-line mb-3">{m.body}</p>
+              <div className="flex items-center gap-2">
+                {m.ownerEmail && (
+                  <a href={`mailto:${m.ownerEmail}?subject=${encodeURIComponent("Re: " + m.subject)}`} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-1.5">Reply by email</a>
+                )}
+                {m.status === "resolved" ? (
+                  <button onClick={() => setStatus(m.id, "open")} disabled={busyId === m.id} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60">Reopen</button>
+                ) : (
+                  <button onClick={() => setStatus(m.id, "resolved")} disabled={busyId === m.id} className="text-xs fp-safe-soft-bg fp-safe rounded-lg px-3 py-1.5 disabled:opacity-60 flex items-center gap-1"><CheckCircle2 size={12} /> Mark resolved</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- Shell ---------------- */
 const TABS = [
   { k: "overview", label: "Overview", icon: LayoutGrid },
   { k: "panels", label: "Panels", icon: Wallet },
   { k: "payments", label: "Platform payments", icon: CreditCard },
   { k: "landing", label: "Landing video", icon: PlayCircle },
+  { k: "support", label: "Support", icon: LifeBuoy },
 ];
 
 export function SuperAdminDashboard() {
@@ -549,6 +688,7 @@ export function SuperAdminDashboard() {
         {tab === "panels" && <PanelsTab />}
         {tab === "payments" && <PaymentsTab />}
         {tab === "landing" && <LandingTab />}
+        {tab === "support" && <SupportTab />}
       </div>
     </div>
   );

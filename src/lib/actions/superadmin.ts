@@ -2,6 +2,7 @@
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
+import { INNVIL_COMMISSION_RATE, INNVIL_MIN_COMMISSION_RATE } from "@/src/lib/money";
 
 /* Super-admin platform stats. Every export is gated on the super_admin role.
    Role is read via the service-role client (keyed by the validated user id) rather
@@ -30,6 +31,8 @@ export interface SuperAdminPanelVM {
   ownerId: string;
   ownerEmail: string | null;
   balance: number;
+  commissionRate: number; // effective per-panel rate (default 5%)
+  ordersToday: number;    // orders created today (bracket reference)
 }
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -98,8 +101,21 @@ export async function listPanelsForSuperAdmin(limit = 200): Promise<SuperAdminPa
   );
   const ownerEmailById = new Map<string, string | null>(emailEntries);
 
+  // Orders created today per panel — reference for the volume-discount brackets.
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const ordersTodayByPanel = new Map<string, number>();
+  const { data: todayOrders } = await admin
+    .from("orders")
+    .select("panel_id")
+    .in("panel_id", rows.map((r) => r.id))
+    .gte("created_at", startOfToday.toISOString());
+  for (const o of (todayOrders as Array<{ panel_id: string }> | null) ?? [])
+    ordersTodayByPanel.set(o.panel_id, (ordersTodayByPanel.get(o.panel_id) ?? 0) + 1);
+
   return rows.map((r) => {
     const settings = toSettings(r.settings);
+    const rawRate = Number(settings.commission_rate);
     return {
       id: r.id,
       name: r.name,
@@ -108,8 +124,35 @@ export async function listPanelsForSuperAdmin(limit = 200): Promise<SuperAdminPa
       ownerId: r.owner_id,
       ownerEmail: ownerEmailById.get(r.owner_id) ?? null,
       balance: toBalance(settings.innvil_balance),
+      commissionRate: Number.isFinite(rawRate) && rawRate > 0 ? rawRate : INNVIL_COMMISSION_RATE,
+      ordersToday: ordersTodayByPanel.get(r.id) ?? 0,
     };
   });
+}
+
+/** Set a panel's commission rate (super admin only). Clamped to 1%–5%. */
+export async function setPanelCommissionRate(panelId: string, rate: number): Promise<Result<{ rate: number }>> {
+  if (!(await requireSuperAdmin())) return { ok: false, error: "Super admin only." };
+  if (!Number.isFinite(rate)) return { ok: false, error: "Enter a valid rate." };
+  const clamped = Math.min(INNVIL_COMMISSION_RATE, Math.max(INNVIL_MIN_COMMISSION_RATE, rate));
+
+  const admin = createAdminClient();
+  const { user } = await getAuthedAdmin();
+  const { data: row } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  if (!row) return { ok: false, error: "Panel not found." };
+
+  const settings = toSettings(row.settings);
+  const updated = { ...settings, commission_rate: round4(clamped) };
+  const { error } = await admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_logs").insert({
+    panel_id: panelId,
+    actor_id: user?.id ?? null,
+    action: "superadmin.commission_rate_set",
+    meta: { rate: round4(clamped) },
+  });
+  return { ok: true, data: { rate: round4(clamped) } };
 }
 
 /** Credit/debit a panel's Innvil balance (stored in panels.settings.innvil_balance). */

@@ -20,7 +20,9 @@ order.
 | `0015_supabase_order_sync_cron.sql` | `pg_cron` + `pg_net`, `trigger_order_sync()`, schedules the order-status sync every 10 min |
 | `0016_platform_deposits.sql` | `platform_deposits` (owner → Innvil top-ups) + `credit_panel_innvil_balance()` (atomic funding of `panels.settings.innvil_balance`) |
 | `0017_commission_settlement.sql` | `orders.commission_amount` + `settle_order_commission()` — draws Innvil's 5% commission off `innvil_balance` per completed order (idempotent; the sync engine sweeps completed+unsettled orders) |
-| `0018_platform_settings.sql` | `platform_settings` key/value store (super-admin RLS) — first use: the landing walkthrough-video URL rendered on the public Innvil landing |
+| `0018_platform_settings.sql` | `platform_settings` key/value store (super-admin RLS) — landing walkthrough-video URL + owner-support destination email |
+| `0019_platform_support.sql` | `platform_support_messages` (owner → Innvil support) + RLS — owners send; super admin reads/resolves in /superadmin, emailed to `platform_settings.support_email` or the super-admin account email |
+| `0020_commission_brackets.sql` | `orders.commission_settled_at` + rewritten `settle_order_commission()` — per-panel `settings.commission_rate` (volume discount to 1%) + a **$100 per-panel per-day** commission cap |
 
 > Numbers `0006`/`0007` were intentionally skipped — the sequence has gaps, that's fine.
 > Migrations run in **filename order**; always number a new one after the current highest.
@@ -28,7 +30,7 @@ order.
 ## Applying the migrations (fresh project)
 
 **Option A — SQL editor (quickest):** open each file, paste into the Supabase
-Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0018`).
+Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0020`).
 
 **Option B — Supabase CLI:**
 
