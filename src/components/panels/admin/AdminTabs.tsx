@@ -41,7 +41,7 @@ import { getPanelBranding, updatePanelBranding, getPanelStatusHistory, type Land
 import {
   listPanelOrders, getPanelOverview, getPanelCurrency,
   resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
-  cancelAndRefundOrder, bulkCancelAndRefund,
+  cancelAndRefundOrder, bulkCancelAndRefund, refreshProviderBalancesAndRetryHeldOrders,
   type AdminOrderVM, type PanelOverview,
 } from "@/src/lib/actions/admin-orders";
 import { syncOrdersNow } from "@/src/lib/actions/orders";
@@ -1637,6 +1637,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [retryingHeld, setRetryingHeld] = useState(false);
   const [currency, setCurrency] = useState("USD");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [commentsView, setCommentsView] = useState<string[] | null>(null);
@@ -1662,11 +1663,11 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     if (!realPanel) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
-      if (syncing || busyId) return;
+      if (syncing || retryingHeld || busyId) return;
       void load();
     }, ORDERS_AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [busyId, load, realPanel, syncing]);
+  }, [busyId, load, realPanel, retryingHeld, syncing]);
 
   const fmt = (n: number) => formatMoney(n, currency);
 
@@ -1728,6 +1729,33 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     setSyncing(false);
   };
 
+  const retryHeldNow = async () => {
+    setRetryingHeld(true); setMsg(null);
+    try {
+      const res = await refreshProviderBalancesAndRetryHeldOrders(panelId);
+      if (!res.ok) {
+        setMsg({ text: res.error, error: true });
+        return;
+      }
+      try {
+        const providerRows = await listProviders(panelId);
+        writeAdminCache(panelId, "providers", providerRows);
+      } catch {
+        // Keep the existing provider-tab cache if the refresh read fails.
+      }
+      await load();
+      if (res.heldFound === 0) {
+        setMsg({ text: "No held orders are waiting on provider balance." });
+      } else if (res.providersIncreased === 0) {
+        setMsg({ text: `Checked ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; no balance increases found for held orders.` });
+      } else {
+        setMsg({ text: `Refreshed ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; retried ${res.retried} held order${res.retried === 1 ? "" : "s"}, ${res.resent} resent${res.failed ? `, ${res.failed} still pending` : ""}.` });
+      }
+    } finally {
+      setRetryingHeld(false);
+    }
+  };
+
   // Selection + mass cancel (owner cancel auto-refunds).
   const cancelable = (o: AdminOrderVM) => o.status !== "canceled" && o.status !== "refunded";
   const selectableIds = useMemo(() => filtered.filter(cancelable).map((o) => o.id), [filtered]);
@@ -1768,9 +1796,14 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       title="Orders"
       icon={ListOrdered}
       right={
-        <button onClick={syncNow} disabled={syncing} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
-          <RefreshCw size={12} className={syncing ? "animate-spin" : ""} /> {syncing ? "Syncing…" : "Sync statuses"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={retryHeldNow} disabled={syncing || retryingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
+            <RefreshCw size={12} className={retryingHeld ? "animate-spin" : ""} /> {retryingHeld ? "Refreshing…" : "Refresh balances & retry holds"}
+          </button>
+          <button onClick={syncNow} disabled={syncing || retryingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
+            <RefreshCw size={12} className={syncing ? "animate-spin" : ""} /> {syncing ? "Syncing…" : "Sync statuses"}
+          </button>
+        </div>
       }
     >
       {msg && <p className={`text-xs mb-3 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}

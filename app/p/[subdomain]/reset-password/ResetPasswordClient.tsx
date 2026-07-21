@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import React, { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { customerResetPassword } from "@/src/lib/actions/customer-auth";
 import { createStorefrontClient } from "@/src/lib/supabase/client";
 
@@ -116,7 +117,7 @@ export function ResetPasswordClient({ panelName, subdomain }: { panelName: strin
     <div className="fp-root min-h-screen fp-grid-bg fp-noise flex items-center justify-center px-4 py-10">
       <div className="fp-panel border fp-line rounded-2xl p-7 w-full max-w-md">
         <div className="flex items-center gap-2 mb-2">
-          <span className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center"><Sparkles size={16} color="#0A0B0F" /></span>
+          <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={16} />
           <p className="fp-display text-lg">{panelName}</p>
         </div>
         <h1 className="fp-display text-2xl mb-2">Reset password</h1>

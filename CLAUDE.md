@@ -127,6 +127,30 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Receipt: business-registration upload + OCR + manual details (v0.2.72)
+- The earnings receipt's business header was hardcoded (`BUSINESS_INFO`). Now it's **per-owner,
+  editable, and OCR-assisted**. New `owner_business_profiles` table (migration `0022`) + actions
+  `getBusinessProfile`/`saveBusinessProfile` (`src/lib/actions/business-profile.ts`).
+- `ReceiptCard.tsx`: a collapsible **"Business details"** editor (legal name, address, registrant,
+  business/registration no., tax id, email, phone) — fully manual entry. **Upload a registration
+  document** (image) → **client-side OCR via `tesseract.js`** (dynamic import) pre-fills the blank
+  fields (heuristics in `parseBusinessText`; never clobbers typed values) + shows the raw scanned
+  text. The **document is NOT stored** — only the details the owner saves. PDF now renders only the
+  fields that are set (skips empties).
+- **Run migration `0022_owner_business_profile.sql`** and **`npm install`** (adds `tesseract.js`).
+  OCR is best-effort/image-based; manual entry is the reliable path.
+
+### 2026-07-20 — Default logo = Ledgerline gauge (drop the AI-tell sparkle) (v0.2.71)
+- The generic `Sparkles`-in-a-square placeholder used for panels/customers without a logo reads as an
+  AI-generated default (an easy "made with AI" tell). Replaced it everywhere with a deliberate secondary
+  brand asset: **`DefaultLogo`** (`src/components/ui/BrandMark.tsx`) — the original **Ledgerline gauge**
+  ("meter") glyph (lucide `Gauge`) in a gold rounded square. This is the canonical global default/
+  placeholder logo.
+- Swapped in: storefront header (`Storefront.tsx`), customer dashboard + landing, the three storefront
+  auth pages (signup/forgot/reset), and both DesignStudio live-preview logos. Left as-is: the "Other"
+  platform-category glyph and the Design-Studio button icon (not brand placeholders). Removed now-unused
+  `Sparkles` imports. No migration.
+
 ### 2026-07-20 — Commission reversal on refund (v0.2.70)
 - Refunding a **completed** order (whose 5% was already settled off `innvil_balance`) now **gives the
   commission back**. New `reverse_order_commission(order, fraction)` (migration `0021`) credits the

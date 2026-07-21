@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import React, { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { customerSignUp } from "@/src/lib/actions/customer-auth";
 
 function isAppHost(hostname: string, rootDomain: string): boolean {
@@ -92,7 +93,7 @@ export function SignUpClient({
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logoUrl} alt={panelName} className="w-8 h-8 rounded-lg object-cover" />
           ) : (
-            <span className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center"><Sparkles size={16} color="#0A0B0F" /></span>
+            <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={16} />
           )}
           <p className="fp-display text-lg">{panelName}</p>
         </Link>

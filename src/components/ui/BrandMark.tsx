@@ -1,4 +1,25 @@
 import React from "react";
+import { Gauge } from "lucide-react";
+
+/**
+ * DefaultLogo — the global default/placeholder brand mark: the original Ledgerline
+ * "meter" (gauge) glyph in a gold rounded square. Used anywhere a panel/customer
+ * hasn't set a custom logo, instead of a generic sparkle (which reads as an
+ * AI-generated placeholder). This is a deliberate secondary brand asset.
+ */
+export function DefaultLogo({
+  className = "w-8 h-8 rounded-lg",
+  iconSize = 16,
+}: {
+  className?: string;
+  iconSize?: number;
+}) {
+  return (
+    <span className={`fp-gold-bg flex items-center justify-center shrink-0 ${className}`}>
+      <Gauge size={iconSize} color="#0A0B0F" />
+    </span>
+  );
+}
 
 export function InnvilBrandMark({
   size,

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Sparkles, Menu, X, Wallet, Plus, Clock, Star, RotateCcw, Zap,
+  Menu, X, Wallet, Plus, Clock, Star, RotateCcw, Zap,
   LayoutGrid, ListOrdered, MessageSquare, KeyRound, UserCircle2,
   ShoppingCart, CheckCircle2, LogOut, FileText,
 } from "lucide-react";
@@ -11,6 +11,7 @@ import {
   initialFavoriteIds, recentServiceIds, CustomerService, CustomerOrder,
 } from "@/src/data/constants";
 import { PlatformGlyph } from "./PlatformIcons";
+import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { NewOrder, PlaceOrderHandler, PlatformMeta } from "./NewOrder";
 import { ApiDocs } from "./ApiDocs";
 import { CustomerTickets } from "./CustomerTickets";
@@ -450,9 +451,7 @@ export function CustomerDashboard({
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logoUrl} alt={brandName} className="w-7 h-7 rounded-md object-cover" />
             ) : (
-              <div className="w-7 h-7 rounded-md fp-violet-bg flex items-center justify-center">
-                <Sparkles size={14} color="#0A0B0F" />
-              </div>
+              <DefaultLogo className="w-7 h-7 rounded-md" iconSize={14} />
             )}
             <span className="fp-display text-lg hidden sm:inline">{brandName}</span>
           </div>

@@ -2,11 +2,12 @@
 
 import React, { useMemo, useState } from "react";
 import {
-  Sparkles, Zap, ShieldCheck, Wallet, Clock, ChevronDown, Headphones,
+  Zap, ShieldCheck, Wallet, Clock, ChevronDown, Headphones,
   BarChart3, ArrowRight,
 } from "lucide-react";
 import { PLATFORMS, PlatformKey, customerServices } from "@/src/data/constants";
 import { PlatformGlyph, PlatformButton } from "./PlatformIcons";
+import { DefaultLogo } from "@/src/components/ui/BrandMark";
 
 /* =========================================================
    PANEL CUSTOMER LANDING — white-label, per panel
@@ -64,9 +65,7 @@ export function CustomerLanding({
       <header className="border-b fp-line-soft bg-[#0A0B0F]/90 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center">
-              <Sparkles size={16} color="#0A0B0F" />
-            </div>
+            <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={16} />
             <span className="fp-display text-xl">NovaBoost</span>
           </div>
           <div className="flex items-center gap-2">

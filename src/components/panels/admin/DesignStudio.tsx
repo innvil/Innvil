@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Save, Type, Sparkles, Lock, Plus, Trash2 } from "lucide-react";
+import { X, Save, Type, Lock, Plus, Trash2 } from "lucide-react";
+import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import { formatMoney } from "@/src/lib/money";
@@ -187,7 +188,7 @@ export function DesignStudio({
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={v.logoUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
                 ) : (
-                  <span className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center"><Sparkles size={15} color="#0A0B0F" /></span>
+                  <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={15} />
                 )}
                 <span className="fp-display text-lg">{v.name || "Your panel"}</span>
               </div>
@@ -213,7 +214,7 @@ export function DesignStudio({
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={v.logoUrl} alt="" className="w-7 h-7 rounded-md object-cover" />
                 ) : (
-                  <span className="w-7 h-7 rounded-md fp-violet-bg flex items-center justify-center"><Sparkles size={13} color="#0A0B0F" /></span>
+                  <DefaultLogo className="w-7 h-7 rounded-md" iconSize={13} />
                 )}
                 <span className="fp-display">{v.name || "Your panel"}</span>
               </div>

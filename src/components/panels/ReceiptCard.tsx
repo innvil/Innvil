@@ -1,42 +1,76 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { FileText, ChevronLeft, ChevronRight, Download } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { FileText, ChevronLeft, ChevronRight, Download, Upload, Loader2, Save, Building2, AlertTriangle, CheckCircle2, ChevronDown } from "lucide-react";
 import { Card } from "@/src/components/ui";
 import { formatMoney } from "@/src/lib/money";
 import { getOwnerReceipt, type OwnerReceipt } from "@/src/lib/actions/admin-orders";
+import { getBusinessProfile, saveBusinessProfile, type BusinessProfile } from "@/src/lib/actions/business-profile";
 import { jsPDF } from "jspdf";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 const fmt = (n: number) => formatMoney(n, "USD");
-const BUSINESS_INFO = {
-  legalName: "INNVIL SOFTWARE PUBLISHING",
-  address: "MONGPONG, CITY OF ROXAS, CAPIZ - REGION VI (WESTERN VISAYAS)",
-  registrant: "KEGGI GLENN SALUKAN CAWIE",
-  businessNameNo: "8338762",
-};
 const fmtDateTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+const EMPTY_BIZ: BusinessProfile = {
+  legalName: "", address: "", registrant: "", businessNumber: "", taxId: "", email: "", phone: "",
+};
+
+/** Best-effort field extraction from OCR'd registration text. Owner edits after. */
+function parseBusinessText(text: string): Partial<BusinessProfile> {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const joined = lines.join("\n");
+  const out: Partial<BusinessProfile> = {};
+
+  const numMatch = joined.match(/(?:business\s*(?:name)?\s*(?:no|number)|registration\s*(?:no|number)|reg\.?\s*no|permit\s*no|company\s*(?:no|number)|dti|sec\s*reg)[^\dA-Za-z]{0,20}([A-Z0-9][A-Z0-9-]{3,})/i);
+  if (numMatch) out.businessNumber = numMatch[1].trim();
+
+  const taxMatch = joined.match(/(?:\btin\b|tax\s*(?:id|identification|no)?|\bvat\b|\bein\b)[^\dA-Za-z]{0,15}([A-Z0-9][A-Z0-9-]{5,})/i);
+  if (taxMatch) out.taxId = taxMatch[1].trim();
+
+  const emailMatch = joined.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  if (emailMatch) out.email = emailMatch[0];
+
+  const phoneMatch = joined.match(/(?:\+?\d[\d\s()-]{7,}\d)/);
+  if (phoneMatch) out.phone = phoneMatch[0].trim();
+
+  const regMatch = joined.match(/(?:registered\s*to|registrant|proprietor|owner|name\s*of\s*(?:the\s*)?(?:owner|business\s*owner))[^A-Za-z]{0,10}([A-Za-z][A-Za-z .,'-]{4,60})/i);
+  if (regMatch) out.registrant = regMatch[1].trim();
+
+  // Legal name — the longest text-heavy line in the first several lines.
+  const nameLine = lines.slice(0, 8)
+    .filter((l) => l.replace(/[^A-Za-z]/g, "").length >= 4)
+    .sort((a, b) => b.length - a.length)[0];
+  if (nameLine) out.legalName = nameLine.slice(0, 120);
+
+  return out;
+}
 
 export function ReceiptCard() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-11
-  const [from, setFrom] = useState<number | null>(null); // day of month
+  const [from, setFrom] = useState<number | null>(null);
   const [to, setTo] = useState<number | null>(null);
   const [receipt, setReceipt] = useState<OwnerReceipt | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Business profile (editable, OCR-assisted).
+  const [biz, setBiz] = useState<BusinessProfile>(EMPTY_BIZ);
+  const [bizOpen, setBizOpen] = useState(false);
+  const [bizSaving, setBizSaving] = useState(false);
+  const [bizMsg, setBizMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrText, setOcrText] = useState("");
+
+  useEffect(() => {
+    getBusinessProfile().then((p) => setBiz(p)).catch(() => {});
+  }, []);
+
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstWeekday = new Date(year, month, 1).getDay();
-
   const cells = useMemo(() => {
     const arr: (number | null)[] = [];
     for (let i = 0; i < firstWeekday; i++) arr.push(null);
@@ -60,10 +94,45 @@ export function ReceiptCard() {
 
   const inRange = (d: number) => from !== null && to !== null && d >= from && d <= to;
   const isEdge = (d: number) => d === from || d === to;
+  const rangeLabel = from ? `${MONTHS[month]} ${from}${to && to !== from ? `–${to}` : ""}, ${year}` : "Pick a start and end day";
 
-  const rangeLabel = from
-    ? `${MONTHS[month]} ${from}${to && to !== from ? `–${to}` : ""}, ${year}`
-    : "Pick a start and end day";
+  const setField = (k: keyof BusinessProfile, v: string) => setBiz((prev) => ({ ...prev, [k]: v }));
+
+  const saveBiz = async () => {
+    setBizSaving(true);
+    setBizMsg(null);
+    const res = await saveBusinessProfile(biz);
+    setBizSaving(false);
+    setBizMsg(res.ok ? { text: "Business details saved — they'll appear on your receipts." } : { text: res.error, error: true });
+  };
+
+  const runOcr = async (file: File) => {
+    setOcrBusy(true);
+    setOcrText("");
+    setBizMsg(null);
+    try {
+      const { recognize } = await import("tesseract.js");
+      const { data } = await recognize(file, "eng");
+      const text = (data?.text ?? "").trim();
+      setOcrText(text);
+      const parsed = parseBusinessText(text);
+      // Only fill blank fields — never clobber what the owner already typed.
+      setBiz((prev) => ({
+        legalName: prev.legalName || parsed.legalName || "",
+        address: prev.address || parsed.address || "",
+        registrant: prev.registrant || parsed.registrant || "",
+        businessNumber: prev.businessNumber || parsed.businessNumber || "",
+        taxId: prev.taxId || parsed.taxId || "",
+        email: prev.email || parsed.email || "",
+        phone: prev.phone || parsed.phone || "",
+      }));
+      setBizMsg({ text: "Scanned. Review the fields and edit anything that's off, then Save." });
+    } catch {
+      setBizMsg({ text: "Couldn't read that document. Please type your details in manually.", error: true });
+    } finally {
+      setOcrBusy(false);
+    }
+  };
 
   const generate = async () => {
     if (from === null) return;
@@ -93,13 +162,11 @@ export function ReceiptCard() {
       doc.addPage();
       y = 42;
     };
-
     const line = (text: string, x: number, align: "left" | "right" = "left") => {
       ensureRoom(16);
       doc.text(text, x, y, { align });
       y += 16;
     };
-
     const drawPair = (label: string, value: string, isDeduction = false) => {
       ensureRoom(18);
       doc.setFont("helvetica", "normal");
@@ -112,23 +179,27 @@ export function ReceiptCard() {
       y += 18;
     };
 
-    doc.setFillColor(246, 246, 248);
-    doc.roundedRect(left, y, right - left, 96, 8, 8, "F");
-    y += 22;
+    // Business header — only render fields the owner actually set.
+    const bizLines: string[] = [];
+    if (biz.address) bizLines.push(biz.address);
+    if (biz.registrant) bizLines.push(`Registered to: ${biz.registrant}`);
+    if (biz.businessNumber) bizLines.push(`Business No.: ${biz.businessNumber}`);
+    if (biz.taxId) bizLines.push(`Tax ID: ${biz.taxId}`);
+    const contact = [biz.email, biz.phone].filter(Boolean).join("  ·  ");
+    if (contact) bizLines.push(contact);
 
+    const headerHeight = Math.max(60, 34 + bizLines.length * 14);
+    doc.setFillColor(246, 246, 248);
+    doc.roundedRect(left, y, right - left, headerHeight, 8, 8, "F");
+    y += 22;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(17);
     doc.setTextColor(17, 24, 39);
-    doc.text(BUSINESS_INFO.legalName, left + 12, y);
+    doc.text(biz.legalName || "Your Business", left + 12, y);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
     doc.setTextColor(70, 70, 70);
-    y += 16;
-    doc.text(BUSINESS_INFO.address, left + 12, y);
-    y += 14;
-    doc.text(`Registered to: ${BUSINESS_INFO.registrant}`, left + 12, y);
-    y += 14;
-    doc.text(`Business Name No.: ${BUSINESS_INFO.businessNameNo}`, left + 12, y);
+    for (const l of bizLines) { y += 14; doc.text(l, left + 12, y); }
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(16);
@@ -204,20 +275,101 @@ export function ReceiptCard() {
     doc.setFontSize(9);
     doc.setTextColor(110, 110, 110);
     doc.text("Generated by Innvil earnings system.", left, y);
-    doc.text(`Business Name No. ${BUSINESS_INFO.businessNameNo}`, right, y, { align: "right" });
+    if (biz.businessNumber) doc.text(`Business No. ${biz.businessNumber}`, right, y, { align: "right" });
     y += 14;
     doc.text("This document is not valid for claim of input tax.", left, y);
     y += 14;
     doc.text("This receipt serves as an official receipt and may be used for lawful legal purposes.", left, y);
 
-    doc.save(
-      `innvil-receipt-${year}-${String(month + 1).padStart(2, "0")}-${String(from).padStart(2, "0")}_to_${String(to ?? from).padStart(2, "0")}.pdf`
-    );
+    doc.save(`innvil-receipt-${year}-${String(month + 1).padStart(2, "0")}-${String(from).padStart(2, "0")}_to_${String(to ?? from).padStart(2, "0")}.pdf`);
   };
+
+  const inputCls = "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border";
+  const bizFilled = Object.values(biz).some((v) => v.trim());
 
   return (
     <Card title="Earnings receipt" icon={FileText}>
       <p className="fp-text-dim text-sm mb-4">Pick a start and end day, then generate a downloadable PDF receipt with each top-up (date/time + amount) and your total orders deduction.</p>
+
+      {/* Business details — editable + OCR auto-fill */}
+      <div className="fp-panel-raised border fp-line-soft rounded-xl mb-6">
+        <button onClick={() => setBizOpen((o) => !o)} className="w-full flex items-center justify-between px-4 py-3 text-left">
+          <span className="flex items-center gap-2 text-sm font-medium">
+            <Building2 size={15} className="fp-gold" /> Business details on your receipt
+            {!bizFilled && <span className="text-[11px] fp-gold-soft-bg fp-gold px-2 py-0.5 rounded-full">Set this up</span>}
+          </span>
+          <ChevronDown size={16} className={`fp-text-faint transition-transform ${bizOpen ? "rotate-180" : ""}`} />
+        </button>
+
+        {bizOpen && (
+          <div className="px-4 pb-4 space-y-3 border-t fp-line-soft pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className={`text-xs fp-gold border fp-line-soft rounded-lg px-3 py-2 cursor-pointer flex items-center gap-1.5 ${ocrBusy ? "opacity-60 pointer-events-none" : ""}`}>
+                {ocrBusy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                {ocrBusy ? "Scanning…" : "Upload registration document"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={ocrBusy}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) runOcr(f); e.target.value = ""; }}
+                />
+              </label>
+              <span className="fp-text-faint text-[11px]">Auto-fills the fields below (image/photo). The document isn&apos;t stored — only the details you save.</span>
+            </div>
+
+            {bizMsg && (
+              <p className={`text-xs flex items-center gap-1.5 ${bizMsg.error ? "text-red-400" : "fp-safe"}`}>
+                {bizMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {bizMsg.text}
+              </p>
+            )}
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <label className="fp-text-dim text-xs fp-mono uppercase">Legal / business name</label>
+                <input value={biz.legalName} onChange={(e) => setField("legalName", e.target.value)} className={`${inputCls} mt-1`} placeholder="e.g. Acme Digital Services" />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="fp-text-dim text-xs fp-mono uppercase">Address</label>
+                <input value={biz.address} onChange={(e) => setField("address", e.target.value)} className={`${inputCls} mt-1`} placeholder="Business address" />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Registrant / owner</label>
+                <input value={biz.registrant} onChange={(e) => setField("registrant", e.target.value)} className={`${inputCls} mt-1`} placeholder="Registered owner name" />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Business / registration no.</label>
+                <input value={biz.businessNumber} onChange={(e) => setField("businessNumber", e.target.value)} className={`${inputCls} mt-1`} placeholder="e.g. 8338762" />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Tax ID / TIN (optional)</label>
+                <input value={biz.taxId} onChange={(e) => setField("taxId", e.target.value)} className={`${inputCls} mt-1`} placeholder="Tax identification no." />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Email (optional)</label>
+                <input value={biz.email} onChange={(e) => setField("email", e.target.value)} className={`${inputCls} mt-1`} placeholder="billing@yourbusiness.com" />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Phone (optional)</label>
+                <input value={biz.phone} onChange={(e) => setField("phone", e.target.value)} className={`${inputCls} mt-1`} placeholder="+1 555 000 0000" />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button onClick={saveBiz} disabled={bizSaving} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 disabled:opacity-60">
+                <Save size={14} /> {bizSaving ? "Saving…" : "Save business details"}
+              </button>
+            </div>
+
+            {ocrText && (
+              <details className="mt-1">
+                <summary className="fp-text-faint text-xs cursor-pointer">View raw scanned text</summary>
+                <pre className="fp-text-faint text-[11px] whitespace-pre-wrap mt-2 max-h-40 overflow-auto fp-panel border fp-line-soft rounded-lg p-2">{ocrText}</pre>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Calendar */}

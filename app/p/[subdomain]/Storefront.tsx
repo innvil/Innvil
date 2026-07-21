@@ -22,6 +22,7 @@ import {
 } from "@/src/lib/actions/customer-auth";
 import { rotateCustomerApiKey } from "@/src/lib/actions/customer-api";
 import { createStorefrontClient } from "@/src/lib/supabase/client";
+import { DefaultLogo } from "@/src/components/ui/BrandMark";
 
 // Nice display labels for the platform keys the import produces. Owner-set labels
 // (platformMeta) win; then this map; then a title-cased fallback for anything new.
@@ -654,9 +655,7 @@ export function Storefront({
               // eslint-disable-next-line @next/next/no-img-element
               <img src={panel.logoUrl} alt={panel.name} className="w-8 h-8 rounded-lg object-cover" />
             ) : (
-              <div className="w-8 h-8 rounded-lg fp-violet-bg flex items-center justify-center">
-                <Sparkles size={16} color="#0A0B0F" />
-              </div>
+              <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={16} />
             )}
             <span className="fp-display text-xl">{panel.name}</span>
           </button>

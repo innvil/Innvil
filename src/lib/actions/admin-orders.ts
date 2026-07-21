@@ -3,7 +3,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import {
-  getProviderCredentials, addOrder, refillOrder, cancelOrders, ProviderError,
+  getProviderCredentials, addOrder, refillOrder, cancelOrders, getBalance, ProviderError,
 } from "@/src/lib/providers";
 import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
 import { syncPanelOrders } from "@/src/lib/orders/sync";
@@ -64,6 +64,72 @@ async function authorizeOrder(orderId: string): Promise<AuthorizedOrderResult> {
 
 async function addHistory(admin: SupabaseClient, orderId: string, status: OrderStatus, note?: string) {
   await admin.from("order_status_history").insert({ order_id: orderId, status, note: note ?? null });
+}
+
+function hasProviderBalanceIncrease(previous: number | null | undefined, next: string | number): boolean {
+  const nextBalance = Number(next);
+  if (!Number.isFinite(nextBalance)) return false;
+  const previousBalance = previous == null ? null : Number(previous);
+  if (previousBalance == null || !Number.isFinite(previousBalance)) return nextBalance > 0;
+  return nextBalance > previousBalance;
+}
+
+async function submitPendingOrderToProvider(
+  admin: SupabaseClient,
+  order: {
+    id: string;
+    service_id: string | null;
+    provider_id: string | null;
+    provider_order_id: string | null;
+    link: string | null;
+    quantity: number | null;
+    provider_payload: unknown;
+  },
+  historyNote: string
+): Promise<Result> {
+  if (!order.provider_id || order.provider_order_id) {
+    return { ok: false, error: "This order has no provider mapping to resend to." };
+  }
+
+  const { data: svc } = await admin
+    .from("services")
+    .select("provider_service_id")
+    .eq("id", order.service_id as string)
+    .maybeSingle();
+  const { data: prov } = await admin
+    .from("providers")
+    .select("api_url")
+    .eq("id", order.provider_id as string)
+    .maybeSingle();
+  if (!svc?.provider_service_id || !prov) {
+    return { ok: false, error: "Provider or service mapping is missing." };
+  }
+
+  const payload = (order.provider_payload as { runs?: number; interval?: number; comments?: string[] } | null) ?? {};
+  const comments = Array.isArray(payload.comments) ? payload.comments : null;
+  try {
+    const creds = await getProviderCredentials(order.provider_id as string, prov.api_url as string);
+    const resp = await addOrder(creds, {
+      service: svc.provider_service_id,
+      link: order.link as string,
+      quantity: order.quantity as number,
+      ...(payload.runs != null ? { runs: payload.runs } : {}),
+      ...(payload.interval != null ? { interval: payload.interval } : {}),
+      ...(comments && comments.length ? { comments: comments.join("\n") } : {}),
+    });
+    if (!("order" in resp)) {
+      return { ok: false, error: resp.error || "Provider rejected the order." };
+    }
+    await admin.from("orders").update({
+      provider_order_id: String(resp.order),
+      status: "processing",
+      provider_response: resp as Record<string, unknown>,
+    }).eq("id", order.id);
+    await addHistory(admin, order.id, "processing", historyNote);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof ProviderError ? e.message : e instanceof Error ? e.message : "Provider error" };
+  }
 }
 
 export interface AdminOrderVM {
@@ -494,45 +560,110 @@ export async function resendOrder(orderId: string): Promise<Result> {
   if ("error" in r) return { ok: false, error: r.error };
   const { admin, order } = r;
   if (order.status !== "pending") return { ok: false, error: "Only pending orders can be resent." };
-  if (!order.provider_id || order.provider_order_id) return { ok: false, error: "This order has no provider mapping to resend to." };
+  return submitPendingOrderToProvider(admin, order, "Resent to provider by owner");
+}
 
-  const { data: svc } = await admin
-    .from("services")
-    .select("provider_service_id")
-    .eq("id", order.service_id as string)
-    .maybeSingle();
-  const { data: prov } = await admin
-    .from("providers")
-    .select("api_url")
-    .eq("id", order.provider_id as string)
-    .maybeSingle();
-  if (!svc?.provider_service_id || !prov) return { ok: false, error: "Provider or service mapping is missing." };
-
-  const payload = (order.provider_payload as { runs?: number; interval?: number; comments?: string[] } | null) ?? {};
-  const comments = Array.isArray(payload.comments) ? payload.comments : null;
-  try {
-    const creds = await getProviderCredentials(order.provider_id as string, prov.api_url as string);
-    const resp = await addOrder(creds, {
-      service: svc.provider_service_id,
-      link: order.link as string,
-      quantity: order.quantity as number,
-      ...(payload.runs != null ? { runs: payload.runs } : {}),
-      ...(payload.interval != null ? { interval: payload.interval } : {}),
-      ...(comments && comments.length ? { comments: comments.join("\n") } : {}),
-    });
-    if ("order" in resp) {
-      await admin.from("orders").update({
-        provider_order_id: String(resp.order),
-        status: "processing",
-        provider_response: resp as Record<string, unknown>,
-      }).eq("id", order.id);
-      await addHistory(admin, order.id as string, "processing", "Resent to provider by owner");
-      return { ok: true };
+export async function refreshProviderBalancesAndRetryHeldOrders(
+  panelId: string
+): Promise<
+  | {
+      ok: true;
+      heldFound: number;
+      providersChecked: number;
+      providersIncreased: number;
+      retried: number;
+      resent: number;
+      failed: number;
     }
-    return { ok: false, error: resp.error || "Provider rejected the order." };
-  } catch (e) {
-    return { ok: false, error: e instanceof ProviderError ? e.message : e instanceof Error ? e.message : "Provider error" };
+  | { ok: false; error: string }
+> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!(await ownsPanel(admin, user.id, panelId))) return { ok: false, error: "Not authorized for this panel" };
+
+  const { data } = await admin
+    .from("orders")
+    .select("id, service_id, provider_id, provider_order_id, link, quantity, status, provider_payload, provider_response")
+    .eq("panel_id", panelId)
+    .eq("status", "pending");
+
+  const heldOrders = ((data as Array<{
+    id: string;
+    service_id: string | null;
+    provider_id: string | null;
+    provider_order_id: string | null;
+    link: string | null;
+    quantity: number | null;
+    status: OrderStatus;
+    provider_payload: unknown;
+    provider_response: { held?: boolean } | null;
+  }> | null) ?? []).filter((order) => (
+    order.provider_id &&
+    !order.provider_order_id &&
+    order.status === "pending" &&
+    order.provider_response?.held === true
+  ));
+
+  if (heldOrders.length === 0) {
+    return { ok: true, heldFound: 0, providersChecked: 0, providersIncreased: 0, retried: 0, resent: 0, failed: 0 };
   }
+
+  const providerIds = [...new Set(heldOrders.map((order) => order.provider_id as string))];
+  const { data: providers } = await admin
+    .from("providers")
+    .select("id, api_url, balance")
+    .in("id", providerIds);
+
+  const providerRows = (providers as Array<{ id: string; api_url: string; balance: number | null }> | null) ?? [];
+  const increasedProviderIds = new Set<string>();
+  let providersChecked = 0;
+
+  for (const provider of providerRows) {
+    providersChecked++;
+    try {
+      const creds = await getProviderCredentials(provider.id, provider.api_url);
+      const balance = await getBalance(creds);
+      if ("error" in balance) continue;
+
+      const latest = Number(balance.balance);
+      if (!Number.isFinite(latest)) continue;
+
+      await admin
+        .from("providers")
+        .update({
+          balance: latest,
+          currency: balance.currency,
+          last_balance_sync: new Date().toISOString(),
+        })
+        .eq("id", provider.id);
+
+      if (hasProviderBalanceIncrease(provider.balance, latest)) {
+        increasedProviderIds.add(provider.id);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  const retryableOrders = heldOrders.filter((order) => increasedProviderIds.has(order.provider_id as string));
+  let resent = 0;
+  let failed = 0;
+
+  for (const order of retryableOrders) {
+    const result = await submitPendingOrderToProvider(admin, order, "Resent to provider after balance refresh");
+    if (result.ok) resent++;
+    else failed++;
+  }
+
+  return {
+    ok: true,
+    heldFound: heldOrders.length,
+    providersChecked,
+    providersIncreased: increasedProviderIds.size,
+    retried: retryableOrders.length,
+    resent,
+    failed,
+  };
 }
 
 /** Ask the provider to refill a completed/partial order. */

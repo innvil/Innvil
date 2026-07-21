@@ -24,6 +24,7 @@ order.
 | `0019_platform_support.sql` | `platform_support_messages` (owner → Innvil support) + RLS — owners send; super admin reads/resolves in /superadmin, emailed to `platform_settings.support_email` or the super-admin account email |
 | `0020_commission_brackets.sql` | `orders.commission_settled_at` + rewritten `settle_order_commission()` — per-panel `settings.commission_rate` (volume discount to 1%) + a **$100 per-panel per-day** commission cap |
 | `0021_commission_reversal.sql` | `reverse_order_commission()` — refunding a completed order credits its (proportional) commission back to `innvil_balance` + reduces `orders.commission_amount` |
+| `0022_owner_business_profile.sql` | `owner_business_profiles` (per-owner receipt business details: legal name, address, registrant, business/reg no., tax id, email, phone) + owner RLS |
 
 > Numbers `0006`/`0007` were intentionally skipped — the sequence has gaps, that's fine.
 > Migrations run in **filename order**; always number a new one after the current highest.
@@ -31,7 +32,7 @@ order.
 ## Applying the migrations (fresh project)
 
 **Option A — SQL editor (quickest):** open each file, paste into the Supabase
-Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0021`).
+Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0022`).
 
 **Option B — Supabase CLI:**
 
