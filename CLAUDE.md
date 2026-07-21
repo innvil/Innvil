@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Commission reversal on refund (v0.2.70)
+- Refunding a **completed** order (whose 5% was already settled off `innvil_balance`) now **gives the
+  commission back**. New `reverse_order_commission(order, fraction)` (migration `0021`) credits the
+  proportional commission to `innvil_balance` and reduces `orders.commission_amount` (so "commission
+  charged" reflects the net take). No-ops when nothing was settled (order never completed).
+- Wired into both refund paths: owner manual `refundOrder` (`admin-orders.ts`, fraction = refund/charge)
+  and the sync engine's completed→terminal refund transition (`src/lib/orders/sync.ts`, same fraction).
+  Held/failed refunds don't call it (those orders were never completed → no commission).
+
 ### 2026-07-20 — Commission volume discounts + $100/day cap (v0.2.69)
 - **Marketing hook to pull socpanel renters: "5% isn't forever."** Per-panel commission can be
   discounted down to **1%** as a panel scales, and Innvil never takes more than **$100/panel/day**.

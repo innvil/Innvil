@@ -647,6 +647,11 @@ export async function syncPanelOrders(
               p_type: "refund",
               p_reason: `Order ${o.id} ${next}`,
             });
+            // Reverse Innvil's commission for the refunded share (no-ops if none was settled).
+            await admin.rpc("reverse_order_commission", {
+              p_order: o.id,
+              p_fraction: Number(o.charge) > 0 ? refund / Number(o.charge) : 1,
+            });
           }
         }
 

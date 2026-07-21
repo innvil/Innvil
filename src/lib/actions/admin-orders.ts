@@ -609,6 +609,8 @@ export async function refundOrder(orderId: string, amount?: number): Promise<Res
   if (balErr) return { ok: false, error: balErr.message };
 
   await admin.from("orders").update({ status: "refunded" }).eq("id", order.id);
+  // Give back Innvil's commission proportional to the refund (no-ops if none was settled).
+  await admin.rpc("reverse_order_commission", { p_order: order.id, p_fraction: full > 0 ? refund / full : 1 });
   await addHistory(admin, order.id as string, "refunded", `Refunded ${refund} by owner`);
   return { ok: true };
 }
