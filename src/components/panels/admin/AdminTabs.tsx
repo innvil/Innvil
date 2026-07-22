@@ -39,7 +39,7 @@ import {
 } from "@/src/lib/actions/payments";
 import { getPanelBranding, updatePanelBranding, getPanelStatusHistory, type LandingSection, type PanelStatusEvent } from "@/src/lib/actions/panels";
 import {
-  listPanelOrders, getPanelOverview, getPanelCurrency,
+  listPanelOrdersPage, getPanelOverview, getPanelCurrency,
   resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
   cancelAndRefundOrder, bulkCancelAndRefund, refreshProviderBalancesAndRetryHeldOrders,
   type AdminOrderVM, type PanelOverview,
@@ -1626,11 +1626,13 @@ const ORDER_FILTERS: Array<{ k: OrderStatus | "all"; label: string }> = [
 ];
 
 const ORDERS_AUTO_REFRESH_MS = 30_000;
+const ORDERS_PAGE_SIZE = 20;
 
 export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onManageCustomer?: (customerAccountId: string) => void }) {
   const realPanel = isUuid(panelId);
+  const [page, setPage] = useState(0);
   const [rows, setRows] = useState<AdminOrderVM[] | null>(() =>
-    realPanel ? readAdminCache<AdminOrderVM[]>(panelId, "orders") : []
+    realPanel ? readAdminCache<AdminOrderVM[]>(panelId, `orders:all:0`) : []
   );
   const [status, setStatus] = useState<OrderStatus | "all">("all");
   const [q, setQ] = useState("");
@@ -1639,6 +1641,9 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [syncing, setSyncing] = useState(false);
   const [retryingHeld, setRetryingHeld] = useState(false);
   const [currency, setCurrency] = useState("USD");
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [totalOrders, setTotalOrders] = useState(0);
+  const [allOrders, setAllOrders] = useState(0);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [commentsView, setCommentsView] = useState<string[] | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -1648,16 +1653,35 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     if (!realPanel || loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const [list, cur] = await Promise.all([listPanelOrders(panelId), getPanelCurrency(panelId)]);
-      setRows(list);
+      const cached = readAdminCache<AdminOrderVM[]>(panelId, `orders:${status}:${page}`);
+      if (cached) setRows(cached);
+      const [list, cur] = await Promise.all([
+        listPanelOrdersPage(panelId, { status, page, pageSize: ORDERS_PAGE_SIZE }),
+        getPanelCurrency(panelId),
+      ]);
+      setRows(list.rows);
+      setHasNextPage(list.hasNext);
+      setTotalOrders(list.totalCount);
+      setAllOrders(list.allCount);
       setCurrency(cur);
-      writeAdminCache(panelId, "orders", list);
+      writeAdminCache(panelId, `orders:${status}:${page}`, list.rows);
     } finally {
       loadingRef.current = false;
     }
-  }, [panelId, realPanel]);
+  }, [page, panelId, realPanel, status]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    setPage(0);
+    setExpanded(null);
+    setSel(new Set());
+  }, [status]);
+
+  useEffect(() => {
+    setExpanded(null);
+    setSel(new Set());
+  }, [page]);
 
   useEffect(() => {
     if (!realPanel) return;
@@ -1690,7 +1714,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const statusCounts = useMemo(() => {
     const base = rows ?? [];
     const c: Record<string, number> = {
-      all: base.length,
+      all: allOrders,
       pending: 0,
       processing: 0,
       in_progress: 0,
@@ -1702,7 +1726,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     };
     for (const o of base) c[o.status] = (c[o.status] ?? 0) + 1;
     return c;
-  }, [rows]);
+  }, [allOrders, rows]);
 
   const act = async (id: string, fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) => {
     setBusyId(id); setMsg(null);
@@ -1746,8 +1770,8 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       await load();
       if (res.heldFound === 0) {
         setMsg({ text: "No held orders are waiting on provider balance." });
-      } else if (res.providersIncreased === 0) {
-        setMsg({ text: `Checked ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; no balance increases found for held orders.` });
+      } else if (res.providersFunded === 0 || res.retried === 0) {
+        setMsg({ text: `Checked ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; none of the held orders have enough refreshed provider balance yet.` });
       } else {
         setMsg({ text: `Refreshed ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; retried ${res.retried} held order${res.retried === 1 ? "" : "s"}, ${res.resent} resent${res.failed ? `, ${res.failed} still pending` : ""}.` });
       }
@@ -1781,6 +1805,9 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     await load();
   };
 
+  const previousPage = () => setPage((p) => Math.max(0, p - 1));
+  const nextPage = () => setPage((p) => p + 1);
+
   if (!realPanel) {
     return (
       <div className="fp-panel-raised border fp-line-soft rounded-xl p-6 text-center fp-text-dim text-sm">
@@ -1798,7 +1825,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       right={
         <div className="flex items-center gap-2">
           <button onClick={retryHeldNow} disabled={syncing || retryingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
-            <RefreshCw size={12} className={retryingHeld ? "animate-spin" : ""} /> {retryingHeld ? "Refreshing…" : "Refresh balances & retry holds"}
+            <RefreshCw size={12} className={retryingHeld ? "animate-spin" : ""} /> {retryingHeld ? "Refreshing…" : "Refresh & Resend"}
           </button>
           <button onClick={syncNow} disabled={syncing || retryingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
             <RefreshCw size={12} className={syncing ? "animate-spin" : ""} /> {syncing ? "Syncing…" : "Sync statuses"}
@@ -1857,7 +1884,8 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
           {rows.length === 0 ? "No orders yet. They'll appear here as customers order." : "No orders match this filter."}
         </p>
       ) : (
-        <div className="overflow-x-auto">
+        <div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[760px]">
             <thead>
               <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
@@ -2010,6 +2038,28 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
               })}
             </tbody>
           </table>
+          </div>
+          <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t fp-line-soft">
+            <p className="text-xs fp-text-faint">
+              {rows.length}/{status === "all" ? allOrders : totalOrders} orders · Page {page + 1}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={previousPage}
+                disabled={page === 0 || syncing || retryingHeld || busyId !== null}
+                className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={nextPage}
+                disabled={!hasNextPage || syncing || retryingHeld || busyId !== null}
+                className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </Card>

@@ -66,14 +66,6 @@ async function addHistory(admin: SupabaseClient, orderId: string, status: OrderS
   await admin.from("order_status_history").insert({ order_id: orderId, status, note: note ?? null });
 }
 
-function hasProviderBalanceIncrease(previous: number | null | undefined, next: string | number): boolean {
-  const nextBalance = Number(next);
-  if (!Number.isFinite(nextBalance)) return false;
-  const previousBalance = previous == null ? null : Number(previous);
-  if (previousBalance == null || !Number.isFinite(previousBalance)) return nextBalance > 0;
-  return nextBalance > previousBalance;
-}
-
 async function submitPendingOrderToProvider(
   admin: SupabaseClient,
   order: {
@@ -159,6 +151,15 @@ export interface AdminOrderVM {
   failReason: string | null;
   /** Custom Comments, if this was a comments order. */
   comments: string[] | null;
+}
+
+export interface AdminOrderPage {
+  rows: AdminOrderVM[];
+  hasNext: boolean;
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  allCount: number;
 }
 
 interface OrderRow {
@@ -281,6 +282,62 @@ export async function listPanelOrders(
   const rows = (data as OrderRow[] | null) ?? [];
   const profiles = await resolveCustomerIdentity(admin, rows.map((r) => one(r.customer_accounts)?.user_id ?? "").filter(Boolean));
   return rows.map((r) => mapOrderRow(r, profiles));
+}
+
+/** Paged orders on a panel the owner controls. Fetches one extra row to derive hasNext cheaply. */
+export async function listPanelOrdersPage(
+  panelId: string,
+  opts?: { status?: OrderStatus | "all"; page?: number; pageSize?: number; sync?: boolean }
+): Promise<AdminOrderPage> {
+  const empty: AdminOrderPage = {
+    rows: [],
+    hasNext: false,
+    page: Math.max(0, opts?.page ?? 0),
+    pageSize: Math.max(1, opts?.pageSize ?? 20),
+    totalCount: 0,
+    allCount: 0,
+  };
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return empty;
+  if (!(await ownsPanel(admin, user.id, panelId))) return empty;
+
+  if (opts?.sync) {
+    try { await syncPanelOrders(admin, panelId); } catch { /* best-effort */ }
+  }
+
+  const page = Math.max(0, opts?.page ?? 0);
+  const pageSize = Math.max(1, opts?.pageSize ?? 20);
+  const from = page * pageSize;
+  const to = from + pageSize;
+
+  const base = admin
+    .from("orders")
+    .select("id, local_id, service_id, customer_id, link, quantity, charge, provider_cost, profit, status, provider_order_id, remains, created_at, provider_response, provider_payload, providers(name, api_url), services(name, local_id), customer_accounts(user_id)")
+    .eq("panel_id", panelId);
+  const filtered = opts?.status && opts.status !== "all" ? base.eq("status", opts.status) : base;
+
+  const [pageRes, filteredCountRes, allCountRes] = await Promise.all([
+    filtered.order("created_at", { ascending: false }).range(from, to),
+    (opts?.status && opts.status !== "all"
+      ? admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId).eq("status", opts.status)
+      : admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId)),
+    admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId),
+  ]);
+
+  const data = pageRes.data;
+  const fetched = (data as OrderRow[] | null) ?? [];
+  const hasNext = fetched.length > pageSize;
+  const rows = hasNext ? fetched.slice(0, pageSize) : fetched;
+  const profiles = await resolveCustomerIdentity(admin, rows.map((r) => one(r.customer_accounts)?.user_id ?? "").filter(Boolean));
+
+  return {
+    rows: rows.map((r) => mapOrderRow(r, profiles)),
+    hasNext,
+    page,
+    pageSize,
+    totalCount: filteredCountRes.count ?? 0,
+    allCount: allCountRes.count ?? 0,
+  };
 }
 
 export interface OwnerOrderVM extends AdminOrderVM {
@@ -570,7 +627,7 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
       ok: true;
       heldFound: number;
       providersChecked: number;
-      providersIncreased: number;
+      providersFunded: number;
       retried: number;
       resent: number;
       failed: number;
@@ -583,7 +640,7 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
 
   const { data } = await admin
     .from("orders")
-    .select("id, service_id, provider_id, provider_order_id, link, quantity, status, provider_payload, provider_response")
+    .select("id, service_id, provider_id, provider_order_id, link, quantity, provider_cost, status, created_at, provider_payload, provider_response")
     .eq("panel_id", panelId)
     .eq("status", "pending");
 
@@ -594,18 +651,21 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
     provider_order_id: string | null;
     link: string | null;
     quantity: number | null;
+    provider_cost: number | null;
     status: OrderStatus;
+    created_at: string;
     provider_payload: unknown;
-    provider_response: { held?: boolean } | null;
+    provider_response: { held?: boolean; reason?: string | null; error?: string | null } | null;
   }> | null) ?? []).filter((order) => (
     order.provider_id &&
     !order.provider_order_id &&
     order.status === "pending" &&
-    order.provider_response?.held === true
+    order.provider_response?.held === true &&
+    order.provider_response?.reason === "provider_balance"
   ));
 
   if (heldOrders.length === 0) {
-    return { ok: true, heldFound: 0, providersChecked: 0, providersIncreased: 0, retried: 0, resent: 0, failed: 0 };
+    return { ok: true, heldFound: 0, providersChecked: 0, providersFunded: 0, retried: 0, resent: 0, failed: 0 };
   }
 
   const providerIds = [...new Set(heldOrders.map((order) => order.provider_id as string))];
@@ -615,7 +675,7 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
     .in("id", providerIds);
 
   const providerRows = (providers as Array<{ id: string; api_url: string; balance: number | null }> | null) ?? [];
-  const increasedProviderIds = new Set<string>();
+  const refreshedBalances = new Map<string, number>();
   let providersChecked = 0;
 
   for (const provider of providerRows) {
@@ -636,16 +696,31 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
           last_balance_sync: new Date().toISOString(),
         })
         .eq("id", provider.id);
-
-      if (hasProviderBalanceIncrease(provider.balance, latest)) {
-        increasedProviderIds.add(provider.id);
-      }
+      refreshedBalances.set(provider.id, latest);
     } catch {
       continue;
     }
   }
 
-  const retryableOrders = heldOrders.filter((order) => increasedProviderIds.has(order.provider_id as string));
+  const retryableOrders: typeof heldOrders = [];
+  const fundedProviderIds = new Set<string>();
+  const remainingByProvider = new Map<string, number>();
+
+  for (const order of [...heldOrders].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    const providerId = order.provider_id as string;
+    const currentBalance = refreshedBalances.get(providerId);
+    const providerCost = Number(order.provider_cost ?? 0);
+    if (!Number.isFinite(currentBalance as number)) continue;
+    if (!Number.isFinite(providerCost) || providerCost <= 0) continue;
+
+    const remaining = remainingByProvider.get(providerId) ?? (currentBalance as number);
+    if (remaining + 0.000001 < providerCost) continue;
+
+    remainingByProvider.set(providerId, remaining - providerCost);
+    fundedProviderIds.add(providerId);
+    retryableOrders.push(order);
+  }
+
   let resent = 0;
   let failed = 0;
 
@@ -659,7 +734,7 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
     ok: true,
     heldFound: heldOrders.length,
     providersChecked,
-    providersIncreased: increasedProviderIds.size,
+    providersFunded: fundedProviderIds.size,
     retried: retryableOrders.length,
     resent,
     failed,
