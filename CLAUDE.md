@@ -146,6 +146,10 @@ innvil/
   Innvil), `noindex` for draft/suspended/maintenance.
 - Also added the **"Refresh & resend held orders"** feature card to the landing #platform grid (the v0.2.73
   differentiator). **`metadataBase` uses `NEXT_PUBLIC_APP_URL`** — set it to the real prod origin.
+- **Top-up bonus tiers on the landing (data-driven):** new public `getPublicTopupTiers()` (platform-payments.ts)
+  reads `platform_topup_discount_defaults` (crypto category, else richest) → `app/page.tsx` passes them to
+  `PublicLanding` (`topupTiers` prop) → a **"Fund more, get more"** tier grid in #pricing (up to +N% bonus
+  credit). Hidden when no tiers are configured, so it always reflects the super-admin's current setup.
 
 ### 2026-07-20 — Remove every remaining Sparkles icon (v0.2.74)
 - Completed the v0.2.71 default-logo work: **all remaining `Sparkles` icons are now the Ledgerline

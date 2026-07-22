@@ -32,10 +32,11 @@ export default async function Home({
   if (user) return <HomeClient mode="app" />;
 
   // Public marketing page — server-rendered for search engines & first paint.
+  const topupTiers = await getPublicTopupTiers();
   return (
     <>
       <LandingJsonLd />
-      <PublicLanding />
+      <PublicLanding topupTiers={topupTiers} />
     </>
   );
 }

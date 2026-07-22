@@ -28,7 +28,7 @@ import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/aut
 import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
-import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
+import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy, type TopupDiscountRule } from "@/src/lib/actions/platform-payments";
 import { getLandingVideo } from "@/src/lib/actions/platform-settings";
 import { toVideoEmbed } from "@/src/lib/video";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
@@ -102,7 +102,7 @@ function TopNav({ world, setWorld }: { world: string; setWorld?: (w: string) => 
   );
 }
 
-export function PublicLanding({ setWorld }: { setWorld?: (w: string) => void }) {
+export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: string) => void; topupTiers?: TopupDiscountRule[] }) {
   const [videoUrl, setVideoUrl] = useState("");
   useEffect(() => {
     let alive = true;
@@ -398,6 +398,25 @@ export function PublicLanding({ setWorld }: { setWorld?: (w: string) => void }) 
             ))}
           </div>
         </div>
+
+        {topupTiers.length > 0 && (
+          <div className="fp-panel border fp-line rounded-2xl p-6 md:p-8 mt-6">
+            <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Top-up bonuses</p>
+            <h3 className="fp-display text-2xl mb-3">Fund more, get more.</h3>
+            <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-6">
+              Top up your Innvil balance and we add bonus credit on top — the bigger the top-up, the bigger
+              the bonus, up to <span className="fp-safe">+{Math.max(...topupTiers.map((t) => t.discountPct))}%</span> free.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {topupTiers.map((t) => (
+                <div key={t.minAmount} className="fp-panel-raised border fp-line-soft rounded-xl px-4 py-3 flex items-center justify-between gap-2">
+                  <span className="fp-text-dim text-sm fp-mono">≥ ${t.minAmount.toLocaleString()}</span>
+                  <span className="fp-safe text-sm font-semibold">+{t.discountPct}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       <section id="faq" className="max-w-3xl mx-auto px-6 py-20 border-t fp-line-soft">
