@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
-  Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Sparkles, Sliders, Tag,
+  Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Gauge, Sliders, Tag,
   ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
   MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, LucideIcon,
 } from "lucide-react";
@@ -528,7 +528,7 @@ export function BrandingTab({ panel }: { panel: Panel }) {
           </div>
 
           <button onClick={() => setStudioFull(true)} disabled={!realPanel} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 disabled:opacity-50">
-            <Sparkles size={14} /> Open full Design Studio
+            <Gauge size={14} /> Open full Design Studio
           </button>
           <p className="fp-text-faint text-[11px] mt-2">Full-screen live editor — custom accent, landing headline &amp; description, real-time preview, and the premium Design Shop.</p>
         </Card>

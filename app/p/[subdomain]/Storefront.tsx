@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Sparkles, Zap, ShieldCheck, Wallet, Clock,
+  Gauge, Zap, ShieldCheck, Wallet, Clock,
   AlertTriangle, CheckCircle2, ChevronDown, Loader2,
   TrendingUp, CreditCard, Search, UserPlus,
 } from "lucide-react";
@@ -552,7 +552,7 @@ export function Storefront({
             className={`flex flex-col items-center gap-2 shrink-0 ${active === "other" ? "fp-violet" : "fp-text-faint"}`}
           >
             <span className={`w-14 h-14 rounded-2xl border flex items-center justify-center ${active === "other" ? "fp-violet-soft-bg border-[rgba(139,127,255,0.45)]" : "fp-panel-raised border-[#262A35]"}`}>
-              <Sparkles size={20} />
+              <Gauge size={20} />
             </span>
             <span className="text-[11px]">Other</span>
           </button>

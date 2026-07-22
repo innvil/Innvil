@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
   Wifi, ShieldCheck, Users, CreditCard, MessageSquare, Palette, Settings, Bell,
-  Search, ArrowUpRight, ArrowRight, TrendingUp, Lock, CheckCircle2, Sparkles, Gauge,
+  Search, ArrowUpRight, ArrowRight, TrendingUp, Lock, CheckCircle2, Gauge,
   LayoutGrid, ChevronRight, Circle, Bot, Wallet, Clock, HelpCircle, ArrowLeft, X, Menu,
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
@@ -116,7 +116,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
       <section className="relative fp-noise fp-grid-bg overflow-hidden">
         <div className="max-w-6xl mx-auto px-6 pt-20 pb-24 grid md:grid-cols-2 gap-14 items-center">
           <div>
-            <Pill tone="violet" icon={Sparkles}>0% monthly rent · 5% commission only</Pill>
+            <Pill tone="violet" icon={Gauge}>0% monthly rent · 5% commission only</Pill>
             <p className="fp-text-faint text-xs fp-mono mt-3">We build the panel builder platform. You bring your own provider.</p>
             <h1 className="fp-display text-5xl md:text-6xl leading-[1.05] mt-6">
               Launch your own<br />

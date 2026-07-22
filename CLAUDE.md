@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Remove every remaining Sparkles icon (v0.2.74)
+- Completed the v0.2.71 default-logo work: **all remaining `Sparkles` icons are now the Ledgerline
+  gauge (`Gauge`)**. Fixed the last three inline usages — storefront "Other" platform-tab glyph, the
+  main-landing hero Pill icon, and the "Open full Design Studio" button. Zero `Sparkles` left in
+  `src/` + `app/`. Inline icons use `Gauge` directly; logo placeholders use `DefaultLogo`. No migration.
+- TODO: add the v0.2.73 **"Refresh & Resend"** feature (held provider-balance orders auto-resend after a
+  top-up) to the landing-page ad as a differentiator.
+
 ### 2026-07-20 — Receipt: business-registration upload + OCR + manual details (v0.2.72)
 - The earnings receipt's business header was hardcoded (`BUSINESS_INFO`). Now it's **per-owner,
   editable, and OCR-assisted**. New `owner_business_profiles` table (migration `0022`) + actions
