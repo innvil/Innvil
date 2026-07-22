@@ -13,12 +13,20 @@ type Params = { params: Promise<{ subdomain: string }> };
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { subdomain } = await params;
   const panel = await getPublicPanel(subdomain);
-  if (!panel) return { title: "Panel not found" };
+  if (!panel) return { title: "Panel not found", robots: { index: false, follow: false } };
+  const title = `${panel.name} — Order social media services`;
+  const description =
+    panel.description ||
+    `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`;
+  // Only browsable states get indexed; draft/suspended/maintenance are hidden.
+  const indexable = panel.status === "live" || panel.status === "inactive";
   return {
-    title: `${panel.name} — Order social media services`,
-    description:
-      panel.description ||
-      `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`,
+    title,
+    description,
+    robots: indexable ? { index: true, follow: true } : { index: false, follow: false },
+    // White-label: OG uses the PANEL's identity, never Innvil's.
+    openGraph: { title, description, type: "website", siteName: panel.name },
+    twitter: { card: "summary_large_image", title, description },
     ...(panel.favicon ? { icons: { icon: panel.favicon } } : {}),
   };
 }

@@ -22,16 +22,29 @@ const ibmPlexMono = IBM_Plex_Mono({
   display: "swap",
 });
 
+// NOTE: no `title.template` on purpose — storefronts are white-label and must not
+// inherit an "· Innvil" suffix. Each route sets its own absolute title.
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud"),
   title: "Innvil — The White-label SMM Panel Builder",
   description: "Build your own white-label SMM panel. Create as many independent panels as you want, each with its own subdomain, storefront, customer dashboard, and wallet. 5% commission only — no monthly rent.",
-  keywords: ["white-label smm panel builder", "white-label smm panel building", "create smm panel", "smm panel software", "no-code smm panel builder"],
+  keywords: ["white-label smm panel builder", "white-label smm panel building", "create smm panel", "smm panel software", "no-code smm panel builder", "smm reseller panel"],
+  applicationName: "Innvil",
   authors: [{ name: "Innvil" }],
   icons: { icon: "/favicon.svg" },
+  robots: { index: true, follow: true },
   openGraph: {
+    // NOTE: no `url` here — it would resolve to the Innvil apex for EVERY route,
+    // including white-label storefronts. Set per-page instead.
     title: "Innvil — The White-label SMM Panel Builder",
-    description: "Build your own white-label SMM panel. 5% commission only.",
+    description: "Build your own white-label SMM panel. 5% commission on completed orders only — no monthly rent.",
     type: "website",
+    siteName: "Innvil",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Innvil — The White-label SMM Panel Builder",
+    description: "Build your own white-label SMM panel. 5% commission only — no monthly rent.",
   },
 };
 

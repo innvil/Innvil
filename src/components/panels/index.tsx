@@ -32,6 +32,7 @@ import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } fro
 import { getLandingVideo } from "@/src/lib/actions/platform-settings";
 import { toVideoEmbed } from "@/src/lib/video";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
+import { LANDING_FAQ } from "@/src/data/landing-faq";
 import type { Panel } from "@/src/types";
 
 const OWNER_APP_CACHE_PREFIX = "innvil-owner-app";
@@ -72,7 +73,7 @@ function writeOwnerAppCache<T>(section: string, value: T) {
   A. INNVIL PUBLIC LANDING PAGE
    ========================================================= */
 
-function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => void }) {
+function TopNav({ world, setWorld }: { world: string; setWorld?: (w: string) => void }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0B0F]/80 border-b fp-line-soft">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -101,7 +102,7 @@ function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => v
   );
 }
 
-export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
+export function PublicLanding({ setWorld }: { setWorld?: (w: string) => void }) {
   const [videoUrl, setVideoUrl] = useState("");
   useEffect(() => {
     let alive = true;
@@ -252,7 +253,8 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
             { icon: MessageSquare, t: "Support tickets, both sides", d: "Customers open and reply to tickets in their dashboard; you answer from the panel's Support inbox, with unread badges and email notices." },
             { icon: FileText, t: "Earnings & downloadable receipts", d: "See top-ups minus provider cost as real profit, and export a self-contained receipt for any date range." },
             { icon: Copy, t: "Duplicate detection + mass cancel", d: "Repeat orders on the same link land in a Duplicate slot instead of your provider. Cancel in bulk — every owner cancel auto-refunds the customer." },
-            { icon: Activity, t: "Provider balance in view", d: "Fetch and cache each connected provider's balance so you never run dry mid-fulfilment. Low-balance orders hold and auto-refund after 24h." },
+            { icon: Activity, t: "Provider balance in view", d: "Fetch and cache each connected provider's balance so you never run dry mid-fulfilment." },
+            { icon: Rocket, t: "Refresh & resend held orders", d: "An order held because your provider's balance ran low doesn't fail — top the provider up and one tap resends every held order the moment its cost is covered." },
             { icon: RefreshCw, t: "Automatic order-status sync", d: "Orders track your provider automatically — completed, partial, canceled — and refund the unfilled portion. No manual chasing." },
             { icon: KeyRound, t: "Customer-facing API", d: "Every customer gets an API key and the full v2 endpoints, including batch ordering up to 100 rows for automation workflows." },
             { icon: Gauge, t: "Fast, mobile-first UX", d: "Owner and customer experiences are built mobile-first and feel like a modern SaaS product, not a legacy panel." },
@@ -402,18 +404,7 @@ export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3 text-center">FAQ</p>
         <h2 className="fp-display text-3xl mb-10 text-center">Your questions, answered.</h2>
         <div className="space-y-2">
-          {[
-            { q: "What is an SMM panel, and what does Innvil do?", a: "An SMM panel is a storefront that sells social-media marketing services — followers, likes, views, comments. Innvil is the no-code builder for one: you create a white-label panel with its own subdomain, storefront, customer dashboard and wallet. Innvil never sells the services itself." },
-            { q: "Do I need technical knowledge to launch a panel?", a: "No. Name your panel, pick a subdomain, choose a theme, connect your provider's API key, and you're live in minutes — no code, no server to manage." },
-            { q: "How does the pricing work?", a: "There's no monthly rent and no setup fee. Innvil takes 5% commission, and only on orders that actually complete — 0% on anything canceled or refunded. That 5% also drops as you scale (see below), and we never take more than $100 from one panel in a single day." },
-            { q: "Does the commission drop as I grow?", a: "Yes — 5% isn't forever. The more a panel sells, the lower its rate: roughly 4% at 1,000 completed orders/day, 3% at 2,500, 2% at 5,000, and 1% at 10,000+. Cross 1,000 orders/day and you can contact support to have your rate reduced. On top of that, Innvil never takes more than $100 from one panel per day — so the effective rate keeps falling the more you sell." },
-            { q: "How do I activate my panel and take it live?", a: "You can set a panel Live any time — even before adding funds. With no Innvil balance it runs in preview (Inactive): your storefront is fully browsable so you can see exactly how it looks live, but customers can't place orders yet. To start accepting orders, open Billing → Add funds and top up (first top-up $10, then $5 minimum) — the panel activates and any live-preview panels flip to fully live automatically. The 5% commission draws from that balance as orders complete, and if it runs out the panel returns to preview until you top up again." },
-            { q: "Do I need my own provider?", a: "Yes — Innvil is bring-your-own-provider. You connect your own SMM provider over their API; Innvil imports the catalog, applies your markup, forwards orders, and syncs statuses. You keep 95% of every order." },
-            { q: "Can I use my own domain?", a: "Every panel includes a free subdomain, and you can connect a custom domain with automatic SSL. Disconnect it anytime and the storefront falls back to the included subdomain — no lock-in." },
-            { q: "How many panels can I create?", a: "As many as you want. One account runs unlimited panels — spin up test panels, delete the ones you don't need, all from one dashboard." },
-            { q: "What payment methods can my customers use?", a: "Each owner connects their own gateways. Crypto is supported today via Cryptomus and NOWPayments (300+ coins), with more gateways rolling out. Your customers top up a wallet and order from the balance." },
-            { q: "Can I log into my customers' accounts?", a: "No — and that's deliberate. Owners can't sign into customer accounts or reset customer passwords; you can only adjust balances. It's a privacy guarantee most legacy panels don't offer." },
-          ].map((f) => (
+          {LANDING_FAQ.map((f) => (
             <details key={f.q} className="fp-panel border fp-line rounded-xl px-4 py-3 group">
               <summary className="cursor-pointer text-sm font-medium flex items-center justify-between list-none gap-3">
                 {f.q}
@@ -711,9 +702,10 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: strin
           <Settings size={14} /> Account settings
         </button>
         <button
-          onClick={() => {
+          onClick={async () => {
+            // Sign out first so the server re-render (setWorld → router.refresh) sees no session.
+            await signOutAction();
             setWorld("public");
-            void signOutAction();
           }}
           className="fp-text-faint text-xs shrink-0"
         >

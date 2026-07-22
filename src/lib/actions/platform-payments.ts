@@ -268,6 +268,29 @@ export async function getPlatformTopupDiscountDefaults(): Promise<TopupDiscountD
   return out;
 }
 
+/**
+ * PUBLIC: the owner top-up bonus tiers to advertise on the marketing landing.
+ * Owner→Innvil top-ups go through crypto gateways, so we surface the crypto tiers;
+ * if crypto has none, fall back to whichever category has the most tiers. Returns
+ * a positive, ascending list — or [] when nothing is configured (section hidden).
+ */
+export async function getPublicTopupTiers(): Promise<TopupDiscountRule[]> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("platform_topup_discount_defaults")
+    .select("category, discount_rules")
+    .in("category", DISCOUNT_CATEGORIES as unknown as string[]);
+
+  const byCat = new Map<string, TopupDiscountRule[]>();
+  for (const row of data ?? []) byCat.set(row.category as string, parseRules(row.discount_rules));
+
+  let tiers = byCat.get("crypto") ?? [];
+  if (tiers.length === 0) {
+    for (const rules of byCat.values()) if (rules.length > tiers.length) tiers = rules;
+  }
+  return tiers.filter((t) => t.discountPct > 0).sort((a, b) => a.minAmount - b.minAmount);
+}
+
 /** Super-admin: set global top-up discount defaults by payment category. */
 export async function setPlatformTopupDiscountDefaults(
   values: Record<PaymentDiscountCategory, Array<{ minAmount: string; discountPct: string }>>

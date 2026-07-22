@@ -1,57 +1,41 @@
-"use client";
+import type { Metadata } from "next";
+import { getUser } from "@/src/lib/auth";
+import { PublicLanding } from "@/src/components/panels";
+import { getPublicTopupTiers } from "@/src/lib/actions/platform-payments";
+import { LandingJsonLd } from "./JsonLd";
+import HomeClient from "./HomeClient";
 
-import { useEffect, useState } from "react";
-import dynamic from "next/dynamic";
-import { createClient } from "@/src/lib/supabase/client";
-import PreviewSwitcher from "./PreviewSwitcher";
-
-const PublicLanding = dynamic(
-  () => import("@/src/components/panels").then((m) => m.PublicLanding),
-  { ssr: false }
-);
-const AuthScreen = dynamic(
-  () => import("@/src/components/panels").then((m) => m.AuthScreen),
-  { ssr: false }
-);
-const InnvilApp = dynamic(
-  () => import("@/src/components/panels").then((m) => m.InnvilApp),
-  {
-    ssr: false,
-    loading: () => <div className="fp-root min-h-screen fp-grid-bg" />,
-  }
-);
+// Homepage-only canonical + OG url (kept off the layout so storefronts don't inherit it).
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+  openGraph: { url: "/" },
+};
 
 /* =========================================================
-   ROOT — real, auth-driven.
-   Signed out → public site / login. Signed in → dashboard.
-   Dev world-switcher is available at "/?preview=1".
+   ROOT — SEO-friendly.
+   Signed-out visitors get the marketing landing SERVER-RENDERED (crawlable).
+   Signed-in users and the dev preview switcher render client-side via HomeClient.
+   Auth lives at real routes (/login, /signup), so the landing needs no client
+   state to work.
    ========================================================= */
 
-type View = "loading" | "public" | "auth" | "app" | "preview";
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  // Dev world-switcher harness.
+  if (sp?.preview === "1") return <HomeClient mode="preview" />;
 
-export default function Home() {
-  const [view, setView] = useState<View>("loading");
+  const user = await getUser();
+  if (user) return <HomeClient mode="app" />;
 
-  useEffect(() => {
-    // Dev escape hatch: the old world-switcher harness.
-    if (new URLSearchParams(window.location.search).get("preview") === "1") {
-      setView("preview");
-      return;
-    }
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => setView(data.user ? "app" : "public"));
-  }, []);
-
-  // Bridge the existing components' setWorld(...) calls to real views.
-  const setWorld = (w: string) => {
-    if (w === "public") setView("public");
-    else if (w === "auth") setView("auth");
-    else setView("app"); // "home"/"panels"/… → the real owner dashboard
-  };
-
-  if (view === "preview") return <PreviewSwitcher />;
-  if (view === "loading") return <div className="fp-root min-h-screen fp-grid-bg" />;
-  if (view === "public") return <PublicLanding setWorld={setWorld} />;
-  if (view === "auth") return <AuthScreen setWorld={setWorld} />;
-  return <InnvilApp setWorld={setWorld} initialSection="home" />;
+  // Public marketing page — server-rendered for search engines & first paint.
+  return (
+    <>
+      <LandingJsonLd />
+      <PublicLanding />
+    </>
+  );
 }

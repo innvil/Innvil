@@ -127,6 +127,26 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — SEO foundation: SSR landing + metadata + structured data (v0.2.75)
+- **Biggest fix — the marketing landing is now server-rendered (crawlable).** `app/page.tsx` was a
+  client-only `ssr:false` shell (empty HTML to crawlers). It's now a **server component**: signed-out
+  visitors get `<PublicLanding />` SSR'd; signed-in users + the `?preview=1` switcher render via a new
+  client island **`app/HomeClient.tsx`** (dynamic `ssr:false` `InnvilApp`/`PreviewSwitcher`). Auth is at
+  real routes (`/login`,`/signup`), so `setWorld` was vestigial on the landing — made optional. Logout
+  now `await signOutAction()` **then** `setWorld` (→ `router.refresh()`) so the server re-render sees no session.
+- **Metadata** (`app/layout.tsx`): added `metadataBase`, `applicationName`, `robots`, Twitter card, OG
+  `siteName`. **Removed the global `canonical`/OG `url`** (they'd leak the Innvil apex onto white-label
+  storefronts); homepage sets its own `canonical:"/"` in `app/page.tsx`. **No title template** (same reason).
+- **Structured data** (`app/JsonLd.tsx`, server): Organization + WebSite + SoftwareApplication + **FAQPage**,
+  the FAQ built from the shared **`src/data/landing-faq.ts`** (single source of truth — PublicLanding renders
+  the same array, required for valid FAQ rich results).
+- **`app/robots.ts` + `app/sitemap.ts`** (disallow /superadmin,/api,reset/forgot; sitemap = marketing pages;
+  storefronts self-manage SEO on their own domains).
+- **Storefront metadata** (`app/p/[subdomain]/page.tsx`): white-label OG (panel's own name/description, never
+  Innvil), `noindex` for draft/suspended/maintenance.
+- Also added the **"Refresh & resend held orders"** feature card to the landing #platform grid (the v0.2.73
+  differentiator). **`metadataBase` uses `NEXT_PUBLIC_APP_URL`** — set it to the real prod origin.
+
 ### 2026-07-20 — Remove every remaining Sparkles icon (v0.2.74)
 - Completed the v0.2.71 default-logo work: **all remaining `Sparkles` icons are now the Ledgerline
   gauge (`Gauge`)**. Fixed the last three inline usages — storefront "Other" platform-tab glyph, the
