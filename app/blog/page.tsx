@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, Clock } from "lucide-react";
-import { allPosts } from "@/src/data/blog-posts";
+import type { BlogPost } from "@/src/data/blog-posts";
+import { listPublishedPosts } from "@/src/lib/blog/data";
 import { MarketingHeader, MarketingFooter } from "@/src/components/marketing/SiteChrome";
 
 const SITE = (process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud").replace(/\/$/, "");
+
+// Refresh the listing so newly-approved AI posts show up without a redeploy.
+export const revalidate = 3600;
 
 export const metadata: Metadata = {
   title: "SMM Panel Guides — How to Start, Compare & Price a Panel | Innvil",
@@ -29,8 +33,7 @@ function fmtDate(iso: string): string {
   });
 }
 
-function BlogIndexJsonLd() {
-  const posts = allPosts();
+function BlogIndexJsonLd({ posts }: { posts: BlogPost[] }) {
   const graph = [
     {
       "@type": "Blog",
@@ -58,11 +61,11 @@ function BlogIndexJsonLd() {
   );
 }
 
-export default function BlogIndex() {
-  const posts = allPosts();
+export default async function BlogIndex() {
+  const posts = await listPublishedPosts();
   return (
     <div className="fp-root min-h-screen">
-      <BlogIndexJsonLd />
+      <BlogIndexJsonLd posts={posts} />
       <MarketingHeader />
 
       <section className="fp-noise fp-grid-bg border-b fp-line-soft">

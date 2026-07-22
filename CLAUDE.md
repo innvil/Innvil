@@ -127,6 +127,29 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-23 — AI blog autopilot: draft → human-approve → publish (v0.2.83)
+- **AI writes blog drafts on a daily schedule; a super admin reviews and publishes.** Deliberately
+  gated (not auto-publish) — daily unreviewed AI content risks Google's "scaled content abuse" penalty,
+  which could demote the whole domain. Nothing goes live without a human clicking Publish.
+- **Migration `0025_blog_ai.sql`** — `blog_posts` (DB-backed posts: slug/title/description/tag/keywords/
+  intro/sections jsonb/cta/related/status draft|published|archived/source ai|manual/topic/published_at) +
+  `blog_topics` (curated topic queue) + RLS (public reads published; super admin manages).
+- **Writer** `src/lib/ai/blog-writer.ts` (server-only): prompts Claude (**`ANTHROPIC_API_KEY`**, optional
+  `BLOG_AI_MODEL`, default `claude-sonnet-5`) for a strict-JSON article matching the block model, hard-
+  validates it, and is constrained to VERIFIED product facts (no invented features/stats). Always a draft.
+- **Read layer** `src/lib/blog/data.ts` merges the 3 static cornerstone guides (`src/data/blog-posts.ts`,
+  still code) with published DB rows (static wins on slug); resilient (empty/unreachable DB → static only).
+  Blog index/[slug]/sitemap now read this + use ISR (`revalidate = 3600`) so approved posts appear without a
+  redeploy. Renderer extracted to `src/components/blog/ArticleBody.tsx` (shared by the article page + admin
+  preview).
+- **Generation** `src/lib/blog/generate.ts` (queue → fallback topic pool → generate → insert draft; marks
+  topic used). **Cron** `app/api/cron/generate-blog` (CRON_SECRET-gated) — **schedule via Supabase pg_cron**,
+  daily, e.g. `select cron.schedule('innvil-generate-blog','0 9 * * *', $$ ... net.http_post(url, Bearer CRON_SECRET) $$)`.
+- **Super admin → new "Blog" tab** (`SuperAdminDashboard.tsx` `BlogTab` + `src/lib/actions/blog-admin.ts`):
+  generate-now (optional topic), drafts-to-review with full preview + light edit (title/desc/slug/tag/keywords)
+  + Publish/Delete, published list (Unpublish/Delete), and the topic queue (add/delete). **Run migration `0025`;
+  set `ANTHROPIC_API_KEY`; schedule the pg_cron job.**
+
 ### 2026-07-23 — Blog / guides content surface for SEO (v0.2.82)
 - **New `/blog` content surface** so the SEO foundation has indexable long-tail articles to rank.
   All SSR, no new deps, no migration. `src/data/blog-posts.ts` is the single source of truth (typed

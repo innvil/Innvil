@@ -1,14 +1,14 @@
 import type { MetadataRoute } from "next";
-import { allPosts } from "@/src/data/blog-posts";
+import { listPublishedPosts } from "@/src/lib/blog/data";
 
 const SITE = (process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud").replace(/\/$/, "");
 
 /* Innvil marketing/site pages. Per-panel storefronts live on their own
    subdomains/custom domains and self-manage SEO, so they're intentionally not
    listed here. */
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
-  const posts = allPosts().map((p): MetadataRoute.Sitemap[number] => ({
+  const posts = (await listPublishedPosts()).map((p): MetadataRoute.Sitemap[number] => ({
     url: `${SITE}/blog/${p.slug}`,
     lastModified: new Date((p.updated ?? p.date) + "T00:00:00Z"),
     changeFrequency: "monthly",

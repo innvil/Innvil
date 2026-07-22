@@ -1,12 +1,17 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowRight, ArrowLeft, Clock } from "lucide-react";
-import { BLOG_POSTS, getPost, relatedPosts, type BlogBlock, type BlogPost } from "@/src/data/blog-posts";
+import { BLOG_POSTS, type BlogPost } from "@/src/data/blog-posts";
+import { getPublishedPost, relatedFor } from "@/src/lib/blog/data";
 import { MarketingHeader, MarketingFooter } from "@/src/components/marketing/SiteChrome";
+import { ArticleBody } from "@/src/components/blog/ArticleBody";
 
 const SITE = (process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud").replace(/\/$/, "");
+
+// Prebuild the static cornerstone guides; DB-published posts render on demand and
+// are cached (ISR) so newly-approved drafts appear without a redeploy.
+export const revalidate = 3600;
 
 export function generateStaticParams() {
   return BLOG_POSTS.map((p) => ({ slug: p.slug }));
@@ -18,7 +23,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const post = getPost(slug);
+  const post = await getPublishedPost(slug);
   if (!post) return { title: "Guide not found | Innvil", robots: { index: false, follow: false } };
   return {
     title: `${post.title} | Innvil`,
@@ -45,45 +50,6 @@ function fmtDate(iso: string): string {
     day: "numeric",
     timeZone: "UTC",
   });
-}
-
-/** Minimal inline formatter: **bold** → <strong>. Text is trusted (authored in-repo). */
-function renderInline(text: string): ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) =>
-    part.startsWith("**") && part.endsWith("**") ? (
-      <strong key={i} className="fp-text font-semibold">{part.slice(2, -2)}</strong>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  );
-}
-
-function Block({ block }: { block: BlogBlock }) {
-  switch (block.kind) {
-    case "p":
-      return <p className="fp-text-dim text-[15px] leading-[1.75] mb-5">{renderInline(block.text)}</p>;
-    case "h3":
-      return <h3 className="fp-display text-xl mt-8 mb-3">{block.text}</h3>;
-    case "ul":
-      return (
-        <ul className="list-disc pl-5 space-y-2 mb-5 fp-text-dim text-[15px] leading-[1.7]">
-          {block.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}
-        </ul>
-      );
-    case "ol":
-      return (
-        <ol className="list-decimal pl-5 space-y-2 mb-5 fp-text-dim text-[15px] leading-[1.7]">
-          {block.items.map((it, i) => <li key={i}>{renderInline(it)}</li>)}
-        </ol>
-      );
-    case "quote":
-      return (
-        <blockquote className="border-l-2 fp-gold-border pl-4 my-6 fp-text italic text-[15px] leading-[1.7]">
-          {renderInline(block.text)}
-        </blockquote>
-      );
-  }
 }
 
 function ArticleJsonLd({ post }: { post: BlogPost }) {
@@ -115,10 +81,10 @@ export default async function BlogPostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const post = getPost(slug);
+  const post = await getPublishedPost(slug);
   if (!post) notFound();
 
-  const related = relatedPosts(slug);
+  const related = await relatedFor(slug);
 
   return (
     <div className="fp-root min-h-screen">
@@ -137,14 +103,8 @@ export default async function BlogPostPage({
         </div>
 
         <h1 className="fp-display text-3xl md:text-4xl leading-[1.1] mb-6">{post.title}</h1>
-        <p className="fp-text text-lg leading-[1.7] mb-10 pb-10 border-b fp-line-soft">{renderInline(post.intro)}</p>
 
-        {post.sections.map((section) => (
-          <section key={section.h2} className="mb-10">
-            <h2 className="fp-display text-2xl mb-4">{section.h2}</h2>
-            {section.blocks.map((block, i) => <Block key={i} block={block} />)}
-          </section>
-        ))}
+        <ArticleBody intro={post.intro} sections={post.sections} />
 
         {post.cta && (
           <div className="fp-panel border fp-gold-border rounded-2xl p-6 md:p-8 mt-12">
