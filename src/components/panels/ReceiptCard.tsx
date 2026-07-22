@@ -20,12 +20,76 @@ const EMPTY_BIZ: BusinessProfile = {
 
 /** Best-effort field extraction from OCR'd registration text. Owner edits after. */
 function parseBusinessText(text: string): Partial<BusinessProfile> {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
   const joined = lines.join("\n");
+  const normalized = text.replace(/\s+/g, " ").trim();
   const out: Partial<BusinessProfile> = {};
+  const stopName = /(documentary\s+stamp|this\s+certifies|certificate|business\s+name\s+registration|secretary|philippines|valid\s+from|testimony\s+whereof)/i;
 
-  const numMatch = joined.match(/(?:business\s*(?:name)?\s*(?:no|number)|registration\s*(?:no|number)|reg\.?\s*no|permit\s*no|company\s*(?:no|number)|dti|sec\s*reg)[^\dA-Za-z]{0,20}([A-Z0-9][A-Z0-9-]{3,})/i);
-  if (numMatch) out.businessNumber = numMatch[1].trim();
+  const lineAfter = (re: RegExp): string => {
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (re.test(lines[i])) return lines[i + 1];
+    }
+    return "";
+  };
+
+  const cleanCandidate = (v: string): string => v.replace(/^[-:;\s]+|[-:;\s]+$/g, "").trim();
+  const trimBusinessName = (v: string): string => {
+    const compact = cleanCandidate(v).replace(/[()]/g, " ").replace(/\s+/g, " ").trim();
+    const cut = compact.match(/^(.*?)(?:\bBARANGAY\b|\bBRGY\.?\b|\bCITY\s+OF\b|\bMUNICIPALITY\b|\bPROVINCE\b|\bREGION\b)/i);
+    const picked = cut?.[1] ? cut[1] : compact;
+    return picked.replace(/[\s,.-]+$/g, "").trim();
+  };
+
+  // Common PH DTI form shape in one-line PDF text: "This certifies that <name> is a business name registered".
+  const certNameInline = normalized.match(/this\s+certifies\s+that\s+(.{3,140}?)\s+is\s+a\s+business\s+name\s+registered/i);
+  if (certNameInline?.[1]) {
+    const candidate = trimBusinessName(certNameInline[1]);
+    if (candidate && !stopName.test(candidate) && /[A-Za-z]{4,}/.test(candidate)) out.legalName = candidate;
+  }
+
+  // Common PH DTI form shape in one-line PDF text: "This certificate issued to <name> is valid from".
+  const certRegistrantInline = normalized.match(/certificate\s+issued\s+to\s+(.{3,140}?)\s+is\s+valid\s+from/i);
+  if (certRegistrantInline?.[1]) {
+    const candidate = cleanCandidate(certRegistrantInline[1]).replace(/[()]/g, "").trim();
+    if (candidate && !stopName.test(candidate) && /[A-Za-z]{4,}/.test(candidate)) out.registrant = candidate;
+  }
+
+  // Common PH DTI form shape: "This certifies that" -> business name on next line.
+  const certName = cleanCandidate(lineAfter(/this\s+certifies\s+that/i));
+  if (!out.legalName && certName && !stopName.test(certName) && /[A-Za-z]{4,}/.test(certName)) {
+    out.legalName = trimBusinessName(certName);
+  }
+
+  // Common PH DTI form shape: "This certificate issued to" -> registrant on next line.
+  const certRegistrant = cleanCandidate(lineAfter(/certificate\s+issued\s+to/i));
+  if (!out.registrant && certRegistrant && !stopName.test(certRegistrant) && /[A-Za-z]{4,}/.test(certRegistrant)) {
+    out.registrant = certRegistrant;
+  }
+
+  const labelIndex = lines.findIndex((l) => /(business\s*name\s*no\.?|registration\s*(?:no|number)|reg\.?\s*no|permit\s*no|company\s*(?:no|number))/i.test(l));
+  if (labelIndex >= 0) {
+    for (let i = labelIndex + 1; i < Math.min(lines.length, labelIndex + 5); i++) {
+      const m = lines[i].match(/\b([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]{4,})\b/);
+      if (m) {
+        out.businessNumber = m[1].trim();
+        break;
+      }
+    }
+  }
+
+  if (!out.businessNumber) {
+    const inlineNo = joined.match(/\b([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]{4,})\b/);
+    if (inlineNo) out.businessNumber = inlineNo[1].trim();
+  }
+
+  if (!out.businessNumber) {
+    const labeledInlineNo = normalized.match(/(?:business\s*name\s*no\.?|registration\s*(?:no|number)|reg\.?\s*no)\s*[:#-]?\s*([A-Z]{2,}[A-Z0-9-]*\d[A-Z0-9-]{4,})/i);
+    if (labeledInlineNo) out.businessNumber = labeledInlineNo[1].trim();
+  }
 
   const taxMatch = joined.match(/(?:\btin\b|tax\s*(?:id|identification|no)?|\bvat\b|\bein\b)[^\dA-Za-z]{0,15}([A-Z0-9][A-Z0-9-]{5,})/i);
   if (taxMatch) out.taxId = taxMatch[1].trim();
@@ -33,22 +97,44 @@ function parseBusinessText(text: string): Partial<BusinessProfile> {
   const emailMatch = joined.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   if (emailMatch) out.email = emailMatch[0];
 
-  const phoneMatch = joined.match(/(?:\+?\d[\d\s()-]{7,}\d)/);
-  if (phoneMatch) out.phone = phoneMatch[0].trim();
+  // Avoid unlabeled numeric lines (e.g. business no) being treated as phone.
+  const phoneLine = lines.find((l) => /(?:phone|mobile|tel\.?|telephone|contact\s*no)/i.test(l));
+  if (phoneLine) {
+    const phoneMatch = phoneLine.match(/(?:\+?\d[\d\s()-]{7,}\d)/);
+    if (phoneMatch) out.phone = phoneMatch[0].trim();
+  }
 
-  const regMatch = joined.match(/(?:registered\s*to|registrant|proprietor|owner|name\s*of\s*(?:the\s*)?(?:owner|business\s*owner))[^A-Za-z]{0,10}([A-Za-z][A-Za-z .,'-]{4,60})/i);
-  if (regMatch) out.registrant = regMatch[1].trim();
+  if (!out.registrant) {
+    const regMatch = joined.match(/(?:registered\s*to|registrant|proprietor|owner|name\s*of\s*(?:the\s*)?(?:owner|business\s*owner))[^A-Za-z]{0,10}([A-Za-z][A-Za-z .,'-]{4,80})/i);
+    if (regMatch) out.registrant = regMatch[1].trim();
+  }
 
-  // Legal name — the longest text-heavy line in the first several lines.
-  const nameLine = lines.slice(0, 8)
+  // Address heuristic for business certs.
+  if (!out.address) {
+    const addressLine = lines.find((l) => /(barangay|city\s+of|province|region\s+[ivx]+)/i.test(l) && !stopName.test(l));
+    if (addressLine) out.address = addressLine;
+  }
+
+  if (!out.address) {
+    const addressInline = normalized.match(/\((barangay)\)\s+(.{5,140}?)\s+is\s+a\s+business\s+name\s+registered/i);
+    if (addressInline?.[2]) out.address = cleanCandidate(addressInline[2]);
+  }
+
+  // Fallback legal name — longest text-heavy line in top block excluding boilerplate.
+  const nameLine = lines.slice(0, 14)
     .filter((l) => l.replace(/[^A-Za-z]/g, "").length >= 4)
+    .filter((l) => !stopName.test(l))
+    .filter((l) => !/^(barangay|city\s+of|province|region\s+[ivx]+)/i.test(l))
+    .filter((l) => !/(business\s*name\s*no\.?|registration\s*(?:no|number))/i.test(l))
     .sort((a, b) => b.length - a.length)[0];
-  if (nameLine) out.legalName = nameLine.slice(0, 120);
+  if (!out.legalName && nameLine) out.legalName = nameLine.slice(0, 120);
 
   return out;
 }
 
 export function ReceiptCard() {
+  const BIZ_DOC_ACCEPT = "image/*,.pdf,.txt,.md,.csv,.json,.rtf,.doc,.docx,.odt,.xls,.xlsx";
+
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth()); // 0-11
@@ -59,11 +145,21 @@ export function ReceiptCard() {
 
   // Business profile (editable, OCR-assisted).
   const [biz, setBiz] = useState<BusinessProfile>(EMPTY_BIZ);
+  const [bizDirty, setBizDirty] = useState<Record<keyof BusinessProfile, boolean>>({
+    legalName: false,
+    address: false,
+    registrant: false,
+    businessNumber: false,
+    taxId: false,
+    email: false,
+    phone: false,
+  });
   const [bizOpen, setBizOpen] = useState(false);
   const [bizSaving, setBizSaving] = useState(false);
   const [bizMsg, setBizMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrText, setOcrText] = useState("");
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     getBusinessProfile().then((p) => setBiz(p)).catch(() => {});
@@ -96,7 +192,10 @@ export function ReceiptCard() {
   const isEdge = (d: number) => d === from || d === to;
   const rangeLabel = from ? `${MONTHS[month]} ${from}${to && to !== from ? `–${to}` : ""}, ${year}` : "Pick a start and end day";
 
-  const setField = (k: keyof BusinessProfile, v: string) => setBiz((prev) => ({ ...prev, [k]: v }));
+  const setField = (k: keyof BusinessProfile, v: string) => {
+    setBiz((prev) => ({ ...prev, [k]: v }));
+    setBizDirty((prev) => ({ ...prev, [k]: true }));
+  };
 
   const saveBiz = async () => {
     setBizSaving(true);
@@ -111,27 +210,77 @@ export function ReceiptCard() {
     setOcrText("");
     setBizMsg(null);
     try {
-      const { recognize } = await import("tesseract.js");
-      const { data } = await recognize(file, "eng");
-      const text = (data?.text ?? "").trim();
+      const lowerName = file.name.toLowerCase();
+      const isImage = file.type.startsWith("image/");
+      let text = "";
+
+      if (isImage) {
+        const { recognize } = await import("tesseract.js");
+        const { data } = await recognize(file, "eng");
+        text = (data?.text ?? "").trim();
+      } else if (lowerName.endsWith(".pdf") || file.type === "application/pdf") {
+        const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+        const pdfjsAny = pdfjs as any;
+        if (pdfjsAny.GlobalWorkerOptions && !pdfjsAny.GlobalWorkerOptions.workerSrc) {
+          pdfjsAny.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@6.1.200/legacy/build/pdf.worker.min.mjs";
+        }
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const doc = await pdfjs.getDocument({ data: bytes }).promise;
+        const chunks: string[] = [];
+        for (let page = 1; page <= doc.numPages; page++) {
+          const p = await doc.getPage(page);
+          const content = await p.getTextContent();
+          const pageText = content.items
+            .map((item) => ("str" in item ? item.str : ""))
+            .join(" ")
+            .trim();
+          if (pageText) chunks.push(pageText);
+        }
+        text = chunks.join("\n").trim();
+        if (!text) throw new Error("No text could be extracted from this PDF. If this is a scanned/image-only PDF, try uploading the image itself or a PDF with selectable text.");
+      } else if (lowerName.endsWith(".docx") || lowerName.endsWith(".odt")) {
+        const mammoth = await import("mammoth/mammoth.browser");
+        const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+        text = (result.value ?? "").trim();
+      } else if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+        const xlsx = await import("xlsx");
+        const wb = xlsx.read(await file.arrayBuffer(), { type: "array" });
+        text = wb.SheetNames
+          .map((sheetName) => xlsx.utils.sheet_to_csv(wb.Sheets[sheetName] ?? {}))
+          .join("\n")
+          .trim();
+      } else if (lowerName.endsWith(".doc")) {
+        throw new Error("Legacy .doc files are not supported yet. Please upload DOCX, PDF, image, or text file.");
+      } else {
+        text = (await file.text()).trim();
+      }
+
+      if (!text) throw new Error("The uploaded file appears empty or unreadable.");
+
       setOcrText(text);
       const parsed = parseBusinessText(text);
-      // Only fill blank fields — never clobber what the owner already typed.
+      // Refresh OCR-filled values, but never clobber fields the owner typed manually.
       setBiz((prev) => ({
-        legalName: prev.legalName || parsed.legalName || "",
-        address: prev.address || parsed.address || "",
-        registrant: prev.registrant || parsed.registrant || "",
-        businessNumber: prev.businessNumber || parsed.businessNumber || "",
-        taxId: prev.taxId || parsed.taxId || "",
-        email: prev.email || parsed.email || "",
-        phone: prev.phone || parsed.phone || "",
+        legalName: bizDirty.legalName ? prev.legalName : (parsed.legalName || prev.legalName || ""),
+        address: bizDirty.address ? prev.address : (parsed.address || prev.address || ""),
+        registrant: bizDirty.registrant ? prev.registrant : (parsed.registrant || prev.registrant || ""),
+        businessNumber: bizDirty.businessNumber ? prev.businessNumber : (parsed.businessNumber || prev.businessNumber || ""),
+        taxId: bizDirty.taxId ? prev.taxId : (parsed.taxId || prev.taxId || ""),
+        email: bizDirty.email ? prev.email : (parsed.email || prev.email || ""),
+        phone: bizDirty.phone ? prev.phone : (parsed.phone || prev.phone || ""),
       }));
       setBizMsg({ text: "Scanned. Review the fields and edit anything that's off, then Save." });
-    } catch {
-      setBizMsg({ text: "Couldn't read that document. Please type your details in manually.", error: true });
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : "Couldn't read that document.";
+      setBizMsg({ text: `${message} You can still type your details manually.`, error: true });
     } finally {
       setOcrBusy(false);
     }
+  };
+
+  const handlePickedFile = (file: File | null | undefined) => {
+    if (!file || ocrBusy) return;
+    void runOcr(file);
   };
 
   const generate = async () => {
@@ -303,19 +452,34 @@ export function ReceiptCard() {
 
         {bizOpen && (
           <div className="px-4 pb-4 space-y-3 border-t fp-line-soft pt-3">
-            <div className="flex flex-wrap items-center gap-2">
+            <div
+              className={`flex flex-wrap items-center gap-2 border border-dashed fp-line-soft rounded-lg p-2 transition-colors ${dragOver ? "fp-gold-border fp-gold-soft-bg" : ""}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (!ocrBusy) setDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                handlePickedFile(e.dataTransfer.files?.[0]);
+              }}
+            >
               <label className={`text-xs fp-gold border fp-line-soft rounded-lg px-3 py-2 cursor-pointer flex items-center gap-1.5 ${ocrBusy ? "opacity-60 pointer-events-none" : ""}`}>
                 {ocrBusy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                 {ocrBusy ? "Scanning…" : "Upload registration document"}
                 <input
                   type="file"
-                  accept="image/*"
+                  accept={BIZ_DOC_ACCEPT}
                   className="hidden"
                   disabled={ocrBusy}
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) runOcr(f); e.target.value = ""; }}
+                  onChange={(e) => { handlePickedFile(e.target.files?.[0]); e.target.value = ""; }}
                 />
               </label>
-              <span className="fp-text-faint text-[11px]">Auto-fills the fields below (image/photo). The document isn&apos;t stored — only the details you save.</span>
+              <span className="fp-text-faint text-[11px]">Accepts images, PDF, DOCX/ODT, TXT/CSV/JSON, and XLS/XLSX. You can also drag and drop. The document isn&apos;t stored — only the details you save.</span>
             </div>
 
             {bizMsg && (
