@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { PublicLanding } from "@/src/components/panels/PublicLanding";
 import {
-  PublicLanding,
   AuthScreen,
   InnvilApp,
   SuperAdmin,

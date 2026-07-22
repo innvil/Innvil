@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-23 — Extract PublicLanding into its own module (SSR/perf) (v0.2.80)
+- **The server-rendered marketing landing no longer ships the whole owner-app bundle.** `PublicLanding`
+  (+ its private `TopNav`) moved OUT of the big `"use client"` barrel `src/components/panels/index.tsx`
+  and INTO a standalone module **`src/components/panels/PublicLanding.tsx`**. `app/page.tsx` (server
+  component, the crawlable homepage) previously imported it from the barrel — which also exports
+  `InnvilApp`/`AuthScreen`/`SuperAdmin` — pulling the entire owner app into the landing's module graph.
+- Importers repointed to `@/src/components/panels/PublicLanding` (`app/page.tsx`, `app/PreviewSwitcher.tsx`);
+  `app/HomeClient.tsx` unchanged (already `dynamic(..., {ssr:false})` for `InnvilApp`). Trimmed the
+  now-unused landing imports from `index.tsx`. Landing markup/copy identical; better Core Web Vitals on
+  the primary SEO page. No migration.
+
 ### 2026-07-20 — Auto provider top-up tracker + drop "Providers (all panels)" (v0.2.78)
 - **Auto-detected top-ups (internal, not manual, not a new API call).** `fetchProviderBalance`
   (`providers.ts`) reads the prior stored balance before updating; if the live balance is HIGHER (same

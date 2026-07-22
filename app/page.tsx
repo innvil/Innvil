@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { getUser } from "@/src/lib/auth";
-import { PublicLanding } from "@/src/components/panels";
+import { PublicLanding } from "@/src/components/panels/PublicLanding";
 import { getPublicTopupTiers } from "@/src/lib/actions/platform-payments";
 import { LandingJsonLd } from "./JsonLd";
 import HomeClient from "./HomeClient";
