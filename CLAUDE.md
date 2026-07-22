@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Owner dashboard home: real stats (v0.2.76)
+- The owner **Dashboard home** was mostly hardcoded ($0.00 stat cards, a mock RevenueChart, "Panels
+  created" the only real number). Now data-driven from `getOwnerBillingSummary` + `listAllOwnerOrders(8)`:
+  stat cards = **Panels (live/total) · Revenue today · Orders today · Innvil balance**; a **Recent orders**
+  card (real, "View all" → Orders section, needs new `goOrders` prop) + a **Today** card (profit today,
+  commission charged, orders today, live panels); each "Your panels" tile shows its **real revenue today**
+  (from `perPanel`) instead of the always-$0 `ordersToday`. Cached via readOwnerAppCache for instant paint.
+  Dropped the mock RevenueChart from the home (still used by the deprecated SuperAdmin mock). No migration.
+
 ### 2026-07-20 — SEO foundation: SSR landing + metadata + structured data (v0.2.75)
 - **Biggest fix — the marketing landing is now server-rendered (crawlable).** `app/page.tsx` was a
   client-only `ssr:false` shell (empty HTML to crawlers). It's now a **server component**: signed-out

@@ -25,7 +25,7 @@ import { AccountSettings } from "./AccountSettings";
 import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling, OwnerTopUps, OwnerContactSupport, OwnerPanelSupport } from "./OwnerSections";
 import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
-import { getOwnerBillingSummary } from "@/src/lib/actions/admin-orders";
+import { getOwnerBillingSummary, listAllOwnerOrders, type OwnerBillingSummary, type OwnerOrderVM } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy, type TopupDiscountRule } from "@/src/lib/actions/platform-payments";
@@ -743,14 +743,35 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: strin
 }
 
 /* --- Dashboard home --- */
-function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel }: {
+const DASH_STATUS_TONE: Record<string, string> = {
+  completed: "fp-safe", processing: "fp-gold", in_progress: "fp-gold", partial: "fp-gold",
+  pending: "fp-text-dim", refunded: "text-red-400", canceled: "text-red-400", failed: "text-red-400",
+  duplicate: "fp-violet",
+};
+
+function DashboardHome({ panels, loading, syncing, goPanels, goCreate, goOrders, openPanel }: {
   panels: Panel[];
   loading: boolean;
   syncing: boolean;
   goPanels: () => void;
   goCreate: () => void;
+  goOrders: () => void;
   openPanel: (p: Panel) => void;
 }) {
+  const [summary, setSummary] = useState<OwnerBillingSummary | null>(() => readOwnerAppCache<OwnerBillingSummary>("dashboard-summary"));
+  const [recent, setRecent] = useState<OwnerOrderVM[] | null>(() => readOwnerAppCache<OwnerOrderVM[]>("dashboard-recent"));
+
+  useEffect(() => {
+    let alive = true;
+    getOwnerBillingSummary().then((s) => { if (!alive) return; setSummary(s); writeOwnerAppCache("dashboard-summary", s); }).catch(() => {});
+    listAllOwnerOrders(8).then((r) => { if (!alive) return; setRecent(r); writeOwnerAppCache("dashboard-recent", r); }).catch(() => { if (alive) setRecent([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const usd = (n?: number) => `$${(Number.isFinite(n) ? (n as number) : 0).toFixed(2)}`;
+  const liveCount = panels.filter((p) => p.status === "live").length;
+  const revByPanel = new Map((summary?.perPanel ?? []).map((p) => [p.panelId, p.revenueToday]));
+
   return (
     <div className="p-4 sm:p-8 space-y-6">
       <div className="flex items-center justify-between">
@@ -759,18 +780,53 @@ function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel
           <Plus size={15} /> Create panel
         </button>
       </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Panels created" value={loading ? "—" : String(panels.length)} />
-        <StatCard label="Orders today (all panels)" value="$0.00" tone="gold" />
-        <StatCard label="Innvil balance" value="$0.00" />
-        <StatCard label="Commission due in 24h" value="$0.00" />
+        <StatCard label="Panels" value={loading ? "—" : `${liveCount}/${panels.length}`} delta={loading ? undefined : `${liveCount} live`} />
+        <StatCard label="Revenue today" value={summary ? usd(summary.revenueToday) : "—"} tone="gold" />
+        <StatCard label="Orders today" value={summary ? String(summary.ordersToday) : "—"} />
+        <StatCard label="Innvil balance" value={summary ? usd(summary.innvilBalance) : "—"} />
       </div>
+
       <div className="grid md:grid-cols-3 gap-6">
-        <div className="md:col-span-2"><RevenueChart title="All panels combined" /></div>
-        <Card title="Recent activity" icon={Activity}>
-          <p className="fp-text-dim text-sm">Activity will appear here as your panels take orders.</p>
+        <div className="md:col-span-2">
+          <Card
+            title="Recent orders"
+            icon={ListOrdered}
+            right={<button onClick={goOrders} className="text-xs fp-gold flex items-center gap-1">View all <ChevronRight size={12} /></button>}
+          >
+            {recent === null ? (
+              <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+            ) : recent.length === 0 ? (
+              <p className="fp-text-faint text-sm py-6 text-center">No orders yet — they&apos;ll show here as your panels sell.</p>
+            ) : (
+              <div className="divide-y fp-line-soft">
+                {recent.slice(0, 6).map((o) => (
+                  <div key={o.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">{o.serviceName}</p>
+                      <p className="fp-text-faint text-xs fp-mono truncate">{o.panelName} · {o.customerEmail ?? o.customerUsername ?? "customer"}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="fp-mono text-sm">{usd(o.charge)}</p>
+                      <p className={`text-xs ${DASH_STATUS_TONE[o.status] ?? "fp-text-faint"}`}>{o.status}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+        <Card title="Today" icon={Activity}>
+          <div className="space-y-3 text-sm">
+            <div className="flex justify-between"><span className="fp-text-dim">Profit today</span><span className="fp-mono">{summary ? usd(summary.profitToday) : "—"}</span></div>
+            <div className="flex justify-between"><span className="fp-text-dim">Commission charged</span><span className="fp-mono fp-gold">{summary ? usd(summary.commissionCharged) : "—"}</span></div>
+            <div className="flex justify-between"><span className="fp-text-dim">Orders today</span><span className="fp-mono">{summary ? summary.ordersToday : "—"}</span></div>
+            <div className="flex justify-between"><span className="fp-text-dim">Live panels</span><span className="fp-mono">{liveCount}</span></div>
+          </div>
         </Card>
       </div>
+
       <Card
         title="Your panels"
         icon={Gauge}
@@ -803,7 +859,7 @@ function DashboardHome({ panels, loading, syncing, goPanels, goCreate, openPanel
                   <StatusBadge status={p.status} />
                 </div>
                 <p className="fp-text-faint text-xs fp-mono">{panelDisplayDomain(p.subdomain, p.domain)}</p>
-                <p className="fp-mono text-sm mt-3">${p.ordersToday.toFixed(2)} today</p>
+                <p className="fp-mono text-sm mt-3">{usd(revByPanel.get(p.id))} <span className="fp-text-faint text-xs">today</span></p>
               </button>
             ))}
           </div>
@@ -1591,7 +1647,7 @@ export function InnvilApp({ setWorld, initialSection }: {
       <div className="flex-1 min-w-0">
         <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} />
         {section === "account" && <AccountSettings />}
-        {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
+        {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} goOrders={() => setSection("orders")} openPanel={openPanel} />}
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} onChanged={refreshPanels} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
         {section === "panelAdmin" && activePanel && (
