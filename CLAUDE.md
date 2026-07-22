@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-23 — SEO keyword copy pass on the landing (v0.2.81)
+- Copy-only pass so the SSR/metadata foundation (v0.2.75–0.2.80) has keyword-aligned content to rank.
+  In `PublicLanding.tsx`: hero intro now names "the no-code **SMM panel builder** — a modern alternative
+  to buying an **SMM panel script**"; #how H2 → **"How to start your own SMM panel."**; #platform →
+  "SMM panel features" / "Everything to run your SMM panel"; #why → "…rented **SMM panel**"; #pricing
+  eyebrow → "SMM panel pricing"; #faq H2 → "SMM panel questions, answered." No structure/logic change.
+- `app/layout.tsx`: added high-intent keywords (how to start an smm panel, start your own smm panel,
+  smm panel builder, smm panel script alternative). Title/description + FAQ were already tuned. No migration.
+
 ### 2026-07-23 — Extract PublicLanding into its own module (SSR/perf) (v0.2.80)
 - **The server-rendered marketing landing no longer ships the whole owner-app bundle.** `PublicLanding`
   (+ its private `TopNav`) moved OUT of the big `"use client"` barrel `src/components/panels/index.tsx`

@@ -28,7 +28,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud"),
   title: "Innvil — The White-label SMM Panel Builder",
   description: "Build your own white-label SMM panel. Create as many independent panels as you want, each with its own subdomain, storefront, customer dashboard, and wallet. 5% commission only — no monthly rent.",
-  keywords: ["white-label smm panel builder", "white-label smm panel building", "create smm panel", "smm panel software", "no-code smm panel builder", "smm reseller panel"],
+  keywords: ["white-label smm panel builder", "white-label smm panel building", "create smm panel", "how to start an smm panel", "start your own smm panel", "smm panel builder", "smm panel script alternative", "smm panel software", "no-code smm panel builder", "smm reseller panel"],
   applicationName: "Innvil",
   authors: [{ name: "Innvil" }],
   icons: { icon: "/favicon.svg" },

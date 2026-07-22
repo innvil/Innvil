@@ -73,9 +73,10 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
               <span className="fp-grad-text">white-label SMM panel.</span>
             </h1>
             <p className="fp-text-dim text-base mt-6 max-w-md leading-relaxed">
-              Innvil is a no-code panel builder. Create as many independent SMM panels as you
-              want, each with its own subdomain, storefront, customer dashboard, and wallet —
-              yours to brand, price, and grow.
+              Innvil is the no-code SMM panel builder — a modern alternative to buying an SMM
+              panel script. Create as many independent, white-label SMM panels as you want, each
+              with its own subdomain, storefront, customer dashboard, and wallet — yours to
+              brand, price, and grow.
             </p>
             <div className="flex items-center gap-4 mt-8">
               <Link href="/signup" className="fp-btn-primary font-semibold px-6 py-3 rounded-lg flex items-center gap-2">
@@ -139,7 +140,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
 
       <section id="how" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">How it works</p>
-        <h2 className="fp-display text-3xl mb-12">One account. Any number of panels.</h2>
+        <h2 className="fp-display text-3xl mb-12">How to start your own SMM panel.</h2>
         <div className="grid md:grid-cols-4 gap-6">
           {[
             { n: "01", t: "Create a panel", d: "Name it, pick a subdomain, choose a theme. Ready in minutes.", icon: Rocket },
@@ -188,8 +189,8 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
       </section>
 
       <section id="platform" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
-        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">The whole platform</p>
-        <h2 className="fp-display text-3xl mb-4">Everything to run the business — not just take orders.</h2>
+        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">SMM panel features</p>
+        <h2 className="fp-display text-3xl mb-4">Everything to run your SMM panel — not just take orders.</h2>
         <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
           Wallets, payments, support, receipts, and safety tooling ship with every panel.
           The parts most SMM panels charge extra for — or don&apos;t have at all — are already here.
@@ -240,9 +241,9 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
 
       <section id="why" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Why Innvil</p>
-        <h2 className="fp-display text-3xl mb-4">Built differently from a rented panel.</h2>
+        <h2 className="fp-display text-3xl mb-4">Built differently from a rented SMM panel.</h2>
         <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
-          Most panels rent you a storefront and bill you every month whether you sell or not.
+          Most SMM panels rent you a storefront and bill you every month whether you sell or not.
           Innvil aligns with your growth — and hands you the parts they hold back.
         </p>
         <div className="grid md:grid-cols-3 gap-6">
@@ -266,7 +267,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
       </section>
 
       <section id="pricing" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
-        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Pricing</p>
+        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">SMM panel pricing</p>
         <h2 className="fp-display text-3xl mb-4">The fairest commission in SMM.</h2>
         <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
           No monthly rent, no setup fee. Innvil takes a flat 5% — and only when an order actually
@@ -371,7 +372,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
 
       <section id="faq" className="max-w-3xl mx-auto px-6 py-20 border-t fp-line-soft">
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3 text-center">FAQ</p>
-        <h2 className="fp-display text-3xl mb-10 text-center">Your questions, answered.</h2>
+        <h2 className="fp-display text-3xl mb-10 text-center">SMM panel questions, answered.</h2>
         <div className="space-y-2">
           {LANDING_FAQ.map((f) => (
             <details key={f.q} className="fp-panel border fp-line rounded-xl px-4 py-3 group">
