@@ -127,6 +127,19 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-23 — Blog / guides content surface for SEO (v0.2.82)
+- **New `/blog` content surface** so the SEO foundation has indexable long-tail articles to rank.
+  All SSR, no new deps, no migration. `src/data/blog-posts.ts` is the single source of truth (typed
+  block model → clean semantic HTML; helpers `allPosts`/`getPost`/`relatedPosts`) and ships 3 cornerstone
+  guides: **how-to-start-an-smm-panel**, **white-label-smm-panel-vs-smm-panel-script**,
+  **how-much-does-an-smm-panel-cost** (genuinely useful, cross-linked, CTA to /signup).
+- `app/blog/page.tsx` = index (own canonical/OG metadata, Blog + ItemList JSON-LD). `app/blog/[slug]/page.tsx`
+  = article (`generateStaticParams` prebuilds all 3, per-post `generateMetadata` with canonical + OG
+  `article`, BlogPosting JSON-LD, `**bold**` inline renderer, related-post links, `notFound()` for unknown
+  slugs). New server-safe `src/components/marketing/SiteChrome.tsx` (`MarketingHeader`/`MarketingFooter`)
+  gives the blog the landing chrome; a **"Guides" → /blog** link was added to both it and the landing TopNav.
+  `app/sitemap.ts` now lists /blog + every post. `robots.ts` already allows /blog.
+
 ### 2026-07-23 — SEO keyword copy pass on the landing (v0.2.81)
 - Copy-only pass so the SSR/metadata foundation (v0.2.75–0.2.80) has keyword-aligned content to rank.
   In `PublicLanding.tsx`: hero intro now names "the no-code **SMM panel builder** — a modern alternative
