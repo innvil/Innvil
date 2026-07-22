@@ -63,6 +63,7 @@ interface OpenOrder {
   status: OrderStatus;
   quantity: number;
   charge: number;
+  provider_cost: number | null;
   customer_id: string;
   remains: number | null;
 }
@@ -518,7 +519,7 @@ export async function syncPanelOrders(
 
   const { data: orders } = await admin
     .from("orders")
-    .select("id, provider_id, provider_order_id, status, quantity, charge, customer_id, remains")
+    .select("id, provider_id, provider_order_id, status, quantity, charge, provider_cost, customer_id, remains")
     .eq("panel_id", panelId)
     .not("provider_order_id", "is", null)
     .not("provider_id", "is", null)
@@ -652,6 +653,14 @@ export async function syncPanelOrders(
               p_order: o.id,
               p_fraction: Number(o.charge) > 0 ? refund / Number(o.charge) : 1,
             });
+            // The provider credits the unfilled portion back to the PROVIDER balance.
+            // Queue it so the balance tracker nets it out instead of logging a top-up.
+            if (o.provider_id && o.provider_cost != null && Number(o.charge) > 0) {
+              const providerRefund = round4(Number(o.provider_cost) * Math.min(refund / Number(o.charge), 1));
+              if (providerRefund > 0) {
+                await admin.rpc("bump_provider_refund_credit", { p_provider: o.provider_id, p_amount: providerRefund });
+              }
+            }
           }
         }
 

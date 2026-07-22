@@ -127,6 +127,37 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-20 — Auto provider top-up tracker + drop "Providers (all panels)" (v0.2.78)
+- **Auto-detected top-ups (internal, not manual, not a new API call).** `fetchProviderBalance`
+  (`providers.ts`) reads the prior stored balance before updating; if the live balance is HIGHER (same
+  currency, not the first observation) it records the increase as a provider top-up in `provider_topups`
+  (migration `0023`). Pre-Innvil balances are the baseline (never counted) — a growth/lock-in record.
+- **Refund-aware (migration `0024`, Option A + review).** Provider-side refunds also raise the balance,
+  so the sync now queues each order's estimated provider refund in `providers.pending_refund_credit`
+  (`bump_provider_refund_credit`, in the terminal-refund block using `provider_cost × fraction`). The
+  next balance increase **nets that out first** — only the leftover is logged as a top-up. If the
+  increase overlapped a refund it's marked `needs_review`, and the tracker shows an inline **"Is this a
+  refund?"** prompt; tagging it refund (`provider_topups.kind='refund'` via `setProviderTopupKind`)
+  **excludes it from the totals and the CSV**. Every entry can also be re-tagged/deleted. (Replaced the
+  earlier "$5 burst" idea — that broke bonused top-ups.)
+- **Provider balances page → adds a "Top-up tracker"** (`OwnerProviderBalances` in `OwnerSections.tsx`):
+  period toggle **Weekly / Bi-weekly / Monthly** (weekly default), per-period totals grouped by currency
+  + per-provider breakdown, a **CSV download** (internal cost record, not an official receipt), and a
+  "Recorded top-ups" list with per-entry delete. Actions in `src/lib/actions/provider-topups.ts`
+  (`listProviderTopups`/`deleteProviderTopup`; auto-insert lives in `fetchProviderBalance`).
+- **Removed "Providers (all panels)"** from the owner sidebar (per user — the balance tracker replaces
+  it and is on-theme). `OwnerProviders` component left defined but unused. **Run migration `0023`.**
+
+### 2026-07-20 — Provider balance tracker (sidebar) (v0.2.77)
+- New owner sidebar item **"Provider balances"** (`OwnerProviderBalances` in `OwnerSections.tsx`, icon
+  `PiggyBank`) — a dedicated, balance-first view of every connected provider so the owner can see how much
+  they've funded on the provider side. Summary stat cards (Providers · Needs top-up · Low balance · Healthy),
+  a **"Total funded"** card that sums balances **grouped by currency** (providers can bill in different
+  currencies), and a per-provider list (balance, Low/Top-up badge, last-synced, per-row + "Refresh all").
+  Reuses `listAllOwnerProviders` + `fetchProviderBalance` + the existing `LOW_BALANCE_THRESHOLD` (10) and the
+  shared `readOwnerCache("providers")` cache. Complements the existing management table ("Providers (all
+  panels)"). No migration.
+
 ### 2026-07-20 — Owner dashboard home: real stats (v0.2.76)
 - The owner **Dashboard home** was mostly hardcoded ($0.00 stat cards, a mock RevenueChart, "Panels
   created" the only real number). Now data-driven from `getOwnerBillingSummary` + `listAllOwnerOrders(8)`:

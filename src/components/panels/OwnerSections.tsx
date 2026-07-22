@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi, CheckCircle2, LifeBuoy, Send } from "lucide-react";
-import { Card, Pill } from "@/src/components/ui";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ListOrdered, Users, Wallet, Plus, History, HelpCircle, RefreshCw, AlertTriangle, Wifi, CheckCircle2, LifeBuoy, Send, Download, Trash2, CalendarDays } from "lucide-react";
+import { Card, Pill, StatCard } from "@/src/components/ui";
+import { listProviderTopups, deleteProviderTopup, setProviderTopupKind, type ProviderTopup } from "@/src/lib/actions/provider-topups";
 import { formatMoney } from "@/src/lib/money";
 import { listAllOwnerOrders, getOwnerBillingSummary, type OwnerOrderVM, type OwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { sendOwnerSupportMessage, listOwnerSupportMessages, listPlatformSupportMessages, setPlatformSupportStatus, type PlatformSupportMessage } from "@/src/lib/actions/platform-support";
@@ -422,6 +423,348 @@ export function OwnerProviders() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+/* ---------- Provider balance tracker (dedicated, balance-first) ---------- */
+type TrackerPeriod = "weekly" | "biweekly" | "monthly";
+function startOfWeekMon(d: Date): Date {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = (x.getDay() + 6) % 7; // 0 = Monday
+  x.setDate(x.getDate() - day);
+  return x;
+}
+function periodStart(d: Date, type: TrackerPeriod): Date {
+  if (type === "monthly") return new Date(d.getFullYear(), d.getMonth(), 1);
+  const wk = startOfWeekMon(d);
+  if (type === "weekly") return wk;
+  const anchor = startOfWeekMon(new Date(2024, 0, 1)); // fixed Monday to bucket bi-weeks
+  const weeks = Math.floor((wk.getTime() - anchor.getTime()) / (7 * 86400000));
+  return new Date(anchor.getTime() + (weeks - (((weeks % 2) + 2) % 2)) * 7 * 86400000);
+}
+function periodLabel(start: Date, type: TrackerPeriod): string {
+  if (type === "monthly") return start.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const end = new Date(start);
+  end.setDate(end.getDate() + (type === "biweekly" ? 13 : 6));
+  const f = (x: Date) => x.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${f(start)} – ${f(end)}`;
+}
+function fmtAmt(n: number, cur: string): string {
+  return cur === "USD"
+    ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${cur}`;
+}
+function fmtByCurrency(m: Map<string, number>): string {
+  const parts = [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([c, n]) => fmtAmt(n, c));
+  return parts.length ? parts.join(" + ") : "$0.00";
+}
+function csvEscape(v: string): string {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+export function OwnerProviderBalances() {
+  const cachedRows = readOwnerCache<OwnerProviderVM[]>("providers");
+  const [rows, setRows] = useState<OwnerProviderVM[] | null>(cachedRows);
+  const [syncing, setSyncing] = useState(Boolean(cachedRows));
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const autoFetchedRef = useRef(false);
+
+  // Top-up tracker (auto-recorded balance increases).
+  const [topups, setTopups] = useState<ProviderTopup[] | null>(() => readOwnerCache<ProviderTopup[]>("provider-topups"));
+  const [period, setPeriod] = useState<TrackerPeriod>("weekly");
+  const [delBusy, setDelBusy] = useState<string | null>(null);
+
+  const load = async () => {
+    const next = await listAllOwnerProviders();
+    setRows(next);
+    writeOwnerCache("providers", next);
+    return next;
+  };
+  const loadTopups = async () => {
+    const next = await listProviderTopups().catch(() => [] as ProviderTopup[]);
+    setTopups(next);
+    writeOwnerCache("provider-topups", next);
+    return next;
+  };
+
+  useEffect(() => {
+    let alive = true;
+    setSyncing(rows !== null);
+    loadTopups();
+    load().then((next) => {
+      if (!alive) return;
+      setSyncing(false);
+      if (autoFetchedRef.current) return;
+      const stale = next.filter((p) => p.balance == null || balanceIsStale(p.last_balance_sync));
+      if (stale.length === 0) { autoFetchedRef.current = true; return; }
+      autoFetchedRef.current = true;
+      setSyncing(true);
+      Promise.all(stale.map((p) => fetchProviderBalance(p.id).catch(() => null)))
+        .then(() => { if (alive) { load(); loadTopups(); } })
+        .finally(() => { if (alive) setSyncing(false); });
+    }).catch(() => { if (alive) setSyncing(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const refreshAll = async () => {
+    if (!rows?.length) return;
+    setRefreshingAll(true);
+    await Promise.all(rows.map((p) => fetchProviderBalance(p.id).catch(() => null)));
+    await Promise.all([load(), loadTopups()]);
+    setRefreshingAll(false);
+  };
+
+  const refreshOne = async (id: string) => {
+    setBusyId(id);
+    await fetchProviderBalance(id).catch(() => null);
+    await Promise.all([load(), loadTopups()]);
+    setBusyId(null);
+  };
+
+  const delEntry = async (id: string) => {
+    setDelBusy(id);
+    const res = await deleteProviderTopup(id);
+    setDelBusy(null);
+    if (res.ok) setTopups((prev) => (prev ?? []).filter((t) => t.id !== id));
+  };
+
+  const classify = async (id: string, kind: "topup" | "refund") => {
+    setDelBusy(id);
+    const res = await setProviderTopupKind(id, kind);
+    setDelBusy(null);
+    if (res.ok) setTopups((prev) => (prev ?? []).map((t) => (t.id === id ? { ...t, kind, needsReview: false } : t)));
+  };
+
+  const downloadCsv = () => {
+    // Only real top-ups (refund-tagged entries are excluded from the cost record).
+    const list = (topups ?? []).filter((t) => t.kind !== "refund");
+    if (!list.length) return;
+    const header = "Date,Provider,Amount,Currency,Note";
+    const lines = list.map((t) => [
+      new Date(t.toppedUpAt).toISOString().slice(0, 10),
+      csvEscape(t.providerName),
+      t.amount.toFixed(2),
+      t.currency,
+      csvEscape(t.note ?? ""),
+    ].join(","));
+    const blob = new Blob([[header, ...lines].join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `innvil-provider-topups-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; start: number; byCurrency: Map<string, number>; byProvider: Map<string, Map<string, number>> }>();
+    for (const t of topups ?? []) {
+      if (t.kind === "refund") continue; // refund-tagged entries don't count toward totals
+      const start = periodStart(new Date(t.toppedUpAt), period);
+      const key = start.toISOString();
+      let g = map.get(key);
+      if (!g) { g = { key, label: periodLabel(start, period), start: start.getTime(), byCurrency: new Map(), byProvider: new Map() }; map.set(key, g); }
+      g.byCurrency.set(t.currency, (g.byCurrency.get(t.currency) ?? 0) + t.amount);
+      let pm = g.byProvider.get(t.providerName);
+      if (!pm) { pm = new Map(); g.byProvider.set(t.providerName, pm); }
+      pm.set(t.currency, (pm.get(t.currency) ?? 0) + t.amount);
+    }
+    return [...map.values()].sort((a, b) => b.start - a.start).slice(0, 12);
+  }, [topups, period]);
+
+  // Balances live in each provider's own currency, so totals are grouped by currency.
+  const byCurrency = new Map<string, number>();
+  let lowCount = 0;
+  let emptyCount = 0;
+  for (const p of rows ?? []) {
+    if (p.balance == null) continue;
+    const cur = (p.currency || "USD").toUpperCase();
+    byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + Number(p.balance));
+    if (p.balance <= 0) emptyCount++;
+    else if (p.balance < LOW_BALANCE_THRESHOLD) lowCount++;
+  }
+  const totals = [...byCurrency.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  return (
+    <div className="p-4 sm:p-8 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="fp-display text-2xl">Provider balances</h1>
+        <div className="flex items-center gap-3">
+          <SyncBadge syncing={syncing} />
+          <button onClick={refreshAll} disabled={refreshingAll || !rows?.length} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm disabled:opacity-60">
+            <RefreshCw size={14} className={refreshingAll ? "animate-spin" : ""} /> {refreshingAll ? "Refreshing…" : "Refresh all"}
+          </button>
+        </div>
+      </div>
+      <p className="fp-text-dim text-sm">
+        Live balances across every provider you&apos;ve connected — see at a glance how much you have funded on the
+        provider side, and which ones need a top-up.
+      </p>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="Providers" value={rows ? String(rows.length) : "—"} />
+        <StatCard label="Needs top-up" value={rows ? String(emptyCount) : "—"} />
+        <StatCard label="Low balance" value={rows ? String(lowCount) : "—"} tone="gold" />
+        <StatCard label="Healthy" value={rows ? String(Math.max(rows.filter((p) => p.balance != null).length - lowCount - emptyCount, 0)) : "—"} tone="safe" />
+      </div>
+
+      {totals.length > 0 && (
+        <Card title="Total funded on providers" icon={Wallet}>
+          <p className="fp-text-faint text-xs mb-3">Summed per currency (providers can bill in different currencies).</p>
+          <div className="flex flex-wrap gap-3">
+            {totals.map(([cur, sum]) => (
+              <div key={cur} className="fp-panel-raised border fp-line-soft rounded-xl px-4 py-3">
+                <p className="fp-display text-2xl fp-gold">{sum.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                <p className="fp-text-faint text-xs fp-mono mt-0.5">{cur}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card title="By provider" icon={Wifi} right={<SyncBadge syncing={syncing} />}>
+        {rows === null ? (
+          <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="fp-text-faint text-sm py-6 text-center">No providers connected on any panel yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((p) => {
+              const empty = p.balance != null && p.balance <= 0;
+              const low = p.balance != null && p.balance > 0 && p.balance < LOW_BALANCE_THRESHOLD;
+              return (
+                <div key={p.id} className="flex items-center justify-between gap-3 fp-panel-raised border fp-line-soft rounded-xl px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{p.name}</p>
+                    <p className="fp-text-faint text-[11px] fp-mono truncate">{p.panelName} · {shortAgo(p.last_balance_sync)}</p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {p.balance == null ? (
+                      <span className="fp-text-faint text-xs">—</span>
+                    ) : (
+                      <span className={`fp-mono text-sm font-medium ${empty ? "text-red-400" : low ? "fp-gold" : "fp-text"}`}>
+                        {Number(p.balance).toLocaleString(undefined, { maximumFractionDigits: 2 })} {p.currency}
+                      </span>
+                    )}
+                    {empty ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 flex items-center gap-1"><AlertTriangle size={10} /> Top up</span>
+                    ) : low ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full fp-gold-soft-bg fp-gold">Low</span>
+                    ) : null}
+                    <button onClick={() => refreshOne(p.id)} disabled={busyId === p.id} className="fp-text-dim hover:fp-text text-xs flex items-center gap-1 disabled:opacity-50">
+                      <RefreshCw size={11} className={busyId === p.id ? "animate-spin" : ""} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* Auto top-up tracker — Innvil records every balance INCREASE as a provider top-up. */}
+      <Card
+        title="Top-up tracker"
+        icon={CalendarDays}
+        right={(
+          <div className="flex items-center gap-2">
+            <div className="flex fp-panel-raised rounded-lg p-0.5 text-xs">
+              {(["weekly", "biweekly", "monthly"] as TrackerPeriod[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  className={`px-2.5 py-1 rounded-md ${period === p ? "fp-gold-bg text-[#0A0B0F] font-semibold" : "fp-text-dim hover:fp-text"}`}
+                >
+                  {p === "weekly" ? "Weekly" : p === "biweekly" ? "Bi-weekly" : "Monthly"}
+                </button>
+              ))}
+            </div>
+            <button onClick={downloadCsv} disabled={!topups?.length} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim flex items-center gap-1.5 disabled:opacity-50 hover:fp-gold-border">
+              <Download size={12} /> CSV
+            </button>
+          </div>
+        )}
+      >
+        <p className="fp-text-faint text-xs mb-4 leading-relaxed">
+          Innvil watches your provider balances and records every increase automatically, netting out the
+          refunds it already knows about. It&apos;s an internal spend record to weigh against your earnings —
+          balances funded before Innvil aren&apos;t counted, and anything flagged as a refund is left out of
+          the totals. Not an official receipt.
+        </p>
+        {topups === null ? (
+          <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+        ) : topups.length === 0 ? (
+          <p className="fp-text-faint text-sm py-6 text-center">No top-ups tracked yet — fund any provider and the increase shows up here after the next balance sync.</p>
+        ) : (
+          <div className="space-y-3">
+            {grouped.map((g, i) => (
+              <div key={g.key} className={`fp-panel-raised border rounded-xl p-4 ${i === 0 ? "fp-gold-border" : "fp-line-soft"}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-medium">
+                    {g.label}
+                    {i === 0 && <span className="fp-text-faint text-xs fp-mono"> · current</span>}
+                  </p>
+                  <span className="fp-mono text-sm fp-gold">{fmtByCurrency(g.byCurrency)}</span>
+                </div>
+                <div className="space-y-1">
+                  {[...g.byProvider.entries()].map(([name, m]) => (
+                    <div key={name} className="flex items-center justify-between text-xs">
+                      <span className="fp-text-dim truncate">{name}</span>
+                      <span className="fp-mono shrink-0">{fmtByCurrency(m)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {topups && topups.length > 0 && (
+        <Card title="Recorded top-ups" icon={History}>
+          <div className="space-y-1.5 max-h-96 overflow-auto">
+            {topups.slice(0, 40).map((t) => {
+              const isRefund = t.kind === "refund";
+              return (
+                <div key={t.id} className={`border-b fp-line-soft last:border-0 py-2 ${isRefund ? "opacity-60" : ""}`}>
+                  <div className="flex items-center justify-between gap-3 text-xs">
+                    <div className="min-w-0">
+                      <span className="fp-text-dim">{new Date(t.toppedUpAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
+                      <span className="fp-text-faint"> · {t.providerName}</span>
+                      {isRefund && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full fp-panel border fp-line-soft fp-text-faint">Refund · not counted</span>}
+                    </div>
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span className={`fp-mono ${isRefund ? "fp-text-faint line-through" : "fp-safe"}`}>+{fmtAmt(t.amount, t.currency)}</span>
+                      {isRefund ? (
+                        <button onClick={() => classify(t.id, "topup")} disabled={delBusy === t.id} className="fp-gold text-[11px] disabled:opacity-50" title="Count as a top-up again">Count</button>
+                      ) : (
+                        <button onClick={() => classify(t.id, "refund")} disabled={delBusy === t.id} className="fp-text-faint hover:fp-text text-[11px] disabled:opacity-50" title="Exclude — this was a refund">Refund?</button>
+                      )}
+                      <button onClick={() => delEntry(t.id)} disabled={delBusy === t.id} className="fp-text-faint hover:text-red-400 disabled:opacity-50" title="Remove">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                  {t.needsReview && !isRefund && (
+                    <div className="mt-1.5 flex items-center gap-2 fp-gold-soft-bg rounded-lg px-2.5 py-1.5">
+                      <span className="text-[11px] fp-gold flex items-center gap-1"><AlertTriangle size={11} /> Unusual increase — is this a refund?</span>
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        <button onClick={() => classify(t.id, "refund")} disabled={delBusy === t.id} className="text-[11px] px-2 py-0.5 rounded-md bg-red-500/10 text-red-400 disabled:opacity-50">Yes, refund</button>
+                        <button onClick={() => classify(t.id, "topup")} disabled={delBusy === t.id} className="text-[11px] px-2 py-0.5 rounded-md fp-safe-soft-bg fp-safe disabled:opacity-50">No, top-up</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@ import {
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
-  AlertTriangle, Wrench, Eye, EyeOff, Trash2, PlayCircle, LifeBuoy,
+  AlertTriangle, Wrench, Eye, EyeOff, Trash2, PlayCircle, LifeBuoy, PiggyBank,
 } from "lucide-react";
 import {
   Card, StatCard, FloorLedger, RevenueChart, StatusBadge,
@@ -22,7 +22,7 @@ import {
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
 import { AccountSettings } from "./AccountSettings";
-import { OwnerOrders, OwnerCustomers, OwnerProviders, OwnerBilling, OwnerTopUps, OwnerContactSupport, OwnerPanelSupport } from "./OwnerSections";
+import { OwnerOrders, OwnerCustomers, OwnerProviderBalances, OwnerBilling, OwnerTopUps, OwnerContactSupport, OwnerPanelSupport } from "./OwnerSections";
 import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary, listAllOwnerOrders, type OwnerBillingSummary, type OwnerOrderVM } from "@/src/lib/actions/admin-orders";
@@ -254,6 +254,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
             { icon: FileText, t: "Earnings & downloadable receipts", d: "See top-ups minus provider cost as real profit, and export a self-contained receipt for any date range." },
             { icon: Copy, t: "Duplicate detection + mass cancel", d: "Repeat orders on the same link land in a Duplicate slot instead of your provider. Cancel in bulk — every owner cancel auto-refunds the customer." },
             { icon: Activity, t: "Provider balance in view", d: "Fetch and cache each connected provider's balance so you never run dry mid-fulfilment." },
+            { icon: PiggyBank, t: "Provider spend tracker", d: "Innvil auto-logs the top-ups you add to your providers — netting out refunds — into an exportable weekly/monthly cost record, so spend vs. earnings is always clear." },
             { icon: Rocket, t: "Refresh & resend held orders", d: "An order held because your provider's balance ran low doesn't fail — top the provider up and one tap resends every held order the moment its cost is covered." },
             { icon: RefreshCw, t: "Automatic order-status sync", d: "Orders track your provider automatically — completed, partial, canceled — and refund the unfilled portion. No manual chasing." },
             { icon: KeyRound, t: "Customer-facing API", d: "Every customer gets an API key and the full v2 endpoints, including batch ordering up to 100 rows for automation workflows." },
@@ -589,7 +590,7 @@ const APP_NAV = [
   { k: "earnings", label: "Earnings & receipts", icon: TrendingUp },
   { k: "orders", label: "Orders (all panels)", icon: ListOrdered },
   { k: "customers", label: "Customers (all panels)", icon: Users },
-  { k: "providers", label: "Providers (all panels)", icon: Wifi },
+  { k: "provider-balances", label: "Provider balances", icon: PiggyBank },
   { k: "support", label: "Support inbox", icon: MessageSquare },
 ];
 
@@ -1678,7 +1679,7 @@ export function InnvilApp({ setWorld, initialSection }: {
           />
         )}
         {section === "customers" && <OwnerCustomers focusCustomerId={focusOwnerCustomerId} />}
-        {section === "providers" && <OwnerProviders />}
+        {section === "provider-balances" && <OwnerProviderBalances />}
         {section === "support" && (
           <div className="p-4 sm:p-8">
             <Card title="Support inbox — all panels" icon={MessageSquare} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>

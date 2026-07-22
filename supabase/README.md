@@ -25,6 +25,8 @@ order.
 | `0020_commission_brackets.sql` | `orders.commission_settled_at` + rewritten `settle_order_commission()` — per-panel `settings.commission_rate` (volume discount to 1%) + a **$100 per-panel per-day** commission cap |
 | `0021_commission_reversal.sql` | `reverse_order_commission()` — refunding a completed order credits its (proportional) commission back to `innvil_balance` + reduces `orders.commission_amount` |
 | `0022_owner_business_profile.sql` | `owner_business_profiles` (per-owner receipt business details: legal name, address, registrant, business/reg no., tax id, email, phone) + owner RLS |
+| `0023_provider_topups.sql` | `provider_topups` — auto-recorded provider balance INCREASES (delta detected in `fetchProviderBalance`) for the Provider-balances top-up tracker; owner RLS |
+| `0024_provider_topup_refunds.sql` | refund-aware tracking: `provider_topups.kind`/`needs_review` + `providers.pending_refund_credit` + `bump_provider_refund_credit()` — nets out known provider-side refunds so they aren't logged as top-ups |
 
 > Numbers `0006`/`0007` were intentionally skipped — the sequence has gaps, that's fine.
 > Migrations run in **filename order**; always number a new one after the current highest.
@@ -32,7 +34,7 @@ order.
 ## Applying the migrations (fresh project)
 
 **Option A — SQL editor (quickest):** open each file, paste into the Supabase
-Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0022`).
+Dashboard → SQL Editor, and run them in **filename order** (`0001` → `0024`).
 
 **Option B — Supabase CLI:**
 

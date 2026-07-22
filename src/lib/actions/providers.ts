@@ -10,6 +10,10 @@ import {
   ProviderError,
 } from "@/src/lib/providers";
 import type { ProviderRow, ProviderStatus } from "@/src/types/db";
+import { round4 } from "@/src/lib/money";
+
+// Ignore sub-cent balance jitter; anything above is treated as a real increase.
+const TOPUP_FLOOR = 0.01;
 
 type Result<T = void> =
   | ({ ok: true } & (T extends void ? object : { data: T }))
@@ -195,17 +199,60 @@ export async function testProviderConnection(
 export async function fetchProviderBalance(
   providerId: string
 ): Promise<Result<{ balance: string; currency: string }>> {
-  const test = await testProviderConnection(providerId);
+  const test = await testProviderConnection(providerId); // also enforces ownership
   if (!test.ok) return test;
 
-  const { admin } = await getAuthedAdmin();
+  const { user, admin } = await getAuthedAdmin();
+  const newBal = Number(test.data.balance);
+  const newCur = (test.data.currency || "USD").toUpperCase();
+
+  // Read the prior snapshot to detect a top-up: a balance INCREASE since the last
+  // sync means the owner funded the provider. We only track increases AFTER the
+  // first observation, so whatever they held before using Innvil is the baseline
+  // (never counted) — the record is purely Innvil's internal spend tracker.
+  const { data: prev } = await admin
+    .from("providers")
+    .select("balance, currency, last_balance_sync, name, pending_refund_credit")
+    .eq("id", providerId)
+    .maybeSingle();
+
+  if (
+    user &&
+    prev?.last_balance_sync &&
+    prev.balance != null &&
+    (prev.currency || "USD").toUpperCase() === newCur
+  ) {
+    const delta = round4(newBal - Number(prev.balance));
+    if (delta > TOPUP_FLOOR) {
+      // Option A: net out provider-side refunds we already know about (the sync queues
+      // them in pending_refund_credit) so a refund landing on the balance isn't logged
+      // as a top-up. Any leftover is a real top-up; flag it for review if it overlapped
+      // a refund (so the owner can confirm it isn't a refund we mis-estimated).
+      const pending = Math.max(Number(prev.pending_refund_credit ?? 0), 0);
+      const consumed = round4(Math.min(delta, pending));
+      const netTopup = round4(delta - consumed);
+      if (consumed > 0) {
+        await admin.rpc("bump_provider_refund_credit", { p_provider: providerId, p_amount: -consumed });
+      }
+      if (netTopup > TOPUP_FLOOR) {
+        await admin.from("provider_topups").insert({
+          owner_id: user.id,
+          provider_id: providerId,
+          provider_name: prev.name ?? "Provider",
+          amount: netTopup,
+          currency: newCur,
+          note: consumed > 0 ? "Auto-detected — verify vs refund" : "Auto-detected top-up",
+          kind: "topup",
+          needs_review: consumed > 0,
+          topped_up_at: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
   await admin
     .from("providers")
-    .update({
-      balance: Number(test.data.balance),
-      currency: test.data.currency,
-      last_balance_sync: new Date().toISOString(),
-    })
+    .update({ balance: newBal, currency: newCur, last_balance_sync: new Date().toISOString() })
     .eq("id", providerId);
   return test;
 }
