@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { Bot, X, Send } from "lucide-react";
+import { ownerAssistantReply, globalAssistantReply } from "@/src/lib/actions/ai-assistant";
 
 /* Floating owner AI assistant — available anywhere in the panel admin. Free
    (Innvil-funded). Streams from /api/ai/assistant. Self-hides if the AI key isn't
@@ -29,27 +30,8 @@ export function OwnerAssistantChat({ panelId }: { panelId?: string }) {
     const next = [...messages, { role: "user" as const, content: text }];
     setMessages(next); setInput(""); setBusy(true);
     try {
-      const resp = await fetch("/api/ai/assistant", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(panelId ? { panelId, messages: next } : { messages: next }),
-      });
-      if (!resp.ok || !resp.body) {
-        const err = await resp.json().catch(() => ({ error: "Something went wrong." }));
-        setMessages((m) => [...m, { role: "assistant", content: err.error ?? "Something went wrong." }]);
-        return;
-      }
-      setMessages((m) => [...m, { role: "assistant", content: "" }]);
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let acc = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        acc += decoder.decode(value, { stream: true });
-        setMessages((m) => { const copy = m.slice(); copy[copy.length - 1] = { role: "assistant", content: acc }; return copy; });
-      }
-      if (!acc.trim()) setMessages((m) => { const copy = m.slice(); copy[copy.length - 1] = { role: "assistant", content: "No response — please try again." }; return copy; });
+      const res = panelId ? await ownerAssistantReply(panelId, next) : await globalAssistantReply(next);
+      setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
     } catch {
       setMessages((m) => [...m, { role: "assistant", content: "Something went wrong reaching the assistant. Please try again." }]);
     } finally {

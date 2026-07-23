@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { MessageCircle, X, Send, LifeBuoy, CheckCircle2 } from "lucide-react";
-import { escalateSupportToTicket } from "@/src/lib/actions/ai-support";
+import { customerSupportReply, escalateSupportToTicket } from "@/src/lib/actions/ai-support";
 
 /* Floating AI support widget for the customer dashboard. Only mounted when the
    panel has the AI add-on enabled. Talks to the grounded, privacy-guarded support
@@ -38,29 +38,8 @@ export function SupportChat({ panelId, brandName }: { panelId: string; brandName
     setInput("");
     setBusy(true);
     try {
-      const resp = await fetch("/api/ai/support", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ panelId, messages: next }),
-      });
-      if (!resp.ok || !resp.body) {
-        const err = await resp.json().catch(() => ({ error: "Something went wrong." }));
-        setMessages((m) => [...m, { role: "assistant", content: err.error ?? "Something went wrong." }]);
-        return;
-      }
-      setMessages((m) => [...m, { role: "assistant", content: "" }]);
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let acc = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        acc += decoder.decode(value, { stream: true });
-        setMessages((m) => { const copy = m.slice(); copy[copy.length - 1] = { role: "assistant", content: acc }; return copy; });
-      }
-      if (!acc.trim()) {
-        setMessages((m) => { const copy = m.slice(); copy[copy.length - 1] = { role: "assistant", content: "No response — please try again." }; return copy; });
-      }
+      const res = await customerSupportReply(panelId, next);
+      setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
     } catch {
       setMessages((m) => [...m, { role: "assistant", content: "Something went wrong. Please try again." }]);
     } finally {

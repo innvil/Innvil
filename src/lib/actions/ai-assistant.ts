@@ -269,6 +269,18 @@ Use these when relevant (e.g. a panel with $0 Innvil balance runs in preview unt
   return { ok: true, system, messages };
 }
 
+/** Account-level assistant reply (non-streaming) for the global floating chat. */
+export async function globalAssistantReply(history: AiMessage[]): Promise<AssistantResult> {
+  const prep = await prepareGlobalAssistant(history);
+  if (!prep.ok) return { ok: false, error: prep.error };
+  try {
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600, temperature: 0.4 });
+    return { ok: true, reply };
+  } catch {
+    return { ok: false, error: "The assistant hit an error. Try again in a moment." };
+  }
+}
+
 /** Whether the owner's free assistant can be used (AI key present). */
 export async function assistantConfigured(): Promise<boolean> {
   return aiConfigured();

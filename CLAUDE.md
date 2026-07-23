@@ -128,14 +128,13 @@ innvil/
 ## Recent Updates
 
 ### 2026-07-24 — Streaming AI replies + floating owner assistant (v0.2.88)
-- **Streaming** — the fix for "takes too long": replies render token-by-token instead of after a full pause.
-  `aiStream()` in `src/lib/ai/client.ts` transforms provider SSE (Anthropic `content_block_delta` / OpenAI
-  `delta.content`) into a plain-text stream, with a fallback that emits the whole answer if a proxy ignores
-  `stream:true`. New route handlers `app/api/ai/assistant` + `app/api/ai/support` reuse the auth+grounding
-  (`prepareOwnerAssistant` / `prepareCustomerSupport`, extracted from the actions) then pipe the stream. Both
-  chat widgets now `fetch` the route and read the stream. Also added a 60s fetch timeout (`postJson`) so a hung
-  proxy can't spin forever, `try/finally` so the composer always resets, and trimmed reply caps (owner 600 /
-  support 500 tokens). Non-stream server actions kept as fallback.
+- **Streaming built but currently OFF (proxy doesn't support SSE).** `aiStream()` in `src/lib/ai/client.ts`
+  (SSE→plain-text) + routes `app/api/ai/{assistant,support}` (reuse `prepareOwnerAssistant`/`prepareGlobalAssistant`
+  /`prepareCustomerSupport`) exist, BUT the aiprimetech proxy in use doesn't stream, so the widgets were reverted
+  to the reliable **non-streaming server actions** (`customerSupportReply`, `ownerAssistantReply`,
+  `globalAssistantReply`). The streaming routes/`aiStream` are retained, unused, ready to re-enable behind a
+  streaming-capable provider (Anthropic direct / OpenRouter). Also kept: 60s fetch timeout (`postJson`),
+  `try/finally` composer reset, trimmed caps (owner 600 / support 500 tokens).
 - **Floating owner assistant (global)** — the free owner assistant is a **floating chat** (bottom-right,
   `Bot` launcher) mounted at the **owner-app shell level** (`InnvilApp` in `panels/index.tsx`), so it's on
   **every** section of the owner dashboard, not just inside a panel. It's **account-level**: `prepareGlobalAssistant`
