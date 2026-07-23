@@ -3,7 +3,7 @@
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { aiComplete, aiConfigured, type AiMessage } from "@/src/lib/ai/client";
-import { aiSupportEnabled } from "@/src/lib/ai/addon";
+import { customerSupportActive } from "@/src/lib/ai/addon";
 import { getStorefrontServices, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { createTicket } from "@/src/lib/actions/tickets";
 
@@ -65,7 +65,7 @@ async function loadContext(panelId: string): Promise<
     .eq("id", panelId)
     .maybeSingle();
   if (!panel) return { ok: false, error: "Panel not found.", unavailable: true };
-  if (!aiSupportEnabled(panel.settings)) return { ok: false, error: "AI support isn't enabled on this panel.", unavailable: true };
+  if (!customerSupportActive(panel.settings)) return { ok: false, error: "Support chat is unavailable on this panel.", unavailable: true };
 
   const { data: acct } = await admin
     .from("customer_accounts")

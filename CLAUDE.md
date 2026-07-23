@@ -127,6 +127,36 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — AI monetization corrected: owner assistant FREE, customer support PAID (v0.2.87)
+- **Fixes the model (v0.2.85–86 had it backwards).** Two independent AI features:
+  - **Owner → Innvil assistant** (owners asking how to run their panel / reach Innvil): **FREE, always on,
+    Innvil-funded.** `ownerAssistantReply` now gates only on ownership + `aiConfigured` (no subscription).
+  - **Storefront customer AI support** (AI chat for the panel's CUSTOMERS): **PAID $2.99/mo add-on** the OWNER
+    enables + pays (from the panel's Innvil balance). The billing/subscription machinery moved here.
+- `src/lib/ai/addon.ts` rewritten: `readSupportSub` + `customerSupportActive(settings)` = the paid `ai_support`
+  subscription is active (OFF by default now; on when the owner subscribes or a super admin comps it). Removed
+  the old always-on default + the `ai_assistant` state helpers.
+- `src/lib/actions/ai-assistant.ts`: `ownerAssistantReply` (free) + **`getSupportAddon`/`setSupportAddon`**
+  (enable charges `AI_ADDON_PRICE` from the panel's Innvil balance, sets `addons.ai_support` sub, audit-logged;
+  disable flips it off). `money.ts` `AI_ASSISTANT_PRICE`→**`AI_ADDON_PRICE`** (2.99). Billing sweep
+  `billDueSupportAddons` (`src/lib/billing/assistant.ts`) now bills `ai_support`; cron `bill-addons` unchanged.
+- UI `OwnerAssistant.tsx` (AI Assistant tab): free owner chat on top + a **Customer AI Support** add-on card
+  (subscribe/cancel, balance check, "panel stays 0% rent"). Storefront chat (`SupportChat`) now shows only when
+  the owner's paid add-on is active (`aiSupport` = `customerSupportActive`). Super-admin Panels toggle = a
+  comp/override (caption "owner add-on · comp"). No migration.
+
+### 2026-07-24 — Customer AI support is now always-on & Innvil-funded (v0.2.86)
+- **Reversal of the v0.2.84 paid-gate:** the customer-facing AI support chat (storefront "contact support")
+  is now **ON for every panel by default**, on Innvil's cost — a platform feature, not a per-panel paid add-on.
+  It is independent of the owner AI Assistant ($2.99 add-on); enabling the owner assistant does NOT toggle the
+  storefront chat and vice-versa.
+- New `customerSupportActive(settings)` (`src/lib/ai/addon.ts`): ON unless a super admin explicitly disables it
+  (`addons.ai_support.enabled === false`) — an emergency off-switch (e.g. abuse), not a purchase gate. Wired
+  into `getPublicPanel` (storefront mounts the widget for all panels), `customerSupportReply` (gate), and the
+  super-admin Panels toggle (now labeled "on by default"; `setPanelAiAddon(false)` = disable). No migration.
+- **Cost note / TODO:** always-on + free means Innvil eats the API usage; recommend adding a per-customer daily
+  message cap to bound cost (needs a small counter/table — not built yet).
+
 ### 2026-07-24 — Owner AI Assistant add-on (paid, $2.99/mo per panel) (v0.2.85)
 - **Second AI surface: the owner-facing assistant.** A paid, opt-in, per-panel add-on that helps the OWNER
   run this panel (connect a provider, import/price services, go live, payments, commission, statuses…),

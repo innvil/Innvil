@@ -1,42 +1,18 @@
 /**
- * AI add-on gate. AI features (customer support chat, owner assistant) only run
- * when a panel has the paid "AI Support" add-on enabled. The flag lives in
- * panels.settings.addons.ai_support.enabled. Pure/serializable — safe to import
- * server-side anywhere; the enabled boolean is passed to the client via props.
+ * AI add-on state. Two independent AI features:
+ *
+ *  1. Owner → Innvil AI assistant (owners asking how to run their panel / reach
+ *     Innvil support): FREE, always available, Innvil-funded. No flag needed.
+ *
+ *  2. Customer AI support chat on the storefront: a PAID per-panel add-on the owner
+ *     buys ($2.99/mo from the panel's Innvil balance). Subscription state lives in
+ *     panels.settings.addons.ai_support. This module reads that state.
+ *
+ * Pure/serializable — safe to import server-side anywhere; the active boolean is
+ * passed to the client via props.
  */
 
-export interface AiAddonState {
-  enabled: boolean;
-  enabledAt: string | null;
-}
-
-export function readAiAddon(settings: unknown): AiAddonState {
-  if (settings && typeof settings === "object") {
-    const addons = (settings as Record<string, unknown>).addons;
-    if (addons && typeof addons === "object") {
-      const ai = (addons as Record<string, unknown>).ai_support;
-      if (ai && typeof ai === "object") {
-        const o = ai as Record<string, unknown>;
-        return {
-          enabled: o.enabled === true,
-          enabledAt: typeof o.enabledAt === "string" ? o.enabledAt : null,
-        };
-      }
-    }
-  }
-  return { enabled: false, enabledAt: null };
-}
-
-export function aiSupportEnabled(settings: unknown): boolean {
-  return readAiAddon(settings).enabled;
-}
-
-/* ---------------------------------------------------------------------------
-   Owner AI Assistant add-on (paid, per-panel, $2.99/mo from the panel's Innvil
-   balance). Subscription state lives in settings.addons.ai_assistant.
-   --------------------------------------------------------------------------- */
-
-export interface AiAssistantState {
+export interface AiSupportSub {
   enabled: boolean;
   since: string | null;
   lastChargeAt: string | null;
@@ -45,12 +21,12 @@ export interface AiAssistantState {
   lapsed: boolean;
 }
 
-export function readAiAssistant(settings: unknown): AiAssistantState {
-  const off: AiAssistantState = { enabled: false, since: null, lastChargeAt: null, nextChargeAt: null, lapsed: false };
+export function readSupportSub(settings: unknown): AiSupportSub {
+  const off: AiSupportSub = { enabled: false, since: null, lastChargeAt: null, nextChargeAt: null, lapsed: false };
   if (settings && typeof settings === "object") {
     const addons = (settings as Record<string, unknown>).addons;
     if (addons && typeof addons === "object") {
-      const a = (addons as Record<string, unknown>).ai_assistant;
+      const a = (addons as Record<string, unknown>).ai_support;
       if (a && typeof a === "object") {
         const o = a as Record<string, unknown>;
         return {
@@ -66,6 +42,10 @@ export function readAiAssistant(settings: unknown): AiAssistantState {
   return off;
 }
 
-export function aiAssistantEnabled(settings: unknown): boolean {
-  return readAiAssistant(settings).enabled;
+/**
+ * Whether the storefront customer AI support chat is active for a panel — i.e. the
+ * owner has the paid add-on enabled (or a super admin comped it). Off by default.
+ */
+export function customerSupportActive(settings: unknown): boolean {
+  return readSupportSub(settings).enabled;
 }

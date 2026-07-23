@@ -445,7 +445,7 @@ function PanelsTab() {
                     >
                       {r.aiSupport ? "On" : "Off"}
                     </button>
-                    <p className="fp-text-faint text-[11px] fp-mono mt-1">paid add-on</p>
+                    <p className="fp-text-faint text-[11px] fp-mono mt-1">owner add-on · comp</p>
                   </td>
                   <td className="py-2.5">
                     <input

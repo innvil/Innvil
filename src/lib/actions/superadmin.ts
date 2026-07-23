@@ -3,7 +3,7 @@
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { INNVIL_COMMISSION_RATE, INNVIL_MIN_COMMISSION_RATE } from "@/src/lib/money";
-import { aiSupportEnabled } from "@/src/lib/ai/addon";
+import { customerSupportActive } from "@/src/lib/ai/addon";
 
 /* Super-admin platform stats. Every export is gated on the super_admin role.
    Role is read via the service-role client (keyed by the validated user id) rather
@@ -128,7 +128,7 @@ export async function listPanelsForSuperAdmin(limit = 200): Promise<SuperAdminPa
       balance: toBalance(settings.innvil_balance),
       commissionRate: Number.isFinite(rawRate) && rawRate > 0 ? rawRate : INNVIL_COMMISSION_RATE,
       ordersToday: ordersTodayByPanel.get(r.id) ?? 0,
-      aiSupport: aiSupportEnabled(r.settings),
+      aiSupport: customerSupportActive(r.settings),
     };
   });
 }

@@ -3,15 +3,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { aiComplete, aiConfigured, type AiMessage } from "@/src/lib/ai/client";
-import { readAiAssistant } from "@/src/lib/ai/addon";
-import { AI_ASSISTANT_PRICE, AI_ASSISTANT_PERIOD_DAYS, round4 } from "@/src/lib/money";
+import { readSupportSub } from "@/src/lib/ai/addon";
+import { AI_ADDON_PRICE, AI_ADDON_PERIOD_DAYS, round4 } from "@/src/lib/money";
 
 /* =========================================================
-   OWNER AI ASSISTANT — the paid, per-panel owner-facing helper.
-   Helps the panel OWNER run THIS panel (how to connect a provider, import + price
-   services, go live, read statuses, take payments, etc.), grounded in the panel's
-   real stats + Innvil how-it-works knowledge. $2.99/mo billed from the panel's
-   Innvil balance; the panel itself stays 0% rent (opt-in add-on).
+   OWNER-FACING AI (two things, owner session):
+
+   1. ownerAssistantReply — the owner's FREE assistant. Helps them run THIS panel
+      (connect a provider, import/price services, go live, payments, commission…),
+      grounded in Innvil how-to + the panel's live stats. Innvil-funded; no charge.
+
+   2. get/setSupportAddon — manage the PAID customer AI support add-on ($2.99/mo
+      from the panel's Innvil balance). Enabling turns on the storefront support
+      chat for the panel's CUSTOMERS. The panel core stays 0% rent (opt-in).
    ========================================================= */
 
 const MAX_HISTORY = 12;
@@ -39,7 +43,11 @@ async function ownedPanel(panelId: string) {
   return { user, admin, panel };
 }
 
-export interface AssistantSubInfo {
+type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+
+/* ---------------- Paid customer-support add-on ---------------- */
+
+export interface SupportAddonInfo {
   enabled: boolean;
   lapsed: boolean;
   price: number;
@@ -47,19 +55,19 @@ export interface AssistantSubInfo {
   nextChargeAt: string | null;
   since: string | null;
   innvilBalance: number;
-  configured: boolean; // AI provider key present
+  configured: boolean;
 }
 
-export async function getPanelAssistant(panelId: string): Promise<AssistantSubInfo | null> {
+export async function getSupportAddon(panelId: string): Promise<SupportAddonInfo | null> {
   const ctx = await ownedPanel(panelId);
   if (!ctx) return null;
   const settings = toSettings(ctx.panel.settings);
-  const sub = readAiAssistant(settings);
+  const sub = readSupportSub(settings);
   return {
     enabled: sub.enabled,
     lapsed: sub.lapsed,
-    price: AI_ASSISTANT_PRICE,
-    periodDays: AI_ASSISTANT_PERIOD_DAYS,
+    price: AI_ADDON_PRICE,
+    periodDays: AI_ADDON_PERIOD_DAYS,
     nextChargeAt: sub.nextChargeAt,
     since: sub.since,
     innvilBalance: toBalance(settings.innvil_balance),
@@ -67,39 +75,37 @@ export async function getPanelAssistant(panelId: string): Promise<AssistantSubIn
   };
 }
 
-type Result<T> = { ok: true; data: T } | { ok: false; error: string };
-
-/** Enable (charges $2.99 now from the panel's Innvil balance) or disable the add-on. */
-export async function setPanelAssistant(panelId: string, enable: boolean): Promise<Result<AssistantSubInfo>> {
+/** Enable (charges $2.99 now from the panel's Innvil balance) or disable the
+ *  storefront customer AI support add-on. */
+export async function setSupportAddon(panelId: string, enable: boolean): Promise<Result<SupportAddonInfo>> {
   const ctx = await ownedPanel(panelId);
   if (!ctx) return { ok: false, error: "Panel not found." };
   const { admin, user, panel } = ctx;
   const settings = toSettings(panel.settings);
-  const sub = readAiAssistant(settings);
+  const sub = readSupportSub(settings);
   const addons = (settings.addons && typeof settings.addons === "object" ? settings.addons : {}) as Record<string, unknown>;
 
   if (!enable) {
-    const updated = { ...settings, addons: { ...addons, ai_assistant: { ...sub, enabled: false, nextChargeAt: null, lapsed: false } } };
+    const updated = { ...settings, addons: { ...addons, ai_support: { ...sub, enabled: false, nextChargeAt: null, lapsed: false } } };
     const { error } = await admin.from("panels").update({ settings: updated }).eq("id", panelId);
     if (error) return { ok: false, error: error.message };
-    await admin.from("audit_logs").insert({ panel_id: panelId, actor_id: user.id, action: "addon.ai_assistant_disabled", meta: {} });
-    const info = await getPanelAssistant(panelId);
+    await admin.from("audit_logs").insert({ panel_id: panelId, actor_id: user.id, action: "addon.ai_support_disabled", meta: {} });
+    const info = await getSupportAddon(panelId);
     return info ? { ok: true, data: info } : { ok: false, error: "Could not read state." };
   }
 
-  // Enabling → charge the first month now.
   const balance = toBalance(settings.innvil_balance);
-  if (balance < AI_ASSISTANT_PRICE) {
-    return { ok: false, error: `You need at least $${AI_ASSISTANT_PRICE.toFixed(2)} in this panel's Innvil balance. Top up in Billing → Add funds, then enable.` };
+  if (balance < AI_ADDON_PRICE) {
+    return { ok: false, error: `You need at least $${AI_ADDON_PRICE.toFixed(2)} in this panel's Innvil balance. Top up in Billing → Add funds, then enable.` };
   }
   const now = new Date();
-  const nextCharge = new Date(now.getTime() + AI_ASSISTANT_PERIOD_DAYS * 86400000);
+  const nextCharge = new Date(now.getTime() + AI_ADDON_PERIOD_DAYS * 86400000);
   const updated = {
     ...settings,
-    innvil_balance: round4(balance - AI_ASSISTANT_PRICE),
+    innvil_balance: round4(balance - AI_ADDON_PRICE),
     addons: {
       ...addons,
-      ai_assistant: {
+      ai_support: {
         enabled: true,
         since: sub.since ?? now.toISOString(),
         lastChargeAt: now.toISOString(),
@@ -113,14 +119,14 @@ export async function setPanelAssistant(panelId: string, enable: boolean): Promi
   await admin.from("audit_logs").insert({
     panel_id: panelId,
     actor_id: user.id,
-    action: "addon.ai_assistant_charged",
-    meta: { amount: AI_ASSISTANT_PRICE, balance_after: round4(balance - AI_ASSISTANT_PRICE), reason: "enable" },
+    action: "addon.ai_support_charged",
+    meta: { amount: AI_ADDON_PRICE, balance_after: round4(balance - AI_ADDON_PRICE), reason: "enable" },
   });
-  const info = await getPanelAssistant(panelId);
+  const info = await getSupportAddon(panelId);
   return info ? { ok: true, data: info } : { ok: false, error: "Could not read state." };
 }
 
-/* ---------------- Assistant chat ---------------- */
+/* ---------------- Free owner assistant ---------------- */
 
 const OWNER_KB = `
 INNVIL — HOW IT WORKS (for the panel owner running this panel):
@@ -131,7 +137,7 @@ INNVIL — HOW IT WORKS (for the panel owner running this panel):
 - Custom domain: Domain tab — connect your own domain with automatic SSL; disconnect anytime and it falls back to the included subdomain (no lock-in).
 - Payments: Payments tab — connect Cryptomus or NOWPayments so your customers can deposit to their wallet; deposits credit automatically on confirmation.
 - Orders sync automatically with your provider (completed/partial/canceled), and the unfilled portion of a partial/canceled order is auto-refunded to the customer. Repeat orders on the same link are caught as duplicates.
-- Add-ons: the AI Support chat (for your customers) is a separate per-panel add-on a super admin enables. This assistant you're using is the owner AI Assistant add-on.
+- Add-ons: Customer AI Support (an AI chat for YOUR customers on your storefront) is a paid add-on ($2.99/mo from this panel's Innvil balance) you can enable in the AI Assistant tab. This assistant you're talking to now is free.
 - Customer privacy boundary: owners cannot log into customer accounts or reset customer passwords — only adjust balances.
 Answer only about running this panel on Innvil. Be concise, practical, and honest; if you don't know, say so. Do not invent features, prices, or stats beyond what's stated here or in the panel data provided.
 `.trim();
@@ -202,17 +208,15 @@ function sanitizeHistory(history: AiMessage[]): AiMessage[] {
   return clean;
 }
 
-export type AssistantResult = { ok: true; reply: string } | { ok: false; error: string; unavailable?: boolean };
+export type AssistantResult = { ok: true; reply: string } | { ok: false; error: string };
 
+/** The owner's free Innvil assistant. Available to every owner (no subscription). */
 export async function ownerAssistantReply(panelId: string, history: AiMessage[]): Promise<AssistantResult> {
   const messages = sanitizeHistory(history);
   if (messages.length === 0) return { ok: false, error: "Type a message first." };
 
   const ctx = await ownedPanel(panelId);
   if (!ctx) return { ok: false, error: "Panel not found." };
-  if (!readAiAssistant(toSettings(ctx.panel.settings)).enabled) {
-    return { ok: false, error: "The AI Assistant add-on isn't active on this panel.", unavailable: true };
-  }
   if (!aiConfigured()) return { ok: false, error: "AI is temporarily unavailable." };
 
   try {
@@ -222,4 +226,9 @@ export async function ownerAssistantReply(panelId: string, history: AiMessage[])
   } catch {
     return { ok: false, error: "The assistant hit an error. Try again in a moment." };
   }
+}
+
+/** Whether the owner's free assistant can be used (AI key present). */
+export async function assistantConfigured(): Promise<boolean> {
+  return aiConfigured();
 }

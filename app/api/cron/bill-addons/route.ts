@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { billDueAssistants } from "@/src/lib/billing/assistant";
+import { billDueSupportAddons } from "@/src/lib/billing/assistant";
 
 /* =========================================================
    Add-on recurring billing cron.
@@ -35,7 +35,7 @@ function isAuthorized(req: Request): boolean {
 async function run(req: Request) {
   if (!isAuthorized(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   try {
-    const res = await billDueAssistants();
+    const res = await billDueSupportAddons();
     return NextResponse.json({ ok: true, ...res });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : "billing failed" }, { status: 500 });
