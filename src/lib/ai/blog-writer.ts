@@ -1,5 +1,6 @@
 import "server-only";
 import type { BlogBlock, BlogSection } from "@/src/data/blog-posts";
+import { aiComplete } from "@/src/lib/ai/client";
 
 /* =========================================================
    AI blog writer.
@@ -13,8 +14,7 @@ import type { BlogBlock, BlogSection } from "@/src/data/blog-posts";
      BLOG_AI_MODEL      (optional; defaults to a strong Claude model)
    ========================================================= */
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const DEFAULT_MODEL = process.env.BLOG_AI_MODEL || "claude-sonnet-5";
+const BLOG_MODEL = process.env.BLOG_AI_MODEL || process.env.AI_MODEL || "claude-sonnet-5";
 
 /** Verified facts the writer may rely on. Keep in sync with the product + landing. */
 const PRODUCT_FACTS = `
@@ -155,9 +155,6 @@ function extractJson(text: string): unknown {
 }
 
 async function callClaude(topic: string, keywords: string[]): Promise<unknown> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set.");
-
   const kw = keywords.length ? `Primary keywords to target naturally: ${keywords.join(", ")}.` : "";
   const userPrompt = `Write one SMM-panel guide article about: "${topic}". ${kw}
 
@@ -183,28 +180,12 @@ Return ONLY a single JSON object (no prose, no markdown fences) with exactly thi
 }
 Use at least 4 sections. Use ul/ol where it genuinely helps. Do not include any keys beyond those shown.`;
 
-  const res = await fetch(ANTHROPIC_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: DEFAULT_MODEL,
-      max_tokens: 4096,
-      system: `You are Innvil's content writer. ${STYLE_RULES}\n\nVERIFIED PRODUCT FACTS (do not contradict or go beyond these):\n${PRODUCT_FACTS}`,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
+  const text = await aiComplete({
+    model: BLOG_MODEL,
+    maxTokens: 4096,
+    system: `You are Innvil's content writer. ${STYLE_RULES}\n\nVERIFIED PRODUCT FACTS (do not contradict or go beyond these):\n${PRODUCT_FACTS}`,
+    messages: [{ role: "user", content: userPrompt }],
   });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Anthropic API ${res.status}: ${body.slice(0, 300)}`);
-  }
-  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-  const text = (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
-  if (!text.trim()) throw new Error("Empty response from model.");
   return extractJson(text);
 }
 

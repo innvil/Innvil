@@ -86,6 +86,29 @@ export async function listAdminPosts(): Promise<AdminBlogPost[]> {
   return ((data as PostRow[] | null) ?? []).map(rowToAdmin);
 }
 
+export interface BlogDraftNotice {
+  id: string;
+  title: string;
+  createdAt: string;
+}
+
+/** Lightweight list of pending drafts for the owner-app bell (super admin only). */
+export async function listBlogDraftNotices(): Promise<BlogDraftNotice[]> {
+  if (!(await requireSuperAdmin()).ok) return [];
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("blog_posts")
+    .select("id, title, created_at")
+    .eq("status", "draft")
+    .order("created_at", { ascending: false })
+    .limit(10);
+  return ((data as Array<{ id: string; title: string; created_at: string }> | null) ?? []).map((r) => ({
+    id: r.id,
+    title: r.title,
+    createdAt: r.created_at,
+  }));
+}
+
 export async function listTopics(): Promise<AdminBlogTopic[]> {
   if (!(await requireSuperAdmin()).ok) return [];
   const admin = createAdminClient();

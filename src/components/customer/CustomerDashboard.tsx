@@ -15,6 +15,7 @@ import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { NewOrder, PlaceOrderHandler, PlatformMeta } from "./NewOrder";
 import { ApiDocs } from "./ApiDocs";
 import { CustomerTickets } from "./CustomerTickets";
+import { SupportChat } from "./SupportChat";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
@@ -140,6 +141,7 @@ export function CustomerDashboard({
   currency = "USD",
   paymentMethods = [],
   panelId,
+  aiSupport = false,
   apiEnabled = true,
   hasExistingApiKey = false,
   apiBaseUrl = "/api/v2",
@@ -175,6 +177,8 @@ export function CustomerDashboard({
   paymentMethods?: PaymentMethod[];
   /** Real panel id — when set, the Tickets tab uses the live support system. */
   panelId?: string;
+  /** Whether the panel's paid AI support add-on is enabled (shows the chat widget). */
+  aiSupport?: boolean;
   /** Customer API status for this panel. */
   apiEnabled?: boolean;
   /** API base URL shown in docs. */
@@ -933,6 +937,8 @@ export function CustomerDashboard({
           </div>
         )}
       </main>
+
+      {aiSupport && panelId && <SupportChat panelId={panelId} brandName={brandName} />}
     </div>
   );
 }

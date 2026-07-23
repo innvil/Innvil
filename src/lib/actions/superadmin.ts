@@ -3,6 +3,7 @@
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { INNVIL_COMMISSION_RATE, INNVIL_MIN_COMMISSION_RATE } from "@/src/lib/money";
+import { aiSupportEnabled } from "@/src/lib/ai/addon";
 
 /* Super-admin platform stats. Every export is gated on the super_admin role.
    Role is read via the service-role client (keyed by the validated user id) rather
@@ -33,6 +34,7 @@ export interface SuperAdminPanelVM {
   balance: number;
   commissionRate: number; // effective per-panel rate (default 5%)
   ordersToday: number;    // orders created today (bracket reference)
+  aiSupport: boolean;     // paid AI support add-on enabled for this panel
 }
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -126,8 +128,38 @@ export async function listPanelsForSuperAdmin(limit = 200): Promise<SuperAdminPa
       balance: toBalance(settings.innvil_balance),
       commissionRate: Number.isFinite(rawRate) && rawRate > 0 ? rawRate : INNVIL_COMMISSION_RATE,
       ordersToday: ordersTodayByPanel.get(r.id) ?? 0,
+      aiSupport: aiSupportEnabled(r.settings),
     };
   });
+}
+
+/** Enable/disable the paid AI support add-on for a panel (super admin only). */
+export async function setPanelAiAddon(panelId: string, enabled: boolean): Promise<Result<{ enabled: boolean }>> {
+  if (!(await requireSuperAdmin())) return { ok: false, error: "Super admin only." };
+  const admin = createAdminClient();
+  const { user } = await getAuthedAdmin();
+  const { data: row } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  if (!row) return { ok: false, error: "Panel not found." };
+
+  const settings = toSettings(row.settings);
+  const addons = (settings.addons && typeof settings.addons === "object" ? settings.addons : {}) as Record<string, unknown>;
+  const updated = {
+    ...settings,
+    addons: {
+      ...addons,
+      ai_support: { enabled, enabledAt: enabled ? new Date().toISOString() : null },
+    },
+  };
+  const { error } = await admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_logs").insert({
+    panel_id: panelId,
+    actor_id: user?.id ?? null,
+    action: "superadmin.ai_addon_set",
+    meta: { enabled },
+  });
+  return { ok: true, data: { enabled } };
 }
 
 /** Set a panel's commission rate (super admin only). Clamped to 1%–5%. */

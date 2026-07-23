@@ -9,7 +9,7 @@ import {
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
-  AlertTriangle, Wrench, Eye, EyeOff, Trash2, LifeBuoy, PiggyBank,
+  AlertTriangle, Wrench, Eye, EyeOff, Trash2, LifeBuoy, PiggyBank, Newspaper,
 } from "lucide-react";
 import {
   Card, StatCard, RevenueChart, StatusBadge,
@@ -28,6 +28,8 @@ import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/aut
 import { getOwnerBillingSummary, listAllOwnerOrders, type OwnerBillingSummary, type OwnerOrderVM } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
+import { BlogReview } from "@/src/components/superadmin/BlogReview";
+import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
@@ -224,6 +226,8 @@ const APP_NAV = [
 function navItemsFor(isSuper: boolean) {
   return [
     ...APP_NAV,
+    // Super-admin-only: review + approve AI blog drafts, right in the owner app.
+    ...(isSuper ? [{ k: "blog", label: "Blog", icon: Newspaper }] : []),
     { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
 }
@@ -262,8 +266,26 @@ function AppSidebar({ section, setSection, isSuper }: { section: string; setSect
   );
 }
 
-function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: string) => void; onOpenAccount: () => void; onOpenNav: () => void }) {
+function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog }: { setWorld: (w: string) => void; onOpenAccount: () => void; onOpenNav: () => void; isSuper?: boolean; onOpenBlog?: () => void }) {
   const [bellOpen, setBellOpen] = useState(false);
+  const [draftNotices, setDraftNotices] = useState<BlogDraftNotice[]>([]);
+
+  useEffect(() => {
+    if (!isSuper) return;
+    let alive = true;
+    listBlogDraftNotices().then((n) => { if (alive) setDraftNotices(n); }).catch(() => {});
+    return () => { alive = false; };
+  }, [isSuper]);
+
+  const relTime = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  };
   const [ownerBalance, setOwnerBalance] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
     try {
@@ -322,20 +344,44 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav }: { setWorld: (w: strin
           <button
             onClick={() => setBellOpen((o) => !o)}
             aria-label="Notifications"
-            className={`p-1 rounded-lg ${bellOpen ? "fp-gold" : "fp-text-dim hover:fp-text"}`}
+            className={`relative p-1 rounded-lg ${bellOpen ? "fp-gold" : "fp-text-dim hover:fp-text"}`}
           >
             <Bell size={17} />
+            {draftNotices.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full fp-gold-bg text-[#0A0B0F] text-[9px] font-bold flex items-center justify-center">
+                {draftNotices.length}
+              </span>
+            )}
           </button>
           {bellOpen && (
             <>
               <button aria-hidden onClick={() => setBellOpen(false)} className="fixed inset-0 z-40 cursor-default" />
               <div className="absolute right-0 top-full mt-2 w-72 fp-panel border fp-line rounded-xl shadow-2xl z-50 p-4">
                 <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Notifications</p>
-                <div className="text-center py-6">
-                  <CheckCircle2 size={20} className="fp-safe mx-auto mb-2" />
-                  <p className="fp-text-dim text-sm">You&apos;re all caught up.</p>
-                  <p className="fp-text-faint text-xs mt-1">Order and deposit alerts will appear here.</p>
-                </div>
+                {draftNotices.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <p className="fp-text-dim text-xs mb-1">{draftNotices.length} blog {draftNotices.length === 1 ? "draft" : "drafts"} to review</p>
+                    {draftNotices.map((n) => (
+                      <button
+                        key={n.id}
+                        onClick={() => { setBellOpen(false); onOpenBlog?.(); }}
+                        className="w-full text-left fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 hover:fp-gold-border"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Newspaper size={13} className="fp-gold shrink-0" />
+                          <span className="text-xs truncate flex-1">{n.title}</span>
+                        </span>
+                        <span className="fp-text-faint text-[10px] fp-mono">{relTime(n.createdAt)} · tap to review</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <CheckCircle2 size={20} className="fp-safe mx-auto mb-2" />
+                    <p className="fp-text-dim text-sm">You&apos;re all caught up.</p>
+                    <p className="fp-text-faint text-xs mt-1">Order and deposit alerts will appear here.</p>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1271,7 +1317,7 @@ export function InnvilApp({ setWorld, initialSection }: {
       )}
 
       <div className="flex-1 min-w-0">
-        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} />
+        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} isSuper={isSuper} onOpenBlog={() => setSection("blog")} />
         {section === "account" && <AccountSettings />}
         {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} goOrders={() => setSection("orders")} openPanel={openPanel} />}
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} onChanged={refreshPanels} />}
@@ -1317,6 +1363,15 @@ export function InnvilApp({ setWorld, initialSection }: {
           </div>
         )}
         {section === "contact" && (isSuper ? <OwnerPanelSupport /> : <OwnerContactSupport />)}
+        {section === "blog" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Blog</h1>
+              <p className="fp-text-dim text-sm mt-1">Review, edit, and publish AI-written blog drafts. Nothing goes live until you publish it.</p>
+            </div>
+            <BlogReview />
+          </div>
+        )}
       </div>
       {showAddFunds && (
         <AddFundsModal

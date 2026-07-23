@@ -9,7 +9,7 @@ import {
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
-  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance, setPanelCommissionRate,
+  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance, setPanelCommissionRate, setPanelAiAddon,
   type PlatformOverview, type SuperAdminPanelVM,
 } from "@/src/lib/actions/superadmin";
 import { commissionBracketRate } from "@/src/lib/money";
@@ -27,6 +27,7 @@ import {
   type AdminBlogPost, type AdminBlogTopic,
 } from "@/src/lib/actions/blog-admin";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
+import { BlogReview } from "./BlogReview";
 
 const inputCls =
   "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-1.5 outline-none focus:fp-gold-border";
@@ -344,6 +345,17 @@ function PanelsTab() {
     setNotice(`Updated balance for panel ${panelId.slice(0, 8)}.`);
   };
 
+  const toggleAi = async (panelId: string, next: boolean) => {
+    setNotice(null);
+    setError(null);
+    setBusyKey(`${panelId}:ai`);
+    const res = await setPanelAiAddon(panelId, next);
+    setBusyKey(null);
+    if (!res.ok) { setError(res.error); return; }
+    setRows((prev) => (prev ?? []).map((r) => (r.id === panelId ? { ...r, aiSupport: res.data.enabled } : r)));
+    setNotice(`AI support ${res.data.enabled ? "enabled" : "disabled"} for panel ${panelId.slice(0, 8)}.`);
+  };
+
   const applyRate = async (panelId: string) => {
     setNotice(null);
     setError(null);
@@ -379,7 +391,7 @@ function PanelsTab() {
         <p className="fp-text-faint text-sm py-6 text-center">No panels found.</p>
       ) : (
         <div className="fp-panel border fp-line rounded-2xl p-4 overflow-x-auto">
-          <table className="w-full min-w-[1140px] text-sm">
+          <table className="w-full min-w-[1280px] text-sm">
             <thead>
               <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
                 <th className="py-2 font-normal">Panel</th>
@@ -387,6 +399,7 @@ function PanelsTab() {
                 <th className="py-2 font-normal">Status</th>
                 <th className="py-2 font-normal text-right">Innvil balance</th>
                 <th className="py-2 font-normal">Commission</th>
+                <th className="py-2 font-normal">AI support</th>
                 <th className="py-2 font-normal">Amount</th>
                 <th className="py-2 font-normal">Reason</th>
                 <th className="py-2 font-normal text-right">Actions</th>
@@ -423,6 +436,16 @@ function PanelsTab() {
                     <p className="fp-text-faint text-[11px] fp-mono mt-1">
                       {r.ordersToday.toLocaleString()}/day → suggests {(commissionBracketRate(r.ordersToday) * 100).toFixed(0)}%
                     </p>
+                  </td>
+                  <td className="py-2.5">
+                    <button
+                      onClick={() => toggleAi(r.id, !r.aiSupport)}
+                      disabled={busyKey !== null}
+                      className={`text-xs px-2.5 py-1.5 rounded-lg disabled:opacity-60 ${r.aiSupport ? "fp-safe-soft-bg fp-safe" : "fp-panel-raised border fp-line-soft fp-text-dim"}`}
+                    >
+                      {r.aiSupport ? "On" : "Off"}
+                    </button>
+                    <p className="fp-text-faint text-[11px] fp-mono mt-1">paid add-on</p>
                   </td>
                   <td className="py-2.5">
                     <input
@@ -639,9 +662,12 @@ function SupportTab() {
   );
 }
 
-/* ---------------- Blog (AI autopilot: draft → review → publish) ---------------- */
+/* ---------------- Blog (AI autopilot) — UI now lives in ./BlogReview.tsx.
+   The BlogTab below is superseded (kept only until the next cleanup pass); the
+   render uses <BlogReview /> instead. ---------------- */
 type EditState = { id: string; title: string; description: string; slug: string; tag: string; keywords: string };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function BlogTab() {
   const [posts, setPosts] = useState<AdminBlogPost[] | null>(null);
   const [topics, setTopics] = useState<AdminBlogTopic[] | null>(null);
@@ -933,7 +959,7 @@ export function SuperAdminDashboard() {
         )}
         {tab === "panels" && <PanelsTab />}
         {tab === "payments" && <PaymentsTab />}
-        {tab === "blog" && <BlogTab />}
+        {tab === "blog" && <BlogReview />}
         {tab === "landing" && <LandingTab />}
         {tab === "support" && <SupportTab />}
       </div>

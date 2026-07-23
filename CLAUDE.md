@@ -127,6 +127,28 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — AI chat support (customer) + AI integration + blog review in owner app (v0.2.84)
+- **Shared AI client** `src/lib/ai/client.ts` (server-only): one Anthropic entry point (`aiComplete`,
+  `aiConfigured`, `DEFAULT_AI_MODEL`) used by every AI feature. **`ANTHROPIC_API_KEY`** required; optional
+  `AI_MODEL` global default. The blog writer was refactored onto it (single integration to maintain).
+- **Customer-facing AI support chat (paid add-on).** Gated by `panels.settings.addons.ai_support.enabled`
+  (`src/lib/ai/addon.ts`). `src/lib/actions/ai-support.ts` `customerSupportReply` answers grounded in a
+  built-in how-it-works FAQ (`SUPPORT_FAQ`, zero owner config) + THIS panel's catalog + the signed-in
+  customer's own balance/recent orders + deposit methods + any custom landing blocks the owner wrote
+  (`settings.branding.sections`), with a HARD privacy rule (never given/never reveals provider identity,
+  provider cost, floors, markup, or commission).
+  `escalateSupportToTicket` opens a real ticket (reuses `createTicket`). UI = floating `SupportChat.tsx`
+  mounted in `CustomerDashboard` when the add-on is on; `aiSupport` threaded PublicPanel → page → Storefront →
+  dashboard. **Super admin enables it per panel** in `/superadmin → Panels` (new AI-support toggle;
+  `setPanelAiAddon`, audit-logged).
+- **Super admin = a panel-owner account role-flagged `super_admin` in Supabase — same owner app.** So blog
+  review now lives in the **owner-app sidebar** (super-admin-only "Blog" item → `BlogReview`), not only at
+  `/superadmin`. The blog review UI was extracted to `src/components/superadmin/BlogReview.tsx` (shared by
+  both). New-draft **notifications go to the in-app bell** (`listBlogDraftNotices` → badge + list in
+  `AppTopbar`, tap → Blog section). AI (cron) drafts also best-effort email super admins (bonus).
+- **Still pending:** the OWNER-facing AI assistant (second surface) — see CLAUDE_PROGRESS. No migration
+  (uses `panels.settings`). Set `ANTHROPIC_API_KEY`.
+
 ### 2026-07-23 — AI blog autopilot: draft → human-approve → publish (v0.2.83)
 - **AI writes blog drafts on a daily schedule; a super admin reviews and publishes.** Deliberately
   gated (not auto-publish) — daily unreviewed AI content risks Google's "scaled content abuse" penalty,
@@ -1261,10 +1283,18 @@ PROVIDER_KEY_SECRET=your_long_random_secret
 # Must be a public URL for webhooks to reach you (prod/preview or a tunnel).
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
-# Protects the order-status sync cron (/api/cron/sync-orders). Vercel Cron sends
-# it as `Authorization: Bearer <CRON_SECRET>`. If unset, the endpoint is open
-# (fine for local testing — hit it in a browser to force a sync).
+# Protects the order-status sync cron (/api/cron/sync-orders) AND the blog-draft
+# cron (/api/cron/generate-blog). Callers send `Authorization: Bearer <CRON_SECRET>`.
+# If unset, the endpoints are open (fine for local testing).
 CRON_SECRET=your_long_random_secret
+
+# AI features (blog writer + customer AI support chat). Innvil-owned Anthropic key,
+# used server-side only. REQUIRED for any AI generation.
+ANTHROPIC_API_KEY=your_anthropic_api_key
+# Optional global default model for all AI features (per-feature overrides exist).
+AI_MODEL=claude-sonnet-5
+# Optional blog-writer-specific model override.
+BLOG_AI_MODEL=claude-sonnet-5
 ```
 
 ---

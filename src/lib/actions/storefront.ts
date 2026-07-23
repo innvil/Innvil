@@ -1,6 +1,7 @@
 "use server";
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
+import { aiSupportEnabled } from "@/src/lib/ai/addon";
 import type { PanelStatus, ServiceRow } from "@/src/types/db";
 
 /**
@@ -31,6 +32,7 @@ export interface PublicPanel {
   description: string;
   favicon: string;
   sections: PublicLandingSection[];
+  aiSupport: boolean;
 }
 
 /** The panel's operating currency (from settings; default USD). */
@@ -114,6 +116,7 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
     description: branding.description,
     favicon: branding.favicon || branding.logoUrl,
     sections: branding.sections,
+    aiSupport: aiSupportEnabled(data.settings),
   };
 }
 

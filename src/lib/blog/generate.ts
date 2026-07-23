@@ -1,7 +1,9 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { BLOG_POSTS } from "@/src/data/blog-posts";
 import { generateBlogDraft, slugify, type GeneratedPost } from "@/src/lib/ai/blog-writer";
+import { sendEmail, simpleEmail } from "@/src/lib/email/resend";
 
 /* =========================================================
    Blog draft generation (shared by the cron and the super-admin "generate now").
@@ -48,6 +50,36 @@ function uniqueSlug(base: string, taken: Set<string>): string {
   return `${root}-${Date.now()}`;
 }
 
+/** Email every super admin that a new AI draft is waiting for review (best-effort). */
+async function notifySuperAdminsOfDraft(admin: SupabaseClient, title: string): Promise<void> {
+  try {
+    const { data: supers } = await admin.from("profiles").select("id").eq("role", "super_admin");
+    const ids = ((supers as Array<{ id: string }> | null) ?? []).map((r) => r.id);
+    if (!ids.length) return;
+    const app = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || "";
+    const emails: string[] = [];
+    for (const id of ids) {
+      try {
+        const { data } = await admin.auth.admin.getUserById(id);
+        if (data.user?.email) emails.push(data.user.email);
+      } catch { /* skip */ }
+    }
+    await Promise.all(
+      emails.map((to) =>
+        sendEmail({
+          to,
+          subject: `New AI blog draft to review — ${title}`,
+          html: simpleEmail(
+            "New AI blog draft ready to review",
+            [`A new draft was written: <strong>${title}</strong>.`, "Review, edit, and publish it from the Blog tab in your super-admin dashboard. Nothing goes live until you publish it."],
+            app ? { label: "Review in super admin", url: `${app}/superadmin` } : undefined
+          ),
+        })
+      )
+    );
+  } catch { /* best-effort — never block generation */ }
+}
+
 async function insertDraft(
   post: GeneratedPost,
   meta: { topic: string; source: "ai" | "manual" }
@@ -72,6 +104,11 @@ async function insertDraft(
     topic: meta.topic,
   });
   if (error) return { ok: false, error: error.message };
+
+  // Notify super admins about scheduled (AI) drafts — the daily ones they'd otherwise
+  // miss. Manual "generate now" drafts are shown inline in the dashboard already.
+  if (meta.source === "ai") await notifySuperAdminsOfDraft(admin, post.title);
+
   return { ok: true, slug, title: post.title, topic: meta.topic };
 }
 
