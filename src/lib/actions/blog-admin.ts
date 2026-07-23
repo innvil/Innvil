@@ -1,10 +1,23 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { slugify } from "@/src/lib/ai/blog-writer";
 import { generateForTopic, runScheduledGeneration } from "@/src/lib/blog/generate";
 import type { BlogSection, BlogPost } from "@/src/data/blog-posts";
+
+/** Refresh the ISR-cached blog surfaces so published/unpublished posts appear
+ *  immediately (instead of waiting up to an hour for revalidation). */
+function revalidateBlog(slug?: string) {
+  try {
+    revalidatePath("/blog");
+    revalidatePath("/sitemap.xml");
+    if (slug) revalidatePath(`/blog/${slug}`);
+  } catch {
+    /* revalidatePath can throw outside a request scope — safe to ignore */
+  }
+}
 
 /* Super-admin blog management. Every export is gated on the super_admin role.
    Reads/writes go through the service-role client (auth enforced in code), matching
@@ -161,30 +174,38 @@ export async function generateDraftNow(topic?: string, keywords: string[] = []):
 export async function publishPost(id: string): Promise<Result<null>> {
   if (!(await requireSuperAdmin()).ok) return { ok: false, error: "Super admin only." };
   const admin = createAdminClient();
-  const { error } = await admin
+  const { data, error } = await admin
     .from("blog_posts")
     .update({ status: "published", published_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .select("slug")
+    .single();
   if (error) return { ok: false, error: error.message };
+  revalidateBlog((data as { slug: string } | null)?.slug);
   return { ok: true, data: null };
 }
 
 export async function unpublishPost(id: string): Promise<Result<null>> {
   if (!(await requireSuperAdmin()).ok) return { ok: false, error: "Super admin only." };
   const admin = createAdminClient();
-  const { error } = await admin
+  const { data, error } = await admin
     .from("blog_posts")
     .update({ status: "draft", published_at: null, updated_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .select("slug")
+    .single();
   if (error) return { ok: false, error: error.message };
+  revalidateBlog((data as { slug: string } | null)?.slug);
   return { ok: true, data: null };
 }
 
 export async function deletePost(id: string): Promise<Result<null>> {
   if (!(await requireSuperAdmin()).ok) return { ok: false, error: "Super admin only." };
   const admin = createAdminClient();
+  const { data: row } = await admin.from("blog_posts").select("slug").eq("id", id).maybeSingle();
   const { error } = await admin.from("blog_posts").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
+  revalidateBlog((row as { slug: string } | null)?.slug);
   return { ok: true, data: null };
 }
 
@@ -217,5 +238,7 @@ export async function updatePostMeta(
 
   const { data, error } = await admin.from("blog_posts").update(update).eq("id", id).select("slug").single();
   if (error) return { ok: false, error: error.message };
-  return { ok: true, data: { slug: finalSlug ?? (data as { slug: string }).slug } };
+  const savedSlug = finalSlug ?? (data as { slug: string }).slug;
+  revalidateBlog(savedSlug);
+  return { ok: true, data: { slug: savedSlug } };
 }

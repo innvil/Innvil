@@ -30,3 +30,42 @@ export function readAiAddon(settings: unknown): AiAddonState {
 export function aiSupportEnabled(settings: unknown): boolean {
   return readAiAddon(settings).enabled;
 }
+
+/* ---------------------------------------------------------------------------
+   Owner AI Assistant add-on (paid, per-panel, $2.99/mo from the panel's Innvil
+   balance). Subscription state lives in settings.addons.ai_assistant.
+   --------------------------------------------------------------------------- */
+
+export interface AiAssistantState {
+  enabled: boolean;
+  since: string | null;
+  lastChargeAt: string | null;
+  nextChargeAt: string | null;
+  /** true when a scheduled charge failed for lack of balance (paused until funded). */
+  lapsed: boolean;
+}
+
+export function readAiAssistant(settings: unknown): AiAssistantState {
+  const off: AiAssistantState = { enabled: false, since: null, lastChargeAt: null, nextChargeAt: null, lapsed: false };
+  if (settings && typeof settings === "object") {
+    const addons = (settings as Record<string, unknown>).addons;
+    if (addons && typeof addons === "object") {
+      const a = (addons as Record<string, unknown>).ai_assistant;
+      if (a && typeof a === "object") {
+        const o = a as Record<string, unknown>;
+        return {
+          enabled: o.enabled === true,
+          since: typeof o.since === "string" ? o.since : null,
+          lastChargeAt: typeof o.lastChargeAt === "string" ? o.lastChargeAt : null,
+          nextChargeAt: typeof o.nextChargeAt === "string" ? o.nextChargeAt : null,
+          lapsed: o.lapsed === true,
+        };
+      }
+    }
+  }
+  return off;
+}
+
+export function aiAssistantEnabled(settings: unknown): boolean {
+  return readAiAssistant(settings).enabled;
+}

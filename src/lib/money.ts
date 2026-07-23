@@ -12,6 +12,12 @@ export const INNVIL_MIN_COMMISSION_RATE = 0.01;
 /** Hard cap on commission Innvil takes from ONE panel in a single day. Mirror of the SQL (0020). */
 export const INNVIL_COMMISSION_CAP_PER_DAY = 100;
 
+/** Monthly price (USD, from the panel's Innvil balance) of the optional owner AI Assistant
+ *  add-on. The panel itself stays 0% rent — this is opt-in only. */
+export const AI_ASSISTANT_PRICE = 2.99;
+/** Billing period length for the AI Assistant add-on. */
+export const AI_ASSISTANT_PERIOD_DAYS = 30;
+
 /**
  * Internal volume-discount brackets by completed orders/day — the guideline support
  * (and future AI support) uses to grant a panel a lower commission rate. Public

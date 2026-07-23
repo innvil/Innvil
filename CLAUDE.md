@@ -127,6 +127,24 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Owner AI Assistant add-on (paid, $2.99/mo per panel) (v0.2.85)
+- **Second AI surface: the owner-facing assistant.** A paid, opt-in, per-panel add-on that helps the OWNER
+  run this panel (connect a provider, import/price services, go live, payments, commission, statuses…),
+  grounded in Innvil how-to knowledge (`OWNER_KB`) + the panel's live stats (status, Innvil balance,
+  commission rate, providers/services/orders/customers counts). The panel itself stays 0% rent — this is
+  strictly opt-in.
+- **Billing: $2.99/mo from the panel's Innvil balance** (`AI_ASSISTANT_PRICE` in `money.ts`). Enabling charges
+  the first month immediately and sets next-charge +30d; a daily cron re-charges due subscriptions and
+  **pauses** the add-on (enabled=false, lapsed=true) when a panel can't cover it. State lives in
+  `panels.settings.addons.ai_assistant` (`readAiAssistant` in `src/lib/ai/addon.ts`) — **no migration**.
+- Files: `src/lib/actions/ai-assistant.ts` (`getPanelAssistant`/`setPanelAssistant` [owner-auth + ownership,
+  charge/refund-free disable, audit-logged]/`ownerAssistantReply` [gated + grounded]); billing sweep
+  `src/lib/billing/assistant.ts` (`billDueAssistants`); cron `app/api/cron/bill-addons` (CRON_SECRET-gated,
+  **schedule via Supabase pg_cron**, daily). UI: `src/components/panels/admin/OwnerAssistant.tsx` (offer card
+  when off → Enable; inline chat + "renews …"/Cancel when on), mounted as a new **"AI Assistant"** tab in
+  `PanelAdmin`. Uses the same shared AI client, so a third-party Claude key works too.
+- **Schedule the pg_cron `innvil-bill-addons` job** (SQL in the route file); set the AI key. No migration.
+
 ### 2026-07-24 — AI chat support (customer) + AI integration + blog review in owner app (v0.2.84)
 - **Shared AI client** `src/lib/ai/client.ts` (server-only): one Anthropic entry point (`aiComplete`,
   `aiConfigured`, `DEFAULT_AI_MODEL`) used by every AI feature. **`ANTHROPIC_API_KEY`** required; optional
@@ -1288,10 +1306,22 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 # If unset, the endpoints are open (fine for local testing).
 CRON_SECRET=your_long_random_secret
 
-# AI features (blog writer + customer AI support chat). Innvil-owned Anthropic key,
-# used server-side only. REQUIRED for any AI generation.
-ANTHROPIC_API_KEY=your_anthropic_api_key
-# Optional global default model for all AI features (per-feature overrides exist).
+# AI features (blog writer + customer AI support chat). Server-side only. The client
+# is provider-agnostic (src/lib/ai/client.ts): it speaks Anthropic's Messages API by
+# default, or an OpenAI-compatible one (OpenRouter, Vercel AI Gateway, …) so you can
+# use a third-party Claude key. REQUIRED for any AI generation: a key.
+#
+# Simplest (Anthropic direct):
+ANTHROPIC_API_KEY=your_anthropic_api_key   # (AI_API_KEY also accepted)
+#
+# Third-party / gateway (OpenAI-compatible), e.g. OpenRouter:
+#   AI_PROVIDER=openai
+#   AI_API_KEY=sk-or-...                     # your OpenRouter/gateway key
+#   AI_BASE_URL=https://openrouter.ai/api/v1 # (default when AI_PROVIDER=openai)
+#   AI_MODEL=anthropic/claude-sonnet-5       # provider-specific model id!
+#
+# Model id (per-feature override exists). Anthropic direct → "claude-sonnet-5";
+# OpenRouter/Vercel Gateway → "anthropic/claude-sonnet-5".
 AI_MODEL=claude-sonnet-5
 # Optional blog-writer-specific model override.
 BLOG_AI_MODEL=claude-sonnet-5

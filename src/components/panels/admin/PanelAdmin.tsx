@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import {
   LayoutGrid, Circle, Palette, Globe, Wifi, Sliders, ShieldCheck,
   ListOrdered, Users, CreditCard, KeyRound, Lock, Bell, MessageSquare, Bot,
-  Gift, Gauge, Copy, ExternalLink, ChevronDown, LucideIcon,
+  Gift, Gauge, Copy, ExternalLink, ChevronDown, MessageCircle, LucideIcon,
 } from "lucide-react";
 import { StatusBadge } from "@/src/components/ui";
 import { PanelStatus } from "@/src/data/constants";
@@ -12,6 +12,7 @@ import { Panel, CustomerRow } from "@/src/types";
 import { updatePanelStatus } from "@/src/lib/actions/panels";
 import { panelStorefrontPath } from "@/src/lib/config";
 import { CustomerDrawer } from "./CustomerDrawer";
+import { OwnerAssistantTab } from "./OwnerAssistant";
 import {
   OverviewTab, StatusTab, BrandingTab, DomainTab, ProvidersTab, ServicesTab,
   FloorTab, OrdersTab, CustomersTab, PaymentsTab, CustomerApiTab,
@@ -33,6 +34,7 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
   { k: "risk", label: "Risk & Security", icon: Lock },
   { k: "notifications", label: "Notifications", icon: Bell },
   { k: "support", label: "Support", icon: MessageSquare },
+  { k: "assistant", label: "AI Assistant", icon: MessageCircle },
   { k: "automation", label: "Automation", icon: Bot },
   { k: "promotions", label: "Promotions", icon: Gift },
 ];
@@ -180,6 +182,7 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel
         {tab === "risk" && <RiskTab />}
         {tab === "notifications" && <NotificationsTab />}
         {tab === "support" && <SupportTab panelId={panel.id} />}
+        {tab === "assistant" && <OwnerAssistantTab panelId={panel.id} panelName={panel.name} />}
         {tab === "automation" && <AutomationTab />}
         {tab === "promotions" && <PromotionsTab />}
       </div>
