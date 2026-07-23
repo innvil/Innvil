@@ -57,26 +57,38 @@ export function aiConfigured(): boolean {
   return Boolean(apiKey());
 }
 
+const AI_TIMEOUT_MS = 60000;
+
+/** POST JSON with a hard timeout so a slow/hung provider can't stall a request forever. */
+async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  try {
+    return await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: controller.signal });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") throw new Error(`AI request timed out after ${AI_TIMEOUT_MS / 1000}s.`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function anthropicComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
   // Anthropic direct authenticates via x-api-key. Third-party Anthropic-compatible
   // proxies (Claude-Code-style resellers) usually want `Authorization: Bearer`, so
   // when a custom base URL is set we send BOTH — Anthropic ignores the extra one.
   const isCustom = !baseUrl.includes("api.anthropic.com");
-  const res = await fetch(`${baseUrl}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      ...(isCustom ? { authorization: `Bearer ${key}` } : {}),
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: opts.maxTokens ?? 1024,
-      ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
-      system: opts.system,
-      messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
-    }),
+  const res = await postJson(`${baseUrl}/v1/messages`, {
+    "content-type": "application/json",
+    "x-api-key": key,
+    "anthropic-version": "2023-06-01",
+    ...(isCustom ? { authorization: `Bearer ${key}` } : {}),
+  }, {
+    model,
+    max_tokens: opts.maxTokens ?? 1024,
+    ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
+    system: opts.system,
+    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -87,21 +99,17 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
 }
 
 async function openaiComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${key}`,
-      // Optional attribution headers some gateways (e.g. OpenRouter) use — harmless elsewhere.
-      "http-referer": process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud",
-      "x-title": "Innvil",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: opts.maxTokens ?? 1024,
-      ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
-      messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))],
-    }),
+  const res = await postJson(`${baseUrl}/chat/completions`, {
+    "content-type": "application/json",
+    authorization: `Bearer ${key}`,
+    // Optional attribution headers some gateways (e.g. OpenRouter) use — harmless elsewhere.
+    "http-referer": process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud",
+    "x-title": "Innvil",
+  }, {
+    model,
+    max_tokens: opts.maxTokens ?? 1024,
+    ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
+    messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))],
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -124,4 +132,97 @@ export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
 
   if (!text) throw new Error("Empty response from model.");
   return text;
+}
+
+/**
+ * Streaming completion → a ReadableStream of plain UTF-8 text deltas. Transforms the
+ * provider's SSE (Anthropic `content_block_delta` or OpenAI `choices[].delta.content`)
+ * into raw text chunks a route handler can pipe straight to the browser. Lets the UI
+ * render the answer as it types instead of waiting for the whole thing.
+ */
+export async function aiStream(opts: AiCompleteOptions): Promise<ReadableStream<Uint8Array>> {
+  const key = apiKey();
+  if (!key) throw new Error("No AI API key set (AI_API_KEY or ANTHROPIC_API_KEY).");
+  const { provider, baseUrl } = providerConfig();
+  const model = opts.model || DEFAULT_AI_MODEL;
+  const isOpenai = provider === "openai";
+  const isCustom = !baseUrl.includes("api.anthropic.com");
+
+  const url = isOpenai ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/messages`;
+  const headers: Record<string, string> = isOpenai
+    ? { "content-type": "application/json", authorization: `Bearer ${key}`, "http-referer": process.env.NEXT_PUBLIC_APP_URL || "https://innvil.cloud", "x-title": "Innvil" }
+    : { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", ...(isCustom ? { authorization: `Bearer ${key}` } : {}) };
+  const body = isOpenai
+    ? { model, max_tokens: opts.maxTokens ?? 1024, stream: true, ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}), messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))] }
+    : { model, max_tokens: opts.maxTokens ?? 1024, stream: true, ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}), system: opts.system, messages: opts.messages.map((m) => ({ role: m.role, content: m.content })) };
+
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok || !res.body) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`AI provider ${res.status}: ${t.slice(0, 300)}`);
+  }
+
+  const encoderOnce = new TextEncoder();
+
+  // Fallback: some proxies ignore `stream:true` and return a normal JSON response.
+  // Detect that (non-SSE content-type) and emit the whole answer as one chunk.
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("event-stream")) {
+    const full = await res.text();
+    let text = "";
+    try {
+      const json = JSON.parse(full) as Record<string, unknown>;
+      if (isOpenai) {
+        const choices = json.choices as Array<{ message?: { content?: string } }> | undefined;
+        text = choices?.[0]?.message?.content ?? "";
+      } else {
+        const content = json.content as Array<{ type: string; text?: string }> | undefined;
+        text = (content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
+      }
+    } catch {
+      text = full;
+    }
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (text.trim()) controller.enqueue(encoderOnce.encode(text.trim()));
+        controller.close();
+      },
+    });
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) { controller.close(); return; }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") { controller.close(); return; }
+        try {
+          const json = JSON.parse(data) as Record<string, unknown>;
+          let text = "";
+          if (isOpenai) {
+            const choices = json.choices as Array<{ delta?: { content?: string } }> | undefined;
+            text = choices?.[0]?.delta?.content ?? "";
+          } else if (json.type === "content_block_delta") {
+            const delta = json.delta as { text?: string } | undefined;
+            text = delta?.text ?? "";
+          }
+          if (text) controller.enqueue(encoder.encode(text));
+        } catch {
+          /* ignore keepalives / non-JSON event lines */
+        }
+      }
+    },
+    cancel() { reader.cancel().catch(() => {}); },
+  });
 }

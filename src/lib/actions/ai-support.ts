@@ -186,25 +186,29 @@ function sanitizeHistory(history: AiMessage[]): AiMessage[] {
   return clean;
 }
 
-/** Answer a customer support message. `history` is the running conversation. */
-export async function customerSupportReply(panelId: string, history: AiMessage[]): Promise<SupportResult> {
+export type PreparedSupport =
+  | { ok: true; system: string; messages: AiMessage[] }
+  | { ok: false; error: string; unavailable?: boolean };
+
+/** Customer-auth + gate + grounding → system prompt + sanitized messages. Shared by
+ *  the non-streaming action and the streaming route. */
+export async function prepareCustomerSupport(panelId: string, history: AiMessage[]): Promise<PreparedSupport> {
   const messages = sanitizeHistory(history);
   if (messages.length === 0) return { ok: false, error: "Type a message first." };
-
   const ctx = await loadContext(panelId);
   if (!ctx.ok) return ctx;
-
   if (!aiConfigured()) {
     return { ok: false, error: "AI support is temporarily unavailable — please tap “Talk to a human”." };
   }
+  return { ok: true, system: buildSystem(ctx.g), messages };
+}
 
+/** Answer a customer support message (non-streaming fallback). */
+export async function customerSupportReply(panelId: string, history: AiMessage[]): Promise<SupportResult> {
+  const prep = await prepareCustomerSupport(panelId, history);
+  if (!prep.ok) return prep;
   try {
-    const reply = await aiComplete({
-      system: buildSystem(ctx.g),
-      messages,
-      maxTokens: 700,
-      temperature: 0.4,
-    });
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 500, temperature: 0.4 });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error — please tap “Talk to a human”." };

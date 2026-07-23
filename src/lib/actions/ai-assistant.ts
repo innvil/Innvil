@@ -209,23 +209,64 @@ function sanitizeHistory(history: AiMessage[]): AiMessage[] {
 }
 
 export type AssistantResult = { ok: true; reply: string } | { ok: false; error: string };
+export type PreparedPrompt = { ok: true; system: string; messages: AiMessage[] } | { ok: false; error: string };
 
-/** The owner's free Innvil assistant. Available to every owner (no subscription). */
-export async function ownerAssistantReply(panelId: string, history: AiMessage[]): Promise<AssistantResult> {
+/** Owner-auth + grounding → the system prompt + sanitized messages. Shared by the
+ *  non-streaming action and the streaming route. */
+export async function prepareOwnerAssistant(panelId: string, history: AiMessage[]): Promise<PreparedPrompt> {
   const messages = sanitizeHistory(history);
   if (messages.length === 0) return { ok: false, error: "Type a message first." };
-
   const ctx = await ownedPanel(panelId);
   if (!ctx) return { ok: false, error: "Panel not found." };
   if (!aiConfigured()) return { ok: false, error: "AI is temporarily unavailable." };
+  const g = await ownerGrounding(ctx.admin, panelId, ctx.panel);
+  return { ok: true, system: buildOwnerSystem(g), messages };
+}
 
+/** The owner's free Innvil assistant (non-streaming fallback). */
+export async function ownerAssistantReply(panelId: string, history: AiMessage[]): Promise<AssistantResult> {
+  const prep = await prepareOwnerAssistant(panelId, history);
+  if (!prep.ok) return { ok: false, error: prep.error };
   try {
-    const g = await ownerGrounding(ctx.admin, panelId, ctx.panel);
-    const reply = await aiComplete({ system: buildOwnerSystem(g), messages, maxTokens: 800, temperature: 0.4 });
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600, temperature: 0.4 });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error. Try again in a moment." };
   }
+}
+
+/** Account-level assistant (not tied to one panel) for the global floating chat.
+ *  Grounded in Innvil how-to + a summary of ALL the owner's panels. */
+export async function prepareGlobalAssistant(history: AiMessage[]): Promise<PreparedPrompt> {
+  const messages = sanitizeHistory(history);
+  if (messages.length === 0) return { ok: false, error: "Type a message first." };
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Please sign in." };
+  if (!aiConfigured()) return { ok: false, error: "AI is temporarily unavailable." };
+
+  const { data } = await admin
+    .from("panels")
+    .select("name, status, settings")
+    .eq("owner_id", user.id)
+    .order("created_at", { ascending: true })
+    .limit(30);
+  const panels = (data as Array<{ name: string; status: string; settings: unknown }> | null) ?? [];
+  const lines = panels.map((p) => {
+    const s = toSettings(p.settings);
+    const bal = toBalance(s.innvil_balance);
+    const rate = Number(s.commission_rate);
+    const rateStr = Number.isFinite(rate) && rate > 0 ? `, commission ${(rate * 100).toFixed(0)}%` : "";
+    return `- ${p.name}: status ${p.status}, Innvil balance $${bal.toFixed(2)}${rateStr}`;
+  });
+  const system = `You are the Innvil AI Assistant for a panel owner. Help them run their SMM panel business on Innvil.
+
+${OWNER_KB}
+
+THIS OWNER'S PANELS (${panels.length}):
+${lines.join("\n") || "No panels created yet."}
+
+Use these when relevant (e.g. a panel with $0 Innvil balance runs in preview until funded). If they ask about a specific panel, use the matching row above. Keep replies short and plain — no markdown headings.`;
+  return { ok: true, system, messages };
 }
 
 /** Whether the owner's free assistant can be used (AI key present). */

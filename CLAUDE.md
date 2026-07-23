@@ -127,6 +127,24 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Streaming AI replies + floating owner assistant (v0.2.88)
+- **Streaming** — the fix for "takes too long": replies render token-by-token instead of after a full pause.
+  `aiStream()` in `src/lib/ai/client.ts` transforms provider SSE (Anthropic `content_block_delta` / OpenAI
+  `delta.content`) into a plain-text stream, with a fallback that emits the whole answer if a proxy ignores
+  `stream:true`. New route handlers `app/api/ai/assistant` + `app/api/ai/support` reuse the auth+grounding
+  (`prepareOwnerAssistant` / `prepareCustomerSupport`, extracted from the actions) then pipe the stream. Both
+  chat widgets now `fetch` the route and read the stream. Also added a 60s fetch timeout (`postJson`) so a hung
+  proxy can't spin forever, `try/finally` so the composer always resets, and trimmed reply caps (owner 600 /
+  support 500 tokens). Non-stream server actions kept as fallback.
+- **Floating owner assistant (global)** — the free owner assistant is a **floating chat** (bottom-right,
+  `Bot` launcher) mounted at the **owner-app shell level** (`InnvilApp` in `panels/index.tsx`), so it's on
+  **every** section of the owner dashboard, not just inside a panel. It's **account-level**: `prepareGlobalAssistant`
+  grounds it in Innvil how-to (`OWNER_KB`) + a summary of ALL the owner's panels (status/balance/commission).
+  The route `/api/ai/assistant` takes an OPTIONAL `panelId` (present → panel-scoped `prepareOwnerAssistant`;
+  absent → global). `OwnerAssistantChat.tsx` always renders (no config gate). The **AI Assistant tab**
+  (`OwnerAssistant.tsx`) is just the **Customer AI Support add-on** toggle/card + a note pointing at the floating button.
+- No migration.
+
 ### 2026-07-24 — AI monetization corrected: owner assistant FREE, customer support PAID (v0.2.87)
 - **Fixes the model (v0.2.85–86 had it backwards).** Two independent AI features:
   - **Owner → Innvil assistant** (owners asking how to run their panel / reach Innvil): **FREE, always on,

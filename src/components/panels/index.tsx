@@ -21,6 +21,7 @@ import {
   allPanelsAdmin, PanelStatus, auditLogs,
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
+import { OwnerAssistantChat } from "./admin/OwnerAssistantChat";
 import { AccountSettings } from "./AccountSettings";
 import { OwnerOrders, OwnerCustomers, OwnerProviderBalances, OwnerBilling, OwnerTopUps, OwnerContactSupport, OwnerPanelSupport } from "./OwnerSections";
 import { ReceiptCard } from "./ReceiptCard";
@@ -1381,6 +1382,9 @@ export function InnvilApp({ setWorld, initialSection }: {
           panels={panelList}
         />
       )}
+
+      {/* Global owner AI assistant — floating, on every section of the owner app. */}
+      <OwnerAssistantChat />
     </div>
   );
 }

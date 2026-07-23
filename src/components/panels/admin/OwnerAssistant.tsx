@@ -1,53 +1,29 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
-import { Bot, Send, CheckCircle2, AlertTriangle, Wallet, Lock, MessageCircle } from "lucide-react";
-import { ownerAssistantReply, getSupportAddon, setSupportAddon, type SupportAddonInfo } from "@/src/lib/actions/ai-assistant";
+import React, { useEffect, useState } from "react";
+import { MessageCircle, CheckCircle2, AlertTriangle, Wallet, Lock, Bot } from "lucide-react";
+import { getSupportAddon, setSupportAddon, type SupportAddonInfo } from "@/src/lib/actions/ai-assistant";
 
-/* AI Assistant tab (owner side). Two things:
-   1. The owner's FREE Innvil assistant (chat) — helps run this panel.
-   2. The paid Customer AI Support add-on ($2.99/mo from the panel's Innvil balance)
-      — turns on the AI support chat for this panel's STOREFRONT customers. */
+/* AI Assistant tab (owner side). The owner's own assistant is the floating button in
+   the corner (free). This tab manages the paid Customer AI Support add-on ($2.99/mo
+   from the panel's Innvil balance) — the AI chat for the panel's STOREFRONT customers. */
 
-type Msg = { role: "user" | "assistant"; content: string };
-
-export function OwnerAssistantTab({ panelId, panelName }: { panelId: string; panelName: string }) {
+export function OwnerAssistantTab({ panelId }: { panelId: string; panelName?: string }) {
   const [addon, setAddon] = useState<SupportAddonInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
-  const [addonErr, setAddonErr] = useState<string | null>(null);
-
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: "assistant", content: `Hi! I'm your Innvil assistant for ${panelName}. Ask me anything about running this panel — connecting a provider, importing and pricing services, going live, payments, commission, and more.` },
-  ]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = () => getSupportAddon(panelId).then((a) => { setAddon(a); setLoading(false); }).catch(() => setLoading(false));
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [panelId]);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, busy]);
 
   const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—");
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
-    const next = [...messages, { role: "user" as const, content: text }];
-    setMessages(next); setInput(""); setBusy(true);
-    const res = await ownerAssistantReply(panelId, next);
-    setBusy(false);
-    setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
-  };
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-  };
-
   const toggleAddon = async (enable: boolean) => {
-    setActionBusy(true); setAddonErr(null);
+    setActionBusy(true); setErr(null);
     const res = await setSupportAddon(panelId, enable);
     setActionBusy(false);
-    if (!res.ok) { setAddonErr(res.error); return; }
+    if (!res.ok) { setErr(res.error); return; }
     setAddon(res.data);
   };
 
@@ -57,49 +33,12 @@ export function OwnerAssistantTab({ panelId, panelName }: { panelId: string; pan
   const canAfford = (addon?.innvilBalance ?? 0) >= price;
 
   return (
-    <div className="max-w-2xl space-y-6">
-      {/* ---- Free owner assistant ---- */}
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <span className="w-8 h-8 rounded-lg fp-gold-soft-bg fp-gold flex items-center justify-center"><Bot size={16} /></span>
-          <div>
-            <p className="text-sm font-medium">Your AI assistant <span className="text-[10px] fp-safe-soft-bg fp-safe px-1.5 py-0.5 rounded-full align-middle">Free</span></p>
-            <p className="fp-text-faint text-[11px]">Ask how to run this panel — grounded in its live stats. It can&apos;t change settings, it guides you.</p>
-          </div>
-        </div>
-
-        {!configured ? (
-          <p className="fp-text-faint text-xs flex items-center gap-1.5 py-4"><Lock size={12} /> The assistant is being set up on Innvil&apos;s side — check back shortly.</p>
-        ) : (
-          <div className="fp-panel border fp-line rounded-2xl flex flex-col h-[26rem] overflow-hidden">
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-              {messages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${m.role === "user" ? "fp-gold-bg text-[#0A0B0F]" : "fp-panel-raised border fp-line-soft fp-text-dim"}`}>
-                    {m.content}
-                  </div>
-                </div>
-              ))}
-              {busy && <div className="flex justify-start"><div className="fp-panel-raised border fp-line-soft rounded-2xl px-3.5 py-2.5 text-sm fp-text-faint">Thinking…</div></div>}
-            </div>
-            <div className="p-3 border-t fp-line-soft flex items-end gap-2">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={onKeyDown}
-                rows={1}
-                placeholder="Ask about running this panel…"
-                className="flex-1 resize-none fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border max-h-24"
-              />
-              <button onClick={send} disabled={busy || !input.trim()} className="w-9 h-9 rounded-lg fp-gold-bg text-[#0A0B0F] flex items-center justify-center disabled:opacity-50 shrink-0">
-                <Send size={16} />
-              </button>
-            </div>
-          </div>
-        )}
+    <div className="max-w-2xl space-y-4">
+      <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs fp-text-dim flex items-center gap-2">
+        <Bot size={14} className="fp-gold shrink-0" />
+        <span>Your own AI assistant is the <span className="fp-text">floating button in the bottom-right corner</span> — free, ask it anything about running this panel.</span>
       </div>
 
-      {/* ---- Paid customer support add-on ---- */}
       <div className="fp-panel border fp-gold-border rounded-2xl p-5">
         <div className="flex items-center gap-3 mb-3">
           <span className="w-10 h-10 rounded-xl fp-gold-soft-bg fp-gold flex items-center justify-center"><MessageCircle size={18} /></span>
@@ -152,7 +91,7 @@ export function OwnerAssistantTab({ panelId, panelName }: { panelId: string; pan
             )}
           </>
         )}
-        {addonErr && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {addonErr}</p>}
+        {err && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {err}</p>}
       </div>
     </div>
   );
