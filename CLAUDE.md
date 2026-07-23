@@ -1372,6 +1372,15 @@ ANTHROPIC_API_KEY=your_anthropic_api_key   # (AI_API_KEY also accepted)
 AI_MODEL=claude-sonnet-5
 # Optional blog-writer-specific model override.
 BLOG_AI_MODEL=claude-sonnet-5
+#
+# Chat streaming (token-by-token replies). OFF by default. Turn ON only with a
+# provider that supports SSE streaming (Anthropic direct / OpenRouter) — the
+# aiprimetech proxy does NOT stream, so leave this off there. NEXT_PUBLIC_* is
+# inlined at build time, so a redeploy applies the change.
+# NEXT_PUBLIC_AI_STREAMING=true
+#
+# --- To switch providers later: set AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL to
+#     the new provider, flip NEXT_PUBLIC_AI_STREAMING=true if it streams, redeploy. ---
 ```
 
 ---

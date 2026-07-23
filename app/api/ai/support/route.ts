@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prepareCustomerSupport } from "@/src/lib/actions/ai-support";
 import { aiStream, type AiMessage } from "@/src/lib/ai/client";
+import { createStorefrontClient } from "@/src/lib/supabase/server";
 
 /* Streaming endpoint for the storefront customer AI support chat. Auth + add-on gate
    + grounding happen in prepareCustomerSupport; the reply streams as plain text. */
@@ -10,6 +11,12 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
+    const supabase = await createStorefrontClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     let body: { panelId?: string; messages?: AiMessage[] };
     try { body = await req.json(); } catch { return NextResponse.json({ error: "Bad request." }, { status: 400 }); }
 

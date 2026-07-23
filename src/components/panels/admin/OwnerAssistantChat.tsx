@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Bot, X, Send } from "lucide-react";
 import { ownerAssistantReply, globalAssistantReply } from "@/src/lib/actions/ai-assistant";
+import { AI_STREAMING, streamAiReply } from "@/src/lib/ai/chat-stream";
 
 /* Floating owner AI assistant — available anywhere in the panel admin. Free
    (Innvil-funded). Streams from /api/ai/assistant. Self-hides if the AI key isn't
@@ -30,8 +31,18 @@ export function OwnerAssistantChat({ panelId }: { panelId?: string }) {
     const next = [...messages, { role: "user" as const, content: text }];
     setMessages(next); setInput(""); setBusy(true);
     try {
-      const res = panelId ? await ownerAssistantReply(panelId, next) : await globalAssistantReply(next);
-      setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
+      if (AI_STREAMING) {
+        setMessages((m) => [...m, { role: "assistant", content: "" }]);
+        const put = (content: string) => setMessages((m) => { const c = m.slice(); c[c.length - 1] = { role: "assistant", content }; return c; });
+        try {
+          await streamAiReply("/api/ai/assistant", panelId ? { panelId, messages: next } : { messages: next }, put);
+        } catch (e) {
+          put(e instanceof Error ? e.message : "Something went wrong reaching the assistant. Please try again.");
+        }
+      } else {
+        const res = panelId ? await ownerAssistantReply(panelId, next) : await globalAssistantReply(next);
+        setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
+      }
     } catch {
       setMessages((m) => [...m, { role: "assistant", content: "Something went wrong reaching the assistant. Please try again." }]);
     } finally {

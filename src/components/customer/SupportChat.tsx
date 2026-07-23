@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { MessageCircle, X, Send, LifeBuoy, CheckCircle2 } from "lucide-react";
 import { customerSupportReply, escalateSupportToTicket } from "@/src/lib/actions/ai-support";
+import { AI_STREAMING, streamAiReply } from "@/src/lib/ai/chat-stream";
 
 /* Floating AI support widget for the customer dashboard. Only mounted when the
    panel has the AI add-on enabled. Talks to the grounded, privacy-guarded support
@@ -38,8 +39,18 @@ export function SupportChat({ panelId, brandName }: { panelId: string; brandName
     setInput("");
     setBusy(true);
     try {
-      const res = await customerSupportReply(panelId, next);
-      setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
+      if (AI_STREAMING) {
+        setMessages((m) => [...m, { role: "assistant", content: "" }]);
+        const put = (content: string) => setMessages((m) => { const c = m.slice(); c[c.length - 1] = { role: "assistant", content }; return c; });
+        try {
+          await streamAiReply("/api/ai/support", { panelId, messages: next }, put);
+        } catch (e) {
+          put(e instanceof Error ? e.message : "Something went wrong. Please try again.");
+        }
+      } else {
+        const res = await customerSupportReply(panelId, next);
+        setMessages((m) => [...m, { role: "assistant", content: res.ok ? res.reply : res.error }]);
+      }
     } catch {
       setMessages((m) => [...m, { role: "assistant", content: "Something went wrong. Please try again." }]);
     } finally {
