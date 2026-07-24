@@ -40,6 +40,45 @@ async function existingSlugs(): Promise<Set<string>> {
   return slugs;
 }
 
+function topicKey(topic: string): string {
+  return topic.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+async function existingGeneratedTopicKeys(): Promise<Set<string>> {
+  const keys = new Set<string>();
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("blog_posts")
+      .select("topic")
+      .not("topic", "is", null);
+    for (const r of (data as Array<{ topic: string | null }> | null) ?? []) {
+      if (!r.topic) continue;
+      keys.add(topicKey(r.topic));
+    }
+  } catch {
+    /* no-op: fallback pool still works even if this read fails */
+  }
+  return keys;
+}
+
+async function latestGeneratedTopicKey(): Promise<string | null> {
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("blog_posts")
+      .select("topic")
+      .not("topic", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const topic = (data as { topic?: string | null } | null)?.topic;
+    return topic ? topicKey(topic) : null;
+  } catch {
+    return null;
+  }
+}
+
 function uniqueSlug(base: string, taken: Set<string>): string {
   const root = slugify(base) || "smm-panel-guide";
   if (!taken.has(root)) return root;
@@ -147,9 +186,18 @@ export async function runScheduledGeneration(): Promise<GenerationOutcome> {
 
   // 2. Fallback pool if the queue is empty, avoiding topics already turned into posts.
   if (!topic) {
-    const taken = await existingSlugs();
-    const pick = FALLBACK_TOPICS.find((t) => !taken.has(slugify(t.topic)));
-    const chosen = pick ?? FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
+    const usedKeys = await existingGeneratedTopicKeys();
+    let candidates = FALLBACK_TOPICS.filter((t) => !usedKeys.has(topicKey(t.topic)));
+
+    // If all fallback topics were used before, at least avoid repeating the very
+    // last generated topic when possible.
+    if (candidates.length === 0) {
+      const latestKey = await latestGeneratedTopicKey();
+      if (latestKey) candidates = FALLBACK_TOPICS.filter((t) => topicKey(t.topic) !== latestKey);
+      if (candidates.length === 0) candidates = FALLBACK_TOPICS.slice();
+    }
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
     topic = chosen.topic;
     keywords = chosen.keywords;
   }

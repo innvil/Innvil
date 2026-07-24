@@ -57,33 +57,14 @@ export function aiConfigured(): boolean {
   return Boolean(apiKey());
 }
 
-const AI_TIMEOUT_MS = 60000;
-
-/** POST JSON with a hard timeout so a slow/hung provider can't stall a request forever. */
+/** POST JSON for AI providers. */
 async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-  try {
-    console.log("AI URL:", url);
-
-    console.time("AI fetch with timeout");
-
-    const result = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    console.timeEnd("AI fetch with timeout");
-
-    return result;
-  } catch (e) {
-    if (e instanceof Error && e.name === "AbortError") throw new Error(`AI request timed out after ${AI_TIMEOUT_MS / 1000}s.`);
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
+  console.log("AI URL:", url);
+  return await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
 }
 
 async function anthropicComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
@@ -169,15 +150,12 @@ export async function aiStream(opts: AiCompleteOptions): Promise<ReadableStream<
     ? { model, max_tokens: opts.maxTokens ?? 1024, stream: true, ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}), messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))] }
     : { model, max_tokens: opts.maxTokens ?? 1024, stream: true, ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}), system: opts.system, messages: opts.messages.map((m) => ({ role: m.role, content: m.content })) };
 
-  console.time("AI fetch");
-
   const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
   });
 
-  console.timeEnd("AI fetch");
   if (!res.ok || !res.body) {
     const t = await res.text().catch(() => "");
     throw new Error(`AI provider ${res.status}: ${t.slice(0, 300)}`);
