@@ -9,16 +9,60 @@ import { DASHBOARD_WIDGET_LABELS, type DashboardWidget, type DashboardWidgetId }
    widgets with built-in controls (no code; the order/wallet functions are never
    touched). Included with the Business plan. */
 
+const DESIGN_LAYOUT_CACHE_PREFIX = "innvil-owner:dashboard-layout";
+
+function layoutCacheKey(panelId: string) {
+  return `${DESIGN_LAYOUT_CACHE_PREFIX}:${panelId}`;
+}
+
+type LayoutCacheValue = { entitled: boolean; home: DashboardWidget[] };
+
+function readLayoutCache(panelId: string): LayoutCacheValue | null {
+  if (typeof window === "undefined") return null;
+  const key = layoutCacheKey(panelId);
+  try {
+    const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as LayoutCacheValue) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLayoutCache(panelId: string, value: LayoutCacheValue) {
+  if (typeof window === "undefined") return;
+  const key = layoutCacheKey(panelId);
+  try {
+    const raw = JSON.stringify(value);
+    window.sessionStorage.setItem(key, raw);
+    window.localStorage.setItem(key, raw);
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
-  const [entitled, setEntitled] = useState<boolean | null>(null);
-  const [layout, setLayout] = useState<DashboardWidget[]>([]);
+  const cached = readLayoutCache(panelId);
+  const [entitled, setEntitled] = useState<boolean | null>(cached ? cached.entitled : null);
+  const [layout, setLayout] = useState<DashboardWidget[]>(cached?.home ?? []);
+  const [syncing, setSyncing] = useState(Boolean(cached));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
   useEffect(() => {
+    setSyncing(true);
     getDashboardDesign(panelId)
-      .then((d) => { if (d) { setEntitled(d.hasDesignTools); setLayout(d.home); } else setEntitled(false); })
-      .catch(() => setEntitled(false));
+      .then((d) => {
+        if (d) {
+          setEntitled(d.hasDesignTools);
+          setLayout(d.home);
+          writeLayoutCache(panelId, { entitled: d.hasDesignTools, home: d.home });
+        } else {
+          setEntitled(false);
+          writeLayoutCache(panelId, { entitled: false, home: [] });
+        }
+      })
+      .catch(() => setEntitled((prev) => (prev === null ? false : prev)))
+      .finally(() => setSyncing(false));
   }, [panelId]);
 
   const move = (i: number, dir: -1 | 1) => {
@@ -36,6 +80,7 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
     setBusy(true); setMsg(null);
     const res = await setDashboardHome(panelId, layout);
     setBusy(false);
+    if (res.ok && entitled !== null) writeLayoutCache(panelId, { entitled, home: layout });
     setMsg(res.ok ? { text: "Saved — your customers' dashboard now uses this layout." } : { text: res.error, error: true });
   };
   const reset = async () => {
@@ -44,7 +89,11 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     const d = await getDashboardDesign(panelId).catch(() => null);
-    if (d) setLayout(d.home);
+    if (d) {
+      setEntitled(d.hasDesignTools);
+      setLayout(d.home);
+      writeLayoutCache(panelId, { entitled: d.hasDesignTools, home: d.home });
+    }
     setMsg({ text: "Reset to the default layout." });
   };
 
@@ -91,7 +140,7 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
   if (!entitled) {
     return (
       <div className="fp-panel-raised border fp-line-soft rounded-lg p-4">
-        <p className="text-sm font-medium flex items-center gap-2"><Lock size={14} className="fp-gold" /> Dashboard layout builder</p>
+        <p className="text-sm font-medium flex items-center gap-2"><Lock size={14} className="fp-gold" /> Dashboard layout builder {syncing && <span className="text-[11px] fp-text-faint">Syncing…</span>}</p>
         <p className="fp-text-faint text-xs mt-1.5 leading-relaxed">
           Rearrange and show/hide the widgets on your customers&apos; dashboard — a <span className="fp-text">Design Tools</span> feature,
           included with the <span className="fp-gold">Innvil Business</span> plan. <span className="fp-text">Plans are coming soon.</span>
@@ -102,7 +151,7 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
 
   return (
     <div>
-      <p className="fp-text-faint text-[11px] mb-3">Reorder and show/hide the widgets your customers see on their dashboard home. The order/wallet functions are never affected.</p>
+      <p className="fp-text-faint text-[11px] mb-3">Reorder and show/hide the widgets your customers see on their dashboard home. The order/wallet functions are never affected.{syncing ? " Syncing…" : ""}</p>
       <div className="space-y-2">
         {layout.map((w, i) => (
           <div key={w.id} className={`flex items-center justify-between fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 ${w.visible ? "" : "opacity-60"}`}>

@@ -8,13 +8,55 @@ import { getSupportAddon, setSupportAddon, type SupportAddonInfo } from "@/src/l
    the corner (free). This tab manages the paid Customer AI Support add-on ($2.99/mo
    from the panel's Innvil balance) — the AI chat for the panel's STOREFRONT customers. */
 
+const SUPPORT_ADDON_CACHE_PREFIX = "innvil-owner:support-addon";
+
+function supportAddonCacheKey(panelId: string) {
+  return `${SUPPORT_ADDON_CACHE_PREFIX}:${panelId}`;
+}
+
+function readSupportAddonCache(panelId: string): SupportAddonInfo | null {
+  if (typeof window === "undefined") return null;
+  const key = supportAddonCacheKey(panelId);
+  try {
+    const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as SupportAddonInfo) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSupportAddonCache(panelId: string, value: SupportAddonInfo) {
+  if (typeof window === "undefined") return;
+  const key = supportAddonCacheKey(panelId);
+  try {
+    const raw = JSON.stringify(value);
+    window.sessionStorage.setItem(key, raw);
+    window.localStorage.setItem(key, raw);
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export function OwnerAssistantTab({ panelId }: { panelId: string; panelName?: string }) {
-  const [addon, setAddon] = useState<SupportAddonInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cached = readSupportAddonCache(panelId);
+  const [addon, setAddon] = useState<SupportAddonInfo | null>(cached);
+  const [loading, setLoading] = useState(!cached);
+  const [syncing, setSyncing] = useState(Boolean(cached));
   const [actionBusy, setActionBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = () => getSupportAddon(panelId).then((a) => { setAddon(a); setLoading(false); }).catch(() => setLoading(false));
+  const load = () => {
+    setSyncing(true);
+    getSupportAddon(panelId)
+      .then((a) => {
+        setAddon(a);
+        writeSupportAddonCache(panelId, a);
+      })
+      .finally(() => {
+        setLoading(false);
+        setSyncing(false);
+      });
+  };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [panelId]);
 
   const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—");
@@ -25,6 +67,7 @@ export function OwnerAssistantTab({ panelId }: { panelId: string; panelName?: st
     setActionBusy(false);
     if (!res.ok) { setErr(res.error); return; }
     setAddon(res.data);
+    writeSupportAddonCache(panelId, res.data);
   };
 
   if (loading) return <p className="fp-text-faint text-sm py-8 text-center">Loading…</p>;
@@ -44,7 +87,7 @@ export function OwnerAssistantTab({ panelId }: { panelId: string; panelName?: st
           <span className="w-10 h-10 rounded-xl fp-gold-soft-bg fp-gold flex items-center justify-center"><MessageCircle size={18} /></span>
           <div className="min-w-0">
             <p className="fp-display text-base">Customer AI Support <span className="text-[10px] fp-gold-soft-bg fp-gold px-1.5 py-0.5 rounded-full align-middle">Add-on</span></p>
-            <p className="fp-text-faint text-[11px]">An AI support chat on your storefront that answers YOUR customers.</p>
+            <p className="fp-text-faint text-[11px]">An AI support chat on your storefront that answers YOUR customers.{syncing ? " Syncing…" : ""}</p>
           </div>
         </div>
 

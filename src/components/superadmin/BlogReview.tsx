@@ -19,9 +19,36 @@ const inputCls =
 
 type EditState = { id: string; title: string; description: string; slug: string; tag: string; keywords: string };
 
+const BLOG_REVIEW_CACHE_KEY = "innvil-superadmin:blog-review";
+
+type BlogReviewCache = { posts: AdminBlogPost[]; topics: AdminBlogTopic[] };
+
+function readBlogReviewCache(): BlogReviewCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(BLOG_REVIEW_CACHE_KEY) ?? window.localStorage.getItem(BLOG_REVIEW_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as BlogReviewCache) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBlogReviewCache(value: BlogReviewCache) {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = JSON.stringify(value);
+    window.sessionStorage.setItem(BLOG_REVIEW_CACHE_KEY, raw);
+    window.localStorage.setItem(BLOG_REVIEW_CACHE_KEY, raw);
+  } catch {
+    // ignore storage failures
+  }
+}
+
 export function BlogReview() {
-  const [posts, setPosts] = useState<AdminBlogPost[] | null>(null);
-  const [topics, setTopics] = useState<AdminBlogTopic[] | null>(null);
+  const cached = readBlogReviewCache();
+  const [posts, setPosts] = useState<AdminBlogPost[] | null>(cached?.posts ?? null);
+  const [topics, setTopics] = useState<AdminBlogTopic[] | null>(cached?.topics ?? null);
+  const [syncing, setSyncing] = useState(Boolean(cached));
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -30,11 +57,22 @@ export function BlogReview() {
   const [newTopic, setNewTopic] = useState("");
   const [newKeywords, setNewKeywords] = useState("");
 
-  const load = () =>
-    Promise.all([listAdminPosts(), listTopics()])
-      .then(([p, t]) => { setPosts(p); setTopics(t); })
-      .catch((e) => { setPosts([]); setTopics([]); setMsg({ text: e instanceof Error ? e.message : "Load failed.", error: true }); });
-  useEffect(() => { load(); }, []);
+  const load = () => {
+    setSyncing(true);
+    return Promise.all([listAdminPosts(), listTopics()])
+      .then(([p, t]) => {
+        setPosts(p);
+        setTopics(t);
+        writeBlogReviewCache({ posts: p, topics: t });
+      })
+      .catch((e) => {
+        setPosts((prev) => (prev === null ? [] : prev));
+        setTopics((prev) => (prev === null ? [] : prev));
+        setMsg({ text: e instanceof Error ? e.message : "Load failed.", error: true });
+      })
+      .finally(() => setSyncing(false));
+  };
+  useEffect(() => { void load(); }, []);
 
   const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -45,7 +83,7 @@ export function BlogReview() {
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setGenTopic("");
     setMsg({ text: `Draft written: “${res.data.title}”. Review it below before publishing.` });
-    load();
+    void load();
   };
 
   const act = async (key: string, fn: () => Promise<{ ok: boolean; error?: string }>, okText?: string) => {
@@ -54,7 +92,7 @@ export function BlogReview() {
     setBusy(null);
     if (!res.ok) { setMsg({ text: res.error ?? "Action failed.", error: true }); return; }
     if (okText) setMsg({ text: okText });
-    load();
+    void load();
   };
 
   const saveEdit = async () => {
@@ -71,7 +109,7 @@ export function BlogReview() {
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setEditing(null);
     setMsg({ text: "Saved." });
-    load();
+    void load();
   };
 
   const addTopicSubmit = async () => {
@@ -81,7 +119,7 @@ export function BlogReview() {
     setBusy(null);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setNewTopic(""); setNewKeywords("");
-    load();
+    void load();
   };
 
   const drafts = (posts ?? []).filter((p) => p.status === "draft");
@@ -94,6 +132,7 @@ export function BlogReview() {
         <span className="fp-text">AI writes drafts; you approve.</span> A daily cron generates one draft from your
         topic queue (or a fallback topic). <span className="fp-text">Nothing goes live until you publish it here</span> —
         this keeps the site safe from search-engine penalties for unreviewed AI content.
+        {syncing && <span className="fp-text-faint"> Syncing…</span>}
       </div>
 
       {msg && (
@@ -220,7 +259,7 @@ export function BlogReview() {
       <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium">Topic queue {pendingTopics.length > 0 && <span className="fp-gold">· {pendingTopics.length} pending</span>}</p>
-          <button onClick={load} className="text-xs fp-gold flex items-center gap-1"><RefreshCw size={12} /> Refresh</button>
+          <button onClick={() => void load()} className="text-xs fp-gold flex items-center gap-1"><RefreshCw size={12} /> Refresh</button>
         </div>
         <p className="fp-text-faint text-xs">The writer takes the highest-priority pending topic first. Empty queue → it uses a built-in fallback topic.</p>
         <div className="flex flex-col sm:flex-row gap-2">
