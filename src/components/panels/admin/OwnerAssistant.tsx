@@ -25,10 +25,15 @@ function readSupportAddonCache(panelId: string): SupportAddonInfo | null {
   }
 }
 
-function writeSupportAddonCache(panelId: string, value: SupportAddonInfo) {
+function writeSupportAddonCache(panelId: string, value: SupportAddonInfo | null) {
   if (typeof window === "undefined") return;
   const key = supportAddonCacheKey(panelId);
   try {
+    if (value === null) {
+      window.sessionStorage.removeItem(key);
+      window.localStorage.removeItem(key);
+      return;
+    }
     const raw = JSON.stringify(value);
     window.sessionStorage.setItem(key, raw);
     window.localStorage.setItem(key, raw);
