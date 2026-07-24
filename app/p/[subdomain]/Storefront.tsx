@@ -14,9 +14,10 @@ import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
 import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, PublicLandingSection } from "@/src/lib/actions/storefront";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
-import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
+import { placeOrder, listCustomerOrdersPage, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
+import type { OrderStatus } from "@/src/types/db";
 import {
   customerUpdateDisplayName, customerUpdateEmail, customerUpdatePassword,
   type CustomerAccountInfo,
@@ -76,6 +77,21 @@ const ORDER_STATUS_LABEL: Record<string, CustomerOrder["status"]> = {
   failed: "Failed",
   refunded: "Refunded",
   duplicate: "Duplicate",
+};
+
+const STOREFRONT_ORDERS_PAGE_SIZE = 50;
+
+const UI_TO_DB_ORDER_STATUS: Record<CustomerOrder["status"] | "All", OrderStatus | "all"> = {
+  All: "all",
+  Pending: "pending",
+  Processing: "processing",
+  "In progress": "in_progress",
+  Completed: "completed",
+  Partial: "partial",
+  Duplicate: "duplicate",
+  Canceled: "canceled",
+  Refunded: "refunded",
+  Failed: "failed",
 };
 
 function formatOrderDate(iso: string): string {
@@ -156,6 +172,13 @@ export function Storefront({
   const [liveBalance, setLiveBalance] = useState(account?.balance ?? 0);
   const [liveDeposits, setLiveDeposits] = useState<DepositVM[]>(initialDeposits);
   const [liveOrders, setLiveOrders] = useState<CustomerOrderVM[]>(initialOrders);
+  const [ordersFilter, setOrdersFilter] = useState<CustomerOrder["status"] | "All">("All");
+  const [ordersPage, setOrdersPage] = useState(0);
+  const [ordersPageRows, setOrdersPageRows] = useState<CustomerOrderVM[]>(initialOrders.slice(0, STOREFRONT_ORDERS_PAGE_SIZE));
+  const [ordersPageHasNext, setOrdersPageHasNext] = useState(initialOrders.length > STOREFRONT_ORDERS_PAGE_SIZE);
+  const [ordersPageTotal, setOrdersPageTotal] = useState(initialOrders.length);
+  const [ordersPageAll, setOrdersPageAll] = useState(initialOrders.length);
+  const [ordersPageBusy, setOrdersPageBusy] = useState(false);
   const [apiEnabled, setApiEnabled] = useState(customerApiEnabled);
   const [apiHasKey, setApiHasKey] = useState(customerApiHasKey);
 
@@ -234,6 +257,47 @@ export function Storefront({
       })),
     [liveOrders, uuidToLocalId]
   );
+
+  const uiPagedOrders: CustomerOrder[] = useMemo(
+    () =>
+      ordersPageRows.map((o) => ({
+        id: o.localId,
+        serviceId: (o.serviceId && uuidToLocalId.get(o.serviceId)) || 0,
+        serviceNo: o.serviceNo,
+        service: o.serviceName,
+        link: o.link,
+        qty: o.quantity,
+        amount: fmt(o.charge),
+        status: ORDER_STATUS_LABEL[o.status] ?? "Pending",
+        date: formatOrderDate(o.createdAt),
+        failReason: o.failReason,
+        comments: o.comments,
+      })),
+    [ordersPageRows, uuidToLocalId]
+  );
+
+  const loadOrdersPage = useCallback(async (status: CustomerOrder["status"] | "All", page: number) => {
+    if (!signedIn) return;
+    setOrdersPageBusy(true);
+    try {
+      const res = await listCustomerOrdersPage(panel.id, {
+        status: UI_TO_DB_ORDER_STATUS[status],
+        page,
+        pageSize: STOREFRONT_ORDERS_PAGE_SIZE,
+      });
+      setOrdersPageRows(res.rows);
+      setOrdersPageHasNext(res.hasNext);
+      setOrdersPageTotal(res.totalCount);
+      setOrdersPageAll(res.allCount);
+    } finally {
+      setOrdersPageBusy(false);
+    }
+  }, [panel.id, signedIn]);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    void loadOrdersPage(ordersFilter, ordersPage);
+  }, [signedIn, panel.id, ordersFilter, ordersPage, loadOrdersPage]);
 
   // Recently ordered — distinct service ids from the newest orders.
   const recentIds = useMemo(() => {
@@ -602,6 +666,17 @@ export function Storefront({
         logoUrl={panel.logoUrl}
         services={uiServices}
         orders={uiOrders}
+        ordersPageRows={uiPagedOrders}
+        ordersPage={ordersPage}
+        ordersHasNextPage={ordersPageHasNext}
+        ordersTotalCount={ordersPageTotal}
+        ordersAllCount={ordersPageAll}
+        ordersPageBusy={ordersPageBusy}
+        onOrdersStatusFilterChange={(next) => {
+          setOrdersFilter(next);
+          setOrdersPage(0);
+        }}
+        onOrdersPageChange={setOrdersPage}
         walletBalance={liveBalance}
         deposits={uiDeposits}
         tickets={[]}

@@ -126,6 +126,14 @@ export function CustomerDashboard({
   logoUrl,
   services = customerServices,
   orders = customerOrders,
+  ordersPageRows,
+  ordersPage = 0,
+  ordersHasNextPage = false,
+  ordersTotalCount,
+  ordersAllCount,
+  ordersPageBusy = false,
+  onOrdersStatusFilterChange,
+  onOrdersPageChange,
   walletBalance = customerWallet.balance,
   deposits = customerWallet.deposits,
   tickets = customerTickets,
@@ -158,6 +166,15 @@ export function CustomerDashboard({
   logoUrl?: string;
   services?: CustomerService[];
   orders?: CustomerOrder[];
+  /** Optional server-paged orders (storefront-only). Falls back to full local list when unset. */
+  ordersPageRows?: CustomerOrder[];
+  ordersPage?: number;
+  ordersHasNextPage?: boolean;
+  ordersTotalCount?: number;
+  ordersAllCount?: number;
+  ordersPageBusy?: boolean;
+  onOrdersStatusFilterChange?: (status: CustomerOrder["status"] | "All") => void;
+  onOrdersPageChange?: (page: number) => void;
   walletBalance?: number;
   deposits?: Deposit[];
   tickets?: Ticket[];
@@ -262,7 +279,7 @@ export function CustomerDashboard({
   };
   const [page, setPage] = useState<CustomerPage>("dashboard");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [orderFilter, setOrderFilter] = useState<string>("All");
+  const [orderFilter, setOrderFilter] = useState<CustomerOrder["status"] | "All">("All");
   const [usernameInput, setUsernameInput] = useState(username ?? (email ? email.split("@")[0] : ""));
   const [emailInput, setEmailInput] = useState(email ?? "");
   const [emailCurrentPassword, setEmailCurrentPassword] = useState("");
@@ -425,7 +442,32 @@ export function CustomerDashboard({
     "Refunded",
     "Failed",
   ] as const;
-  const filteredOrders = orderFilter === "All" ? orders : orders.filter((o) => o.status === orderFilter);
+  const hasServerOrderPaging = typeof onOrdersStatusFilterChange === "function" && typeof onOrdersPageChange === "function";
+  const currentOrderRows = hasServerOrderPaging ? (ordersPageRows ?? []) : orders;
+  const filteredOrders = hasServerOrderPaging
+    ? currentOrderRows
+    : (orderFilter === "All" ? currentOrderRows : currentOrderRows.filter((o) => o.status === orderFilter));
+  const allOrdersTotal = hasServerOrderPaging ? (ordersAllCount ?? currentOrderRows.length) : orders.length;
+  const filterTotal = hasServerOrderPaging
+    ? (ordersTotalCount ?? filteredOrders.length)
+    : filteredOrders.length;
+
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {
+      All: hasServerOrderPaging ? (ordersAllCount ?? currentOrderRows.length) : orders.length,
+      Pending: 0,
+      Processing: 0,
+      "In progress": 0,
+      Completed: 0,
+      Partial: 0,
+      Duplicate: 0,
+      Canceled: 0,
+      Refunded: 0,
+      Failed: 0,
+    };
+    for (const o of currentOrderRows) c[o.status] = (c[o.status] ?? 0) + 1;
+    return c;
+  }, [currentOrderRows, hasServerOrderPaging, orders.length, ordersAllCount]);
 
   const go = (p: CustomerPage) => {
     if (p === "order") setPrefillServiceId(null);
@@ -625,12 +667,18 @@ export function CustomerDashboard({
             <p className="fp-display text-lg mb-4">Order history</p>
             <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
               {orderFilterOptions.map((status) => {
-                const count = status === "All" ? orders.length : orders.filter((o) => o.status === status).length;
+                const count = statusCounts[status] ?? 0;
                 const active = orderFilter === status;
                 return (
                   <button
                     key={status}
-                    onClick={() => setOrderFilter(status)}
+                    onClick={() => {
+                      setOrderFilter(status);
+                      if (hasServerOrderPaging) {
+                        onOrdersStatusFilterChange?.(status);
+                        onOrdersPageChange?.(0);
+                      }
+                    }}
                     className={`shrink-0 text-xs px-3 py-1.5 rounded-full border transition-colors ${
                       active
                         ? "fp-violet-soft-bg fp-violet border-[rgba(139,127,255,0.45)]"
@@ -642,7 +690,7 @@ export function CustomerDashboard({
                 );
               })}
             </div>
-            {orders.length === 0 ? (
+            {allOrdersTotal === 0 ? (
               <div className="text-center py-10">
                 <p className="text-sm fp-text-dim mb-3">You haven&apos;t placed any orders yet.</p>
                 <button onClick={() => go("order")} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg">
@@ -652,12 +700,47 @@ export function CustomerDashboard({
             ) : filteredOrders.length === 0 ? (
               <div className="text-center py-10">
                 <p className="text-sm fp-text-dim mb-3">No orders match the selected status.</p>
-                <button onClick={() => setOrderFilter("All")} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg">
+                <button
+                  onClick={() => {
+                    setOrderFilter("All");
+                    if (hasServerOrderPaging) {
+                      onOrdersStatusFilterChange?.("All");
+                      onOrdersPageChange?.(0);
+                    }
+                  }}
+                  className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg"
+                >
                   Show all orders
                 </button>
               </div>
             ) : (
-              <OrderRows orders={filteredOrders} services={services} onReorder={quickOrder} />
+              <>
+                <OrderRows orders={filteredOrders} services={services} onReorder={quickOrder} />
+                {hasServerOrderPaging && (
+                  <div className="mt-4 pt-3 border-t fp-line-soft flex items-center justify-between gap-2">
+                    <div className="text-xs fp-text-faint fp-mono">
+                      {filteredOrders.length}/{filterTotal} orders{ordersPageBusy ? " · Syncing…" : ""}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onOrdersPageChange?.(Math.max(0, ordersPage - 1))}
+                        disabled={ordersPage <= 0 || ordersPageBusy}
+                        className="text-xs fp-text-dim border fp-line-soft rounded-lg px-2.5 py-1.5 disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => onOrdersPageChange?.(ordersPage + 1)}
+                        disabled={!ordersHasNextPage || ordersPageBusy}
+                        className="text-xs fp-text-dim border fp-line-soft rounded-lg px-2.5 py-1.5 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                      <span className="text-[11px] fp-text-faint fp-mono">Page {ordersPage + 1}</span>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
