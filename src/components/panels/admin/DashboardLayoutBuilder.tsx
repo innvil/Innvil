@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { Eye, EyeOff, ArrowUp, ArrowDown, Save, Lock, RotateCcw, LayoutGrid, CheckCircle2, AlertTriangle } from "lucide-react";
 import { getDashboardDesign, setDashboardHome, resetDashboardHome } from "@/src/lib/actions/design";
-import { DASHBOARD_WIDGET_LABELS, type DashboardWidget } from "@/src/lib/dashboard-layout";
+import { DASHBOARD_WIDGET_LABELS, type DashboardWidget, type DashboardWidgetId } from "@/src/lib/dashboard-layout";
 
 /* Design Tools — customer-dashboard layout builder. Rearrange/show-hide the home
    widgets with built-in controls (no code; the order/wallet functions are never
@@ -48,6 +48,44 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
     setMsg({ text: "Reset to the default layout." });
   };
 
+  // Mini representative render of each home widget, for the live preview.
+  const miniWidget = (id: DashboardWidgetId) => {
+    switch (id) {
+      case "stats":
+        return (
+          <div className="grid grid-cols-3 gap-1">
+            {["Balance", "Pending", "Done"].map((l) => (
+              <div key={l} className="fp-panel border fp-line-soft rounded p-1.5">
+                <p className="text-[7px] fp-text-faint uppercase leading-none">{l}</p>
+                <p className="text-[10px] fp-gold leading-tight mt-0.5">—</p>
+              </div>
+            ))}
+          </div>
+        );
+      case "favorites":
+        return (
+          <div className="fp-panel border fp-line-soft rounded p-2">
+            <p className="text-[9px] fp-gold mb-1">★ Favorites</p>
+            <div className="space-y-1">{[0, 1].map((i) => <div key={i} className="h-3 fp-panel-raised rounded" />)}</div>
+          </div>
+        );
+      case "recent":
+        return (
+          <div className="fp-panel border fp-line-soft rounded p-2">
+            <p className="text-[9px] fp-violet mb-1">Recently ordered</p>
+            <div className="space-y-1">{[0, 1].map((i) => <div key={i} className="h-3 fp-panel-raised rounded" />)}</div>
+          </div>
+        );
+      case "orders":
+        return (
+          <div className="fp-panel border fp-line-soft rounded p-2">
+            <p className="text-[9px] mb-1">Recent orders</p>
+            <div className="space-y-1">{[0, 1, 2].map((i) => <div key={i} className="h-3 fp-panel-raised rounded" />)}</div>
+          </div>
+        );
+    }
+  };
+
   if (entitled === null) return <p className="fp-text-faint text-xs py-3">Loading…</p>;
 
   if (!entitled) {
@@ -82,6 +120,25 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
           </div>
         ))}
       </div>
+
+      <div className="mt-4">
+        <p className="fp-text-faint text-[10px] fp-mono uppercase mb-2">Live preview · customer dashboard</p>
+        <div className="fp-panel-raised border fp-line-soft rounded-lg p-2.5 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1"><span className="w-4 h-4 rounded fp-gold-bg" /><span className="text-[9px]">Panel</span></span>
+            <span className="flex items-center gap-1">
+              <span className="text-[8px] fp-gold fp-panel border fp-line-soft rounded px-1.5 py-0.5">$—</span>
+              <span className="text-[8px] fp-gold-bg text-[#0A0B0F] rounded px-1.5 py-0.5">Add</span>
+            </span>
+          </div>
+          {layout.filter((w) => w.visible).length === 0 ? (
+            <p className="fp-text-faint text-[10px] text-center py-3">All widgets hidden.</p>
+          ) : (
+            layout.filter((w) => w.visible).map((w) => <div key={w.id}>{miniWidget(w.id)}</div>)
+          )}
+        </div>
+      </div>
+
       {msg && (
         <p className={`text-xs mt-3 flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>
           {msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}

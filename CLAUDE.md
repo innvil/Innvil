@@ -139,8 +139,11 @@ innvil/
 - `CustomerDashboard` home is now config-driven (IIFE renders widgets in the saved order/visibility; default
   path identical to before). Threaded `dashboardLayout` through `getPublicPanel` → page → `Storefront` →
   dashboard. **Render gated on `hasDesignTools`** so a downgrade reverts customers to default.
-- UI `src/components/panels/admin/DashboardLayoutBuilder.tsx` (show/hide + up/down reorder + reset), mounted as
-  a new **"Dashboard layout"** section in the Design Studio (upsell card when not on Business).
+- UI `src/components/panels/admin/DashboardLayoutBuilder.tsx` (show/hide + up/down reorder + reset + a **live
+  mini-preview** of the customer dashboard home that updates as you edit), mounted as a new **"Dashboard layout"**
+  section in the Design Studio (upsell card when not on Business). NOTE: this targets the panel's CUSTOMER
+  dashboard (top-nav + mobile hamburger — no sidebar), never the Innvil owner app. NEXT iteration: owner custom
+  content blocks on the dashboard + nav-style options (top-tabs vs always-hamburger).
 - **Plans aren't sold to owners yet** (Campaign Automation feature is Phase 2) — owner surfaces say "coming
   soon." A **super admin can COMP a plan** per panel to test the Business-gated features: `setPanelPlan(tier)`
   in `superadmin.ts` (no charge, `nextChargeAt=null` so the cron skips it, audit-logged) + a **Plan** select
