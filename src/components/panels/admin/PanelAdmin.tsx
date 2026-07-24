@@ -35,7 +35,7 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
   { k: "notifications", label: "Notifications", icon: Bell },
   { k: "support", label: "Support", icon: MessageSquare },
   { k: "assistant", label: "AI Assistant", icon: MessageCircle },
-  { k: "automation", label: "Automation", icon: Bot },
+  { k: "automation", label: "Campaign Automation", icon: Bot },
   { k: "promotions", label: "Promotions", icon: Gift },
 ];
 

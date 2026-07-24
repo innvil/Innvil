@@ -10,6 +10,8 @@ export interface ThemeDef {
   a: string; // swatch color 1 (accent)
   b: string; // swatch color 2 (surface)
   seasonal?: boolean; // grouped under "Seasonal" in the picker
+  premium?: boolean; // Design Shop premium template
+  note?: string; // short tagline (premium picker)
   vars: Record<string, string>; // CSS variable overrides
 }
 
@@ -132,6 +134,80 @@ export const THEMES: ThemeDef[] = [
       "--gold-soft-border": "rgba(111,207,151,0.30)",
       "--violet": "#E28FB8",
       "--violet-light": "#F0B4D2",
+    },
+  },
+
+  /* -------- Design Shop · premium templates -------- */
+  {
+    id: "aurora",
+    label: "Aurora",
+    a: "#5EEAD4",
+    b: "#0A0E1A",
+    premium: true,
+    note: "Gradient glass · teal → violet",
+    vars: {
+      "--void": "#0A0E1A",
+      "--void-2": "#0C1122",
+      "--panel": "#121A30",
+      "--panel-raised": "#16203C",
+      "--line": "#243258",
+      "--line-soft": "#1B2748",
+      "--gold": "#5EEAD4",
+      "--gold-light": "#A78BFA",
+      "--gold-soft": "rgba(94,234,212,0.10)",
+      "--gold-soft-border": "rgba(167,139,250,0.30)",
+      "--violet": "#A78BFA",
+      "--violet-light": "#C4B5FD",
+    },
+  },
+  {
+    id: "carbon",
+    label: "Carbon Pro",
+    a: "#22D3EE",
+    b: "#050506",
+    premium: true,
+    note: "Ultra-dark · cyan monospace",
+    vars: {
+      "--void": "#050506",
+      "--void-2": "#0A0A0C",
+      "--panel": "#101013",
+      "--panel-raised": "#16161A",
+      "--line": "#26262C",
+      "--line-soft": "#1C1C21",
+      "--text": "#F2F2F4",
+      "--text-dim": "#9A9AA4",
+      "--text-faint": "#5E5E68",
+      "--gold": "#22D3EE",
+      "--gold-light": "#67E8F9",
+      "--gold-soft": "rgba(34,211,238,0.10)",
+      "--gold-soft-border": "rgba(34,211,238,0.30)",
+      "--violet": "#818CF8",
+      "--violet-light": "#A5B4FC",
+    },
+  },
+  {
+    id: "luxe",
+    label: "Luxe",
+    a: "#A67C34",
+    b: "#FBF8F1",
+    premium: true,
+    note: "Editorial · warm ivory + gold",
+    vars: {
+      "--void": "#FBF8F1",
+      "--void-2": "#F3EEE2",
+      "--panel": "#FFFFFF",
+      "--panel-raised": "#F6F1E7",
+      "--line": "#E7E0D1",
+      "--line-soft": "#EFEADD",
+      "--text": "#1A1712",
+      "--text-dim": "#6B6255",
+      "--text-faint": "#A79E8D",
+      "--gold": "#A67C34",
+      "--gold-light": "#C89B4E",
+      "--gold-soft": "rgba(166,124,52,0.10)",
+      "--gold-soft-border": "rgba(166,124,52,0.28)",
+      "--violet": "#8A6D3B",
+      "--violet-light": "#B18E52",
     },
   },
 ];

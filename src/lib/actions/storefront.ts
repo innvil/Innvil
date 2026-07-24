@@ -2,6 +2,8 @@
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { customerSupportActive } from "@/src/lib/ai/addon";
+import { hasDesignTools } from "@/src/lib/plans";
+import { readDashboardHome, type DashboardWidget } from "@/src/lib/dashboard-layout";
 import type { PanelStatus, ServiceRow } from "@/src/types/db";
 
 /**
@@ -33,6 +35,7 @@ export interface PublicPanel {
   favicon: string;
   sections: PublicLandingSection[];
   aiSupport: boolean;
+  dashboardLayout: DashboardWidget[] | null;
 }
 
 /** The panel's operating currency (from settings; default USD). */
@@ -117,6 +120,9 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
     favicon: branding.favicon || branding.logoUrl,
     sections: branding.sections,
     aiSupport: customerSupportActive(data.settings),
+    // Custom layout only applies while Design Tools (Business) is active — a
+    // downgrade reverts customers to the default dashboard.
+    dashboardLayout: hasDesignTools(data.settings) ? readDashboardHome(data.settings) : null,
   };
 }
 

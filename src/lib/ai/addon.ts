@@ -12,6 +12,8 @@
  * passed to the client via props.
  */
 
+import { planBundlesSupport } from "@/src/lib/plans";
+
 export interface AiSupportSub {
   enabled: boolean;
   since: string | null;
@@ -44,8 +46,9 @@ export function readSupportSub(settings: unknown): AiSupportSub {
 
 /**
  * Whether the storefront customer AI support chat is active for a panel — i.e. the
- * owner has the paid add-on enabled (or a super admin comped it). Off by default.
+ * owner has the paid add-on enabled, a super admin comped it, OR the panel is on the
+ * Business plan (which bundles it). Off by default.
  */
 export function customerSupportActive(settings: unknown): boolean {
-  return readSupportSub(settings).enabled;
+  return planBundlesSupport(settings) || readSupportSub(settings).enabled;
 }

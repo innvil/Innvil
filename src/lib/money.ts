@@ -19,6 +19,15 @@ export const AI_ADDON_PRICE = 2.99;
 /** Billing period length for the paid AI add-on. */
 export const AI_ADDON_PERIOD_DAYS = 30;
 
+/** Campaign Automation subscription tiers (monthly, USD, from the panel's Innvil
+ *  balance). Business bundles the AI support add-on. Panel core stays 0% rent. */
+export const INNVIL_PRO_PRICE = 9.99;
+export const INNVIL_BUSINESS_PRICE = 19.99;
+export const PLAN_PERIOD_DAYS = 30;
+export function planPrice(tier: "pro" | "business"): number {
+  return tier === "business" ? INNVIL_BUSINESS_PRICE : INNVIL_PRO_PRICE;
+}
+
 /**
  * Internal volume-discount brackets by completed orders/day — the guideline support
  * (and future AI support) uses to grant a panel a lower commission rate. Public

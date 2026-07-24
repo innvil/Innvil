@@ -17,6 +17,7 @@ import { ApiDocs } from "./ApiDocs";
 import { CustomerTickets } from "./CustomerTickets";
 import { SupportChat } from "./SupportChat";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
+import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
 type Ticket = { id: string; subj: string; status: string; updated: string };
@@ -142,6 +143,7 @@ export function CustomerDashboard({
   paymentMethods = [],
   panelId,
   aiSupport = false,
+  dashboardLayout,
   apiEnabled = true,
   hasExistingApiKey = false,
   apiBaseUrl = "/api/v2",
@@ -179,6 +181,8 @@ export function CustomerDashboard({
   panelId?: string;
   /** Whether the panel's paid AI support add-on is enabled (shows the chat widget). */
   aiSupport?: boolean;
+  /** Owner-configured home widget layout (Design Tools). Unset = default layout. */
+  dashboardLayout?: DashboardWidget[];
   /** Customer API status for this panel. */
   apiEnabled?: boolean;
   /** API base URL shown in docs. */
@@ -514,8 +518,8 @@ export function CustomerDashboard({
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
         {/* ---------- DASHBOARD ---------- */}
-        {page === "dashboard" && (
-          <div className="space-y-6">
+        {page === "dashboard" && (() => {
+          const wStats = (
             <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
               {[
                 { label: "Wallet balance", value: fmt(walletBalance), tone: "fp-gold" },
@@ -531,62 +535,75 @@ export function CustomerDashboard({
                 </div>
               ))}
             </div>
-
-            <div className="grid lg:grid-cols-2 gap-6">
-              {/* Quick order — favorites */}
-              <div className="fp-panel border fp-line rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <p className="fp-display text-lg flex items-center gap-2">
-                    <Star size={15} className="fp-gold" /> Favorites
-                  </p>
-                  <span className="fp-text-faint text-xs fp-mono">1-click quick order</span>
-                </div>
-                {favoriteServices.length === 0 ? (
-                  <div className="text-center py-6">
-                    <p className="text-sm fp-text-dim mb-3">No favorites yet.</p>
-                    <button
-                      onClick={() => go("order")}
-                      className="text-sm fp-violet"
-                    >
-                      Star a service while ordering to pin it here →
-                    </button>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {favoriteServices.map((s) => (
-                      <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} currency={currency} />
-                    ))}
-                  </div>
-                )}
+          );
+          const wFavorites = (
+            <div className="fp-panel border fp-line rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="fp-display text-lg flex items-center gap-2">
+                  <Star size={15} className="fp-gold" /> Favorites
+                </p>
+                <span className="fp-text-faint text-xs fp-mono">1-click quick order</span>
               </div>
-
-              {/* Recently ordered */}
-              <div className="fp-panel border fp-line rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <p className="fp-display text-lg flex items-center gap-2">
-                    <Clock size={15} className="fp-violet" /> Recently ordered
-                  </p>
+              {favoriteServices.length === 0 ? (
+                <div className="text-center py-6">
+                  <p className="text-sm fp-text-dim mb-3">No favorites yet.</p>
+                  <button onClick={() => go("order")} className="text-sm fp-violet">
+                    Star a service while ordering to pin it here →
+                  </button>
                 </div>
+              ) : (
                 <div className="space-y-2">
-                  {recentServices.map((s) => (
+                  {favoriteServices.map((s) => (
                     <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} currency={currency} />
                   ))}
                 </div>
+              )}
+            </div>
+          );
+          const wRecent = (
+            <div className="fp-panel border fp-line rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <p className="fp-display text-lg flex items-center gap-2">
+                  <Clock size={15} className="fp-violet" /> Recently ordered
+                </p>
+              </div>
+              <div className="space-y-2">
+                {recentServices.map((s) => (
+                  <ServiceQuickCard key={s.id} service={s} onQuickOrder={quickOrder} pathOverride={glyphPath(s.platform)} currency={currency} />
+                ))}
               </div>
             </div>
-
-            {/* Recent orders */}
+          );
+          const wOrders = (
             <div className="fp-panel border fp-line rounded-2xl p-5">
               <div className="flex items-center justify-between mb-4">
                 <p className="fp-display text-lg">Recent orders</p>
-                <button onClick={() => go("orders")} className="text-xs fp-violet">
-                  View all →
-                </button>
+                <button onClick={() => go("orders")} className="text-xs fp-violet">View all →</button>
               </div>
               <OrderRows orders={orders.slice(0, 3)} services={services} onReorder={quickOrder} compact platformMeta={platformMeta} />
             </div>
-          </div>
-        )}
+          );
+          const byId: Record<string, React.ReactNode> = { stats: wStats, favorites: wFavorites, recent: wRecent, orders: wOrders };
+
+          // Owner-customized layout (Design Tools): render visible widgets in order,
+          // each full-width. Default (unset): the original stats → fav+recent → orders.
+          if (dashboardLayout) {
+            return (
+              <div className="space-y-6">
+                {dashboardLayout.filter((w) => w.visible).map((w) => (
+                  <div key={w.id}>{byId[w.id]}</div>
+                ))}
+              </div>
+            );
+          }
+          return (
+            <div className="space-y-6">
+              {wStats}
+              <div className="grid lg:grid-cols-2 gap-6">{wFavorites}{wRecent}</div>
+              {wOrders}
+            </div>
+          );
+        })()}
 
         {/* ---------- NEW ORDER ---------- */}
         {page === "order" && (

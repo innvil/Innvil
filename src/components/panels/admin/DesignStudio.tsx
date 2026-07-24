@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Save, Type, Lock, Plus, Trash2 } from "lucide-react";
+import { X, Save, Type, Gem, Plus, Trash2 } from "lucide-react";
 import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import { formatMoney } from "@/src/lib/money";
+import { DashboardLayoutBuilder } from "./DashboardLayoutBuilder";
 
 /* =========================================================
    DESIGN STUDIO — full-screen "world" for editing a panel's
@@ -28,11 +29,8 @@ export interface StudioValues {
 let SECTION_SEQ = 0;
 const newSection = (): LandingSection => ({ id: `s${Date.now()}_${SECTION_SEQ++}`, title: "", body: "", ctaLabel: "", ctaHref: "" });
 
-const PREMIUM_DESIGNS = [
-  { id: "aurora", label: "Aurora", note: "Gradient glass · animated hero" },
-  { id: "carbon", label: "Carbon Pro", note: "Ultra-dark · sharp monospace" },
-  { id: "luxe", label: "Luxe", note: "Editorial serif · gold foil" },
-];
+const FREE_THEMES = THEMES.filter((t) => !t.premium);
+const PREMIUM_THEMES = THEMES.filter((t) => t.premium);
 
 export function DesignStudio({
   panel,
@@ -145,7 +143,7 @@ export function DesignStudio({
           <section>
             <p className="fp-text-faint text-xs fp-mono uppercase mb-3">Free designs (within Innvil)</p>
             <div className="grid grid-cols-2 gap-2">
-              {THEMES.map((t) => (
+              {FREE_THEMES.map((t) => (
                 <button key={t.id} onClick={() => set({ theme: t.id })} className={`text-left rounded-lg border p-2.5 transition-colors ${v.theme === t.id ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft fp-panel-raised hover:fp-gold-border"}`}>
                   <div className="flex gap-1 mb-1.5">
                     <span className="w-3.5 h-3.5 rounded-full border border-black/20" style={{ background: t.a }} />
@@ -164,16 +162,34 @@ export function DesignStudio({
           </section>
 
           <section>
-            <p className="fp-text-faint text-xs fp-mono uppercase mb-1">Design Shop · premium</p>
-            <p className="fp-text-faint text-[11px] mb-3">Advanced designs that restyle your landing AND dashboard — coming soon.</p>
+            <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Gem size={12} className="fp-gold" /> Design Shop · premium templates</p>
+            <p className="fp-text-faint text-[11px] mb-3">Polished, distinct looks for your storefront — click to apply, restyled edge to edge (landing + dashboard).</p>
             <div className="space-y-2">
-              {PREMIUM_DESIGNS.map((d) => (
-                <div key={d.id} className="flex items-center justify-between fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5">
-                  <div><p className="text-sm">{d.label}</p><p className="fp-text-faint text-[11px]">{d.note}</p></div>
-                  <span className="text-[10px] fp-text-faint flex items-center gap-1"><Lock size={10} /> Soon</span>
-                </div>
+              {PREMIUM_THEMES.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => set({ theme: t.id })}
+                  className={`w-full flex items-center justify-between rounded-lg border px-3 py-2.5 transition-colors ${v.theme === t.id ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft fp-panel-raised hover:fp-gold-border"}`}
+                >
+                  <span className="flex items-center gap-2.5 text-left min-w-0">
+                    <span className="flex gap-1 shrink-0">
+                      <span className="w-3.5 h-3.5 rounded-full border border-black/20" style={{ background: t.a }} />
+                      <span className="w-3.5 h-3.5 rounded-full border border-black/20" style={{ background: t.b }} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="text-sm block">{t.label}</span>
+                      <span className="fp-text-faint text-[11px] block truncate">{t.note}</span>
+                    </span>
+                  </span>
+                  <span className={`text-[10px] shrink-0 ${v.theme === t.id ? "fp-gold" : "fp-text-faint"}`}>{v.theme === t.id ? "Applied" : "Apply"}</span>
+                </button>
               ))}
             </div>
+          </section>
+
+          <section>
+            <p className="fp-text-faint text-xs fp-mono uppercase mb-3">Dashboard layout · design tools</p>
+            <DashboardLayoutBuilder panelId={panel.id} />
           </section>
         </div>
 

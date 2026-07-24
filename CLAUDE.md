@@ -127,6 +127,54 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Design Shop Phase A: dashboard layout builder (v0.2.91)
+- **Design Tools = bundled into Business** (not a separate charge). `hasDesignTools(settings)` = Business tier
+  (`src/lib/plans.ts`). Premium landing templates stay à-la-carte (Phase B).
+- **Customer-dashboard layout builder** — a Business owner rearranges/show-hides the dashboard HOME widgets
+  (stats, favorites, recently-ordered, recent-orders) with built-in controls. **No code; order/wallet logic
+  untouched.** Config in `panels.settings.dashboard.home`; unset ⇒ default layout unchanged. No migration.
+- `src/lib/dashboard-layout.ts` (NEW): `DashboardWidget`, `DEFAULT_DASHBOARD_HOME`, `readDashboardHome`
+  (repairs/appends missing widgets), `normalizeDashboardHome`, labels. `src/lib/actions/design.ts` (NEW):
+  `getDashboardDesign`/`setDashboardHome`/`resetDashboardHome` (owner-auth + Business gate).
+- `CustomerDashboard` home is now config-driven (IIFE renders widgets in the saved order/visibility; default
+  path identical to before). Threaded `dashboardLayout` through `getPublicPanel` → page → `Storefront` →
+  dashboard. **Render gated on `hasDesignTools`** so a downgrade reverts customers to default.
+- UI `src/components/panels/admin/DashboardLayoutBuilder.tsx` (show/hide + up/down reorder + reset), mounted as
+  a new **"Dashboard layout"** section in the Design Studio (upsell card when not on Business).
+- **Phase B next (dep installed):** premium landing templates (buy once, own forever) + sanitized custom-HTML
+  landing editor (`sanitize-html`), gated by Design Tools / one-time purchase.
+
+### 2026-07-24 — Design Shop: premium templates (v0.2.90)
+- **First slice of the Design Shop.** Added a `premium` + `note` flag to `ThemeDef` and three real premium
+  templates in `src/data/themes.ts` — **Aurora** (gradient glass, teal→violet), **Carbon Pro** (ultra-dark,
+  cyan), **Luxe** (editorial ivory + gold, a light theme). They apply like any theme (CSS-var overrides on the
+  storefront root, so they restyle landing + customer dashboard). No dep, no migration.
+- `DesignStudio.tsx`: split themes into `FREE_THEMES` / `PREMIUM_THEMES`; the old locked "coming soon" premium
+  placeholders are now the real premium templates (click to apply). (Icon `Lock`→`Gem`.)
+- **Next (needs `npm install sanitize-html @types/sanitize-html`):** sanitized custom-HTML landing sections —
+  owners paste HTML, server-sanitizes (allowlist tags/attrs, strip all JS/handlers) before rendering on the
+  storefront. Chosen approach = sanitized inline blocks (safe on a customer-facing page). Then: richer section
+  builder (reorder, more block types) + Design-Shop pricing/gating.
+
+### 2026-07-24 — Campaign Automation: subscription foundation (Phase 1) (v0.2.89)
+- **First half of "Campaign Automation"** (renamed from "Automator") — the paid, monthly subscription that
+  will unlock a customer-facing bulk "Campaign" ordering surface on the storefront. Per-panel, owner-subscribed,
+  billed from the panel's Innvil balance (reuses the AI add-on charge/settle pattern). **No migration** (state in
+  `panels.settings.addons.plan`). **Backend only this phase — no live subscribe UI yet** (won't sell it until the
+  Phase 2 feature exists so owners aren't charged for nothing).
+- Plans: **Innvil Pro $9.99/mo** (Campaign Automation, ≤250 links, saved profiles, background processing) and
+  **Innvil Business $19.99/mo** (unlimited links, file import, **bundles the AI Support add-on**, priority).
+  Prices in `money.ts` (`INNVIL_PRO_PRICE`/`INNVIL_BUSINESS_PRICE`/`PLAN_PERIOD_DAYS`/`planPrice`).
+- `src/lib/plans.ts` (NEW): `readPlan`/`planTier`/`hasCampaignAutomation`/`hasFileImport`/`campaignLinkLimit`/
+  `planBundlesSupport`. `src/lib/ai/addon.ts` `customerSupportActive` now also true on Business (the bundle).
+- `src/lib/actions/plan.ts` (NEW): `getPlan`/`setPlan(tier|null)` — subscribe/switch charges the tier price from
+  Innvil balance now (rejects if short), sets `nextChargeAt` +30d, audit-logged; Business subscribe disables any
+  separate `ai_support` sub to avoid double-billing; cancel flips it off. `src/lib/billing/plans.ts` `billDuePlans`
+  swept by the `bill-addons` cron (now runs support + plan sweeps). Lapse (low balance) → tier=null + lapsed=true.
+- Renamed the PanelAdmin "Automation" tab → **"Campaign Automation"** (its subscribe UI + the feature land in Phase 2).
+- **Phase 2 next:** migration (`campaigns`, `automation_profiles`), smart link detection, platform auto-detect,
+  fan-out ordering via `placeOrder` (customer wallet), the storefront campaign surface, and the owner subscribe UI.
+
 ### 2026-07-24 — Streaming AI replies + floating owner assistant (v0.2.88)
 - **Streaming built but currently OFF (proxy doesn't support SSE).** `aiStream()` in `src/lib/ai/client.ts`
   (SSE→plain-text) + routes `app/api/ai/{assistant,support}` (reuse `prepareOwnerAssistant`/`prepareGlobalAssistant`

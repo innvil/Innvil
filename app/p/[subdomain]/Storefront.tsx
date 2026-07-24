@@ -13,6 +13,7 @@ import { PlatformGlyph, PlatformButton } from "@/src/components/customer/Platfor
 import { CustomerDashboard } from "@/src/components/customer/CustomerDashboard";
 import type { PlaceOrderArgs } from "@/src/components/customer/NewOrder";
 import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, PublicLandingSection } from "@/src/lib/actions/storefront";
+import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 import { placeOrder, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
 import { formatMoney } from "@/src/lib/money";
@@ -128,7 +129,7 @@ export function Storefront({
   customerApiHasKey = false,
   apiBaseUrl = "/api/v2",
 }: {
-  panel: { id: string; subdomain: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[]; aiSupport?: boolean };
+  panel: { id: string; subdomain: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[]; aiSupport?: boolean; dashboardLayout?: DashboardWidget[] | null };
   services: StorefrontService[];
   initialAccount: CustomerAccountInfo | null;
   initialOrders?: CustomerOrderVM[];
@@ -630,6 +631,7 @@ export function Storefront({
         paymentMethods={paymentMethods}
         panelId={panel.id}
         aiSupport={panel.aiSupport ?? false}
+        dashboardLayout={panel.dashboardLayout ?? undefined}
         apiEnabled={apiEnabled}
         hasExistingApiKey={apiHasKey}
         apiBaseUrl={apiBaseUrl}
