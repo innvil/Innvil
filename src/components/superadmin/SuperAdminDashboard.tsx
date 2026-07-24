@@ -9,7 +9,7 @@ import {
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
-  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance, setPanelCommissionRate, setPanelAiAddon,
+  getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance, setPanelCommissionRate, setPanelAiAddon, setPanelPlan,
   type PlatformOverview, type SuperAdminPanelVM,
 } from "@/src/lib/actions/superadmin";
 import { commissionBracketRate } from "@/src/lib/money";
@@ -356,6 +356,16 @@ function PanelsTab() {
     setNotice(`AI support ${res.data.enabled ? "enabled" : "disabled"} for panel ${panelId.slice(0, 8)}.`);
   };
 
+  const applyPlan = async (panelId: string, tier: "" | "pro" | "business") => {
+    setNotice(null); setError(null);
+    setBusyKey(`${panelId}:plan`);
+    const res = await setPanelPlan(panelId, tier === "" ? null : tier);
+    setBusyKey(null);
+    if (!res.ok) { setError(res.error); return; }
+    setRows((prev) => (prev ?? []).map((r) => (r.id === panelId ? { ...r, planTier: res.data.tier } : r)));
+    setNotice(`Plan set to ${res.data.tier ?? "Free"} for panel ${panelId.slice(0, 8)}.`);
+  };
+
   const applyRate = async (panelId: string) => {
     setNotice(null);
     setError(null);
@@ -391,7 +401,7 @@ function PanelsTab() {
         <p className="fp-text-faint text-sm py-6 text-center">No panels found.</p>
       ) : (
         <div className="fp-panel border fp-line rounded-2xl p-4 overflow-x-auto">
-          <table className="w-full min-w-[1280px] text-sm">
+          <table className="w-full min-w-[1400px] text-sm">
             <thead>
               <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
                 <th className="py-2 font-normal">Panel</th>
@@ -400,6 +410,7 @@ function PanelsTab() {
                 <th className="py-2 font-normal text-right">Innvil balance</th>
                 <th className="py-2 font-normal">Commission</th>
                 <th className="py-2 font-normal">AI support</th>
+                <th className="py-2 font-normal">Plan</th>
                 <th className="py-2 font-normal">Amount</th>
                 <th className="py-2 font-normal">Reason</th>
                 <th className="py-2 font-normal text-right">Actions</th>
@@ -446,6 +457,19 @@ function PanelsTab() {
                       {r.aiSupport ? "On" : "Off"}
                     </button>
                     <p className="fp-text-faint text-[11px] fp-mono mt-1">owner add-on · comp</p>
+                  </td>
+                  <td className="py-2.5">
+                    <select
+                      value={r.planTier ?? ""}
+                      onChange={(e) => applyPlan(r.id, e.target.value as "" | "pro" | "business")}
+                      disabled={busyKey !== null}
+                      className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs outline-none focus:fp-gold-border disabled:opacity-60"
+                    >
+                      <option value="">Free</option>
+                      <option value="pro">Pro</option>
+                      <option value="business">Business</option>
+                    </select>
+                    <p className="fp-text-faint text-[11px] fp-mono mt-1">comp · testing</p>
                   </td>
                   <td className="py-2.5">
                     <input

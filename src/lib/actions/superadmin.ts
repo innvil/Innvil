@@ -4,6 +4,7 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { INNVIL_COMMISSION_RATE, INNVIL_MIN_COMMISSION_RATE } from "@/src/lib/money";
 import { customerSupportActive } from "@/src/lib/ai/addon";
+import { planTier, type PlanTier } from "@/src/lib/plans";
 
 /* Super-admin platform stats. Every export is gated on the super_admin role.
    Role is read via the service-role client (keyed by the validated user id) rather
@@ -35,6 +36,7 @@ export interface SuperAdminPanelVM {
   commissionRate: number; // effective per-panel rate (default 5%)
   ordersToday: number;    // orders created today (bracket reference)
   aiSupport: boolean;     // paid AI support add-on enabled for this panel
+  planTier: PlanTier | null; // Campaign Automation plan (pro/business) or none
 }
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -129,8 +131,35 @@ export async function listPanelsForSuperAdmin(limit = 200): Promise<SuperAdminPa
       commissionRate: Number.isFinite(rawRate) && rawRate > 0 ? rawRate : INNVIL_COMMISSION_RATE,
       ordersToday: ordersTodayByPanel.get(r.id) ?? 0,
       aiSupport: customerSupportActive(r.settings),
+      planTier: planTier(r.settings),
     };
   });
+}
+
+/** Comp/override a panel's Campaign Automation plan (super admin only). No charge and
+ *  no next-charge date, so the billing cron won't bill it — for testing / grants. */
+export async function setPanelPlan(panelId: string, tier: PlanTier | null): Promise<Result<{ tier: PlanTier | null }>> {
+  if (!(await requireSuperAdmin())) return { ok: false, error: "Super admin only." };
+  const admin = createAdminClient();
+  const { user } = await getAuthedAdmin();
+  const { data: row } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  if (!row) return { ok: false, error: "Panel not found." };
+
+  const settings = toSettings(row.settings);
+  const addons = (settings.addons && typeof settings.addons === "object" ? settings.addons : {}) as Record<string, unknown>;
+  const existing = (addons.plan && typeof addons.plan === "object" ? addons.plan : {}) as Record<string, unknown>;
+  const now = new Date().toISOString();
+  const plan = tier
+    ? { ...existing, tier, since: typeof existing.since === "string" ? existing.since : now, nextChargeAt: null, lapsed: false }
+    : { ...existing, tier: null, nextChargeAt: null, lapsed: false };
+  const updated = { ...settings, addons: { ...addons, plan } };
+
+  const { error } = await admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  await admin.from("audit_logs").insert({
+    panel_id: panelId, actor_id: user?.id ?? null, action: "superadmin.plan_set", meta: { tier, comp: true },
+  });
+  return { ok: true, data: { tier } };
 }
 
 /** Enable/disable the paid AI support add-on for a panel (super admin only). */

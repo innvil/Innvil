@@ -56,7 +56,7 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
         <p className="text-sm font-medium flex items-center gap-2"><Lock size={14} className="fp-gold" /> Dashboard layout builder</p>
         <p className="fp-text-faint text-xs mt-1.5 leading-relaxed">
           Rearrange and show/hide the widgets on your customers&apos; dashboard — a <span className="fp-text">Design Tools</span> feature,
-          included with the <span className="fp-gold">Innvil Business</span> plan. Subscribe in Campaign Automation to unlock it.
+          included with the <span className="fp-gold">Innvil Business</span> plan. <span className="fp-text">Plans are coming soon.</span>
         </p>
       </div>
     );

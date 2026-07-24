@@ -141,6 +141,10 @@ innvil/
   dashboard. **Render gated on `hasDesignTools`** so a downgrade reverts customers to default.
 - UI `src/components/panels/admin/DashboardLayoutBuilder.tsx` (show/hide + up/down reorder + reset), mounted as
   a new **"Dashboard layout"** section in the Design Studio (upsell card when not on Business).
+- **Plans aren't sold to owners yet** (Campaign Automation feature is Phase 2) — owner surfaces say "coming
+  soon." A **super admin can COMP a plan** per panel to test the Business-gated features: `setPanelPlan(tier)`
+  in `superadmin.ts` (no charge, `nextChargeAt=null` so the cron skips it, audit-logged) + a **Plan** select
+  (Free/Pro/Business) in the `/superadmin` Panels table (`SuperAdminPanelVM.planTier`).
 - **Phase B next (dep installed):** premium landing templates (buy once, own forever) + sanitized custom-HTML
   landing editor (`sanitize-html`), gated by Design Tools / one-time purchase.
 
