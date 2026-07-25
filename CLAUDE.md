@@ -173,9 +173,26 @@ innvil/
     (**Studio** dark creator-economy, **Agency** clean corporate, **Orbit** minimal futuristic — each a
     genuinely different composition). **Ship one design at a time**: a design only becomes `published`
     (buyable + fully previewable) when finished; others are metadata-only "Available soon" cards.
-  - **NEXT:** the shared `DesignRenderer` (config → real landing, functional slots wired), then the full live
-    preview route (real render + demo content + desktop/tablet/mobile + personalization + purchase guards),
-    then the marketplace UI + one-time purchase/library.
+  - **`src/components/design/DesignRenderer.tsx` (NEW)** — the ONE shared renderer used by both the live
+    previews and (post-purchase) the real storefront landing, so a preview is never an approximation. Renders
+    every section type + header/footer from config, tokens as CSS vars (`--d-*`), CSS-only animations
+    (fade-up/float), `<details>` FAQ. **Functional sections render injected `slots`** (`auth-card` /
+    `service-list` / `payment-methods`): the caller passes Innvil's real backend-wired components, so this file
+    never touches auth/order/payment logic; with no slot it draws a demo visual (used by previews).
+    `inert` mode disables navigation for previews.
+  - **`/design-shop`** (`app/design-shop/page.tsx` + `src/components/design/DesignShop.tsx`) — marketplace:
+    cover, price, tagline, categories, page count, version, responsive/animated flags, features, category
+    filters. Published → **Live preview**; teasers → "In the studio / Available soon". Buy buttons are
+    intentionally disabled until the purchase+library layer lands.
+  - **`/design-preview/[id]`** (`app/design-preview/[id]/page.tsx` + `DesignPreviewShell.tsx`) — the FULL live
+    preview: real render via the shared renderer with the package's demo content, working desktop/tablet/mobile
+    widths, and temporary **personalization** (panel name / logo / accent) that never installs or unlocks
+    anything. `noindex`; teaser ids get an "in the studio" notice.
+  - **PRICING:** max **$12** one-time per design, with a real ladder — Pulse $12, Studio $12, Agency $10,
+    Orbit $7.
+  - **NEXT:** one-time purchase + owned-design library (`settings.addons.design.owned`, activate/switch),
+    wiring a purchased design into the real storefront landing (pass real `slots` + live catalog data), then
+    designs #2–#4 one at a time, then the visual editor on top of this same schema.
 
 ### 2026-07-24 — Design Shop Phase A: dashboard layout builder (v0.2.91)
 - **Design Tools = bundled into Business** (not a separate charge). `hasDesignTools(settings)` = Business tier

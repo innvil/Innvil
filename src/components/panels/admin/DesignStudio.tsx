@@ -196,10 +196,21 @@ export function DesignStudio({
 
           <section>
             <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Gem size={12} className="fp-gold" /> Design Shop</p>
-            <p className="fp-text-faint text-[11px] leading-relaxed">
+            <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
               A marketplace of <span className="fp-text">complete, professionally designed landing pages</span> — distinct layouts,
-              artwork and animation, each with a full live preview, bought once and yours forever. Plus a full visual
-              editor for your panel&apos;s frontend. <span className="fp-text">In development.</span>
+              artwork and animation, each with a full live preview, bought once and yours forever.
+            </p>
+            <a
+              href="/design-shop"
+              target="_blank"
+              rel="noreferrer"
+              className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg inline-flex items-center gap-1.5"
+            >
+              <Gem size={13} /> Browse the Design Shop
+            </a>
+            <p className="fp-text-faint text-[10px] mt-2">
+              Opens in a new tab so you don&apos;t lose unsaved edits. First design (<span className="fp-text">Pulse</span>) is
+              previewable now; purchasing and the visual editor are still in development.
             </p>
           </section>
         </div>

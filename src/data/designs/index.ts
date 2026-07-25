@@ -23,7 +23,7 @@ export const COMING_SOON_DESIGNS: DesignMeta[] = [
     tagline: "The creator economy, quantified.",
     description:
       "A dark, cinematic creator-economy landing: video statistics, engagement charts, glowing service cards and oversized editorial typography. Built for panels selling to serious creators.",
-    price: 34,
+    price: 12,
     categories: ["creator-economy", "dark", "animated"],
     includedPages: ["landing", "login", "signup"],
     features: ["Engagement chart hero", "Glowing service cards", "Video stat blocks", "Bold editorial type"],
@@ -42,7 +42,7 @@ export const COMING_SOON_DESIGNS: DesignMeta[] = [
     tagline: "Campaign-grade credibility.",
     description:
       "A clean agency composition: campaign dashboards, client metrics, side-by-side service comparisons, testimonials and polished product mockups. For panels selling to businesses.",
-    price: 34,
+    price: 10,
     categories: ["agency", "corporate", "conversion"],
     includedPages: ["landing", "login", "signup", "pricing"],
     features: ["Campaign dashboard mockup", "Client metric bands", "Service comparison table", "Case-study testimonials"],
@@ -61,7 +61,7 @@ export const COMING_SOON_DESIGNS: DesignMeta[] = [
     tagline: "Minimal, fast, futuristic.",
     description:
       "A restrained futuristic landing: generous whitespace, monospace accents, orbiting platform glyphs and micro-interactions. For panels that want to feel like a product, not a storefront.",
-    price: 29,
+    price: 7,
     categories: ["minimal", "futuristic", "platform-focused"],
     includedPages: ["landing", "login", "signup"],
     features: ["Orbiting platform glyphs", "Monospace detailing", "Micro-interactions", "Ultra-light layout"],

@@ -16,7 +16,7 @@ export const PULSE: DesignPackage = {
     tagline: "Social energy, in motion.",
     description:
       "A high-energy landing built around live social engagement: floating like/view/follower cards drift over a vivid gradient, a phone feed mockup previews real growth, and count-up stats make momentum feel tangible. Designed to convert first-time visitors into signups.",
-    price: 29,
+    price: 12,
     categories: ["social-growth", "colorful", "animated", "conversion"],
     includedPages: ["landing", "login", "signup"],
     features: [
