@@ -157,6 +157,25 @@ innvil/
 - Also this release: the **dashboard-layout live preview moved into the Design Studio's preview column,
   directly below the landing preview** (was awkwardly in the side controls). `DashboardHomePreview` is now an
   exported component; `DashboardLayoutBuilder` reports its working layout up via `onLayoutChange`.
+- **Design Shop foundation started (vertical slice: build the backbone THROUGH one finished design).**
+  - `src/lib/design/schema.ts` (NEW) — the shared config contract for BOTH the marketplace and the future
+    visual editor: `DesignTokens` (+ `tokensToCssVars`), typed sections (`hero` w/ engagement floats + phone
+    mockup, `stats` w/ `source:"live"`, `services`, `platforms`, `steps`, `features`, `testimonials`, `faq`,
+    `cta`, `content`, and **`functional`** — a constrained slot (`auth-card`/`service-list`/`payment-methods`)
+    so a design can PLACE real components without owning their logic), per-section `variant`/`animation`/
+    `responsive`/token overrides, `DesignPage` (header/sections/footer), `DesignMeta` (price, categories,
+    includedPages, features, version, changelog, publisher, status, cover), `DesignPackage` (+ demo `preview`
+    content), and preview-only `PreviewPersonalization`/`personalizeTokens`.
+  - `src/data/designs/pulse.ts` (NEW) — **design #1 "Pulse"** ($29, social-growth/animated): gradient backdrop,
+    floating like/view/follower/notify cards, phone-feed hero mockup, count-up stats, glow service cards,
+    testimonials, FAQ, glass auth slot. A complete landing composition, not a palette.
+  - `src/data/designs/index.ts` (NEW) — catalog: `PUBLISHED_DESIGNS` (Pulse) + `COMING_SOON_DESIGNS` teasers
+    (**Studio** dark creator-economy, **Agency** clean corporate, **Orbit** minimal futuristic — each a
+    genuinely different composition). **Ship one design at a time**: a design only becomes `published`
+    (buyable + fully previewable) when finished; others are metadata-only "Available soon" cards.
+  - **NEXT:** the shared `DesignRenderer` (config → real landing, functional slots wired), then the full live
+    preview route (real render + demo content + desktop/tablet/mobile + personalization + purchase guards),
+    then the marketplace UI + one-time purchase/library.
 
 ### 2026-07-24 — Design Shop Phase A: dashboard layout builder (v0.2.91)
 - **Design Tools = bundled into Business** (not a separate charge). `hasDesignTools(settings)` = Business tier
