@@ -945,11 +945,14 @@ function AddFundsModal({
   initialPolicy,
   initialInnvilBalance,
   panels,
+  initialPanelId,
 }: {
   onClose: () => void;
   initialPolicy: OwnerTopupPolicy | null;
   initialInnvilBalance: number | null;
   panels: Panel[];
+  /** Preselect a panel (e.g. when opened from that panel's admin header). */
+  initialPanelId?: string;
 }) {
   const pickDiscountRule = (value: number, rules: Array<{ minAmount: number; discountPct: number }>) => {
     if (!Number.isFinite(value) || value <= 0 || rules.length === 0) return null;
@@ -964,7 +967,7 @@ function AddFundsModal({
   const [step, setStep] = useState("amount");
   const [amount, setAmount] = useState("50");
   const [method, setMethod] = useState("");
-  const [panelId, setPanelId] = useState<string>(panels[0]?.id ?? "");
+  const [panelId, setPanelId] = useState<string>(initialPanelId || panels[0]?.id || "");
   const [busy, setBusy] = useState(false);
   const [policy, setPolicy] = useState<OwnerTopupPolicy | null>(initialPolicy);
   const [innvilBalance, setInnvilBalance] = useState<number | null>(initialInnvilBalance);
@@ -1197,6 +1200,8 @@ export function InnvilApp({ setWorld, initialSection }: {
   const [activePanel, setActivePanel] = useState<Panel | null>(null);
   const [panelInitialTab, setPanelInitialTab] = useState<string | undefined>(cachedNav?.panelTab);
   const [showAddFunds, setShowAddFunds] = useState(false);
+  // Which panel the Add Funds modal should preselect (set when opened from a panel).
+  const [addFundsPanelId, setAddFundsPanelId] = useState<string | undefined>(undefined);
   const [ownerTopupPolicy, setOwnerTopupPolicy] = useState<OwnerTopupPolicy | null>(
     readOwnerAppCache<OwnerTopupPolicy>("owner-topup-policy")
   );
@@ -1329,6 +1334,7 @@ export function InnvilApp({ setWorld, initialSection }: {
             setWorld={setWorld}
             initialTab={panelInitialTab}
             onTabChange={setPanelInitialTab}
+            onAddFunds={() => { setAddFundsPanelId(activePanel.id); setShowAddFunds(true); }}
           />
         )}
         {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
@@ -1376,10 +1382,11 @@ export function InnvilApp({ setWorld, initialSection }: {
       </div>
       {showAddFunds && (
         <AddFundsModal
-          onClose={() => setShowAddFunds(false)}
+          onClose={() => { setShowAddFunds(false); setAddFundsPanelId(undefined); }}
           initialPolicy={ownerTopupPolicy}
           initialInnvilBalance={ownerInnvilBalance}
           panels={panelList}
+          initialPanelId={addFundsPanelId}
         />
       )}
 

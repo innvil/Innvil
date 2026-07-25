@@ -8,7 +8,7 @@ import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
  * preview setWorld hook. Plain <Link>/<a> navigation only.
  */
 
-export function MarketingHeader() {
+export function MarketingHeader({ signedIn = false }: { signedIn?: boolean }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0B0F]/80 border-b fp-line-soft">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -22,14 +22,23 @@ export function MarketingHeader() {
           <Link href="/#how" className="hover:fp-text">How it works</Link>
           <Link href="/#features" className="hover:fp-text">Features</Link>
           <Link href="/#pricing" className="hover:fp-text">Pricing</Link>
+          <Link href="/design-shop" className="hover:fp-text">Designs</Link>
           <Link href="/blog" className="hover:fp-text">Guides</Link>
           <Link href="/#faq" className="hover:fp-text">FAQ</Link>
         </nav>
         <div className="flex items-center gap-3">
-          <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
-          <Link href="/signup" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">
-            Create your panel
-          </Link>
+          {signedIn ? (
+            <Link href="/" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">
+              Back to dashboard
+            </Link>
+          ) : (
+            <>
+              <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
+              <Link href="/signup" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">
+                Create your panel
+              </Link>
+            </>
+          )}
         </div>
       </div>
     </header>

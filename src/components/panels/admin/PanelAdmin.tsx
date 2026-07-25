@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import {
   LayoutGrid, Circle, Palette, Globe, Wifi, Sliders, ShieldCheck,
   ListOrdered, Users, CreditCard, KeyRound, Lock, Bell, MessageSquare, Bot,
-  Gift, Gauge, Copy, ExternalLink, ChevronDown, MessageCircle, LucideIcon,
+  Gift, Gauge, Copy, ExternalLink, ChevronDown, MessageCircle, Wallet, LucideIcon,
 } from "lucide-react";
 import { StatusBadge } from "@/src/components/ui";
 import { PanelStatus } from "@/src/data/constants";
@@ -43,7 +43,7 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
 const PRIMARY_TABS = TABS.slice(0, 10);
 const OVERFLOW_TABS = TABS.slice(10);
 
-export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel: Panel; setWorld: (w: string) => void; initialTab?: string; onTabChange?: (tab: string) => void }) {
+export function PanelAdmin({ panel, setWorld, initialTab, onTabChange, onAddFunds }: { panel: Panel; setWorld: (w: string) => void; initialTab?: string; onTabChange?: (tab: string) => void; onAddFunds?: () => void }) {
   const readSavedTab = (panelId: string): string | null => {
     if (typeof window === "undefined") return null;
     const key = `innvil-admin:${panelId}:active-tab`;
@@ -102,6 +102,24 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange }: { panel
           <StatusBadge status={panelStatus} />
         </div>
         <div className="flex items-center gap-2">
+          {/* This panel's own Innvil balance — commission, add-ons and design purchases
+              draw from it (top-ups are per panel). */}
+          <div className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 flex items-center gap-2">
+            <Wallet size={13} className="fp-gold" />
+            <div className="leading-none">
+              <p className="text-[10px] fp-text-faint fp-mono uppercase">Panel balance</p>
+              <p className="text-xs fp-mono mt-0.5">
+                {typeof panel.innvilBalance === "number"
+                  ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(panel.innvilBalance)
+                  : "—"}
+              </p>
+            </div>
+            {onAddFunds && (
+              <button onClick={onAddFunds} className="text-[11px] fp-gold-soft-bg fp-gold rounded-md px-2 py-1 ml-1">
+                Add funds
+              </button>
+            )}
+          </div>
           <a
             href={panelStorefrontPath(panel.subdomain, panel.domain)}
             target="_blank"

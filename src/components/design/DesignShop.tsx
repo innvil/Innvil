@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Eye, Lock, CheckCircle2, Palette } from "lucide-react";
+import { Eye, Lock, CheckCircle2, Palette, Wallet, AlertTriangle } from "lucide-react";
 import type { DesignMeta, DesignStyleCategory } from "@/src/lib/design/schema";
+import { getDesignLibrary, buyDesign, activateDesign, type DesignLibraryInfo } from "@/src/lib/actions/design";
 
 /* Design Shop marketplace — browse complete landing designs. One design is finished
    and published at a time; the rest are honest "Available soon" teasers. */
@@ -22,9 +23,44 @@ const FILTERS: Array<{ k: DesignStyleCategory | "all"; label: string }> = [
   { k: "conversion", label: "Conversion" },
 ];
 
-export function DesignShop({ cards }: { cards: DesignMeta[] }) {
+export function DesignShop({
+  cards,
+  signedIn = false,
+  panels = [],
+}: {
+  cards: DesignMeta[];
+  signedIn?: boolean;
+  panels?: Array<{ id: string; name: string }>;
+}) {
   const [filter, setFilter] = useState<DesignStyleCategory | "all">("all");
+  const [panelId, setPanelId] = useState<string>(panels[0]?.id ?? "");
+  const [lib, setLib] = useState<DesignLibraryInfo | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const list = filter === "all" ? cards : cards.filter((c) => c.categories.includes(filter));
+
+  useEffect(() => {
+    if (!panelId) { setLib(null); return; }
+    getDesignLibrary(panelId).then(setLib).catch(() => setLib(null));
+  }, [panelId]);
+
+  const buy = async (id: string, name: string) => {
+    setBusy(id); setMsg(null);
+    const res = await buyDesign(panelId, id);
+    setBusy(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setLib(res.data);
+    setMsg({ text: `${name} is yours — activate it to put it live.` });
+  };
+
+  const apply = async (id: string, name: string) => {
+    setBusy(id); setMsg(null);
+    const res = await activateDesign(panelId, id);
+    setBusy(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setLib(res.data);
+    setMsg({ text: `${name} is now live on that panel's landing page.` });
+  };
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-12">
@@ -39,6 +75,42 @@ export function DesignShop({ cards }: { cards: DesignMeta[] }) {
           you own, and edit its text and permitted styles. Every published design has a complete live preview.
         </p>
       </div>
+
+      {/* Buying context — purchases are per panel, from that panel's Innvil balance */}
+      {signedIn ? (
+        panels.length > 0 ? (
+          <div className="fp-panel border fp-line rounded-xl p-4 mb-6 flex flex-wrap items-center gap-3">
+            <span className="text-xs fp-text-dim">Buying for</span>
+            <select
+              value={panelId}
+              onChange={(e) => { setPanelId(e.target.value); setMsg(null); }}
+              className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border"
+            >
+              {panels.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {lib && (
+              <span className="text-xs fp-text-faint flex items-center gap-1.5">
+                <Wallet size={13} /> Innvil balance <span className="fp-mono fp-text">${lib.ownerBalance.toFixed(2)}</span>
+                {lib.owned.length > 0 && <span>· {lib.owned.length} owned</span>}
+              </span>
+            )}
+            {msg && (
+              <span className={`text-xs flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>
+                {msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className="fp-panel border fp-line rounded-xl p-4 mb-6 text-xs fp-text-dim">
+            Create a panel first — designs are bought per panel, from that panel&apos;s Innvil balance.
+          </div>
+        )
+      ) : (
+        <div className="fp-panel border fp-line rounded-xl p-4 mb-6 flex flex-wrap items-center gap-3">
+          <span className="text-xs fp-text-dim">Preview any design free. <span className="fp-text">Log in to buy</span> — purchases are per panel.</span>
+          <Link href="/login" className="fp-btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg">Log in</Link>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 mb-8">
         {FILTERS.map((f) => (
@@ -115,9 +187,24 @@ export function DesignShop({ cards }: { cards: DesignMeta[] }) {
                         <Link href={`/design-preview/${d.id}`} className="fp-btn-primary text-xs font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
                           <Eye size={13} /> Live preview
                         </Link>
-                        <button disabled className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 cursor-not-allowed" title="Purchasing arrives with the Design Shop launch">
-                          Buy ${d.price}
-                        </button>
+                        {!signedIn || !panelId ? (
+                          <span className="fp-text-faint text-[11px]">${d.price} one-time</span>
+                        ) : lib?.active === d.id ? (
+                          <span className="text-[11px] fp-gold flex items-center gap-1"><CheckCircle2 size={12} /> Live</span>
+                        ) : lib?.owned.includes(d.id) ? (
+                          <button onClick={() => apply(d.id, d.name)} disabled={busy !== null} className="text-xs fp-gold-soft-bg fp-gold rounded-lg px-3 py-2 disabled:opacity-60">
+                            {busy === d.id ? "…" : "Activate"}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => buy(d.id, d.name)}
+                            disabled={busy !== null || (lib?.ownerBalance ?? 0) < d.price}
+                            title={(lib?.ownerBalance ?? 0) < d.price ? "Top up your Innvil balance first" : undefined}
+                            className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 disabled:opacity-60 hover:fp-text"
+                          >
+                            {busy === d.id ? "…" : `Buy $${d.price}`}
+                          </button>
+                        )}
                       </>
                     )}
                   </div>

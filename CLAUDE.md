@@ -190,9 +190,21 @@ innvil/
     anything. `noindex`; teaser ids get an "in the studio" notice.
   - **PRICING:** max **$12** one-time per design, with a real ladder — Pulse $12, Studio $12, Agency $10,
     Orbit $7.
-  - **NEXT:** one-time purchase + owned-design library (`settings.addons.design.owned`, activate/switch),
-    wiring a purchased design into the real storefront landing (pass real `slots` + live catalog data), then
-    designs #2–#4 one at a time, then the visual editor on top of this same schema.
+  - **PURCHASE LOOP CLOSED (same release).** `src/lib/design/library.ts` (NEW) reads
+    `panels.settings.addons.design` → `{ owned[], active }` (an `active` design must still be owned — guards
+    tampering). `actions/design.ts` gained `getDesignLibrary` / **`buyDesign`** (one-time charge from the
+    panel's Innvil balance, rejects duplicates/unpublished/insufficient funds, audit-logged) / **`activateDesign`**
+    (must own it; `null` = back to the default landing). Purchases are PERMANENT — switching or deactivating
+    never revokes a design.
+  - **Live on the real storefront:** `getPublicPanel` now returns `activeDesign`, and `app/p/[subdomain]/page.tsx`
+    renders the purchased design **for guests only** (signed-in customers always get the real dashboard) using
+    the SAME `DesignRenderer` with the panel's live catalog, currency and logo. The renderer gained a `hrefs`
+    prop (via a small `HrefContext`) so CTAs point at **this panel's** `/p/<sub>/signup|login` — never Innvil's
+    owner auth — and the `auth-card` slot is filled with a real signup/login card.
+  - Owner UI: `DesignLibraryPanel.tsx` (NEW) in the Design Studio's Design Shop section — buy / activate /
+    switch / preview, with the panel's balance shown; "Innvil default landing" is always an option.
+  - **NEXT:** designs #2–#4 one finished at a time (Studio → Agency → Orbit), then the visual editor on this
+    same schema; later, per-design editable text/permitted settings.
 
 ### 2026-07-24 — Design Shop Phase A: dashboard layout builder (v0.2.91)
 - **Design Tools = bundled into Business** (not a separate charge). `hasDesignTools(settings)` = Business tier

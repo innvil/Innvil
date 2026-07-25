@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { getUser } from "@/src/lib/auth";
+import { listPanels } from "@/src/lib/actions/panels";
 import { MarketingHeader, MarketingFooter } from "@/src/components/marketing/SiteChrome";
 import { designCards } from "@/src/data/designs";
 import { DesignShop } from "@/src/components/design/DesignShop";
@@ -11,11 +13,23 @@ export const metadata: Metadata = {
   openGraph: { title: "Innvil Design Shop", description: "Complete landing designs for your SMM panel.", url: "/design-shop", type: "website", siteName: "Innvil" },
 };
 
-export default function DesignShopPage() {
+/* Session-aware: signed-out visitors browse + preview; signed-in owners pick one of
+   their panels and buy/activate right here (purchases are per-panel, charged from
+   that panel's Innvil balance). */
+export const dynamic = "force-dynamic";
+
+export default async function DesignShopPage() {
+  const user = await getUser();
+  const panels = user ? await listPanels() : [];
+
   return (
     <div className="fp-root min-h-screen">
-      <MarketingHeader />
-      <DesignShop cards={designCards()} />
+      <MarketingHeader signedIn={Boolean(user)} />
+      <DesignShop
+        cards={designCards()}
+        signedIn={Boolean(user)}
+        panels={panels.map((p) => ({ id: p.id, name: p.name }))}
+      />
       <MarketingFooter />
     </div>
   );

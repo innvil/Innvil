@@ -38,6 +38,7 @@ function TopNav({ setWorld }: { world?: string; setWorld?: (w: string) => void }
           <a href="#platform" className="hover:fp-text">Platform</a>
           <a href="#why" className="hover:fp-text">Why Innvil</a>
           <a href="#pricing" className="hover:fp-text">Pricing</a>
+          <Link href="/design-shop" className="hover:fp-text">Designs</Link>
           <Link href="/blog" className="hover:fp-text">Guides</Link>
           <a href="#faq" className="hover:fp-text">FAQ</a>
         </nav>

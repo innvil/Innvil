@@ -6,6 +6,9 @@ import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanel
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
 import type { PanelStatus } from "@/src/types/db";
 import { themeVars } from "@/src/data/themes";
+import { currencySymbol } from "@/src/lib/money";
+import { getDesignPackage } from "@/src/data/designs";
+import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { Storefront } from "./Storefront";
 
 type Params = { params: Promise<{ subdomain: string }> };
@@ -100,6 +103,57 @@ export default async function StorefrontPage({ params }: Params) {
     getPanelPaymentMethods(panel.id),
   ]);
   const apiBaseUrl = await getApiBaseUrl(panel.customDomain);
+
+  /* A purchased marketplace design replaces the DEFAULT GUEST LANDING only. Signed-in
+     customers always get the real dashboard, and the design's CTAs point at this
+     panel's own auth routes — never Innvil's. */
+  const designPkg = panel.activeDesign ? getDesignPackage(panel.activeDesign) : undefined;
+  if (designPkg && !account) {
+    const base = `/p/${panel.subdomain}`;
+    const sym = currencySymbol(panel.currency);
+    const prices = services.map((s) => s.price).filter((n) => Number.isFinite(n) && n > 0);
+    return (
+      <div style={themeStyle}>
+        <DesignRenderer
+          pkg={designPkg}
+          page="landing"
+          data={{
+            panelName: panel.name,
+            logoUrl: panel.logoUrl || undefined,
+            currencySymbol: sym,
+            services: services.slice(0, 12).map((s) => ({
+              name: s.name,
+              platform: s.platform ?? "other",
+              price: s.price.toFixed(2),
+              min: String(s.min),
+            })),
+            categories: Array.from(new Set(services.map((s) => s.category).filter((c): c is string => Boolean(c)))).slice(0, 6),
+            liveStats: {
+              services: String(services.length),
+              platforms: String(new Set(services.map((s) => s.platform).filter(Boolean)).size),
+              from: prices.length ? `${sym}${Math.min(...prices).toFixed(2)}` : undefined,
+            },
+          }}
+          hrefs={{ signup: `${base}/signup`, login: `${base}/login`, services: "#services" }}
+          slots={{
+            "auth-card": (
+              <div style={{ display: "grid", gap: ".75rem", textAlign: "center" }}>
+                <p className="dz-dim" style={{ margin: 0, fontSize: ".95rem" }}>
+                  Create your account to add funds and place your first order.
+                </p>
+                <a href={`${base}/signup`} className="dz-btn dz-btn-primary" style={{ justifyContent: "center" }}>
+                  Create account
+                </a>
+                <a href={`${base}/login`} className="dz-dim" style={{ fontSize: ".85rem", textDecoration: "none" }}>
+                  Already have an account? Log in
+                </a>
+              </div>
+            ),
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div style={themeStyle}>

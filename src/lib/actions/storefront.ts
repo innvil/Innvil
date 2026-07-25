@@ -4,6 +4,7 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { customerSupportActive } from "@/src/lib/ai/addon";
 import { hasDesignTools } from "@/src/lib/plans";
 import { readDashboardHome, type DashboardWidget } from "@/src/lib/dashboard-layout";
+import { activeDesignId } from "@/src/lib/design/library";
 import type { PanelStatus, ServiceRow } from "@/src/types/db";
 
 /**
@@ -36,6 +37,8 @@ export interface PublicPanel {
   sections: PublicLandingSection[];
   aiSupport: boolean;
   dashboardLayout: DashboardWidget[] | null;
+  /** Purchased marketplace design applied to the landing (null = default landing). */
+  activeDesign: string | null;
 }
 
 /** The panel's operating currency (from settings; default USD). */
@@ -123,6 +126,8 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
     // Custom layout only applies while Design Tools (Business) is active — a
     // downgrade reverts customers to the default dashboard.
     dashboardLayout: hasDesignTools(data.settings) ? readDashboardHome(data.settings) : null,
+    // Owned forever — a purchased design keeps working regardless of subscription.
+    activeDesign: activeDesignId(data.settings),
   };
 }
 

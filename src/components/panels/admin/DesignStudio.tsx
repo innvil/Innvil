@@ -7,6 +7,7 @@ import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import { formatMoney } from "@/src/lib/money";
 import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutBuilder";
+import { DesignLibraryPanel } from "./DesignLibraryPanel";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
 /* =========================================================
@@ -204,14 +205,11 @@ export function DesignStudio({
               href="/design-shop"
               target="_blank"
               rel="noreferrer"
-              className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg inline-flex items-center gap-1.5"
+              className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg inline-flex items-center gap-1.5 mb-4"
             >
               <Gem size={13} /> Browse the Design Shop
             </a>
-            <p className="fp-text-faint text-[10px] mt-2">
-              Opens in a new tab so you don&apos;t lose unsaved edits. First design (<span className="fp-text">Pulse</span>) is
-              previewable now; purchasing and the visual editor are still in development.
-            </p>
+            <DesignLibraryPanel panelId={panel.id} />
           </section>
         </div>
 

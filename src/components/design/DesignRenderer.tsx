@@ -31,6 +31,14 @@ export interface DesignRenderData {
   liveStats?: { services?: string; platforms?: string; from?: string };
 }
 
+/** Where the design's CTAs point. A storefront must pass its OWN auth routes —
+ *  otherwise customers would be sent to Innvil's owner signup. */
+export interface DesignHrefs {
+  signup?: string;
+  login?: string;
+  services?: string;
+}
+
 export interface DesignRendererProps {
   pkg: DesignPackage;
   page?: DesignPageId;
@@ -38,6 +46,8 @@ export interface DesignRendererProps {
   personalization?: PreviewPersonalization;
   /** Real backend-wired components (auth card, service list…). Missing slot = demo visual. */
   slots?: Partial<Record<FunctionalSlot, React.ReactNode>>;
+  /** CTA destinations (defaults are Innvil's, correct only for previews). */
+  hrefs?: DesignHrefs;
   /** Preview mode: links/buttons don't navigate. */
   inert?: boolean;
 }
@@ -92,23 +102,27 @@ const DESIGN_CSS = `
 
 /* ------------------------------------------------------------------ helpers ---- */
 
-function ctaHref(cta: DesignCta): string {
+function ctaHref(cta: DesignCta, hrefs?: DesignHrefs): string {
   switch (cta.action) {
-    case "signup": return "/signup";
-    case "login": return "/login";
-    case "services": return "#services";
+    case "signup": return hrefs?.signup ?? "/signup";
+    case "login": return hrefs?.login ?? "/login";
+    case "services": return hrefs?.services ?? "#services";
     default: return cta.href || "#";
   }
 }
 
+/** CTA destinations for the current render (storefronts override Innvil's defaults). */
+const HrefContext = React.createContext<DesignHrefs | undefined>(undefined);
+
 function CtaRow({ ctas, inert }: { ctas?: DesignCta[]; inert?: boolean }) {
+  const hrefs = React.useContext(HrefContext);
   if (!ctas?.length) return null;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: ".75rem", marginTop: "1.75rem" }}>
       {ctas.map((c, i) => (
         <a
           key={i}
-          href={inert ? undefined : ctaHref(c)}
+          href={inert ? undefined : ctaHref(c, hrefs)}
           onClick={inert ? (e) => e.preventDefault() : undefined}
           className={`dz-btn ${i === 0 ? "dz-btn-primary" : "dz-btn-ghost"}`}
         >
@@ -403,6 +417,7 @@ function Content({ s, inert }: { s: ContentSection; inert?: boolean }) {
 /* ------------------------------------------------------------------- chrome ---- */
 
 function Header({ page, data, inert }: { page: DesignPage; data: DesignRenderData; inert?: boolean }) {
+  const hrefs = React.useContext(HrefContext);
   const h = page.header;
   if (!h) return null;
   return (
@@ -423,7 +438,7 @@ function Header({ page, data, inert }: { page: DesignPage; data: DesignRenderDat
           {h.ctas?.map((c, i) => (
             <a
               key={i}
-              href={inert ? undefined : ctaHref(c)}
+              href={inert ? undefined : ctaHref(c, hrefs)}
               onClick={inert ? (e) => e.preventDefault() : undefined}
               className={i === (h.ctas!.length - 1) ? "dz-btn dz-btn-primary" : "dz-dim"}
               style={i === (h.ctas!.length - 1) ? { padding: ".55rem 1.1rem", fontSize: ".85rem" } : { textDecoration: "none", fontSize: ".9rem" }}
@@ -481,7 +496,7 @@ function renderSection(s: DesignSection, data: DesignRenderData, slots?: DesignR
   }
 }
 
-export function DesignRenderer({ pkg, page = "landing", data, personalization, slots, inert }: DesignRendererProps) {
+export function DesignRenderer({ pkg, page = "landing", data, personalization, slots, hrefs, inert }: DesignRendererProps) {
   const target = getPage(pkg, page) ?? pkg.pages[0];
   if (!target) return null;
 
@@ -491,6 +506,7 @@ export function DesignRenderer({ pkg, page = "landing", data, personalization, s
   const merged: DesignRenderData = { ...data, panelName: name, logoUrl: personalization?.logoUrl || data.logoUrl };
 
   return (
+    <HrefContext.Provider value={hrefs}>
     <div className="dz-root" style={rootStyle}>
       <style dangerouslySetInnerHTML={{ __html: DESIGN_CSS }} />
       {tokens.backdrop && <div className="dz-backdrop" />}
@@ -514,5 +530,6 @@ export function DesignRenderer({ pkg, page = "landing", data, personalization, s
       </main>
       <Footer page={target} data={merged} inert={inert} />
     </div>
+    </HrefContext.Provider>
   );
 }
