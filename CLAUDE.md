@@ -127,6 +127,37 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Design Shop scope correction + preview placement (v0.2.96)
+- **CORRECTION to v0.2.90.** The three "premium templates" (aurora/carbon/luxe) are just CSS-var color
+  themes — that is explicitly **NOT** the paid Design Shop. They're now labeled **"More color themes ·
+  included"** (free). Do not sell color presets, font presets, dashboard skins, static screenshots, small
+  preview cards, summarized previews, or one shared layout recolored as the paid product.
+- **The real Design Shop (per the user's full spec — see memory `innvil-design-shop-vision`):**
+  1. **Config-driven visual interface editor (Business sub)** — Shopify/Webflow-class, for the panel's
+     FRONTEND only: canvas w/ desktop/tablet/mobile, layers panel, approved SMM component library,
+     grid/section/column drag-drop (not raw absolute positioning), per-component settings, global design
+     tokens, component variants (order form, service list, balance card, stats, tables, header, nav),
+     non-functional content sections, page-level editing (dashboard/services/orders/add-funds/tickets/auth),
+     nav editing, undo/redo/autosave/revisions/draft/publish/revert/duplicate/import/export, responsive
+     controls, **safe constraints** (can't delete/break backend-connected components), and a **renderer**
+     that reads the config and renders the SAME existing functionality. Backend/DB/API/orders/payments
+     are never touched — functional components stay wired to their current actions.
+  2. **Marketplace of complete one-time-purchase landing designs** — each a full design PACKAGE (page/section
+     schemas, component variants, tokens, responsive rules, animation defs, original/licensed artwork, fonts,
+     default+preview content, version/compatibility metadata), materially different from the others
+     (SMM visual language: likes/views/followers/creator profiles/growth charts/feeds). Bought once → the
+     owner's design library forever (activate/deactivate/switch/customize permitted settings). Marketplace
+     metadata + filters per spec. **Every design needs a FULL live preview** — the real landing rendered with
+     demo content via the SAME renderer/config (not a mockup), with responsive/scroll/hover/animation, optional
+     pre-purchase personalization (name/logo/color/categories/mode), and export/activation guarded until bought.
+  3. **Sanitized "bring your own HTML"** → included in the **Business** subscription (with the editor).
+- **Architecture backbone:** the editor and marketplace designs SHARE ONE config-driven renderer (a purchased
+  design is just a config the renderer reads). Build order: schema + renderer → editor UI → marketplace +
+  full-preview environment. Large multi-phase effort; deliver incrementally.
+- Also this release: the **dashboard-layout live preview moved into the Design Studio's preview column,
+  directly below the landing preview** (was awkwardly in the side controls). `DashboardHomePreview` is now an
+  exported component; `DashboardLayoutBuilder` reports its working layout up via `onLayoutChange`.
+
 ### 2026-07-24 — Design Shop Phase A: dashboard layout builder (v0.2.91)
 - **Design Tools = bundled into Business** (not a separate charge). `hasDesignTools(settings)` = Business tier
   (`src/lib/plans.ts`). Premium landing templates stay à-la-carte (Phase B).

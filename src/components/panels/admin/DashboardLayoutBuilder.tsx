@@ -40,7 +40,68 @@ function writeLayoutCache(panelId: string, value: LayoutCacheValue) {
   }
 }
 
-export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
+/* Mini representative render of each customer-dashboard home widget. */
+function miniWidget(id: DashboardWidgetId) {
+  switch (id) {
+    case "stats":
+      return (
+        <div className="grid grid-cols-3 gap-1.5">
+          {["Balance", "Pending", "Done"].map((l) => (
+            <div key={l} className="fp-panel border fp-line-soft rounded p-2">
+              <p className="text-[8px] fp-text-faint uppercase leading-none">{l}</p>
+              <p className="text-[11px] fp-gold leading-tight mt-1">—</p>
+            </div>
+          ))}
+        </div>
+      );
+    case "favorites":
+      return (
+        <div className="fp-panel border fp-line-soft rounded p-2.5">
+          <p className="text-[10px] fp-gold mb-1.5">★ Favorites · quick order</p>
+          <div className="space-y-1">{[0, 1].map((i) => <div key={i} className="h-3.5 fp-panel-raised rounded" />)}</div>
+        </div>
+      );
+    case "recent":
+      return (
+        <div className="fp-panel border fp-line-soft rounded p-2.5">
+          <p className="text-[10px] fp-violet mb-1.5">Recently ordered</p>
+          <div className="space-y-1">{[0, 1].map((i) => <div key={i} className="h-3.5 fp-panel-raised rounded" />)}</div>
+        </div>
+      );
+    case "orders":
+      return (
+        <div className="fp-panel border fp-line-soft rounded p-2.5">
+          <p className="text-[10px] mb-1.5">Recent orders</p>
+          <div className="space-y-1">{[0, 1, 2].map((i) => <div key={i} className="h-3.5 fp-panel-raised rounded" />)}</div>
+        </div>
+      );
+  }
+}
+
+/** Live preview of the customer dashboard home for a given layout. Rendered in the
+ *  Design Studio's preview column (below the landing preview). */
+export function DashboardHomePreview({ layout, panelName }: { layout: DashboardWidget[] | null; panelName?: string }) {
+  if (!layout) return null;
+  const visible = layout.filter((w) => w.visible);
+  return (
+    <div className="fp-root p-4 border-t fp-line-soft" style={{ background: "var(--void-2)" }}>
+      <div className="flex items-center justify-between mb-3">
+        <span className="flex items-center gap-1.5"><span className="w-5 h-5 rounded fp-gold-bg" /><span className="text-[10px]">{panelName || "Your panel"}</span></span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-[9px] fp-gold fp-panel border fp-line-soft rounded px-2 py-1">$—</span>
+          <span className="text-[9px] fp-gold-bg text-[#0A0B0F] rounded px-2 py-1">Add Funds</span>
+        </span>
+      </div>
+      {visible.length === 0 ? (
+        <p className="fp-text-faint text-[10px] text-center py-4">All widgets hidden.</p>
+      ) : (
+        <div className="space-y-2">{visible.map((w) => <div key={w.id}>{miniWidget(w.id)}</div>)}</div>
+      )}
+    </div>
+  );
+}
+
+export function DashboardLayoutBuilder({ panelId, onLayoutChange }: { panelId: string; onLayoutChange?: (layout: DashboardWidget[] | null) => void }) {
   const cached = readLayoutCache(panelId);
   const [entitled, setEntitled] = useState<boolean | null>(cached ? cached.entitled : null);
   const [layout, setLayout] = useState<DashboardWidget[]>(cached?.home ?? []);
@@ -97,43 +158,11 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
     setMsg({ text: "Reset to the default layout." });
   };
 
-  // Mini representative render of each home widget, for the live preview.
-  const miniWidget = (id: DashboardWidgetId) => {
-    switch (id) {
-      case "stats":
-        return (
-          <div className="grid grid-cols-3 gap-1">
-            {["Balance", "Pending", "Done"].map((l) => (
-              <div key={l} className="fp-panel border fp-line-soft rounded p-1.5">
-                <p className="text-[7px] fp-text-faint uppercase leading-none">{l}</p>
-                <p className="text-[10px] fp-gold leading-tight mt-0.5">—</p>
-              </div>
-            ))}
-          </div>
-        );
-      case "favorites":
-        return (
-          <div className="fp-panel border fp-line-soft rounded p-2">
-            <p className="text-[9px] fp-gold mb-1">★ Favorites</p>
-            <div className="space-y-1">{[0, 1].map((i) => <div key={i} className="h-3 fp-panel-raised rounded" />)}</div>
-          </div>
-        );
-      case "recent":
-        return (
-          <div className="fp-panel border fp-line-soft rounded p-2">
-            <p className="text-[9px] fp-violet mb-1">Recently ordered</p>
-            <div className="space-y-1">{[0, 1].map((i) => <div key={i} className="h-3 fp-panel-raised rounded" />)}</div>
-          </div>
-        );
-      case "orders":
-        return (
-          <div className="fp-panel border fp-line-soft rounded p-2">
-            <p className="text-[9px] mb-1">Recent orders</p>
-            <div className="space-y-1">{[0, 1, 2].map((i) => <div key={i} className="h-3 fp-panel-raised rounded" />)}</div>
-          </div>
-        );
-    }
-  };
+  // Keep the Design Studio's preview column in sync with the working layout.
+  useEffect(() => {
+    onLayoutChange?.(entitled ? layout : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, entitled]);
 
   if (entitled === null) return <p className="fp-text-faint text-xs py-3">Loading…</p>;
 
@@ -168,24 +197,6 @@ export function DashboardLayoutBuilder({ panelId }: { panelId: string }) {
             </div>
           </div>
         ))}
-      </div>
-
-      <div className="mt-4">
-        <p className="fp-text-faint text-[10px] fp-mono uppercase mb-2">Live preview · customer dashboard</p>
-        <div className="fp-panel-raised border fp-line-soft rounded-lg p-2.5 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1"><span className="w-4 h-4 rounded fp-gold-bg" /><span className="text-[9px]">Panel</span></span>
-            <span className="flex items-center gap-1">
-              <span className="text-[8px] fp-gold fp-panel border fp-line-soft rounded px-1.5 py-0.5">$—</span>
-              <span className="text-[8px] fp-gold-bg text-[#0A0B0F] rounded px-1.5 py-0.5">Add</span>
-            </span>
-          </div>
-          {layout.filter((w) => w.visible).length === 0 ? (
-            <p className="fp-text-faint text-[10px] text-center py-3">All widgets hidden.</p>
-          ) : (
-            layout.filter((w) => w.visible).map((w) => <div key={w.id}>{miniWidget(w.id)}</div>)
-          )}
-        </div>
       </div>
 
       {msg && (

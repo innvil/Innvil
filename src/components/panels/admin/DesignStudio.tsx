@@ -6,7 +6,8 @@ import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
 import { formatMoney } from "@/src/lib/money";
-import { DashboardLayoutBuilder } from "./DashboardLayoutBuilder";
+import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutBuilder";
+import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
 /* =========================================================
    DESIGN STUDIO — full-screen "world" for editing a panel's
@@ -44,6 +45,7 @@ export function DesignStudio({
   onSaved: (v: StudioValues) => void;
 }) {
   const [v, setV] = useState<StudioValues>(initial);
+  const [dashPreview, setDashPreview] = useState<DashboardWidget[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const set = (patch: Partial<StudioValues>) => setV((s) => ({ ...s, ...patch }));
@@ -162,8 +164,8 @@ export function DesignStudio({
           </section>
 
           <section>
-            <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Gem size={12} className="fp-gold" /> Design Shop · premium templates</p>
-            <p className="fp-text-faint text-[11px] mb-3">Polished, distinct looks for your storefront — click to apply, restyled edge to edge (landing + dashboard).</p>
+            <p className="fp-text-faint text-xs fp-mono uppercase mb-1">More color themes · included</p>
+            <p className="fp-text-faint text-[11px] mb-3">Extra palettes, free with every panel — click to apply (landing + dashboard).</p>
             <div className="space-y-2">
               {PREMIUM_THEMES.map((t) => (
                 <button
@@ -189,7 +191,16 @@ export function DesignStudio({
 
           <section>
             <p className="fp-text-faint text-xs fp-mono uppercase mb-3">Dashboard layout · design tools</p>
-            <DashboardLayoutBuilder panelId={panel.id} />
+            <DashboardLayoutBuilder panelId={panel.id} onLayoutChange={setDashPreview} />
+          </section>
+
+          <section>
+            <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Gem size={12} className="fp-gold" /> Design Shop</p>
+            <p className="fp-text-faint text-[11px] leading-relaxed">
+              A marketplace of <span className="fp-text">complete, professionally designed landing pages</span> — distinct layouts,
+              artwork and animation, each with a full live preview, bought once and yours forever. Plus a full visual
+              editor for your panel&apos;s frontend. <span className="fp-text">In development.</span>
+            </p>
           </section>
         </div>
 
@@ -239,6 +250,8 @@ export function DesignStudio({
                 <button className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg">Add Funds</button>
               </div>
             </div>
+            {/* Customer-dashboard home — reflects the Dashboard layout builder live. */}
+            <DashboardHomePreview layout={dashPreview} panelName={v.name} />
           </div>
           <p className="fp-text-faint text-[11px] text-center mt-3">Free designs stay within the Innvil system. Premium designs (Design Shop) will restyle the whole dashboard.</p>
         </div>
