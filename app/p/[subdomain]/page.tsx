@@ -10,6 +10,7 @@ import type { PanelStatus } from "@/src/types/db";
 import { themeVars } from "@/src/data/themes";
 import { currencySymbol } from "@/src/lib/money";
 import { getDesignPackage } from "@/src/data/designs";
+import { editorToPackage } from "@/src/lib/design/editor";
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { Storefront } from "./Storefront";
 
@@ -109,7 +110,11 @@ export default async function StorefrontPage({ params }: Params) {
   /* A purchased marketplace design replaces the DEFAULT GUEST LANDING only. Signed-in
      customers always get the real dashboard, and the design's CTAs point at this
      panel's own auth routes — never Innvil's. */
-  const designPkg = panel.activeDesign ? getDesignPackage(panel.activeDesign) : undefined;
+  const designPkg = panel.activeDesign
+    ? getDesignPackage(panel.activeDesign)
+    : panel.customDesign
+      ? editorToPackage(panel.customDesign, panel.name)
+      : undefined;
   if (designPkg && !account) {
     const base = await storefrontBase(panel.subdomain);
     const sym = currencySymbol(panel.currency);

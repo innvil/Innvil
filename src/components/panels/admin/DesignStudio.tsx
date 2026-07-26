@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Save, Type, Gem, Plus, Trash2, Monitor, LayoutDashboard } from "lucide-react";
+import { X, Save, Type, Gem, Plus, Trash2, Monitor, LayoutDashboard, Layers } from "lucide-react";
 import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
@@ -12,6 +12,7 @@ import { getDesignPackage } from "@/src/data/designs";
 import { getDesignLibrary } from "@/src/lib/actions/design";
 import { themeToDesignTokens, designToThemeVars } from "@/src/lib/design/theme-bridge";
 import { DesignLibraryPanel } from "./DesignLibraryPanel";
+import { VisualEditor } from "./VisualEditor";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
 /* =========================================================
@@ -52,6 +53,7 @@ export function DesignStudio({
   const [v, setV] = useState<StudioValues>(initial);
   // Which "world" of the studio is active — the landing page or the customer dashboard.
   const [world, setWorld] = useState<"landing" | "dashboard">("landing");
+  const [showEditor, setShowEditor] = useState(false);
   const [dashPreview, setDashPreview] = useState<DashboardWidget[] | null>(null);
   // The purchased design currently applied to this panel's landing (null = Innvil default).
   const [activeDesign, setActiveDesign] = useState<string | null>(null);
@@ -85,6 +87,10 @@ export function DesignStudio({
     setMsg({ text: "Saved — your live panel now reflects this." });
     onSaved(v);
   };
+
+  if (showEditor) {
+    return <VisualEditor panel={panel} onClose={() => { setShowEditor(false); loadActiveDesign(); }} />;
+  }
 
   return (
     <div className="fixed inset-0 z-[60] fp-root flex flex-col" style={{ background: "var(--void)" }}>
@@ -238,6 +244,17 @@ export function DesignStudio({
               <Gem size={13} /> Browse the Design Shop
             </a>
             <DesignLibraryPanel panelId={panel.id} onChanged={loadActiveDesign} />
+          </section>
+
+          <section>
+            <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Layers size={12} className="fp-gold" /> Visual editor · design tools</p>
+            <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
+              Build your <span className="fp-text">own</span> landing from scratch — add sections, edit copy, set
+              colours, publish. Included with Business.
+            </p>
+            <button onClick={() => setShowEditor(true)} className="fp-panel-raised border fp-gold-border rounded-lg px-3 py-2 text-xs fp-gold inline-flex items-center gap-1.5">
+              <Layers size={13} /> Open the visual editor
+            </button>
           </section>
           </div>
          ) : (

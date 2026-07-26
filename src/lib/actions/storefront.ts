@@ -5,6 +5,7 @@ import { customerSupportActive } from "@/src/lib/ai/addon";
 import { hasDesignTools } from "@/src/lib/plans";
 import { readDashboardHome, type DashboardWidget } from "@/src/lib/dashboard-layout";
 import { activeDesignId } from "@/src/lib/design/library";
+import { readEditorState, type EditorDesign } from "@/src/lib/design/editor";
 import type { PanelStatus, ServiceRow } from "@/src/types/db";
 
 /**
@@ -39,6 +40,8 @@ export interface PublicPanel {
   dashboardLayout: DashboardWidget[] | null;
   /** Purchased marketplace design applied to the landing (null = default landing). */
   activeDesign: string | null;
+  /** Owner's published visual-editor landing (null = none). Marketplace design wins if both. */
+  customDesign: EditorDesign | null;
 }
 
 /** The panel's operating currency (from settings; default USD). */
@@ -128,6 +131,7 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
     dashboardLayout: hasDesignTools(data.settings) ? readDashboardHome(data.settings) : null,
     // Owned forever — a purchased design keeps working regardless of subscription.
     activeDesign: activeDesignId(data.settings),
+    customDesign: readEditorState(data.settings).published,
   };
 }
 

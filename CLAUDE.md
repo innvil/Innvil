@@ -127,6 +127,30 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Visual editor (Phase 1): config-driven landing builder (v0.2.108)
+- **First slice of the Shopify/Webflow-style visual editor**, built on the SAME schema + `DesignRenderer` the
+  marketplace uses (an owner-built design is just another config the renderer reads). Business-gated
+  (`hasDesignTools`). No migration — state in `panels.settings.design.editor` = `{ draft, published }`.
+- `src/lib/design/editor.ts` (NEW) — `EditorDesign` (`{ tokens, page }`), `EDITOR_DEFAULT_TOKENS` (neutral dark
+  starter palette), `makeSection(kind)` factories + `starterDesign()` (a complete starting landing),
+  `readEditorState(settings)`, and **`editorToPackage(design, name)`** → wraps the config as a `DesignPackage`
+  so the shared renderer draws it.
+- `actions/design.ts` — `getCustomDesign` / `saveCustomDesignDraft` / `publishCustomDesign` /
+  `unpublishCustomDesign` / `resetCustomDesign` (owner-auth + Business gate; publish snapshots draft→published,
+  audit-logged).
+- `src/components/panels/admin/VisualEditor.tsx` (NEW) — full-screen editor: **layers/sections panel**
+  (select / reorder / delete), an **approved component library** ("Add" → hero/stats/services/platforms/steps/
+  features/testimonials/faq/cta/content/functional), a **per-section settings panel** (edit copy; services
+  price toggle), **global colours** (accent/bg tokens), desktop/tablet/mobile **live canvas** via
+  `DesignRenderer`, and Save draft / Publish / Unpublish / Reset. Opened from a new "Visual editor" card in the
+  Design Studio's Landing world. Non-Business owners see a locked upsell.
+- **Live on the storefront:** `getPublicPanel` now returns `customDesign` (the published `EditorDesign`);
+  `app/p/[subdomain]/page.tsx` renders it for guests via `editorToPackage` when no marketplace design is active
+  (precedence: marketplace design > editor design > default). The signed-in dashboard themes from its tokens too.
+- **Phase 1 limits (next):** per-item editing for list sections (steps/features/testimonials/faq), drag-drop,
+  undo/redo/revisions, nav/header/footer editing, more per-section settings (variant/animation), and
+  responsive per-breakpoint controls. Functional blocks already stay backend-wired via the renderer's slots.
+
 ### 2026-07-24 — Blog UI paints from cache (no wait for the super-admin check) (v0.2.107)
 - **The Blog nav item, Blog section and bell draft-notices were missing until `amSuperAdmin()` resolved** —
   `isSuper` started `false` with no cache, so blog surfaces popped in late (unlike the rest of the app, which

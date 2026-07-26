@@ -6,6 +6,7 @@ import {
   readDashboardHome, normalizeDashboardHome, DEFAULT_DASHBOARD_HOME, type DashboardWidget,
 } from "@/src/lib/dashboard-layout";
 import { readDesignLibrary } from "@/src/lib/design/library";
+import { readEditorState, starterDesign, type EditorDesign, type EditorState } from "@/src/lib/design/editor";
 import { getDesignPackage } from "@/src/data/designs";
 import { round4 } from "@/src/lib/money";
 
@@ -63,6 +64,84 @@ export async function setDashboardHome(panelId: string, layout: DashboardWidget[
   const { error } = await ctx.admin.from("panels").update({ settings: updated }).eq("id", panelId);
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: null };
+}
+
+/* ------------------------------------------------------------ visual editor ---- */
+
+export interface CustomDesignInfo {
+  hasDesignTools: boolean;
+  draft: EditorDesign;
+  hasPublished: boolean;
+}
+
+/** Load the panel's visual-editor draft (+ whether a published version exists). */
+export async function getCustomDesign(panelId: string): Promise<CustomDesignInfo | null> {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return null;
+  const settings = toSettings(ctx.panel.settings);
+  const state = readEditorState(settings);
+  return { hasDesignTools: hasDesignTools(settings), draft: state.draft, hasPublished: state.published !== null };
+}
+
+function writeEditorState(settings: Settings, next: EditorState): Settings {
+  const design = (settings.design && typeof settings.design === "object" ? settings.design : {}) as Record<string, unknown>;
+  return { ...settings, design: { ...design, editor: next } };
+}
+
+/** Save the working draft. Requires Design Tools (Business). */
+export async function saveCustomDesignDraft(panelId: string, draft: EditorDesign): Promise<Result<null>> {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return { ok: false, error: "Panel not found." };
+  const settings = toSettings(ctx.panel.settings);
+  if (!hasDesignTools(settings)) {
+    return { ok: false, error: "The visual editor is included with the Business plan." };
+  }
+  if (!draft || typeof draft !== "object" || !draft.page) return { ok: false, error: "Invalid design." };
+  const state = readEditorState(settings);
+  const updated = writeEditorState(settings, { draft, published: state.published });
+  const { error } = await ctx.admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
+/** Publish the current draft to the storefront (snapshot draft → published). */
+export async function publishCustomDesign(panelId: string): Promise<Result<null>> {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return { ok: false, error: "Panel not found." };
+  const settings = toSettings(ctx.panel.settings);
+  if (!hasDesignTools(settings)) return { ok: false, error: "The visual editor is included with the Business plan." };
+  const state = readEditorState(settings);
+  const updated = writeEditorState(settings, { draft: state.draft, published: state.draft });
+  const { error } = await ctx.admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  await ctx.admin.from("audit_logs").insert({ panel_id: panelId, actor_id: ctx.user.id, action: "design.editor_published", meta: {} });
+  return { ok: true, data: null };
+}
+
+/** Take the custom design off the storefront (keeps the draft to edit later). */
+export async function unpublishCustomDesign(panelId: string): Promise<Result<null>> {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return { ok: false, error: "Panel not found." };
+  const settings = toSettings(ctx.panel.settings);
+  const state = readEditorState(settings);
+  const updated = writeEditorState(settings, { draft: state.draft, published: null });
+  const { error } = await ctx.admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
+/** Reset the draft to a fresh starter composition. */
+export async function resetCustomDesign(panelId: string): Promise<Result<EditorDesign>> {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return { ok: false, error: "Panel not found." };
+  const settings = toSettings(ctx.panel.settings);
+  if (!hasDesignTools(settings)) return { ok: false, error: "The visual editor is included with the Business plan." };
+  const state = readEditorState(settings);
+  const fresh = starterDesign();
+  const updated = writeEditorState(settings, { draft: fresh, published: state.published });
+  const { error } = await ctx.admin.from("panels").update({ settings: updated }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: fresh };
 }
 
 /* ---------------------------------------------------------------- library ---- */
