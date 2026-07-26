@@ -5,7 +5,7 @@ import { Lock, Wrench, FileText } from "lucide-react";
 import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
 import { storefrontBase } from "@/src/lib/storefront-host";
-import { themeToDesignTokens } from "@/src/lib/design/theme-bridge";
+import { themeToDesignTokens, designToThemeVars } from "@/src/lib/design/theme-bridge";
 import type { PanelStatus } from "@/src/types/db";
 import { themeVars } from "@/src/data/themes";
 import { currencySymbol } from "@/src/lib/money";
@@ -158,8 +158,16 @@ export default async function StorefrontPage({ params }: Params) {
     );
   }
 
+  /* A signed-in customer whose panel has an active design gets the dashboard themed from
+     the design's palette (recoloured first by any free theme), matching the landing.
+     Guests were already handled above; no design ⇒ the panel's colour theme. */
+  const dashboardStyle =
+    designPkg && account
+      ? (designToThemeVars(designPkg.tokens, themeToDesignTokens(panel.theme, panel.accent)) as CSSProperties)
+      : themeStyle;
+
   return (
-    <div style={themeStyle}>
+    <div style={dashboardStyle}>
       <Storefront
         panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description, sections: panel.sections, aiSupport: panel.aiSupport, dashboardLayout: panel.dashboardLayout }}
         services={services}

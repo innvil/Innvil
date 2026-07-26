@@ -2,6 +2,34 @@ import { themeById } from "@/src/data/themes";
 import type { DesignTokens } from "./schema";
 
 /**
+ * The REVERSE bridge: maps a purchased design's `--d-*` tokens onto the `fp-*` CSS
+ * variables the existing customer dashboard (and default storefront chrome) use, so a
+ * signed-in customer's dashboard picks up the active design's palette. Colours + a few
+ * shape tokens only — no layout or logic changes. `overrides` lets a free colour theme
+ * recolour the design first (same precedence as the landing).
+ */
+export function designToThemeVars(tokens: DesignTokens, overrides?: Partial<DesignTokens>): Record<string, string> {
+  const t = { ...tokens, ...(overrides ?? {}) };
+  return {
+    "--void": t.bg,
+    "--void-2": t.bgAlt,
+    "--panel": t.surface,
+    "--panel-raised": t.surfaceAlt,
+    "--line": t.border,
+    "--line-soft": t.border,
+    "--text": t.text,
+    "--text-dim": t.textDim,
+    "--text-faint": t.textFaint,
+    "--gold": t.accent,
+    "--gold-light": t.accentAlt,
+    "--violet": t.accentAlt,
+    // Accent tints — color-mix handles hex or rgba accents cleanly.
+    "--gold-soft": `color-mix(in srgb, ${t.accent} 14%, transparent)`,
+    "--gold-soft-border": `color-mix(in srgb, ${t.accent} 32%, transparent)`,
+  };
+}
+
+/**
  * Bridges the FREE colour themes (which are `fp-*` CSS-variable sets) onto a purchased
  * design's tokens, so an owner can recolour a bought design instead of being stuck with
  * its shipped palette. Only colours are mapped — the design keeps its own layout,

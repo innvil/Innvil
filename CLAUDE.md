@@ -127,6 +127,27 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Customer dashboard themed from the active design (v0.2.102)
+- **A signed-in customer's dashboard now picks up the active design's palette** (was still the default Innvil
+  look even with a design applied). New **`designToThemeVars(tokens, overrides)`** in `theme-bridge.ts` — the
+  REVERSE of `themeToDesignTokens`: maps the design's `--d-*` tokens onto the `fp-*` CSS vars the existing
+  dashboard uses (surfaces, text, accent + `color-mix` accent tints). `app/p/[subdomain]/page.tsx` wraps the
+  signed-in storefront in `designToThemeVars(designPkg.tokens, themeToDesignTokens(theme, accent))` when a design
+  is active, else the panel's colour theme. **Colours only — no dashboard layout/markup/order/wallet changes**;
+  a free colour theme still recolours the design first (same precedence as the landing).
+- Guests already got the design landing; this closes the last "default UI with a design active" gap.
+
+### 2026-07-24 — Themed signup page from the active design (v0.2.101)
+- **The signup page now wears the panel's purchased design** — same pattern as login (v0.2.98). `SignUpClient`
+  gained an **`embedded`** mode (form only, inputs/buttons styled from `--d-*` design tokens; form markup shared
+  between both modes) and host-aware links via `storefrontBaseFromLocation` (no more hardcoded `/p/<sub>`).
+  `app/p/[subdomain]/signup/page.tsx` checks `panel.activeDesign`; if the package has a `signup` page it renders
+  the design via the shared `DesignRenderer` (catalog-derived stats, panel `hrefs`, `themeToDesignTokens`
+  overrides) and **injects the real signup form into the `auth-card` slot** — auth logic stays outside the
+  design. No design ⇒ the default page wrapped in `themeVars`.
+- **TODO (next):** the customer DASHBOARD still renders the default Innvil UI even with a design active — theme
+  it from the active design's tokens (order/wallet logic untouched).
+
 ### 2026-07-24 — White-label fix: storefront auth pages leaked Innvil branding (v0.2.100)
 - **The real "still points to Innvil" bug was METADATA, not links.** The storefront auth pages had **no
   `generateMetadata`**, so they inherited the root layout's Innvil title + favicon — a customer on

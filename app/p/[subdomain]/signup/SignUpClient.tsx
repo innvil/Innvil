@@ -6,6 +6,7 @@ import React, { useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { customerSignUp } from "@/src/lib/actions/customer-auth";
+import { storefrontBaseFromLocation } from "@/src/lib/config";
 
 function isAppHost(hostname: string, rootDomain: string): boolean {
   const h = hostname.toLowerCase();
@@ -32,11 +33,14 @@ export function SignUpClient({
   panelName,
   subdomain,
   logoUrl,
+  embedded = false,
 }: {
   panelId: string;
   panelName: string;
   subdomain: string;
   logoUrl?: string | null;
+  /** Render only the form — used when injected into a purchased design's auth slot. */
+  embedded?: boolean;
 }) {
   const router = useRouter();
   const [username, setUsername] = useState("");
@@ -46,7 +50,10 @@ export function SignUpClient({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loginHref = useMemo(() => `/p/${subdomain}`, [subdomain]);
+  // Host-aware: "/p/<sub>" on the app host, "" on a panel host (proxy already scopes it).
+  const base = useMemo(() => storefrontBaseFromLocation(subdomain), [subdomain]);
+  const loginHref = `${base}/login`;
+  const homeHref = base || "/";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,13 +89,78 @@ export function SignUpClient({
     }
   };
 
-  const inputCls =
-    "w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[rgba(139,127,255,0.35)] text-[#EDEAE2]";
+  const inputCls = embedded
+    // Inherit the design's tokens so the form matches the purchased design.
+    ? "w-full rounded-lg px-3 py-2.5 text-sm outline-none"
+    : "w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm outline-none focus:border-[rgba(139,127,255,0.35)] text-[#EDEAE2]";
+  const embeddedInputStyle = embedded
+    ? { background: "var(--d-surface-alt)", border: "1px solid var(--d-border)", color: "var(--d-text)" }
+    : undefined;
+
+  const form = (
+    <form onSubmit={submit} autoComplete={`section-innvil-customer-signup-${panelId} on`}>
+      <input
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        type="text"
+        name="username"
+        autoComplete={`section-innvil-customer-signup-${panelId} username`}
+        placeholder="Username"
+        className={`${inputCls} mb-3`}
+        style={embeddedInputStyle}
+      />
+      <input
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        type="email"
+        name="email"
+        autoComplete={`section-innvil-customer-signup-${panelId} email`}
+        placeholder="Email"
+        className={`${inputCls} mb-3`}
+        style={embeddedInputStyle}
+      />
+      <input
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        type="password"
+        name="password"
+        autoComplete={`section-innvil-customer-signup-${panelId} new-password`}
+        placeholder="Password"
+        className={`${inputCls} mb-4`}
+        style={embeddedInputStyle}
+      />
+
+      {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
+      {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
+
+      {embedded ? (
+        <button type="submit" disabled={busy} className="dz-btn dz-btn-primary" style={{ width: "100%", justifyContent: "center" }}>
+          {busy ? "Please wait..." : "Create account"}
+        </button>
+      ) : (
+        <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
+          {busy ? "Please wait..." : "Create account"}
+        </button>
+      )}
+    </form>
+  );
+
+  if (embedded) {
+    return (
+      <div>
+        {form}
+        <p className="text-xs text-center mt-4" style={{ color: "var(--d-text-faint)" }}>
+          Already have an account?{" "}
+          <Link href={loginHref} style={{ color: "var(--d-accent)" }}>Log in</Link>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="fp-root min-h-screen fp-grid-bg fp-noise flex items-center justify-center px-4 py-10">
       <div className="fp-panel border fp-line rounded-2xl p-7 w-full max-w-md">
-        <Link href={`/p/${subdomain}`} className="flex items-center gap-2 mb-2 w-fit">
+        <Link href={homeHref} className="flex items-center gap-2 mb-2 w-fit">
           {logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logoUrl} alt={panelName} className="w-8 h-8 rounded-lg object-cover" />
@@ -100,42 +172,7 @@ export function SignUpClient({
         <h1 className="fp-display text-2xl mb-2">Create account</h1>
         <p className="fp-text-dim text-sm mb-6">Username, email, and password are required. We will send a confirmation email before first login.</p>
 
-        <form onSubmit={submit} autoComplete={`section-innvil-customer-signup-${panelId} on`}>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            type="text"
-            name="username"
-            autoComplete={`section-innvil-customer-signup-${panelId} username`}
-            placeholder="Username"
-            className={`${inputCls} mb-3`}
-          />
-          <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
-            name="email"
-            autoComplete={`section-innvil-customer-signup-${panelId} email`}
-            placeholder="Email"
-            className={`${inputCls} mb-3`}
-          />
-          <input
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            name="password"
-            autoComplete={`section-innvil-customer-signup-${panelId} new-password`}
-            placeholder="Password"
-            className={`${inputCls} mb-4`}
-          />
-
-          {error && <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
-          {notice && <p className="text-xs fp-safe mb-3 flex items-center gap-1.5"><CheckCircle2 size={12} /> {notice}</p>}
-
-          <button type="submit" disabled={busy} className="fp-btn-primary font-semibold w-full py-3 rounded-lg text-sm disabled:opacity-60">
-            {busy ? "Please wait..." : "Create account"}
-          </button>
-        </form>
+        {form}
 
         <p className="fp-text-faint text-xs text-center mt-4">
           Already have an account? <Link href={loginHref} className="fp-violet">Log in</Link>
