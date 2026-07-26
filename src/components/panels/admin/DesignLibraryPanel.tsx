@@ -9,7 +9,7 @@ import { designCards } from "@/src/data/designs";
    Innvil balance), then activate / switch between the designs it owns. Owned designs
    are permanent — deactivating never revokes them. */
 
-export function DesignLibraryPanel({ panelId }: { panelId: string }) {
+export function DesignLibraryPanel({ panelId, onChanged }: { panelId: string; onChanged?: () => void }) {
   const [lib, setLib] = useState<DesignLibraryInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
@@ -25,6 +25,7 @@ export function DesignLibraryPanel({ panelId }: { panelId: string }) {
     setBusy(null);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setLib(res.data);
+    onChanged?.();
     setMsg({ text: `${name} is yours — activate it to put it live.` });
   };
 
@@ -34,6 +35,7 @@ export function DesignLibraryPanel({ panelId }: { panelId: string }) {
     setBusy(null);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setLib(res.data);
+    onChanged?.();
     setMsg({ text: id ? `${name} is now live on your landing page.` : "Back to the default landing." });
   };
 

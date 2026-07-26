@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Design activation fixes: storefront login route + live design preview (v0.2.97)
+- **FIX (404 on login):** a purchased design's "Log in" CTA pointed at `/p/<sub>/login`, which **didn't exist** —
+  the default storefront logs in inline on its landing card, so the route was never created. Added
+  **`app/p/[subdomain]/login/`** (`page.tsx` + `LoginClient.tsx`), mirroring the existing signup page and using
+  `customerSignIn`; links to forgot-password + signup, redirects to `/p/<sub>` on success.
+- **FIX (Design Studio preview was hardcoded):** the studio's landing preview always drew the default Innvil
+  hero. It now loads the panel's active design (`getDesignLibrary`) and renders the **real design** via the
+  shared `DesignRenderer` (inert, demo content, live name/logo/accent) when one is applied; otherwise the default
+  preview. `DesignLibraryPanel` gained `onChanged` so buying/activating/deactivating refreshes the preview
+  immediately. Caption now states which design is shown.
+
 ### 2026-07-24 — Design Shop scope correction + preview placement (v0.2.96)
 - **CORRECTION to v0.2.90.** The three "premium templates" (aurora/carbon/luxe) are just CSS-var color
   themes — that is explicitly **NOT** the paid Design Shop. They're now labeled **"More color themes ·

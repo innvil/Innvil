@@ -5,8 +5,11 @@ import { X, Save, Type, Gem, Plus, Trash2 } from "lucide-react";
 import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
-import { formatMoney } from "@/src/lib/money";
+import { formatMoney, currencySymbol } from "@/src/lib/money";
 import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutBuilder";
+import { DesignRenderer } from "@/src/components/design/DesignRenderer";
+import { getDesignPackage } from "@/src/data/designs";
+import { getDesignLibrary } from "@/src/lib/actions/design";
 import { DesignLibraryPanel } from "./DesignLibraryPanel";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
@@ -47,6 +50,8 @@ export function DesignStudio({
 }) {
   const [v, setV] = useState<StudioValues>(initial);
   const [dashPreview, setDashPreview] = useState<DashboardWidget[] | null>(null);
+  // The purchased design currently applied to this panel's landing (null = Innvil default).
+  const [activeDesign, setActiveDesign] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const set = (patch: Partial<StudioValues>) => setV((s) => ({ ...s, ...patch }));
@@ -57,6 +62,13 @@ export function DesignStudio({
   const currency = panel.currency || "USD";
   const preview = themeVars(v.theme, v.accent) as React.CSSProperties;
   const inputCls = "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border";
+
+  // Which purchased design (if any) is live — so the preview shows the REAL landing.
+  const loadActiveDesign = React.useCallback(() => {
+    getDesignLibrary(panel.id).then((lib) => setActiveDesign(lib?.active ?? null)).catch(() => {});
+  }, [panel.id]);
+  React.useEffect(() => { loadActiveDesign(); }, [loadActiveDesign]);
+  const activePkg = activeDesign ? getDesignPackage(activeDesign) : undefined;
 
   const save = async () => {
     setBusy(true); setMsg(null);
@@ -209,7 +221,7 @@ export function DesignStudio({
             >
               <Gem size={13} /> Browse the Design Shop
             </a>
-            <DesignLibraryPanel panelId={panel.id} />
+            <DesignLibraryPanel panelId={panel.id} onChanged={loadActiveDesign} />
           </section>
         </div>
 
@@ -217,32 +229,47 @@ export function DesignStudio({
         <div className="overflow-y-auto p-6" style={{ background: "var(--void-2)" }}>
           <p className="fp-text-faint text-xs fp-mono uppercase mb-3 text-center">Live preview</p>
           <div style={preview} className="mx-auto max-w-3xl rounded-2xl overflow-hidden border fp-line shadow-2xl">
-            {/* Landing hero */}
-            <div className="fp-root p-6" style={{ background: "var(--void)" }}>
-              <div className="flex items-center gap-2 mb-6">
-                {v.logoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={v.logoUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
-                ) : (
-                  <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={15} />
-                )}
-                <span className="fp-display text-lg">{v.name || "Your panel"}</span>
-              </div>
-              <h1 className="fp-display text-2xl mb-2 leading-tight">{v.headline || "Grow every platform from one wallet."}</h1>
-              <p className="fp-text-dim text-sm mb-4">{v.description || "Instant delivery, transparent pricing, and one balance for all your social growth."}</p>
-              <button className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
-              <div className="fp-panel border fp-line rounded-xl p-3 mt-5 flex items-center justify-between">
-                <div><p className="text-sm font-medium">Instagram Followers — HQ</p><p className="fp-text-faint text-xs fp-mono">Followers · min 100</p></div>
-                <span className="fp-mono text-sm fp-gold">{formatMoney(1.35, currency)}/1k</span>
-              </div>
-              {v.sections.filter((s) => s.title || s.body).map((s) => (
-                <div key={s.id} className="border-t fp-line-soft mt-5 pt-5 text-center">
-                  {s.title && <p className="fp-display text-lg mb-1">{s.title}</p>}
-                  {s.body && <p className="fp-text-dim text-sm whitespace-pre-line">{s.body}</p>}
-                  {s.ctaLabel && <span className="fp-btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mt-3">{s.ctaLabel}</span>}
+            {/* Landing — the ACTIVE purchased design when there is one, else the Innvil default. */}
+            {activePkg ? (
+              <DesignRenderer
+                pkg={activePkg}
+                data={{
+                  panelName: v.name || activePkg.preview.panelName,
+                  logoUrl: v.logoUrl || undefined,
+                  services: activePkg.preview.services,
+                  categories: activePkg.preview.categories,
+                  currencySymbol: currencySymbol(currency),
+                }}
+                personalization={v.accent ? { accent: v.accent } : undefined}
+                inert
+              />
+            ) : (
+              <div className="fp-root p-6" style={{ background: "var(--void)" }}>
+                <div className="flex items-center gap-2 mb-6">
+                  {v.logoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={v.logoUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
+                  ) : (
+                    <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={15} />
+                  )}
+                  <span className="fp-display text-lg">{v.name || "Your panel"}</span>
                 </div>
-              ))}
-            </div>
+                <h1 className="fp-display text-2xl mb-2 leading-tight">{v.headline || "Grow every platform from one wallet."}</h1>
+                <p className="fp-text-dim text-sm mb-4">{v.description || "Instant delivery, transparent pricing, and one balance for all your social growth."}</p>
+                <button className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
+                <div className="fp-panel border fp-line rounded-xl p-3 mt-5 flex items-center justify-between">
+                  <div><p className="text-sm font-medium">Instagram Followers — HQ</p><p className="fp-text-faint text-xs fp-mono">Followers · min 100</p></div>
+                  <span className="fp-mono text-sm fp-gold">{formatMoney(1.35, currency)}/1k</span>
+                </div>
+                {v.sections.filter((s) => s.title || s.body).map((s) => (
+                  <div key={s.id} className="border-t fp-line-soft mt-5 pt-5 text-center">
+                    {s.title && <p className="fp-display text-lg mb-1">{s.title}</p>}
+                    {s.body && <p className="fp-text-dim text-sm whitespace-pre-line">{s.body}</p>}
+                    {s.ctaLabel && <span className="fp-btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mt-3">{s.ctaLabel}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
             {/* Dashboard header */}
             <div className="fp-root border-t fp-line-soft p-4 flex items-center justify-between" style={{ background: "var(--void-2)" }}>
               <div className="flex items-center gap-2">
@@ -262,7 +289,11 @@ export function DesignStudio({
             {/* Customer-dashboard home — reflects the Dashboard layout builder live. */}
             <DashboardHomePreview layout={dashPreview} panelName={v.name} />
           </div>
-          <p className="fp-text-faint text-[11px] text-center mt-3">Free designs stay within the Innvil system. Premium designs (Design Shop) will restyle the whole dashboard.</p>
+          <p className="fp-text-faint text-[11px] text-center mt-3">
+            {activePkg
+              ? `Landing shown with your active design (${activePkg.meta.name}). Colour themes below still style the customer dashboard.`
+              : "Colour themes style the landing + dashboard. Buy a Design Shop design to replace the landing entirely."}
+          </p>
         </div>
       </div>
     </div>
