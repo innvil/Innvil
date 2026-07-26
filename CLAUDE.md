@@ -127,6 +127,24 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Fix: schedule bill-addons cron; order-sync job missing too (v0.2.105)
+- **`cron.job` showed ONLY `innvil-generate-blog`** — `innvil-bill-addons` and `innvil-order-sync-every-10-min`
+  were not scheduled (add-on/plan billing + order-status sync silently never ran). Added
+  **`0027_supabase_bill_addons_cron.sql`** (`trigger_bill_addons()` → `/api/cron/bill-addons?secret=…`, daily
+  06:00 UTC) mirroring 0015/0026. **Order-sync has `0015` but its job is absent** — re-run 0015's
+  `select cron.schedule('innvil-order-sync-every-10-min', …)` (the migration is idempotent) to restore it.
+  All three crons share the vault `app_url`/`cron_secret`.
+
+### 2026-07-24 — Fix: blog auto-generation was never scheduled (v0.2.104)
+- **Root cause of "no auto blogs":** the daily blog-draft cron existed only as a COMMENT in the route file — no
+  migration ever scheduled it (unlike order-sync, which has `0015`). So the endpoint worked when hit manually
+  but was never called. Added **`0026_supabase_blog_cron.sql`** mirroring `0015`: `trigger_blog_generation()`
+  (vault `app_url` + `cron_secret`, `net.http_get` → `/api/cron/generate-blog?secret=…`, 120s timeout) +
+  `cron.schedule('innvil-generate-blog','0 9 * * *', …)`, with an unschedule-if-exists guard. **Run migration
+  0026**; needs vault `app_url`/`cron_secret` (same as order-sync) + `ANTHROPIC_API_KEY`.
+- The manual "generate now" inserts exactly one draft (`generateDraftNow` → single `insertDraft`); "2 at once"
+  was most likely a double-submit/retry of the slow AI request or the cron firing alongside it — not a loop.
+
 ### 2026-07-24 — Fix: Design Studio preview ignored the colour theme (v0.2.103)
 - **The live storefront already recoloured a bought design from the free theme (v0.2.99), but the Design Studio
   PREVIEW didn't** — it passed `personalization={accent}` only, never `tokenOverrides`, so picking a theme in the

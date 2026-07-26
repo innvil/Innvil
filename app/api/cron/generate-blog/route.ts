@@ -7,8 +7,9 @@ import { runScheduledGeneration } from "@/src/lib/blog/generate";
    and saves it as status='draft'. Nothing is ever published automatically — a
    super admin reviews and publishes from /superadmin → Blog.
 
-   Schedule via Supabase pg_cron (project convention — not vercel.json). Example
-   (run daily at 09:00 UTC), replacing the URL + secret:
+   Scheduled by migration 0026_supabase_blog_cron.sql (Supabase pg_cron — project
+   convention, not vercel.json). Apply that migration to turn the daily job on.
+   Equivalent manual schedule (daily 09:00 UTC), replacing the URL + secret:
 
      select cron.schedule(
        'innvil-generate-blog',
