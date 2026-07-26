@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Design Studio: Landing / Dashboard "worlds" (v0.2.106)
+- **The Design Studio now has two worlds** switched by a top-bar toggle (Landing · Dashboard), instead of
+  stacking the dashboard preview under the landing. `world` state in `DesignStudio.tsx`:
+  - **Landing** — identity, landing copy, ad sections, colour themes, Design Shop controls + the landing
+    preview (active design via `DesignRenderer`, or the default).
+  - **Dashboard** — the `DashboardLayoutBuilder` controls + a focused customer-dashboard preview (header +
+    `DashboardHomePreview`) whose palette follows the active design (`designToThemeVars`) or the colour theme.
+  Each world shows only its own controls + its own preview. No data/logic change — purely the studio's editing UX.
+
 ### 2026-07-24 — Fix: schedule bill-addons cron; order-sync job missing too (v0.2.105)
 - **`cron.job` showed ONLY `innvil-generate-blog`** — `innvil-bill-addons` and `innvil-order-sync-every-10-min`
   were not scheduled (add-on/plan billing + order-status sync silently never ran). Added

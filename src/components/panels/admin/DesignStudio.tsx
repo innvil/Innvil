@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Save, Type, Gem, Plus, Trash2 } from "lucide-react";
+import { X, Save, Type, Gem, Plus, Trash2, Monitor, LayoutDashboard } from "lucide-react";
 import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
@@ -10,7 +10,7 @@ import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutB
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { getDesignPackage } from "@/src/data/designs";
 import { getDesignLibrary } from "@/src/lib/actions/design";
-import { themeToDesignTokens } from "@/src/lib/design/theme-bridge";
+import { themeToDesignTokens, designToThemeVars } from "@/src/lib/design/theme-bridge";
 import { DesignLibraryPanel } from "./DesignLibraryPanel";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
@@ -50,6 +50,8 @@ export function DesignStudio({
   onSaved: (v: StudioValues) => void;
 }) {
   const [v, setV] = useState<StudioValues>(initial);
+  // Which "world" of the studio is active — the landing page or the customer dashboard.
+  const [world, setWorld] = useState<"landing" | "dashboard">("landing");
   const [dashPreview, setDashPreview] = useState<DashboardWidget[] | null>(null);
   // The purchased design currently applied to this panel's landing (null = Innvil default).
   const [activeDesign, setActiveDesign] = useState<string | null>(null);
@@ -95,6 +97,22 @@ export function DesignStudio({
             <p className="fp-text-faint text-xs truncate">{panel.name} · {panel.subdomain}</p>
           </div>
         </div>
+        {/* World switcher — Landing vs Customer dashboard, each its own controls + preview */}
+        <div className="flex items-center gap-1 fp-panel-raised border fp-line-soft rounded-lg p-1 shrink-0">
+          <button
+            onClick={() => setWorld("landing")}
+            className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${world === "landing" ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
+          >
+            <Monitor size={13} /> Landing
+          </button>
+          <button
+            onClick={() => setWorld("dashboard")}
+            className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${world === "dashboard" ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
+          >
+            <LayoutDashboard size={13} /> Dashboard
+          </button>
+        </div>
+
         <div className="flex items-center gap-2 shrink-0">
           {msg && <span className={`text-xs hidden sm:inline ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</span>}
           <button onClick={save} disabled={busy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-50 flex items-center gap-1.5">
@@ -107,7 +125,9 @@ export function DesignStudio({
       {/* Body */}
       <div className="flex-1 min-h-0 grid lg:grid-cols-[380px_1fr]">
         {/* Controls */}
-        <div className="overflow-y-auto border-r fp-line-soft p-5 space-y-6">
+        <div className="overflow-y-auto border-r fp-line-soft p-5">
+         {world === "landing" ? (
+          <div className="space-y-6">
           <section>
             <p className="fp-text-faint text-xs fp-mono uppercase mb-3">Identity</p>
             <label className="fp-text-dim text-xs">Display name</label>
@@ -204,11 +224,6 @@ export function DesignStudio({
           </section>
 
           <section>
-            <p className="fp-text-faint text-xs fp-mono uppercase mb-3">Dashboard layout · design tools</p>
-            <DashboardLayoutBuilder panelId={panel.id} onLayoutChange={setDashPreview} />
-          </section>
-
-          <section>
             <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Gem size={12} className="fp-gold" /> Design Shop</p>
             <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
               A marketplace of <span className="fp-text">complete, professionally designed landing pages</span> — distinct layouts,
@@ -224,77 +239,110 @@ export function DesignStudio({
             </a>
             <DesignLibraryPanel panelId={panel.id} onChanged={loadActiveDesign} />
           </section>
+          </div>
+         ) : (
+          <div className="space-y-6">
+            <section>
+              <p className="fp-text-faint text-xs fp-mono uppercase mb-1">Dashboard layout · design tools</p>
+              <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
+                Rearrange and show/hide the widgets on your customers&apos; dashboard home. Colours follow the theme
+                you pick on the <span className="fp-text">Landing</span> tab — this world is about layout.
+              </p>
+              <DashboardLayoutBuilder panelId={panel.id} onLayoutChange={setDashPreview} />
+            </section>
+          </div>
+         )}
         </div>
 
-        {/* Live preview */}
+        {/* Live preview — its own view per world */}
         <div className="overflow-y-auto p-6" style={{ background: "var(--void-2)" }}>
-          <p className="fp-text-faint text-xs fp-mono uppercase mb-3 text-center">Live preview</p>
-          <div style={preview} className="mx-auto max-w-3xl rounded-2xl overflow-hidden border fp-line shadow-2xl">
-            {/* Landing — the ACTIVE purchased design when there is one, else the Innvil default. */}
-            {activePkg ? (
-              <DesignRenderer
-                pkg={activePkg}
-                data={{
-                  panelName: v.name || activePkg.preview.panelName,
-                  logoUrl: v.logoUrl || undefined,
-                  services: activePkg.preview.services,
-                  categories: activePkg.preview.categories,
-                  currencySymbol: currencySymbol(currency),
-                }}
-                tokenOverrides={themeToDesignTokens(v.theme, v.accent)}
-                inert
-              />
-            ) : (
-              <div className="fp-root p-6" style={{ background: "var(--void)" }}>
-                <div className="flex items-center gap-2 mb-6">
-                  {v.logoUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={v.logoUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
-                  ) : (
-                    <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={15} />
-                  )}
-                  <span className="fp-display text-lg">{v.name || "Your panel"}</span>
-                </div>
-                <h1 className="fp-display text-2xl mb-2 leading-tight">{v.headline || "Grow every platform from one wallet."}</h1>
-                <p className="fp-text-dim text-sm mb-4">{v.description || "Instant delivery, transparent pricing, and one balance for all your social growth."}</p>
-                <button className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
-                <div className="fp-panel border fp-line rounded-xl p-3 mt-5 flex items-center justify-between">
-                  <div><p className="text-sm font-medium">Instagram Followers — HQ</p><p className="fp-text-faint text-xs fp-mono">Followers · min 100</p></div>
-                  <span className="fp-mono text-sm fp-gold">{formatMoney(1.35, currency)}/1k</span>
-                </div>
-                {v.sections.filter((s) => s.title || s.body).map((s) => (
-                  <div key={s.id} className="border-t fp-line-soft mt-5 pt-5 text-center">
-                    {s.title && <p className="fp-display text-lg mb-1">{s.title}</p>}
-                    {s.body && <p className="fp-text-dim text-sm whitespace-pre-line">{s.body}</p>}
-                    {s.ctaLabel && <span className="fp-btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mt-3">{s.ctaLabel}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-            {/* Dashboard header */}
-            <div className="fp-root border-t fp-line-soft p-4 flex items-center justify-between" style={{ background: "var(--void-2)" }}>
-              <div className="flex items-center gap-2">
-                {v.logoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={v.logoUrl} alt="" className="w-7 h-7 rounded-md object-cover" />
-                ) : (
-                  <DefaultLogo className="w-7 h-7 rounded-md" iconSize={13} />
-                )}
-                <span className="fp-display">{v.name || "Your panel"}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="fp-mono text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-2"><span className="fp-gold">{formatMoney(24.6, currency)}</span></span>
-                <button className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg">Add Funds</button>
-              </div>
-            </div>
-            {/* Customer-dashboard home — reflects the Dashboard layout builder live. */}
-            <DashboardHomePreview layout={dashPreview} panelName={v.name} />
-          </div>
-          <p className="fp-text-faint text-[11px] text-center mt-3">
-            {activePkg
-              ? `Shown with your active design (${activePkg.meta.name}). Pick a colour theme below to recolour it — the design keeps its layout, type and animation.`
-              : "Colour themes style the landing + dashboard. Buy a Design Shop design to replace the landing entirely."}
+          <p className="fp-text-faint text-xs fp-mono uppercase mb-3 text-center">
+            {world === "landing" ? "Landing preview" : "Customer dashboard preview"}
           </p>
+
+          {world === "landing" ? (
+            <>
+              <div style={preview} className="mx-auto max-w-3xl rounded-2xl overflow-hidden border fp-line shadow-2xl">
+                {/* Landing — the ACTIVE purchased design when there is one, else the Innvil default. */}
+                {activePkg ? (
+                  <DesignRenderer
+                    pkg={activePkg}
+                    data={{
+                      panelName: v.name || activePkg.preview.panelName,
+                      logoUrl: v.logoUrl || undefined,
+                      services: activePkg.preview.services,
+                      categories: activePkg.preview.categories,
+                      currencySymbol: currencySymbol(currency),
+                    }}
+                    tokenOverrides={themeToDesignTokens(v.theme, v.accent)}
+                    inert
+                  />
+                ) : (
+                  <div className="fp-root p-6" style={{ background: "var(--void)" }}>
+                    <div className="flex items-center gap-2 mb-6">
+                      {v.logoUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={v.logoUrl} alt="" className="w-8 h-8 rounded-lg object-cover" />
+                      ) : (
+                        <DefaultLogo className="w-8 h-8 rounded-lg" iconSize={15} />
+                      )}
+                      <span className="fp-display text-lg">{v.name || "Your panel"}</span>
+                    </div>
+                    <h1 className="fp-display text-2xl mb-2 leading-tight">{v.headline || "Grow every platform from one wallet."}</h1>
+                    <p className="fp-text-dim text-sm mb-4">{v.description || "Instant delivery, transparent pricing, and one balance for all your social growth."}</p>
+                    <button className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
+                    <div className="fp-panel border fp-line rounded-xl p-3 mt-5 flex items-center justify-between">
+                      <div><p className="text-sm font-medium">Instagram Followers — HQ</p><p className="fp-text-faint text-xs fp-mono">Followers · min 100</p></div>
+                      <span className="fp-mono text-sm fp-gold">{formatMoney(1.35, currency)}/1k</span>
+                    </div>
+                    {v.sections.filter((s) => s.title || s.body).map((s) => (
+                      <div key={s.id} className="border-t fp-line-soft mt-5 pt-5 text-center">
+                        {s.title && <p className="fp-display text-lg mb-1">{s.title}</p>}
+                        {s.body && <p className="fp-text-dim text-sm whitespace-pre-line">{s.body}</p>}
+                        {s.ctaLabel && <span className="fp-btn-primary text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mt-3">{s.ctaLabel}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <p className="fp-text-faint text-[11px] text-center mt-3">
+                {activePkg
+                  ? `Shown with your active design (${activePkg.meta.name}). Pick a colour theme to recolour it — the design keeps its layout, type and animation.`
+                  : "Colour themes style the landing + dashboard. Buy a Design Shop design to replace the landing entirely."}
+              </p>
+            </>
+          ) : (
+            <>
+              {/* Customer dashboard — palette follows the active design (or the colour theme). */}
+              <div
+                style={activePkg ? (designToThemeVars(activePkg.tokens, themeToDesignTokens(v.theme, v.accent)) as React.CSSProperties) : preview}
+                className="fp-root mx-auto max-w-3xl rounded-2xl overflow-hidden border fp-line shadow-2xl"
+              >
+                {/* Dashboard header */}
+                <div className="p-4 flex items-center justify-between" style={{ background: "var(--void-2)" }}>
+                  <div className="flex items-center gap-2">
+                    {v.logoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={v.logoUrl} alt="" className="w-7 h-7 rounded-md object-cover" />
+                    ) : (
+                      <DefaultLogo className="w-7 h-7 rounded-md" iconSize={13} />
+                    )}
+                    <span className="fp-display">{v.name || "Your panel"}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="fp-mono text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-2"><span className="fp-gold">{formatMoney(24.6, currency)}</span></span>
+                    <button className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg">Add Funds</button>
+                  </div>
+                </div>
+                {/* Customer-dashboard home — reflects the Dashboard layout builder live. */}
+                <DashboardHomePreview layout={dashPreview} panelName={v.name} />
+              </div>
+              <p className="fp-text-faint text-[11px] text-center mt-3">
+                This is your customers&apos; dashboard home. Rearrange the widgets on the left; colours follow your
+                {activePkg ? " active design" : " colour theme"}.
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>
