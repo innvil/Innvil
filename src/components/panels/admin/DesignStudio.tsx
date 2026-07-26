@@ -9,7 +9,7 @@ import { formatMoney, currencySymbol } from "@/src/lib/money";
 import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutBuilder";
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { getDesignPackage } from "@/src/data/designs";
-import { getDesignLibrary } from "@/src/lib/actions/design";
+import { getDesignLibrary, getDashboardDesign } from "@/src/lib/actions/design";
 import { themeToDesignTokens, designToThemeVars } from "@/src/lib/design/theme-bridge";
 import { DesignLibraryPanel } from "./DesignLibraryPanel";
 import { VisualEditor } from "./VisualEditor";
@@ -54,6 +54,9 @@ export function DesignStudio({
   // Which "world" of the studio is active — the landing page or the customer dashboard.
   const [world, setWorld] = useState<"landing" | "dashboard">("landing");
   const [showEditor, setShowEditor] = useState(false);
+  // Design Tools (Business) entitlement — gated features are HIDDEN, not upsold, for
+  // owners without it, since there's no self-serve subscribe yet.
+  const [hasTools, setHasTools] = useState(false);
   const [dashPreview, setDashPreview] = useState<DashboardWidget[] | null>(null);
   // The purchased design currently applied to this panel's landing (null = Innvil default).
   const [activeDesign, setActiveDesign] = useState<string | null>(null);
@@ -73,6 +76,11 @@ export function DesignStudio({
     getDesignLibrary(panel.id).then((lib) => setActiveDesign(lib?.active ?? null)).catch(() => {});
   }, [panel.id]);
   React.useEffect(() => { loadActiveDesign(); }, [loadActiveDesign]);
+  React.useEffect(() => {
+    getDashboardDesign(panel.id)
+      .then((d) => { setHasTools(!!d?.hasDesignTools); if (!d?.hasDesignTools) setWorld("landing"); })
+      .catch(() => setHasTools(false));
+  }, [panel.id]);
   const activePkg = activeDesign ? getDesignPackage(activeDesign) : undefined;
 
   const save = async () => {
@@ -103,21 +111,25 @@ export function DesignStudio({
             <p className="fp-text-faint text-xs truncate">{panel.name} · {panel.subdomain}</p>
           </div>
         </div>
-        {/* World switcher — Landing vs Customer dashboard, each its own controls + preview */}
-        <div className="flex items-center gap-1 fp-panel-raised border fp-line-soft rounded-lg p-1 shrink-0">
-          <button
-            onClick={() => setWorld("landing")}
-            className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${world === "landing" ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
-          >
-            <Monitor size={13} /> Landing
-          </button>
-          <button
-            onClick={() => setWorld("dashboard")}
-            className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${world === "dashboard" ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
-          >
-            <LayoutDashboard size={13} /> Dashboard
-          </button>
-        </div>
+        {/* World switcher — only shown when Design Tools (Business) is available. */}
+        {hasTools ? (
+          <div className="flex items-center gap-1 fp-panel-raised border fp-line-soft rounded-lg p-1 shrink-0">
+            <button
+              onClick={() => setWorld("landing")}
+              className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${world === "landing" ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
+            >
+              <Monitor size={13} /> Landing
+            </button>
+            <button
+              onClick={() => setWorld("dashboard")}
+              className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${world === "dashboard" ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
+            >
+              <LayoutDashboard size={13} /> Dashboard
+            </button>
+          </div>
+        ) : (
+          <span />
+        )}
 
         <div className="flex items-center gap-2 shrink-0">
           {msg && <span className={`text-xs hidden sm:inline ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</span>}
@@ -246,16 +258,18 @@ export function DesignStudio({
             <DesignLibraryPanel panelId={panel.id} onChanged={loadActiveDesign} />
           </section>
 
-          <section>
-            <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Layers size={12} className="fp-gold" /> Visual editor · design tools</p>
-            <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
-              Build your <span className="fp-text">own</span> landing from scratch — add sections, edit copy, set
-              colours, publish. Included with Business.
-            </p>
-            <button onClick={() => setShowEditor(true)} className="fp-panel-raised border fp-gold-border rounded-lg px-3 py-2 text-xs fp-gold inline-flex items-center gap-1.5">
-              <Layers size={13} /> Open the visual editor
-            </button>
-          </section>
+          {hasTools && (
+            <section>
+              <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Layers size={12} className="fp-gold" /> Visual editor · design tools</p>
+              <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
+                Build your <span className="fp-text">own</span> landing from scratch — add sections, edit copy, set
+                colours, publish.
+              </p>
+              <button onClick={() => setShowEditor(true)} className="fp-panel-raised border fp-gold-border rounded-lg px-3 py-2 text-xs fp-gold inline-flex items-center gap-1.5">
+                <Layers size={13} /> Open the visual editor
+              </button>
+            </section>
+          )}
           </div>
          ) : (
           <div className="space-y-6">

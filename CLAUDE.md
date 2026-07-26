@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Hide Business-gated design tools from non-subscribers (v0.2.109)
+- **Design Tools are now HIDDEN, not upsold, for owners without Business.** Since there's no self-serve
+  subscribe yet (it ships with the Automator / Campaign Automation Phase 2 — only a super admin can comp a plan
+  today), the Design Studio loads `getDashboardDesign().hasDesignTools` and only renders the **Dashboard world
+  toggle** and the **Visual editor** card when entitled; a non-entitled user is forced to the Landing world.
+  The internal upsells in `DashboardLayoutBuilder`/`VisualEditor` remain as defensive fallbacks but are now
+  unreachable for normal owners.
+
 ### 2026-07-24 — Visual editor (Phase 1): config-driven landing builder (v0.2.108)
 - **First slice of the Shopify/Webflow-style visual editor**, built on the SAME schema + `DesignRenderer` the
   marketplace uses (an owner-built design is just another config the renderer reads). Business-gated
