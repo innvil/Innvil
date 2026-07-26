@@ -1,14 +1,32 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { getPublicPanel, getStorefrontServices } from "@/src/lib/actions/storefront";
 import { getDesignPackage } from "@/src/data/designs";
 import { getPage } from "@/src/lib/design/schema";
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
+import { themeToDesignTokens } from "@/src/lib/design/theme-bridge";
+import { storefrontBase } from "@/src/lib/storefront-host";
 import { themeVars } from "@/src/data/themes";
 import { currencySymbol } from "@/src/lib/money";
 import { LoginClient } from "./LoginClient";
 
 type Params = { params: Promise<{ subdomain: string }> };
+
+/* White-label: the tab title + favicon must be the PANEL's, never Innvil's. Without
+   this the page inherits the root layout's Innvil branding. */
+export async function generateMetadata({ params }: Params): Promise<Metadata> {
+  const { subdomain } = await params;
+  const panel = await getPublicPanel(subdomain);
+  if (!panel) return { title: "Panel not found", robots: { index: false, follow: false } };
+  return {
+    title: `Log in — ${panel.name}`,
+    description: `Log in to your ${panel.name} account to order and manage your balance.`,
+    robots: { index: false, follow: false },
+    openGraph: { title: `Log in — ${panel.name}`, type: "website", siteName: panel.name },
+    ...(panel.favicon ? { icons: { icon: panel.favicon } } : {}),
+  };
+}
 
 export default async function StorefrontLoginPage({ params }: Params) {
   const { subdomain } = await params;
@@ -40,6 +58,7 @@ export default async function StorefrontLoginPage({ params }: Params) {
      page matches the design instead of the Innvil default. */
   const pkg = panel.activeDesign ? getDesignPackage(panel.activeDesign) : undefined;
   if (pkg && getPage(pkg, "login")) {
+    const base = await storefrontBase(panel.subdomain);
     const services = await getStorefrontServices(panel.id).catch(() => []);
     const platforms = new Set(services.map((s) => s.platform).filter(Boolean));
     const prices = services.map((s) => Number(s.price)).filter((n) => Number.isFinite(n) && n > 0);
@@ -66,10 +85,11 @@ export default async function StorefrontLoginPage({ params }: Params) {
             from: prices.length ? `${sym}${Math.min(...prices).toFixed(2)}` : undefined,
           },
         }}
+        tokenOverrides={themeToDesignTokens(panel.theme, panel.accent)}
         hrefs={{
-          signup: `/p/${panel.subdomain}/signup`,
-          login: `/p/${panel.subdomain}/login`,
-          services: `/p/${panel.subdomain}`,
+          signup: `${base}/signup`,
+          login: `${base}/login`,
+          services: base || "/",
         }}
         slots={{
           "auth-card": (

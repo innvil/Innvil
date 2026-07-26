@@ -1,8 +1,22 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { getPublicPanel } from "@/src/lib/actions/storefront";
 import { ResetPasswordClient } from "./ResetPasswordClient";
 
 type Params = { params: Promise<{ subdomain: string }> };
+
+/* White-label: panel's own title + favicon, never Innvil's. */
+export async function generateMetadata({ params }: Params): Promise<Metadata> {
+  const { subdomain } = await params;
+  const panel = await getPublicPanel(subdomain);
+  if (!panel) return { title: "Panel not found", robots: { index: false, follow: false } };
+  return {
+    title: `Set a new password — ${panel.name}`,
+    robots: { index: false, follow: false },
+    openGraph: { title: `Set a new password — ${panel.name}`, type: "website", siteName: panel.name },
+    ...(panel.favicon ? { icons: { icon: panel.favicon } } : {}),
+  };
+}
 
 export default async function StorefrontResetPasswordPage({ params }: Params) {
   const { subdomain } = await params;

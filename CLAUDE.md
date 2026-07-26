@@ -127,6 +127,32 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — White-label fix: storefront auth pages leaked Innvil branding (v0.2.100)
+- **The real "still points to Innvil" bug was METADATA, not links.** The storefront auth pages had **no
+  `generateMetadata`**, so they inherited the root layout's Innvil title + favicon — a customer on
+  `…/p/<sub>/login` saw a tab reading *"Innvil — The White-label SMM Panel Builder"*. Only the landing had
+  per-panel metadata.
+- Added `generateMetadata` (panel name title, panel favicon, `noindex`, OG `siteName` = panel) to
+  **login, signup, forgot-password and reset-password**. Auth pages are now fully white-label.
+- Also added `storefrontBaseFromLocation(subdomain)` to `src/lib/config.ts` — the CLIENT counterpart of
+  `storefrontBase()` — so client components stop hardcoding `/p/<sub>` (still to be applied to
+  `SignUpClient`/`ForgotPasswordClient`/`ResetPasswordClient`).
+
+### 2026-07-24 — Free themes recolour bought designs + host-aware storefront links (v0.2.99)
+- **FIX (log-in link went to Innvil):** storefront links hardcoded `/p/<sub>/…`. On a PANEL host (subdomain,
+  custom domain, `sub.localhost`) the proxy already rewrites `/` to that panel, so the prefix sent the visitor
+  back through the proxy onto Innvil. New **`src/lib/storefront-host.ts` `storefrontBase(subdomain)`** (server,
+  header-based) returns `/p/<sub>` on the app host and `""` on a panel host; used by the landing + login pages.
+  `LoginClient` does the same check client-side for its own links/redirect.
+- **Free colour themes now apply to PURCHASED designs** (they were locked to the design's shipped palette).
+  New **`src/lib/design/theme-bridge.ts` `themeToDesignTokens(themeId, accent)`** maps the `fp-*` theme vars onto
+  the design's `--d-*` colour tokens (and drops the design's decorative backdrop, which is palette-specific).
+  `DesignRenderer` gained **`tokenOverrides`**; the landing + login pass the panel's theme/accent. **Colours
+  only** — layout, typography, radii, shadows and animation stay the designer's, which is what keeps designs
+  distinct.
+- **TODO (next):** signup page (mirror the login pattern — Pulse's `signup` page already exists) and the customer
+  DASHBOARD picking up the active design's tokens.
+
 ### 2026-07-24 — Themed auth pages + "Back to dashboard" fix (v0.2.98)
 - **The login page now uses the panel's purchased design.** Pulse gained **`login` + `signup` page schemas**
   (design chrome + hero + a `functional: auth-card` slot). `app/p/[subdomain]/login/page.tsx` checks

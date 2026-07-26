@@ -3,7 +3,7 @@
 import React from "react";
 import {
   tokensToCssVars, personalizeTokens, getPage,
-  type DesignPackage, type DesignPage, type DesignPageId, type DesignSection, type DesignCta,
+  type DesignPackage, type DesignPage, type DesignPageId, type DesignSection, type DesignCta, type DesignTokens,
   type PreviewPersonalization, type HeroSection, type StatsSection, type ServicesSection,
   type PlatformsSection, type StepsSection, type FeaturesSection, type TestimonialsSection,
   type FaqSection, type CtaSection, type FunctionalSection, type ContentSection,
@@ -48,6 +48,9 @@ export interface DesignRendererProps {
   slots?: Partial<Record<FunctionalSlot, React.ReactNode>>;
   /** CTA destinations (defaults are Innvil's, correct only for previews). */
   hrefs?: DesignHrefs;
+  /** Owner recolouring — e.g. a free colour theme applied to a purchased design.
+   *  Colours only; the design keeps its own layout, type, radii and animation. */
+  tokenOverrides?: Partial<DesignTokens>;
   /** Preview mode: links/buttons don't navigate. */
   inert?: boolean;
 }
@@ -496,12 +499,12 @@ function renderSection(s: DesignSection, data: DesignRenderData, slots?: DesignR
   }
 }
 
-export function DesignRenderer({ pkg, page = "landing", data, personalization, slots, hrefs, inert }: DesignRendererProps) {
+export function DesignRenderer({ pkg, page = "landing", data, personalization, slots, hrefs, tokenOverrides, inert }: DesignRendererProps) {
   const target = getPage(pkg, page) ?? pkg.pages[0];
   if (!target) return null;
 
   const tokens = personalizeTokens(pkg.tokens, personalization);
-  const rootStyle = tokensToCssVars(tokens) as React.CSSProperties;
+  const rootStyle = tokensToCssVars(tokens, tokenOverrides) as React.CSSProperties;
   const name = personalization?.panelName || data.panelName;
   const merged: DesignRenderData = { ...data, panelName: name, logoUrl: personalization?.logoUrl || data.logoUrl };
 
@@ -509,7 +512,11 @@ export function DesignRenderer({ pkg, page = "landing", data, personalization, s
     <HrefContext.Provider value={hrefs}>
     <div className="dz-root" style={rootStyle}>
       <style dangerouslySetInnerHTML={{ __html: DESIGN_CSS }} />
-      {tokens.backdrop && <div className="dz-backdrop" />}
+      {(() => {
+        // A theme override can switch the design's decorative backdrop off.
+        const backdrop = tokenOverrides?.backdrop ?? tokens.backdrop;
+        return backdrop && backdrop !== "none" ? <div className="dz-backdrop" /> : null;
+      })()}
       <Header page={target} data={merged} inert={inert} />
       <main style={{ position: "relative" }}>
         {target.sections.map((s) => {

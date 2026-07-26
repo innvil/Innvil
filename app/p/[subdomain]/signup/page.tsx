@@ -1,8 +1,23 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { getPublicPanel } from "@/src/lib/actions/storefront";
 import { SignUpClient } from "./SignUpClient";
 
 type Params = { params: Promise<{ subdomain: string }> };
+
+/* White-label: panel's own title + favicon, never Innvil's. */
+export async function generateMetadata({ params }: Params): Promise<Metadata> {
+  const { subdomain } = await params;
+  const panel = await getPublicPanel(subdomain);
+  if (!panel) return { title: "Panel not found", robots: { index: false, follow: false } };
+  return {
+    title: `Create account — ${panel.name}`,
+    description: `Create your ${panel.name} account to start ordering.`,
+    robots: { index: false, follow: false },
+    openGraph: { title: `Create account — ${panel.name}`, type: "website", siteName: panel.name },
+    ...(panel.favicon ? { icons: { icon: panel.favicon } } : {}),
+  };
+}
 
 export default async function StorefrontSignUpPage({ params }: Params) {
   const { subdomain } = await params;

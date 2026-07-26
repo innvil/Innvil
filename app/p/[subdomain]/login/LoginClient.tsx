@@ -31,7 +31,18 @@ export function LoginClient({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const homeHref = useMemo(() => `/p/${subdomain}`, [subdomain]);
+  /* On a panel host (subdomain / custom domain) the proxy already scopes "/" to this
+     panel, so links must NOT carry a /p/<sub> prefix — that would route back through
+     the proxy and land on Innvil. On the app host we need the prefix. */
+  const base = useMemo(() => {
+    if (typeof window === "undefined") return `/p/${subdomain}`;
+    const host = window.location.hostname.toLowerCase();
+    const root = (process.env.NEXT_PUBLIC_PANEL_ROOT_DOMAIN || "innvil.cloud").toLowerCase();
+    const isAppHost =
+      host === root || host === `www.${root}` || host === "localhost" || host === "127.0.0.1" || host.endsWith(".vercel.app");
+    return isAppHost ? `/p/${subdomain}` : "";
+  }, [subdomain]);
+  const homeHref = base || "/";
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,10 +118,10 @@ export function LoginClient({
       <div>
         {form}
         <div className="flex items-center justify-between mt-4 text-xs" style={{ color: "var(--d-text-faint)" }}>
-          <Link href={`/p/${subdomain}/forgot-password`} style={{ color: "var(--d-text-faint)" }}>Forgot password?</Link>
+          <Link href={`${base}/forgot-password`} style={{ color: "var(--d-text-faint)" }}>Forgot password?</Link>
           <span>
             New here?{" "}
-            <Link href={`/p/${subdomain}/signup`} style={{ color: "var(--d-accent)" }}>Create account</Link>
+            <Link href={`${base}/signup`} style={{ color: "var(--d-accent)" }}>Create account</Link>
           </span>
         </div>
       </div>
@@ -135,9 +146,9 @@ export function LoginClient({
         {form}
 
         <div className="flex items-center justify-between mt-4 text-xs">
-          <Link href={`/p/${subdomain}/forgot-password`} className="fp-text-faint hover:fp-text">Forgot password?</Link>
+          <Link href={`${base}/forgot-password`} className="fp-text-faint hover:fp-text">Forgot password?</Link>
           <span className="fp-text-faint">
-            New here? <Link href={`/p/${subdomain}/signup`} className="fp-violet">Create account</Link>
+            New here? <Link href={`${base}/signup`} className="fp-violet">Create account</Link>
           </span>
         </div>
       </div>

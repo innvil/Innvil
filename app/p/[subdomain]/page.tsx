@@ -4,6 +4,8 @@ import { headers } from "next/headers";
 import { Lock, Wrench, FileText } from "lucide-react";
 import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
+import { storefrontBase } from "@/src/lib/storefront-host";
+import { themeToDesignTokens } from "@/src/lib/design/theme-bridge";
 import type { PanelStatus } from "@/src/types/db";
 import { themeVars } from "@/src/data/themes";
 import { currencySymbol } from "@/src/lib/money";
@@ -109,7 +111,7 @@ export default async function StorefrontPage({ params }: Params) {
      panel's own auth routes — never Innvil's. */
   const designPkg = panel.activeDesign ? getDesignPackage(panel.activeDesign) : undefined;
   if (designPkg && !account) {
-    const base = `/p/${panel.subdomain}`;
+    const base = await storefrontBase(panel.subdomain);
     const sym = currencySymbol(panel.currency);
     const prices = services.map((s) => s.price).filter((n) => Number.isFinite(n) && n > 0);
     return (
@@ -134,6 +136,7 @@ export default async function StorefrontPage({ params }: Params) {
               from: prices.length ? `${sym}${Math.min(...prices).toFixed(2)}` : undefined,
             },
           }}
+          tokenOverrides={themeToDesignTokens(panel.theme, panel.accent)}
           hrefs={{ signup: `${base}/signup`, login: `${base}/login`, services: "#services" }}
           slots={{
             "auth-card": (
