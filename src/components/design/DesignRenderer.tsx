@@ -212,6 +212,34 @@ function Hero({ s, data, inert }: { s: HeroSection; data: DesignRenderData; iner
             </div>
           )}
 
+          {s.mockup === "dashboard-card" && (
+            <div className="dz-card" style={{ padding: "1.2rem", maxWidth: 380, marginLeft: "auto" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
+                  {data.logoUrl
+                    ? /* eslint-disable-next-line @next/next/no-img-element */ <img src={data.logoUrl} alt="" style={{ width: 26, height: 26, borderRadius: 8, objectFit: "cover" }} />
+                    : <span style={{ width: 26, height: 26, borderRadius: 8, background: "linear-gradient(120deg, var(--d-accent), var(--d-accent-alt))" }} />}
+                  <b style={{ fontSize: ".82rem" }}>Creator analytics</b>
+                </span>
+                <span className="dz-chip dz-accent" style={{ padding: ".3rem .6rem", fontSize: ".68rem" }}>▲ 32% mo</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: ".5rem", marginBottom: "1rem" }}>
+                {[["Followers", "48.2K"], ["Views", "1.2M"], ["Revenue", `${data.currencySymbol ?? "$"}9.4K`]].map(([l, val]) => (
+                  <div key={l} style={{ background: "var(--d-surface-alt)", border: "1px solid var(--d-border)", borderRadius: "var(--d-radius)", padding: ".55rem" }}>
+                    <div className="dz-faint" style={{ fontSize: ".58rem", textTransform: "uppercase", letterSpacing: ".06em" }}>{l}</div>
+                    <div className="dz-accent" style={{ fontSize: ".95rem", fontWeight: 700, marginTop: ".15rem" }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: ".35rem", height: 74 }}>
+                {[38, 52, 45, 63, 58, 78, 92].map((h, i) => (
+                  <span key={i} style={{ flex: 1, height: `${h}%`, borderRadius: "4px 4px 0 0", background: "linear-gradient(180deg, var(--d-accent), color-mix(in srgb, var(--d-accent-alt) 60%, transparent))" }} />
+                ))}
+              </div>
+              <div className="dz-faint" style={{ fontSize: ".6rem", marginTop: ".5rem", textAlign: "center" }}>Last 7 days · growth</div>
+            </div>
+          )}
+
           {s.floats?.slice(0, 5).map((f, i) => (
             <div key={i} className="dz-floatcard dz-float dz-hide-mobile" style={{ ...FLOAT_POS[i % FLOAT_POS.length], animationDelay: `${i * 0.6}s` }}>
               <span className="dz-accent" style={{ fontSize: ".95rem" }}>{FLOAT_ICON[f.kind] ?? "★"}</span>

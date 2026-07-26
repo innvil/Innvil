@@ -127,6 +127,19 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Design #2 "Studio" published (v0.2.110)
+- **Second marketplace design shipped, one-at-a-time as intended.** `src/data/designs/studio.ts` (NEW) —
+  **"Studio"** ($12, dark creator-economy): near-black cinematic canvas, cyan/indigo accent, editorial serif
+  headlines, a **creator-analytics hero card** (mini growth bar-chart + follower/view/revenue tiles), glowing
+  service cards, creator/agency testimonials. A different composition from Pulse, not a recolour.
+- **New hero mockup in the shared renderer:** `DesignRenderer` now draws `mockup: "dashboard-card"` (the
+  analytics card) alongside `"phone-feed"` — reusable by future designs. `"dashboard-card"` was already a valid
+  schema value.
+- `src/data/designs/index.ts`: Studio moved from `COMING_SOON_DESIGNS` → `PUBLISHED_DESIGNS` (buyable + full
+  live preview). Remaining teasers: **Agency** (clean corporate) and **Orbit** (minimal futuristic).
+- **NEXT designs:** Agency → Orbit, one finished at a time. Visual editor Phase 2 + dashboard editor deferred
+  until the Automator (subscribe flow) launches.
+
 ### 2026-07-24 — Hide Business-gated design tools from non-subscribers (v0.2.109)
 - **Design Tools are now HIDDEN, not upsold, for owners without Business.** Since there's no self-serve
   subscribe yet (it ships with the Automator / Campaign Automation Phase 2 — only a super admin can comp a plan

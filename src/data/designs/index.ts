@@ -1,5 +1,6 @@
 import type { DesignMeta, DesignPackage } from "@/src/lib/design/schema";
 import { PULSE } from "./pulse";
+import { STUDIO } from "./studio";
 
 /**
  * DESIGN MARKETPLACE CATALOG.
@@ -13,29 +14,10 @@ import { PULSE } from "./pulse";
  */
 
 /** Finished, buyable designs — each has a complete package + full live preview. */
-export const PUBLISHED_DESIGNS: DesignPackage[] = [PULSE];
+export const PUBLISHED_DESIGNS: DesignPackage[] = [PULSE, STUDIO];
 
 /** Teaser-only entries. Distinct creative directions, in build order. */
 export const COMING_SOON_DESIGNS: DesignMeta[] = [
-  {
-    id: "studio",
-    name: "Studio",
-    tagline: "The creator economy, quantified.",
-    description:
-      "A dark, cinematic creator-economy landing: video statistics, engagement charts, glowing service cards and oversized editorial typography. Built for panels selling to serious creators.",
-    price: 12,
-    categories: ["creator-economy", "dark", "animated"],
-    includedPages: ["landing", "login", "signup"],
-    features: ["Engagement chart hero", "Glowing service cards", "Video stat blocks", "Bold editorial type"],
-    version: "0.9.0",
-    changelog: [],
-    publisher: "Innvil Studio",
-    updatedAt: "2026-07-24",
-    responsive: true,
-    animated: true,
-    status: "coming_soon",
-    cover: { background: "linear-gradient(160deg, #05070D 0%, #0B1220 55%, #07131A 100%)", accent: "#22D3EE" },
-  },
   {
     id: "agency",
     name: "Agency",
