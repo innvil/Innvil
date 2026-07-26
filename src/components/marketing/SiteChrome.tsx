@@ -28,9 +28,11 @@ export function MarketingHeader({ signedIn = false }: { signedIn?: boolean }) {
         </nav>
         <div className="flex items-center gap-3">
           {signedIn ? (
-            <Link href="/" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">
+            /* Full navigation (not <Link>): the owner app is a separate client island and
+               the router cache can otherwise serve a stale signed-out landing. */
+            <a href="/" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">
               Back to dashboard
-            </Link>
+            </a>
           ) : (
             <>
               <Link href="/login" className="text-sm fp-text-dim">Log in</Link>

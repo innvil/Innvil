@@ -210,6 +210,56 @@ export const PULSE: DesignPackage = {
         ],
       },
     },
+
+    /* Auth pages — the design supplies the chrome and composition; the REAL login /
+       signup form is injected into the `auth-card` functional slot by the storefront,
+       so authentication logic stays entirely outside the design package. */
+    {
+      id: "login",
+      header: { variant: "floating-pill", sticky: false, ctas: [{ label: "Create account", action: "signup" }] },
+      sections: [
+        {
+          id: "login-hero",
+          type: "hero",
+          variant: "compact-center",
+          animation: "fade-up",
+          eyebrow: "Welcome back",
+          headline: "Log in and keep",
+          headlineAccent: "growing.",
+          sub: "Your balance, orders and favourites are right where you left them.",
+          floats: [
+            { kind: "like", label: "Likes", value: "+1.2K" },
+            { kind: "follower", label: "Followers", value: "+840" },
+          ],
+          mockup: "none",
+        },
+        { id: "login-card", type: "functional", component: "auth-card", variant: "glass-centered", animation: "fade-up" },
+      ],
+      footer: { variant: "glass-columns", blurb: "Fast, transparent social growth services — one wallet, every platform." },
+    },
+    {
+      id: "signup",
+      header: { variant: "floating-pill", sticky: false, ctas: [{ label: "Log in", action: "login" }] },
+      sections: [
+        {
+          id: "signup-hero",
+          type: "hero",
+          variant: "compact-center",
+          animation: "fade-up",
+          eyebrow: "Get started free",
+          headline: "Create your account",
+          headlineAccent: "in seconds.",
+          sub: "One wallet for every platform — no approval queue, no waiting.",
+          floats: [
+            { kind: "view", label: "Views", value: "12.4K" },
+            { kind: "notify", label: "Order complete" },
+          ],
+          mockup: "none",
+        },
+        { id: "signup-card", type: "functional", component: "auth-card", variant: "glass-centered", animation: "fade-up" },
+      ],
+      footer: { variant: "glass-columns", blurb: "Fast, transparent social growth services — one wallet, every platform." },
+    },
   ],
 
   preview: {

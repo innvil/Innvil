@@ -127,6 +127,20 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Themed auth pages + "Back to dashboard" fix (v0.2.98)
+- **The login page now uses the panel's purchased design.** Pulse gained **`login` + `signup` page schemas**
+  (design chrome + hero + a `functional: auth-card` slot). `app/p/[subdomain]/login/page.tsx` checks
+  `panel.activeDesign`; if that package has a `login` page it renders the design via the shared
+  `DesignRenderer` (real catalog-derived stats, panel `hrefs`) and **injects the real login form into the
+  `auth-card` slot** — so authentication logic stays entirely outside the design package. No design ⇒ the
+  default themed page (now wrapped in `themeVars` so it respects the panel's colour theme).
+- `LoginClient` gained an **`embedded`** mode: form only, inputs/buttons styled from the design tokens
+  (`--d-*`), used when injected into a design's auth slot. The form markup is shared between both modes.
+- **FIX:** the marketing header's **"Back to dashboard"** did nothing — it was a client `<Link href="/">`, so
+  Next's router cache could serve the stale signed-out landing. Now a plain `<a>` (full navigation).
+- **TODO (next):** the signup page still renders the default UI — mirror this pattern with `SignUpClient`
+  `embedded` + the design's `signup` page (already defined in Pulse).
+
 ### 2026-07-24 — Design activation fixes: storefront login route + live design preview (v0.2.97)
 - **FIX (404 on login):** a purchased design's "Log in" CTA pointed at `/p/<sub>/login`, which **didn't exist** —
   the default storefront logs in inline on its landing card, so the route was never created. Added
