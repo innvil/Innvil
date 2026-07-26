@@ -7,6 +7,8 @@ import {
 } from "@/src/lib/dashboard-layout";
 import { readDesignLibrary } from "@/src/lib/design/library";
 import { readEditorState, starterDesign, type EditorDesign, type EditorState } from "@/src/lib/design/editor";
+import { getDesignPricing } from "@/src/lib/actions/platform-settings";
+import { effectivePrice } from "@/src/lib/design/pricing";
 import { getDesignPackage } from "@/src/data/designs";
 import { round4 } from "@/src/lib/money";
 
@@ -195,7 +197,10 @@ export async function buyDesign(panelId: string, designId: string): Promise<Resu
   const lib = readDesignLibrary(settings);
   if (lib.owned.includes(designId)) return { ok: false, error: "You already own this design." };
 
-  const price = pkg.meta.price;
+  // Effective price = super-admin override + first-purchase promo (first design on this panel).
+  const pricing = await getDesignPricing();
+  const eff = effectivePrice(pkg.meta.price, pricing[designId], { firstPurchase: lib.owned.length === 0 });
+  const price = eff.price;
 
   /* Innvil funds live per-panel but behave as ONE POOL for the owner (that's the
      balance shown in the topbar). So a purchase draws from this panel first, then the

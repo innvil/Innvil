@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
-  PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink,
+  PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag,
 } from "lucide-react";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
@@ -28,6 +28,7 @@ import {
 } from "@/src/lib/actions/blog-admin";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
 import { BlogReview } from "./BlogReview";
+import { DesignPricingAdmin } from "./DesignPricingAdmin";
 
 const inputCls =
   "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-1.5 outline-none focus:fp-gold-border";
@@ -934,6 +935,7 @@ const TABS = [
   { k: "panels", label: "Panels", icon: Wallet },
   { k: "payments", label: "Platform payments", icon: CreditCard },
   { k: "blog", label: "Blog", icon: Newspaper },
+  { k: "pricing", label: "Design pricing", icon: Tag },
   { k: "landing", label: "Landing video", icon: PlayCircle },
   { k: "support", label: "Support", icon: LifeBuoy },
 ];
@@ -984,6 +986,7 @@ export function SuperAdminDashboard() {
         {tab === "panels" && <PanelsTab />}
         {tab === "payments" && <PaymentsTab />}
         {tab === "blog" && <BlogReview />}
+        {tab === "pricing" && <DesignPricingAdmin />}
         {tab === "landing" && <LandingTab />}
         {tab === "support" && <SupportTab />}
       </div>

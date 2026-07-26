@@ -127,6 +127,23 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Super-admin design pricing + first-purchase promos (v0.2.111)
+- **Design prices are now super-admin-settable, with per-design first-purchase promos** (base prices still live
+  in each package's `meta.price` as the default). No migration — stored in `platform_settings` under key
+  `design_pricing` = `{ [designId]: { price?, promoActive, promoPrice?, promoLabel? } }`.
+- `src/lib/design/pricing.ts` (NEW) — `DesignPricingEntry`/`DesignPricingMap` + `effectivePrice(base, entry,
+  {firstPurchase})` (override price + promo applied to a buyer's FIRST design on a panel, i.e. `owned.length===0`).
+- `actions/platform-settings.ts` — `getDesignPricing()` (public-safe read) + `setDesignPricing(id, entry)`
+  (super-admin, sanitised, upsert).
+- `buyDesign` now charges the **effective price** (override + first-purchase promo), not `meta.price`.
+- **UI `src/components/superadmin/DesignPricingAdmin.tsx` (NEW)** — per-design price + promo toggle/price/label,
+  **cached** (session+local, paints instantly then background-syncs, like BlogReview). Mounted in BOTH surfaces:
+  the `/superadmin` route (new **Design pricing** tab) and the **owner-app super-admin sidebar** (new
+  "Design pricing" section, super-admin only).
+- Design Shop reflects it: cover badge / buy button show the overridden price and, for a first-time buyer,
+  the promo price + label; the balance gate uses the effective price. (NOTE: the in-studio `DesignLibraryPanel`
+  buy button still shows the base price — `buyDesign` charges correctly server-side; wire its display next.)
+
 ### 2026-07-24 — Design #2 "Studio" published (v0.2.110)
 - **Second marketplace design shipped, one-at-a-time as intended.** `src/data/designs/studio.ts` (NEW) —
   **"Studio"** ($12, dark creator-economy): near-black cinematic canvas, cyan/indigo accent, editorial serif

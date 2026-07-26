@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { getUser } from "@/src/lib/auth";
 import { listPanels } from "@/src/lib/actions/panels";
+import { getDesignPricing } from "@/src/lib/actions/platform-settings";
 import { MarketingHeader, MarketingFooter } from "@/src/components/marketing/SiteChrome";
 import { designCards } from "@/src/data/designs";
 import { DesignShop } from "@/src/components/design/DesignShop";
@@ -20,13 +21,17 @@ export const dynamic = "force-dynamic";
 
 export default async function DesignShopPage() {
   const user = await getUser();
-  const panels = user ? await listPanels() : [];
+  const [panels, pricing] = await Promise.all([
+    user ? listPanels() : Promise.resolve([]),
+    getDesignPricing(),
+  ]);
 
   return (
     <div className="fp-root min-h-screen">
       <MarketingHeader signedIn={Boolean(user)} />
       <DesignShop
         cards={designCards()}
+        pricing={pricing}
         signedIn={Boolean(user)}
         panels={panels.map((p) => ({ id: p.id, name: p.name }))}
       />

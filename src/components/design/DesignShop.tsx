@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Eye, Lock, CheckCircle2, Palette, Wallet, AlertTriangle } from "lucide-react";
 import type { DesignMeta, DesignStyleCategory } from "@/src/lib/design/schema";
 import { getDesignLibrary, buyDesign, activateDesign, type DesignLibraryInfo } from "@/src/lib/actions/design";
+import { effectivePrice, type DesignPricingMap } from "@/src/lib/design/pricing";
 
 /* Design Shop marketplace — browse complete landing designs. One design is finished
    and published at a time; the rest are honest "Available soon" teasers. */
@@ -25,10 +26,12 @@ const FILTERS: Array<{ k: DesignStyleCategory | "all"; label: string }> = [
 
 export function DesignShop({
   cards,
+  pricing = {},
   signedIn = false,
   panels = [],
 }: {
   cards: DesignMeta[];
+  pricing?: DesignPricingMap;
   signedIn?: boolean;
   panels?: Array<{ id: string; name: string }>;
 }) {
@@ -61,6 +64,10 @@ export function DesignShop({
     setLib(res.data);
     setMsg({ text: `${name} is now live on that panel's landing page.` });
   };
+
+  // A buyer's first design purchase on the selected panel gets first-purchase promos.
+  const firstPurchase = !!(signedIn && panelId && lib && lib.owned.length === 0);
+  const priceFor = (d: DesignMeta) => effectivePrice(d.price, pricing[d.id], { firstPurchase });
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-12">
@@ -142,7 +149,7 @@ export function DesignShop({
                       className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
                       style={soon ? { background: "rgba(0,0,0,.45)", color: "#fff" } : { background: d.cover.accent, color: "#0A0B0F" }}
                     >
-                      {soon ? "Available soon" : `$${d.price} once`}
+                      {soon ? "Available soon" : (() => { const p = priceFor(d); return p.isPromo ? `$${p.price} · was $${p.base}` : `$${p.price} once`; })()}
                     </span>
                   </div>
                 </div>
@@ -180,7 +187,7 @@ export function DesignShop({
                         <button disabled className="text-xs fp-text-faint border fp-line-soft rounded-lg px-3 py-2 flex items-center gap-1.5 cursor-not-allowed">
                           <Lock size={12} /> In the studio
                         </button>
-                        <span className="fp-text-faint text-[11px]">Planned ${d.price}</span>
+                        <span className="fp-text-faint text-[11px]">Planned ${priceFor(d).base}</span>
                       </>
                     ) : (
                       <>
@@ -188,7 +195,12 @@ export function DesignShop({
                           <Eye size={13} /> Live preview
                         </Link>
                         {!signedIn || !panelId ? (
-                          <span className="fp-text-faint text-[11px]">${d.price} one-time</span>
+                          <span className="fp-text-faint text-[11px]">
+                            ${priceFor(d).base} one-time
+                            {pricing[d.id]?.promoActive && typeof pricing[d.id]?.promoPrice === "number" && (
+                              <span className="fp-gold"> · {pricing[d.id]?.promoLabel || "First purchase"} ${pricing[d.id]?.promoPrice}</span>
+                            )}
+                          </span>
                         ) : lib?.active === d.id ? (
                           <span className="text-[11px] fp-gold flex items-center gap-1"><CheckCircle2 size={12} /> Live</span>
                         ) : lib?.owned.includes(d.id) ? (
@@ -198,11 +210,11 @@ export function DesignShop({
                         ) : (
                           <button
                             onClick={() => buy(d.id, d.name)}
-                            disabled={busy !== null || (lib?.ownerBalance ?? 0) < d.price}
-                            title={(lib?.ownerBalance ?? 0) < d.price ? "Top up your Innvil balance first" : undefined}
+                            disabled={busy !== null || (lib?.ownerBalance ?? 0) < priceFor(d).price}
+                            title={(lib?.ownerBalance ?? 0) < priceFor(d).price ? "Top up your Innvil balance first" : undefined}
                             className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 disabled:opacity-60 hover:fp-text"
                           >
-                            {busy === d.id ? "…" : `Buy $${d.price}`}
+                            {busy === d.id ? "…" : (() => { const p = priceFor(d); return p.isPromo ? `Buy $${p.price} (${p.label})` : `Buy $${p.price}`; })()}
                           </button>
                         )}
                       </>

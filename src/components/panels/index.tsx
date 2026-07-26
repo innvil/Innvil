@@ -30,6 +30,7 @@ import { getOwnerBillingSummary, listAllOwnerOrders, type OwnerBillingSummary, t
 import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { BlogReview } from "@/src/components/superadmin/BlogReview";
+import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdmin";
 import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
@@ -229,6 +230,7 @@ function navItemsFor(isSuper: boolean) {
     ...APP_NAV,
     // Super-admin-only: review + approve AI blog drafts, right in the owner app.
     ...(isSuper ? [{ k: "blog", label: "Blog", icon: Newspaper }] : []),
+    ...(isSuper ? [{ k: "design-pricing", label: "Design pricing", icon: Tag }] : []),
     { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
 }
@@ -1379,6 +1381,15 @@ export function InnvilApp({ setWorld, initialSection }: {
               <p className="fp-text-dim text-sm mt-1">Review, edit, and publish AI-written blog drafts. Nothing goes live until you publish it.</p>
             </div>
             <BlogReview />
+          </div>
+        )}
+        {section === "design-pricing" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Design pricing</h1>
+              <p className="fp-text-dim text-sm mt-1">Set each design&apos;s one-time price and first-purchase promotions.</p>
+            </div>
+            <DesignPricingAdmin />
           </div>
         )}
       </div>
