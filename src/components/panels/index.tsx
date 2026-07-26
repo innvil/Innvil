@@ -1211,12 +1211,14 @@ export function InnvilApp({ setWorld, initialSection }: {
   const [panelList, setPanelList] = useState<Panel[]>(cachedPanels);
   const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
   const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
-  const [isSuper, setIsSuper] = useState(false);
+  // Cache the super-admin flag so the Blog nav/section + bell notices paint instantly
+  // on reload (like the rest of the app), then re-verify in the background.
+  const [isSuper, setIsSuper] = useState<boolean>(() => readOwnerAppCache<boolean>("is-super") ?? false);
   const [mobileNav, setMobileNav] = useState(false);
   const [focusOwnerCustomerId, setFocusOwnerCustomerId] = useState<string | null>(null);
   const didRestorePanelRef = useRef(false);
 
-  useEffect(() => { amSuperAdmin().then(setIsSuper); }, []);
+  useEffect(() => { amSuperAdmin().then((v) => { setIsSuper(v); writeOwnerAppCache("is-super", v); }); }, []);
 
   useEffect(() => {
     let alive = true;

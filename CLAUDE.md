@@ -127,6 +127,13 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Blog UI paints from cache (no wait for the super-admin check) (v0.2.107)
+- **The Blog nav item, Blog section and bell draft-notices were missing until `amSuperAdmin()` resolved** —
+  `isSuper` started `false` with no cache, so blog surfaces popped in late (unlike the rest of the app, which
+  paints from `readOwnerAppCache`). Now `isSuper` initialises from `readOwnerAppCache("is-super")` and writes
+  back when the check resolves, so blog UI shows immediately on reload and re-verifies in the background.
+  `BlogReview` already caches its drafts/topics, so the content fills from cache too.
+
 ### 2026-07-24 — Design Studio: Landing / Dashboard "worlds" (v0.2.106)
 - **The Design Studio now has two worlds** switched by a top-bar toggle (Landing · Dashboard), instead of
   stacking the dashboard preview under the landing. `world` state in `DesignStudio.tsx`:
