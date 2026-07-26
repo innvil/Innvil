@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-24 — Fix: Design Studio preview ignored the colour theme (v0.2.103)
+- **The live storefront already recoloured a bought design from the free theme (v0.2.99), but the Design Studio
+  PREVIEW didn't** — it passed `personalization={accent}` only, never `tokenOverrides`, so picking a theme in the
+  studio left the preview locked to the design's shipped palette (the "black-pink gradient"). Now the studio
+  preview passes `tokenOverrides={themeToDesignTokens(v.theme, v.accent)}`, so changing the colour theme
+  recolours the design live in the preview — matching what the storefront renders. Caption updated to say the
+  theme recolours the design (layout/type/animation stay the designer's).
+
 ### 2026-07-24 — Customer dashboard themed from the active design (v0.2.102)
 - **A signed-in customer's dashboard now picks up the active design's palette** (was still the default Innvil
   look even with a design applied). New **`designToThemeVars(tokens, overrides)`** in `theme-bridge.ts` — the

@@ -10,6 +10,7 @@ import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutB
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { getDesignPackage } from "@/src/data/designs";
 import { getDesignLibrary } from "@/src/lib/actions/design";
+import { themeToDesignTokens } from "@/src/lib/design/theme-bridge";
 import { DesignLibraryPanel } from "./DesignLibraryPanel";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
@@ -240,7 +241,7 @@ export function DesignStudio({
                   categories: activePkg.preview.categories,
                   currencySymbol: currencySymbol(currency),
                 }}
-                personalization={v.accent ? { accent: v.accent } : undefined}
+                tokenOverrides={themeToDesignTokens(v.theme, v.accent)}
                 inert
               />
             ) : (
@@ -291,7 +292,7 @@ export function DesignStudio({
           </div>
           <p className="fp-text-faint text-[11px] text-center mt-3">
             {activePkg
-              ? `Landing shown with your active design (${activePkg.meta.name}). Colour themes below still style the customer dashboard.`
+              ? `Shown with your active design (${activePkg.meta.name}). Pick a colour theme below to recolour it — the design keeps its layout, type and animation.`
               : "Colour themes style the landing + dashboard. Buy a Design Shop design to replace the landing entirely."}
           </p>
         </div>
