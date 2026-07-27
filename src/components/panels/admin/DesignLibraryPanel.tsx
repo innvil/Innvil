@@ -3,6 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { Gem, Eye, CheckCircle2, AlertTriangle, Wallet, Lock } from "lucide-react";
 import { getDesignLibrary, buyDesign, activateDesign, type DesignLibraryInfo } from "@/src/lib/actions/design";
+import { getDesignPricing } from "@/src/lib/actions/platform-settings";
+import { effectivePrice, type DesignPricingMap } from "@/src/lib/design/pricing";
 import { designCards } from "@/src/data/designs";
 
 /* Design Shop library for ONE panel: buy a design once (charged from the panel's
@@ -11,12 +13,14 @@ import { designCards } from "@/src/data/designs";
 
 export function DesignLibraryPanel({ panelId, onChanged }: { panelId: string; onChanged?: () => void }) {
   const [lib, setLib] = useState<DesignLibraryInfo | null>(null);
+  const [pricing, setPricing] = useState<DesignPricingMap>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const cards = designCards();
 
   useEffect(() => {
     getDesignLibrary(panelId).then(setLib).catch(() => setLib(null));
+    getDesignPricing().then(setPricing).catch(() => setPricing({}));
   }, [panelId]);
 
   const buy = async (id: string, name: string) => {
@@ -40,6 +44,10 @@ export function DesignLibraryPanel({ panelId, onChanged }: { panelId: string; on
   };
 
   if (!lib) return <p className="fp-text-faint text-xs py-2">Loading your design library…</p>;
+
+  // First design on this panel gets the first-purchase promo.
+  const firstPurchase = lib.owned.length === 0;
+  const priceFor = (id: string, base: number) => effectivePrice(base, pricing[id], { firstPurchase });
 
   return (
     <div>
@@ -77,7 +85,11 @@ export function DesignLibraryPanel({ panelId, onChanged }: { panelId: string; on
                   <div className="min-w-0">
                     <p className="text-sm truncate">{d.name}</p>
                     <p className="fp-text-faint text-[11px] truncate">
-                      {soon ? "In the studio" : owned ? "Owned" : `$${d.price} one-time`} · {d.tagline}
+                      {soon
+                        ? "In the studio"
+                        : owned
+                          ? "Owned"
+                          : (() => { const p = priceFor(d.id, d.price); return p.isPromo ? `$${p.price} ${p.label.toLowerCase()} (was $${p.base})` : `$${p.price} one-time`; })()} · {d.tagline}
                     </p>
                   </div>
                 </div>
@@ -96,8 +108,8 @@ export function DesignLibraryPanel({ panelId, onChanged }: { panelId: string; on
                       {busy === d.id ? "…" : "Activate"}
                     </button>
                   ) : (
-                    <button onClick={() => buy(d.id, d.name)} disabled={busy !== null || lib.ownerBalance < d.price} className="fp-btn-primary text-[11px] font-semibold rounded-lg px-2.5 py-1.5 disabled:opacity-60">
-                      {busy === d.id ? "…" : `Buy $${d.price}`}
+                    <button onClick={() => buy(d.id, d.name)} disabled={busy !== null || lib.ownerBalance < priceFor(d.id, d.price).price} className="fp-btn-primary text-[11px] font-semibold rounded-lg px-2.5 py-1.5 disabled:opacity-60">
+                      {busy === d.id ? "…" : `Buy $${priceFor(d.id, d.price).price}`}
                     </button>
                   )}
                 </div>

@@ -141,8 +141,9 @@ innvil/
   the `/superadmin` route (new **Design pricing** tab) and the **owner-app super-admin sidebar** (new
   "Design pricing" section, super-admin only).
 - Design Shop reflects it: cover badge / buy button show the overridden price and, for a first-time buyer,
-  the promo price + label; the balance gate uses the effective price. (NOTE: the in-studio `DesignLibraryPanel`
-  buy button still shows the base price — `buyDesign` charges correctly server-side; wire its display next.)
+  the promo price + label; the balance gate uses the effective price. The in-studio `DesignLibraryPanel` also
+  loads `getDesignPricing()` and shows the effective/promo price on its buy button + balance gate (v0.2.112).
+  Also fixed a duplicate `Tag` lucide import in `panels/index.tsx` that broke the build (v0.2.112).
 
 ### 2026-07-24 — Design #2 "Studio" published (v0.2.110)
 - **Second marketplace design shipped, one-at-a-time as intended.** `src/data/designs/studio.ts` (NEW) —
