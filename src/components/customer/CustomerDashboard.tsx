@@ -16,6 +16,7 @@ import { NewOrder, PlaceOrderHandler, PlatformMeta } from "./NewOrder";
 import { ApiDocs } from "./ApiDocs";
 import { CustomerTickets } from "./CustomerTickets";
 import { SupportChat } from "./SupportChat";
+import { CampaignSurface } from "./CampaignSurface";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 
@@ -58,11 +59,12 @@ const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
    Wallet, Tickets, API, Profile. No Login/Register here.
    ========================================================= */
 
-type CustomerPage = "dashboard" | "order" | "orders" | "wallet" | "tickets" | "api" | "profile";
+type CustomerPage = "dashboard" | "order" | "campaign" | "orders" | "wallet" | "tickets" | "api" | "profile";
 
 const NAV: Array<{ k: CustomerPage; label: string; icon: typeof LayoutGrid }> = [
   { k: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { k: "order", label: "New Order", icon: ShoppingCart },
+  { k: "campaign", label: "Campaign", icon: Zap },
   { k: "orders", label: "Orders", icon: ListOrdered },
   { k: "wallet", label: "Wallet", icon: Wallet },
   { k: "tickets", label: "Tickets", icon: MessageSquare },
@@ -151,6 +153,7 @@ export function CustomerDashboard({
   paymentMethods = [],
   panelId,
   aiSupport = false,
+  campaignEnabled = false,
   dashboardLayout,
   apiEnabled = true,
   hasExistingApiKey = false,
@@ -198,6 +201,8 @@ export function CustomerDashboard({
   panelId?: string;
   /** Whether the panel's paid AI support add-on is enabled (shows the chat widget). */
   aiSupport?: boolean;
+  /** Whether Campaign Automation (plan) is enabled — shows the Campaign tab. */
+  campaignEnabled?: boolean;
   /** Owner-configured home widget layout (Design Tools). Unset = default layout. */
   dashboardLayout?: DashboardWidget[];
   /** Customer API status for this panel. */
@@ -507,7 +512,7 @@ export function CustomerDashboard({
           </div>
 
           <nav className="hidden md:flex items-center gap-1">
-            {NAV.map((n) => (
+            {NAV.filter((n) => n.k !== "campaign" || campaignEnabled).map((n) => (
               <button
                 key={n.k}
                 onClick={() => go(n.k)}
@@ -537,7 +542,7 @@ export function CustomerDashboard({
         {/* Mobile hamburger menu */}
         {menuOpen && (
           <nav className="md:hidden border-t fp-line-soft bg-[#0D0F14] px-4 py-3 space-y-1">
-            {NAV.map((n) => (
+            {NAV.filter((n) => n.k !== "campaign" || campaignEnabled).map((n) => (
               <button
                 key={n.k}
                 onClick={() => go(n.k)}
@@ -659,6 +664,11 @@ export function CustomerDashboard({
             platformMeta={platformMeta}
             currency={currency}
           />
+        )}
+
+        {/* ---------- CAMPAIGN ---------- */}
+        {page === "campaign" && campaignEnabled && (
+          <CampaignSurface panelId={panelId} currency={currency} />
         )}
 
         {/* ---------- ORDERS ---------- */}

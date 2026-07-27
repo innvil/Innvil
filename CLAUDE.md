@@ -127,6 +127,24 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Campaign Automation — Phase 2b: fan-out engine + storefront surface (v1.1.1)
+- **The Automator now runs orders.** `src/lib/actions/campaigns.ts` (NEW) — `runCampaign({panelId, links, tier})`:
+  storefront-auth'd, gated on `hasCampaignAutomation`, parses the blob (`analyzeCampaign`), creates a `campaigns`
+  row, and for each detected link looks up the owner's enabled `campaign_service_presets` for that platform+tier
+  and places **one order per preset** via the existing `placeOrder` (customer wallet, floors/markup/provider all
+  reused), deduping by service and applying the Instagram-Reel rule (views only). Records `campaign_items`
+  (order_ids, charge, status), caps links by `campaignLinkLimit`, and skips comment presets (pools = 2c).
+  `listCampaigns` for history.
+- `src/components/customer/CampaignSurface.tsx` (NEW) — storefront Campaign tab: paste-links textarea with a
+  **live analysis** (per-platform counts + unrecognized), regular/priority tier, Run, a per-link result list, and
+  recent campaigns. Mounted in `CustomerDashboard` as a new **"Campaign"** nav item, shown only when
+  `campaignEnabled`. Gate threaded `getPublicPanel.campaignAutomation` → page → Storefront → dashboard.
+- **Testing:** comp a panel to Pro/Business (super admin) so the Campaign tab appears; until the 2c preset UI
+  exists, insert a `campaign_service_presets` row (panel_id, platform, tier='regular', service_type, service_id,
+  quantity, enabled=true) to see fan-out place orders. No new migration (0028 already covers it).
+- **NEXT (2c):** owner preset UI (per platform/tier service_type → service + qty) + comment pools; then 2d
+  (self-serve subscribe UI that unlocks the campaign surface + design tools) + background processing for big runs.
+
 ### 2026-07-25 — Campaign Automation (the Automator) — Phase 2a foundation (v1.1.0)
 - **Started the Automator.** Foundation slice only (per user: full-auto "watched accounts" deferred). No UI or
   fan-out yet — that's 2b. Ships the detection engine + schema.

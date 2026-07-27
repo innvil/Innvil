@@ -145,7 +145,7 @@ export function Storefront({
   customerApiHasKey = false,
   apiBaseUrl = "/api/v2",
 }: {
-  panel: { id: string; subdomain: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[]; aiSupport?: boolean; dashboardLayout?: DashboardWidget[] | null };
+  panel: { id: string; subdomain: string; name: string; status: string; currency: string; logoUrl?: string; headline?: string; description?: string; sections?: PublicLandingSection[]; aiSupport?: boolean; campaignAutomation?: boolean; dashboardLayout?: DashboardWidget[] | null };
   services: StorefrontService[];
   initialAccount: CustomerAccountInfo | null;
   initialOrders?: CustomerOrderVM[];
@@ -706,6 +706,7 @@ export function Storefront({
         paymentMethods={paymentMethods}
         panelId={panel.id}
         aiSupport={panel.aiSupport ?? false}
+        campaignEnabled={panel.campaignAutomation ?? false}
         dashboardLayout={panel.dashboardLayout ?? undefined}
         apiEnabled={apiEnabled}
         hasExistingApiKey={apiHasKey}

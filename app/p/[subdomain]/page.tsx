@@ -174,7 +174,7 @@ export default async function StorefrontPage({ params }: Params) {
   return (
     <div style={dashboardStyle}>
       <Storefront
-        panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description, sections: panel.sections, aiSupport: panel.aiSupport, dashboardLayout: panel.dashboardLayout }}
+        panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description, sections: panel.sections, aiSupport: panel.aiSupport, campaignAutomation: panel.campaignAutomation, dashboardLayout: panel.dashboardLayout }}
         services={services}
         initialAccount={account}
         platformMeta={platformMeta}

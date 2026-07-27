@@ -2,7 +2,7 @@
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { customerSupportActive } from "@/src/lib/ai/addon";
-import { hasDesignTools } from "@/src/lib/plans";
+import { hasDesignTools, hasCampaignAutomation } from "@/src/lib/plans";
 import { readDashboardHome, type DashboardWidget } from "@/src/lib/dashboard-layout";
 import { activeDesignId } from "@/src/lib/design/library";
 import { readEditorState, type EditorDesign } from "@/src/lib/design/editor";
@@ -37,6 +37,7 @@ export interface PublicPanel {
   favicon: string;
   sections: PublicLandingSection[];
   aiSupport: boolean;
+  campaignAutomation: boolean;
   dashboardLayout: DashboardWidget[] | null;
   /** Purchased marketplace design applied to the landing (null = default landing). */
   activeDesign: string | null;
@@ -126,6 +127,7 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
     favicon: branding.favicon || branding.logoUrl,
     sections: branding.sections,
     aiSupport: customerSupportActive(data.settings),
+    campaignAutomation: hasCampaignAutomation(data.settings),
     // Custom layout only applies while Design Tools (Business) is active — a
     // downgrade reverts customers to the default dashboard.
     dashboardLayout: hasDesignTools(data.settings) ? readDashboardHome(data.settings) : null,
