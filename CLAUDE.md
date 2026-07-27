@@ -127,7 +127,26 @@ innvil/
 
 ## Recent Updates
 
-### 2026-07-25 — Landing: automation-first positioning + full feature coverage (v1.0.1)
+### 2026-07-25 — Campaign Automation (the Automator) — Phase 2a foundation (v1.1.0)
+- **Started the Automator.** Foundation slice only (per user: full-auto "watched accounts" deferred). No UI or
+  fan-out yet — that's 2b. Ships the detection engine + schema.
+- `src/lib/automation/links.ts` (NEW) — ported from the SMM-automator project + enhanced: `detectPlatform(link)`
+  (hostname → instagram/tiktok/youtube/x/facebook/linkedin/telegram/spotify/threads, with a substring fallback),
+  `isInstagramReel(link)` (Reel rule = views only), **`parseCampaignLinks(input)`** (extracts every URL even when
+  pasted with no separators — newlines/commas/spaces AND concatenated `…/1https://…/2` — deduped), and
+  `analyzeCampaign(input)` (per-link preview: platform + counts). Pure module, client+server safe.
+- **Migration `0028_campaign_automation.sql`** (NEW) — `campaign_service_presets` (OWNER config: per
+  (platform, tier, service_type) → a panel `service_id` + quantity, `enabled`), `campaigns` (CUSTOMER run header:
+  panel/customer/tier/status/total_links/total_charge), `campaign_items` (per link: detected platform, status,
+  `order_ids` jsonb, charge, error). Enums `campaign_status` / `campaign_item_status`. RLS mirrors support
+  tickets (presets = owner/super-admin only; campaigns/items = panel members, super admin, or the owning
+  customer). **Run migration 0028.**
+- **NEXT (2b):** fan-out — for each detected link, look up the owner's presets for its platform and place one
+  order per preset via the existing `placeOrder` (customer wallet, floors/markup respected), writing
+  `campaign_items`; then the storefront **Campaign** surface (link blob + csv/xlsx/docx upload). Then 2c (owner
+  preset UI + comment pools) and 2d (self-serve subscribe UI that unlocks the campaign surface + design tools).
+
+### 2026-07-25 — Landing: automation-first positioning + full feature coverage (v1.0.2)
 - **The marketing landing (`PublicLanding.tsx`) now sells the whole product with an "SMM panel made easy /
   almost fully automated / minimal human touch" angle** (the landing = Innvil's storefront). Changes:
   - **Hero** repositioned: pill "SMM panel making & managing — made easy", mono line "Almost fully automated ·
