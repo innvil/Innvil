@@ -27,22 +27,19 @@ function TopNav({ setWorld }: { world?: string; setWorld?: (w: string) => void }
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0B0F]/80 border-b fp-line-soft">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+        <a href="#top" aria-label="Innvil — back to top" className="flex items-center gap-2.5 shrink-0">
           <div className="w-10 h-10 rounded-[9px] bg-[#C9A574] flex items-center justify-center">
             <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
           </div>
           <span className="fp-display text-lg tracking-wide">Innvil</span>
-        </div>
-        <nav className="hidden md:flex items-center gap-7 text-sm fp-text-dim">
+        </a>
+        <nav className="hidden md:flex items-center gap-6 text-sm fp-text-dim">
           <a href="#how" className="hover:fp-text">How it works</a>
           <a href="#automation" className="hover:fp-text">Automation</a>
           <a href="#features" className="hover:fp-text">Features</a>
-          <a href="#platform" className="hover:fp-text">Platform</a>
-          <a href="#why" className="hover:fp-text">Why Innvil</a>
           <a href="#pricing" className="hover:fp-text">Pricing</a>
           <Link href="/design-shop" className="hover:fp-text">Designs</Link>
           <Link href="/blog" className="hover:fp-text">Guides</Link>
-          <a href="#faq" className="hover:fp-text">FAQ</a>
         </nav>
         <div className="flex items-center gap-3">
           <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
@@ -65,7 +62,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
   const video = toVideoEmbed(videoUrl);
 
   return (
-    <div>
+    <div id="top">
       <TopNav world="public" setWorld={setWorld} />
       <section className="relative fp-noise fp-grid-bg overflow-hidden">
         <div className="max-w-6xl mx-auto px-6 pt-20 pb-24 grid md:grid-cols-2 gap-14 items-center">

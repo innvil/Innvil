@@ -28,7 +28,7 @@ export function LandingJsonLd() {
       name: "Innvil",
       applicationCategory: "BusinessApplication",
       operatingSystem: "Web",
-      description: "Build your own white-label SMM panel — each with its own subdomain, storefront, customer dashboard and wallet.",
+      description: "Build and run your own white-label SMM panel — almost fully automated, minimal human touch. Catalog import, pricing, order routing, status sync, refunds and deposits run on their own.",
       offers: {
         "@type": "Offer",
         price: "0",

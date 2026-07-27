@@ -140,6 +140,11 @@ innvil/
   - **`#platform` grid gained 3 cards** that were missing entirely: **Design Shop + visual editor**, **Free AI
     assistant** (owner), **AI customer support (add-on)**.
   - Fixed the stale `#why` line that listed the Design Shop as "next" — it's live now.
+- **SEO pass (same release):** root metadata (`app/layout.tsx`) title → "Innvil — SMM Panel Making & Managing,
+  Made Easy"; description + OG/Twitter reworked around automation; keywords add "smm panel made easy",
+  "automated smm panel", "smm panel automation", "run/manage an smm panel". Two new FAQ entries in
+  `landing-faq.ts` ("How much is automated?" + "Can I customize the storefront?") — they render on-page AND in
+  the FAQPage JSON-LD (shared array). `app/JsonLd.tsx` SoftwareApplication description updated to match.
 - Content/copy only; no logic change.
 
 ### 2026-07-25 — v1.0.0 — public launch 🎉
