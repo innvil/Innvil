@@ -127,6 +127,21 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Landing: automation-first positioning + full feature coverage (v1.0.1)
+- **The marketing landing (`PublicLanding.tsx`) now sells the whole product with an "SMM panel made easy /
+  almost fully automated / minimal human touch" angle** (the landing = Innvil's storefront). Changes:
+  - **Hero** repositioned: pill "SMM panel making & managing — made easy", mono line "Almost fully automated ·
+    minimal human touch · 0% rent, 5% only", headline "Your own SMM panel, built and run for you", copy leads
+    with what Innvil automates.
+  - **NEW `#automation` section** ("Built to run itself. Minimal human touch.") — a 9-point checklist of what
+    runs on its own (catalog import/categorize, markup pricing, order routing, 10-min status sync, auto-refunds,
+    crypto auto-credit, commission settlement, held-order auto-resend, provider-spend logging) + "the only things
+    that need you" line. New "Automation" nav anchor.
+  - **`#platform` grid gained 3 cards** that were missing entirely: **Design Shop + visual editor**, **Free AI
+    assistant** (owner), **AI customer support (add-on)**.
+  - Fixed the stale `#why` line that listed the Design Shop as "next" — it's live now.
+- Content/copy only; no logic change.
+
 ### 2026-07-25 — v1.0.0 — public launch 🎉
 - **First stable release.** Build passes, deployed to production, and all three pg_cron jobs
   (`innvil-order-sync-every-10-min`, `innvil-generate-blog`, `innvil-bill-addons`) verified active + running.

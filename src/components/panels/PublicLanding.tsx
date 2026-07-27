@@ -6,6 +6,7 @@ import {
   ArrowRight, ChevronRight, ChevronDown, Circle, Gauge, PlayCircle, Rocket, Wifi,
   Palette, Tag, Percent, RefreshCw, ListOrdered, Sliders, ShieldCheck, Globe, Trash2,
   Wallet, MessageSquare, FileText, Copy, Activity, PiggyBank, KeyRound, Lock, LayoutGrid, Gift,
+  Bot, Zap, CheckCircle2,
 } from "lucide-react";
 import { Pill, FloorLedger } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
@@ -34,6 +35,7 @@ function TopNav({ setWorld }: { world?: string; setWorld?: (w: string) => void }
         </div>
         <nav className="hidden md:flex items-center gap-7 text-sm fp-text-dim">
           <a href="#how" className="hover:fp-text">How it works</a>
+          <a href="#automation" className="hover:fp-text">Automation</a>
           <a href="#features" className="hover:fp-text">Features</a>
           <a href="#platform" className="hover:fp-text">Platform</a>
           <a href="#why" className="hover:fp-text">Why Innvil</a>
@@ -68,17 +70,17 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
       <section className="relative fp-noise fp-grid-bg overflow-hidden">
         <div className="max-w-6xl mx-auto px-6 pt-20 pb-24 grid md:grid-cols-2 gap-14 items-center">
           <div>
-            <Pill tone="violet" icon={Gauge}>0% monthly rent · 5% commission only</Pill>
-            <p className="fp-text-faint text-xs fp-mono mt-3">We build the panel builder platform. You bring your own provider.</p>
+            <Pill tone="violet" icon={Gauge}>SMM panel making &amp; managing — made easy</Pill>
+            <p className="fp-text-faint text-xs fp-mono mt-3">Almost fully automated · minimal human touch · 0% rent, 5% only</p>
             <h1 className="fp-display text-5xl md:text-6xl leading-[1.05] mt-6">
-              Launch your own<br />
-              <span className="fp-grad-text">white-label SMM panel.</span>
+              Your own SMM panel,<br />
+              <span className="fp-grad-text">built and run for you.</span>
             </h1>
             <p className="fp-text-dim text-base mt-6 max-w-md leading-relaxed">
-              Innvil is the no-code SMM panel builder — a modern alternative to buying an SMM
-              panel script. Create as many independent, white-label SMM panels as you want, each
-              with its own subdomain, storefront, customer dashboard, and wallet — yours to
-              brand, price, and grow.
+              Innvil is the no-code SMM panel builder that does the heavy lifting. Spin up unlimited
+              white-label panels — each with its own subdomain, storefront, wallet and customer
+              dashboard — then let Innvil automate the busywork: catalog import, pricing, order
+              routing, status sync, refunds and deposits all run on their own. You brand, price, and grow.
             </p>
             <div className="flex items-center gap-4 mt-8">
               <Link href="/signup" className="fp-btn-primary font-semibold px-6 py-3 rounded-lg flex items-center gap-2">
@@ -162,6 +164,36 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
         </div>
       </section>
 
+      <section id="automation" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
+        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3 flex items-center gap-1.5">
+          <Zap size={13} className="fp-gold" /> Almost fully automated
+        </p>
+        <h2 className="fp-display text-3xl mb-4">Built to run itself. Minimal human touch.</h2>
+        <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
+          Running an SMM panel is mostly repetitive busywork. Innvil automates it end to end, so you
+          spend minutes managing what used to take hours — and your customers get a fast, hands-off experience.
+        </p>
+        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
+          {[
+            "Provider catalog imported & auto-categorized",
+            "Your markup priced onto every service automatically",
+            "Orders routed to your provider the moment they're placed",
+            "Order status synced from your provider every 10 minutes",
+            "Unfilled or canceled portions auto-refunded to the customer",
+            "Crypto deposits auto-credit the wallet on confirmation",
+            "Commission settled automatically on completed orders",
+            "Held orders auto-resend once your provider is topped up",
+            "Provider spend auto-logged (net of refunds) for clean books",
+          ].map((t) => (
+            <div key={t} className="fp-panel border fp-line rounded-xl px-4 py-3 flex items-start gap-2.5">
+              <CheckCircle2 size={16} className="fp-gold shrink-0 mt-0.5" />
+              <span className="fp-text-dim text-sm leading-snug">{t}</span>
+            </div>
+          ))}
+        </div>
+        <p className="fp-text-faint text-xs mt-6">The only things that need you: connecting your provider, setting your prices, and choosing when to go live.</p>
+      </section>
+
       <section id="features" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Provider automation</p>
         <h2 className="fp-display text-3xl mb-4">Import a thousand services in one click.</h2>
@@ -211,6 +243,9 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
             { icon: RefreshCw, t: "Automatic order-status sync", d: "Orders track your provider automatically — completed, partial, canceled — and refund the unfilled portion. No manual chasing." },
             { icon: KeyRound, t: "Customer-facing API", d: "Every customer gets an API key and the full v2 endpoints, including batch ordering up to 100 rows for automation workflows." },
             { icon: Gauge, t: "Fast, mobile-first UX", d: "Owner and customer experiences are built mobile-first and feel like a modern SaaS product, not a legacy panel." },
+            { icon: Palette, t: "Design Shop + visual editor", d: "Give your storefront a professionally designed landing — buy a complete design once and own it forever, recolor it with free themes, or build your own with the no-code visual editor. Never look generic." },
+            { icon: Bot, t: "Free AI assistant", d: "A built-in assistant helps you run your panel — connect a provider, import services, go live — free on every account, no setup." },
+            { icon: MessageSquare, t: "AI customer support (add-on)", d: "Turn on an AI chat that answers your customers about services, orders and deposits — grounded in your own catalog — and opens a ticket when it can't help." },
           ].map((f) => (
             <div key={f.t} className="fp-panel border fp-line rounded-2xl p-6">
               <span className="w-10 h-10 rounded-xl fp-gold-soft-bg fp-gold flex items-center justify-center mb-4">
@@ -254,7 +289,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
             { icon: Wifi, t: "Bring your own provider", d: "We never resell SMM services or mark up your provider. You keep 95% of every order and your margin is yours.", lead: false },
             { icon: Globe, t: "No domain lock-in", d: "Disconnect your custom domain anytime and the storefront reverts to your included subdomain. You're never held hostage.", lead: false },
             { icon: Lock, t: "Real customer-privacy boundary", d: "You can't log into customer accounts or reset their passwords — only adjust balances. A trust guarantee legacy panels don't give.", lead: false },
-            { icon: LayoutGrid, t: "A business OS, not just a panel", d: "Wallet, tickets, receipts and duplicate tooling today; Automator, Analytics and a Design Shop as opt-in add-ons next.", lead: false },
+            { icon: LayoutGrid, t: "A business OS, not just a panel", d: "Wallet, tickets, receipts, duplicate tooling and a full Design Shop today; the Automator and Analytics land as opt-in add-ons next.", lead: false },
             { icon: Gift, t: "ANVIL rewards — coming soon", d: "Earn rewards on every top-up and unlock discounts on paid features as the platform grows.", lead: false },
           ].map((f) => (
             <div key={f.t} className={`fp-panel border rounded-2xl p-6 ${f.lead ? "fp-gold-border" : "fp-line"}`}>
