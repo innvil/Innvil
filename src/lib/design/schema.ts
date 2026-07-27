@@ -109,7 +109,7 @@ export interface HeroSection extends SectionBase {
   /** Decorative floating engagement elements (likes/views/followers…). */
   floats?: Array<{ kind: "like" | "heart" | "view" | "follower" | "comment" | "share" | "notify"; label?: string; value?: string }>;
   /** Optional phone/app mockup composition. */
-  mockup?: "none" | "phone-feed" | "phone-orders" | "dashboard-card";
+  mockup?: "none" | "phone-feed" | "phone-orders" | "dashboard-card" | "collage" | "orbit";
 }
 
 /** STATS / trust numbers. */

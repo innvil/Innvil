@@ -127,6 +127,56 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — v1.0.0 — public launch 🎉
+- **First stable release.** Build passes, deployed to production, and all three pg_cron jobs
+  (`innvil-order-sync-every-10-min`, `innvil-generate-blog`, `innvil-bill-addons`) verified active + running.
+  Google indexing requested.
+- **What's live at 1.0:** end-to-end money loop (deposits → wallet → orders → provider forward → status sync →
+  5% commission settlement w/ volume discounts + $100/day cap), white-label storefronts (subdomain + custom
+  domains, per-panel metadata/favicon), bring-your-own provider, multi-gateway payments (Cryptomus/NOWPayments/
+  Razorpay/Stripe), owner→Innvil top-ups, support tickets both directions, earnings receipts, AI blog autopilot
+  (human-approved), customer AI support add-on + free owner assistant, SEO foundation + /blog, and a
+  **functional Design Shop** (4 distinct designs — Pulse/Studio/Agency/Orbit — buy/activate/switch, full live
+  previews, super-admin pricing + first-purchase promos) + **visual editor Phase 1**.
+- **Gated "coming soon" (not blocking 1.0):** self-serve plan subscriptions + Campaign Automation Phase 2 (the
+  Automator), visual-editor Phase 2 + dashboard editor, child panels / design resell. Business features are
+  comp-only via super admin today.
+
+### 2026-07-24 — Orbit/collage badges use real platform glyphs (v0.2.116)
+- The `orbit` and `collage` hero mockups showed the platform's first LETTER in each floating badge. They now
+  render the real monochrome brand glyph via the existing `PlatformGlyph` (`src/components/customer/
+  PlatformIcons.tsx`, `fill: currentColor` → white on the accent badge; unknown platforms get the neutral
+  fallback ring). `DesignRenderer` now imports `PlatformGlyph`.
+
+### 2026-07-24 — Design #4 "Orbit" published — initial four complete (v0.2.115)
+- **`src/data/designs/orbit.ts` (NEW) — "Orbit"** ($7, minimal futuristic premium): a combination of the
+  backlog directions (GlassOS glass/aurora + Neon-Cyber grid + Floating Social Ecosystem hero). Deep-space
+  canvas, electric-lime (#A3E635) + indigo accent, aurora-over-grid `backdrop`, glass cards.
+- **New signature layout in the renderer: `mockup: "orbit"`** — platform badges orbiting a central "growth"
+  dashboard node with spinning dashed rings (new `dz-spin`/`dz-spin-rev` CSS + `dzSpin` keyframe). `"orbit"`
+  added to the schema mockup union.
+- `src/data/designs/index.ts`: Orbit → `PUBLISHED_DESIGNS`; **`COMING_SOON_DESIGNS` is now empty** — the
+  initial four (Pulse, Studio, Agency, Orbit) are all live, each with a distinct LAYOUT (phone-feed /
+  dashboard-card / collage / orbit), not just a palette.
+- **NEXT designs** come from the backlog in memory `innvil-design-directions` (GlassOS, Neon Cyber, Bento,
+  Finance, Dark Luxury, Isometric, AI Assistant, Brutalist, Aurora, Motion) — each needs its own renderer
+  variant/mockup. Then: visual editor Phase 2 + dashboard editor when the Automator launches.
+
+### 2026-07-24 — Renderer now varies by LAYOUT + Design #3 "Agency" (bold/colourful) (v0.2.114)
+- **Root fix: designs were only differing by tokens/copy** because `DesignRenderer` drew one fixed layout per
+  section type — so a light palette on the same structure read as "Studio in white." The renderer now branches
+  on `variant`/`mockup` for real layout differences:
+  - **`mockup: "collage"`** (NEW) — a playful card collage hero (accent tile + trophy card + platform-icon card)
+    instead of phone-feed / dashboard-card. `"collage"` added to the schema mockup union.
+  - **`features` `variant: "color-cards"`** (NEW) — full-colour feature tiles cycling dark → accent-gradient →
+    light with big emoji (`item.icon`). Default features variant now also uses `item.icon` when present.
+- `src/data/designs/agency.ts` — **"Agency"** rebuilt as a **bold, colourful, playful** composition (warm
+  off-white canvas, coral→orange gradient, very rounded shapes, collage hero, colour feature cards, emoji), a
+  genuinely different LOOK from dark Pulse/Studio — not a recolour. ($10, id still `agency`.)
+- `src/data/designs/index.ts`: Agency is `PUBLISHED`. Only teaser left: **Orbit** (minimal futuristic).
+- **NOTE:** future designs should lean on `variant`/`mockup` for layout distinctiveness, not just tokens. Add
+  new variants to the shared renderer as needed. **NEXT design:** Orbit.
+
 ### 2026-07-24 — Super-admin design pricing + first-purchase promos (v0.2.111)
 - **Design prices are now super-admin-settable, with per-design first-purchase promos** (base prices still live
   in each package's `meta.price` as the default). No migration — stored in `platform_settings` under key

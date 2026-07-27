@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
 import {
   tokensToCssVars, personalizeTokens, getPage,
   type DesignPackage, type DesignPage, type DesignPageId, type DesignSection, type DesignCta, type DesignTokens,
@@ -76,6 +77,9 @@ const DESIGN_CSS = `
 @keyframes dzFadeUp { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
 @keyframes dzFadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes dzFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+@keyframes dzSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.dz-spin { animation: dzSpin 26s linear infinite; }
+.dz-spin-rev { animation: dzSpin 34s linear infinite reverse; }
 .dz-anim-fade-up { animation: dzFadeUp .7s cubic-bezier(.2,.7,.3,1) both; }
 .dz-anim-fade-in { animation: dzFadeIn .8s ease both; }
 .dz-float { animation: dzFloat 5s ease-in-out infinite; }
@@ -240,6 +244,63 @@ function Hero({ s, data, inert }: { s: HeroSection; data: DesignRenderData; iner
             </div>
           )}
 
+          {s.mockup === "collage" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gridTemplateRows: "auto auto", gap: ".9rem" }}>
+              {/* Big accent tile */}
+              <div style={{ gridRow: "span 2", borderRadius: "var(--d-radius-lg)", padding: "1.4rem", minHeight: 260, display: "flex", flexDirection: "column", justifyContent: "space-between", background: "linear-gradient(150deg, var(--d-accent), var(--d-accent-alt))", color: "#fff", boxShadow: "var(--d-shadow)" }}>
+                <span style={{ fontSize: "2.6rem", lineHeight: 1 }}>🚀</span>
+                <div>
+                  <div style={{ fontSize: "1.05rem", fontWeight: 800, letterSpacing: "-0.01em" }}>#1 rated SMM panel</div>
+                  <div style={{ fontSize: ".8rem", opacity: 0.85, marginTop: ".3rem" }}>Trusted by creators worldwide</div>
+                </div>
+              </div>
+              {/* Trophy / best card */}
+              <div className="dz-card" style={{ padding: "1.1rem", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: "2rem" }}>🏆</span>
+                <div style={{ fontWeight: 800, fontSize: ".9rem", marginTop: ".5rem" }}>World-class quality</div>
+              </div>
+              {/* Platform icons row */}
+              <div className="dz-card" style={{ padding: "1rem" }}>
+                <div className="dz-faint" style={{ fontSize: ".62rem", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: ".6rem" }}>Every platform</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: ".45rem" }}>
+                  {Array.from(new Set(data.services.map((x) => x.platform))).slice(0, 6).map((p) => (
+                    <span key={p} style={{ width: 34, height: 34, borderRadius: 11, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))" }}>
+                      <PlatformGlyph platform={p} size={18} />
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {s.mockup === "orbit" && (
+            <div style={{ position: "relative", width: 340, height: 340, maxWidth: "100%", margin: "0 auto" }}>
+              {/* Concentric spinning rings */}
+              <div className="dz-spin" style={{ position: "absolute", inset: 0, borderRadius: "50%", border: "1px dashed var(--d-border)" }} />
+              <div className="dz-spin-rev" style={{ position: "absolute", inset: 46, borderRadius: "50%", border: "1px dashed var(--d-border)" }} />
+              <div style={{ position: "absolute", inset: 92, borderRadius: "50%", border: "1px solid var(--d-border)", background: "color-mix(in srgb, var(--d-accent) 6%, transparent)" }} />
+              {/* Center node */}
+              <div className="dz-card" style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 132, padding: ".9rem", textAlign: "center" }}>
+                <div style={{ fontSize: "1.5rem", lineHeight: 1 }}>⚡</div>
+                <div className="dz-accent" style={{ fontWeight: 800, fontSize: "1.05rem", marginTop: ".35rem" }}>+18%</div>
+                <div className="dz-faint" style={{ fontSize: ".58rem", textTransform: "uppercase", letterSpacing: ".08em" }}>Growth / wk</div>
+              </div>
+              {/* Platform badges orbiting the node (upright) */}
+              {Array.from(new Set(data.services.map((x) => x.platform))).slice(0, 6).map((p, i, arr) => {
+                const ang = (i / arr.length) * Math.PI * 2 - Math.PI / 2;
+                const r = 138;
+                const x = 170 + r * Math.cos(ang) - 21;
+                const y = 170 + r * Math.sin(ang) - 21;
+                return (
+                  <span key={p} className="dz-float dz-hide-mobile"
+                    style={{ position: "absolute", top: y, left: x, width: 42, height: 42, borderRadius: 13, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "var(--d-shadow)", animationDelay: `${i * 0.5}s` }}>
+                    <PlatformGlyph platform={p} size={22} />
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
           {s.floats?.slice(0, 5).map((f, i) => (
             <div key={i} className="dz-floatcard dz-float dz-hide-mobile" style={{ ...FLOAT_POS[i % FLOAT_POS.length], animationDelay: `${i * 0.6}s` }}>
               <span className="dz-accent" style={{ fontSize: ".95rem" }}>{FLOAT_ICON[f.kind] ?? "★"}</span>
@@ -341,6 +402,33 @@ function Steps({ s }: { s: StepsSection }) {
 }
 
 function Features({ s }: { s: FeaturesSection }) {
+  // Bold, playful variant: each card gets a full-bleed colour that cycles
+  // dark → accent gradient → light, with an oversized emoji icon.
+  if (s.variant === "color-cards") {
+    const palettes = [
+      { bg: "var(--d-text)", fg: "var(--d-bg)", dim: "color-mix(in srgb, var(--d-bg) 65%, var(--d-text))" },
+      { bg: "linear-gradient(150deg, var(--d-accent), var(--d-accent-alt))", fg: "#ffffff", dim: "rgba(255,255,255,0.82)" },
+      { bg: "var(--d-surface)", fg: "var(--d-text)", dim: "var(--d-text-dim)" },
+    ];
+    return (
+      <section className="dz-section dz-wrap">
+        <SectionHeading heading={s.heading} sub={s.sub} />
+        <div className="dz-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
+          {s.items.map((it, i) => {
+            const p = palettes[i % palettes.length];
+            return (
+              <div key={i} style={{ background: p.bg, color: p.fg, border: "1px solid var(--d-border)", borderRadius: "var(--d-radius-lg)", padding: "1.6rem", boxShadow: "var(--d-shadow)" }}>
+                <div style={{ fontSize: "2rem", lineHeight: 1 }}>{it.icon || "✨"}</div>
+                <h3 className="dz-display" style={{ fontSize: "1.15rem", margin: "1rem 0 .5rem", color: p.fg }}>{it.title}</h3>
+                <p style={{ fontSize: ".9rem", lineHeight: 1.6, margin: 0, color: p.dim }}>{it.body}</p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="dz-section dz-wrap">
       <SectionHeading heading={s.heading} sub={s.sub} />
@@ -348,7 +436,7 @@ function Features({ s }: { s: FeaturesSection }) {
         {s.items.map((it, i) => (
           <div key={i} className="dz-card" style={{ padding: "1.5rem" }}>
             <div style={{ width: 34, height: 34, borderRadius: 11, display: "grid", placeItems: "center", background: "linear-gradient(120deg, var(--d-accent), var(--d-accent-alt))", color: "#0B0614", fontWeight: 700 }}>
-              {it.title.slice(0, 1)}
+              {it.icon || it.title.slice(0, 1)}
             </div>
             <h3 className="dz-display" style={{ fontSize: "1.02rem", margin: ".9rem 0 .45rem" }}>{it.title}</h3>
             <p className="dz-dim" style={{ fontSize: ".88rem", lineHeight: 1.6, margin: 0 }}>{it.body}</p>
