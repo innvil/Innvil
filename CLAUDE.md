@@ -127,6 +127,23 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R1: three-tier plan model + platform scoping (v1.1.2)
+- **Re-architecting the Automator to the v2 model** (see memory `innvil-automator-v2`): customer keyword config,
+  $6.99 customer sub (100% to owner), owner tier plans incl. **Business+**. This slice = the plan/pricing MODEL
+  (pure); actions/UI/keyword-config/teaser come next (R1b→R4). No migration yet.
+- `plans.ts` — `PlanTier` now `pro | business | business_plus`. **Tier → campaign platforms:** Pro = X/Instagram/
+  TikTok; Business = + Facebook/YouTube/LinkedIn/Threads/Telegram; Business+ = **all** owner services (`null`).
+  New helpers `tierPlatforms`, `automatorPlatformAllowed(settings, platform)`, `hasFileUpload` / `hasWatchedAccounts`
+  (Business+ only); `hasDesignTools`/`planBundlesSupport` now true for Business AND Business+.
+- `money.ts` — `INNVIL_BUSINESS_PLUS_PRICE = 49.99`; `planPrice` handles it; `CUSTOMER_AUTOMATOR_PRICE = 6.99`
+  + `AUTOMATOR_PERIOD_DAYS` (the hard-coded customer sub — 100% owner revenue, wired in R1b).
+- `actions/plan.ts` — `PlanInfo.businessPlusPrice`; Business+ also disables the separate ai_support sub (bundled)
+  + counts as bundling support. Super-admin Panels **Plan** select gained a **Business+** comp option (testing).
+- Existing 2b `campaigns.ts`/`CampaignSurface` (owner-preset + regular/priority) still compile but are SUPERSEDED
+  — replaced in R2 (customer keyword config) + R3 (keyword fan-out).
+- **NEXT (R1b):** customer $6.99 automator subscription (table + charge from wallet → owner earnings + monthly
+  billing) + owner tier subscribe UI with the "have enough demand first" warning.
+
 ### 2026-07-25 — Campaign Automation — Phase 2b: fan-out engine + storefront surface (v1.1.1)
 - **The Automator now runs orders.** `src/lib/actions/campaigns.ts` (NEW) — `runCampaign({panelId, links, tier})`:
   storefront-auth'd, gated on `hasCampaignAutomation`, parses the blob (`analyzeCampaign`), creates a `campaigns`

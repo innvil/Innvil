@@ -3,7 +3,7 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { readPlan, type PlanTier } from "@/src/lib/plans";
 import { readSupportSub } from "@/src/lib/ai/addon";
-import { INNVIL_PRO_PRICE, INNVIL_BUSINESS_PRICE, PLAN_PERIOD_DAYS, planPrice, round4 } from "@/src/lib/money";
+import { INNVIL_PRO_PRICE, INNVIL_BUSINESS_PRICE, INNVIL_BUSINESS_PLUS_PRICE, PLAN_PERIOD_DAYS, planPrice, round4 } from "@/src/lib/money";
 
 /* =========================================================
    Campaign Automation subscription (per-panel, owner-facing).
@@ -40,7 +40,8 @@ export interface PlanInfo {
   innvilBalance: number;
   proPrice: number;
   businessPrice: number;
-  bundlesSupport: boolean; // true on Business
+  businessPlusPrice: number;
+  bundlesSupport: boolean; // true on Business / Business+
 }
 
 export async function getPlan(panelId: string): Promise<PlanInfo | null> {
@@ -56,7 +57,8 @@ export async function getPlan(panelId: string): Promise<PlanInfo | null> {
     innvilBalance: toBalance(settings.innvil_balance),
     proPrice: INNVIL_PRO_PRICE,
     businessPrice: INNVIL_BUSINESS_PRICE,
-    bundlesSupport: p.tier === "business",
+    businessPlusPrice: INNVIL_BUSINESS_PLUS_PRICE,
+    bundlesSupport: p.tier === "business" || p.tier === "business_plus",
   };
 }
 
@@ -93,7 +95,7 @@ export async function setPlan(panelId: string, tier: PlanTier | null): Promise<R
   };
   // Business bundles AI support → turn off any separately-paid ai_support sub so the
   // owner isn't double-charged (customerSupportActive stays true via the plan).
-  if (tier === "business") {
+  if (tier === "business" || tier === "business_plus") {
     const sup = readSupportSub(settings);
     if (sup.enabled) nextAddons.ai_support = { ...sup, enabled: false, nextChargeAt: null, lapsed: false };
   }

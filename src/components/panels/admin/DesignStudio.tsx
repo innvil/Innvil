@@ -258,7 +258,7 @@ export function DesignStudio({
             <DesignLibraryPanel panelId={panel.id} onChanged={loadActiveDesign} />
           </section>
 
-          {hasTools && (
+          {hasTools ? (
             <section>
               <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Layers size={12} className="fp-gold" /> Visual editor · design tools</p>
               <p className="fp-text-faint text-[11px] leading-relaxed mb-3">
@@ -268,6 +268,18 @@ export function DesignStudio({
               <button onClick={() => setShowEditor(true)} className="fp-panel-raised border fp-gold-border rounded-lg px-3 py-2 text-xs fp-gold inline-flex items-center gap-1.5">
                 <Layers size={13} /> Open the visual editor
               </button>
+            </section>
+          ) : (
+            <section>
+              <p className="fp-text-faint text-xs fp-mono uppercase mb-1 flex items-center gap-1.5"><Layers size={12} className="fp-gold" /> Design tools · coming soon</p>
+              <div className="fp-panel-raised border fp-line-soft rounded-lg p-3">
+                <p className="fp-text-dim text-[11px] leading-relaxed">
+                  A full no-code editor for your storefront is on the way — rearrange <span className="fp-text">navs
+                  and sections</span>, switch to a hamburger/dropdown layout, place components, and design your own
+                  landing. We&apos;re building it properly before release. For now, use the colour themes and the
+                  Design Shop above.
+                </p>
+              </div>
             </section>
           )}
           </div>

@@ -240,7 +240,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
             { icon: RefreshCw, t: "Automatic order-status sync", d: "Orders track your provider automatically — completed, partial, canceled — and refund the unfilled portion. No manual chasing." },
             { icon: KeyRound, t: "Customer-facing API", d: "Every customer gets an API key and the full v2 endpoints, including batch ordering up to 100 rows for automation workflows." },
             { icon: Gauge, t: "Fast, mobile-first UX", d: "Owner and customer experiences are built mobile-first and feel like a modern SaaS product, not a legacy panel." },
-            { icon: Palette, t: "Design Shop + visual editor", d: "Give your storefront a professionally designed landing — buy a complete design once and own it forever, recolor it with free themes, or build your own with the no-code visual editor. Never look generic." },
+            { icon: Palette, t: "Design Shop", d: "Give your storefront a professionally designed landing — buy a complete design once and own it forever, and recolor it with free themes. A no-code visual editor is coming soon. Never look generic." },
             { icon: Bot, t: "Free AI assistant", d: "A built-in assistant helps you run your panel — connect a provider, import services, go live — free on every account, no setup." },
             { icon: MessageSquare, t: "AI customer support (add-on)", d: "Turn on an AI chat that answers your customers about services, orders and deposits — grounded in your own catalog — and opens a ticket when it can't help." },
           ].map((f) => (

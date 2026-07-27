@@ -357,7 +357,7 @@ function PanelsTab() {
     setNotice(`AI support ${res.data.enabled ? "enabled" : "disabled"} for panel ${panelId.slice(0, 8)}.`);
   };
 
-  const applyPlan = async (panelId: string, tier: "" | "pro" | "business") => {
+  const applyPlan = async (panelId: string, tier: "" | "pro" | "business" | "business_plus") => {
     setNotice(null); setError(null);
     setBusyKey(`${panelId}:plan`);
     const res = await setPanelPlan(panelId, tier === "" ? null : tier);
@@ -462,13 +462,14 @@ function PanelsTab() {
                   <td className="py-2.5">
                     <select
                       value={r.planTier ?? ""}
-                      onChange={(e) => applyPlan(r.id, e.target.value as "" | "pro" | "business")}
+                      onChange={(e) => applyPlan(r.id, e.target.value as "" | "pro" | "business" | "business_plus")}
                       disabled={busyKey !== null}
                       className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs outline-none focus:fp-gold-border disabled:opacity-60"
                     >
                       <option value="">Free</option>
                       <option value="pro">Pro</option>
                       <option value="business">Business</option>
+                      <option value="business_plus">Business+</option>
                     </select>
                     <p className="fp-text-faint text-[11px] fp-mono mt-1">comp · testing</p>
                   </td>

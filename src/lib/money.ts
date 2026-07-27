@@ -23,10 +23,18 @@ export const AI_ADDON_PERIOD_DAYS = 30;
  *  balance). Business bundles the AI support add-on. Panel core stays 0% rent. */
 export const INNVIL_PRO_PRICE = 9.99;
 export const INNVIL_BUSINESS_PRICE = 19.99;
+export const INNVIL_BUSINESS_PLUS_PRICE = 49.99;
 export const PLAN_PERIOD_DAYS = 30;
-export function planPrice(tier: "pro" | "business"): number {
-  return tier === "business" ? INNVIL_BUSINESS_PRICE : INNVIL_PRO_PRICE;
+export function planPrice(tier: "pro" | "business" | "business_plus"): number {
+  if (tier === "business_plus") return INNVIL_BUSINESS_PLUS_PRICE;
+  if (tier === "business") return INNVIL_BUSINESS_PRICE;
+  return INNVIL_PRO_PRICE;
 }
+
+/** The customer-facing automator subscription — HARD-CODED (owners can't change it).
+ *  The full amount is the OWNER's revenue; Innvil earns only via the owner's tier fee. */
+export const CUSTOMER_AUTOMATOR_PRICE = 6.99;
+export const AUTOMATOR_PERIOD_DAYS = 30;
 
 /**
  * Internal volume-discount brackets by completed orders/day — the guideline support
