@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Refresh & resend now catches stuck-pending orders too (v1.1.7)
+- **"Refresh & resend" only retried orders explicitly flagged held-for-provider-balance** — pending orders that
+  simply never got forwarded to the provider (stuck on OUR end) were ignored. `refreshProviderBalancesAndRetry
+  HeldOrders` (`admin-orders.ts`) now treats ANY pending order with a `provider_id` but no `provider_order_id`
+  as a candidate (never sent = safe to resend; a set `provider_order_id` means it's genuinely pending at the
+  provider → skipped). Balance-held orders still gate on the refreshed provider balance; other stuck orders
+  resend directly. `submitPendingOrderToProvider` already guards on `provider_order_id`, so there's no
+  double-send risk.
+
 ### 2026-07-25 — Automator v2 — R2: customer keyword-slot config (v1.1.6)
 - **The config now belongs to the CUSTOMER** (keyword slots), not the owner. `src/lib/automation/profile.ts`
   (NEW, pure) — `AutomationProfile` = `platforms: { [platform]: AutomationSlot[] }`, each slot = `{serviceId,

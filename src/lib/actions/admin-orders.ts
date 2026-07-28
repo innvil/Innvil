@@ -657,12 +657,15 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
     provider_payload: unknown;
     provider_response: { held?: boolean; reason?: string | null; error?: string | null } | null;
   }> | null) ?? []).filter((order) => (
+    // Pending on OUR end: mapped to a provider but never actually sent (no provider
+    // order id). Covers both balance-held orders AND orders that just never forwarded.
+    // If a provider_order_id exists, it's genuinely pending at the provider — skip it.
     order.provider_id &&
     !order.provider_order_id &&
-    order.status === "pending" &&
-    order.provider_response?.held === true &&
-    order.provider_response?.reason === "provider_balance"
+    order.status === "pending"
   ));
+  const isBalanceHold = (o: (typeof heldOrders)[number]) =>
+    o.provider_response?.held === true && o.provider_response?.reason === "provider_balance";
 
   if (heldOrders.length === 0) {
     return { ok: true, heldFound: 0, providersChecked: 0, providersFunded: 0, retried: 0, resent: 0, failed: 0 };
@@ -708,6 +711,16 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
 
   for (const order of [...heldOrders].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
     const providerId = order.provider_id as string;
+
+    // Orders that were never sent to the provider for a reason OTHER than a balance
+    // hold (stuck on our end) are resent directly — the provider never saw them, so
+    // there's no double-send risk (submitPendingOrderToProvider also guards on the
+    // provider_order_id). Balance-held orders stay gated on the refreshed balance.
+    if (!isBalanceHold(order)) {
+      retryableOrders.push(order);
+      continue;
+    }
+
     const currentBalance = refreshedBalances.get(providerId);
     const providerCost = Number(order.provider_cost ?? 0);
     if (!Number.isFinite(currentBalance as number)) continue;
