@@ -5,8 +5,9 @@ import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Gauge, Sliders, Tag,
   ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
-  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, LucideIcon,
+  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, Wallet, LucideIcon,
 } from "lucide-react";
+import { getPlan, setPlan, type PlanInfo } from "@/src/lib/actions/plan";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -2850,25 +2851,123 @@ export function SupportTab({ panelId }: { panelId: string }) {
   return <SupportInbox panelId={panelId} />;
 }
 
-export function AutomationTab() {
+const AUTOMATOR_TIERS: Array<{
+  tier: "pro" | "business" | "business_plus";
+  name: string;
+  priceKey: "proPrice" | "businessPrice" | "businessPlusPrice";
+  platforms: string;
+  features: string[];
+}> = [
+  { tier: "pro", name: "Pro", priceKey: "proPrice", platforms: "X · Instagram · TikTok", features: ["Campaign automation for your customers", "Customer keyword configuration"] },
+  { tier: "business", name: "Business", priceKey: "businessPrice", platforms: "Pro + Facebook · YouTube · LinkedIn · Threads · Telegram", features: ["Everything in Pro, more platforms", "AI customer support bundled"] },
+  { tier: "business_plus", name: "Business+", priceKey: "businessPlusPrice", platforms: "All of your services", features: ["Everything in Business, no platform limit", "File upload (csv/xlsx/docx)", "Watched accounts · full-auto"] },
+];
+
+export function AutomationTab({ panelId }: { panelId: string }) {
+  const [info, setInfo] = React.useState<PlanInfo | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const [pending, setPending] = React.useState<"pro" | "business" | "business_plus" | null>(null);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const load = React.useCallback(() => {
+    getPlan(panelId).then((i) => { setInfo(i); setLoading(false); }).catch(() => setLoading(false));
+  }, [panelId]);
+  React.useEffect(() => { load(); }, [load]);
+
+  const priceOf = (t: (typeof AUTOMATOR_TIERS)[number]) => (info ? (info[t.priceKey] as number) : 0);
+  const breakEven = (price: number) => Math.ceil(price / 6.99);
+
+  const subscribe = async (tier: "pro" | "business" | "business_plus") => {
+    setBusy(tier); setMsg(null);
+    const res = await setPlan(panelId, tier);
+    setBusy(null); setPending(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setInfo(res.data);
+    setMsg({ text: `Subscribed to ${tier === "business_plus" ? "Business+" : tier === "business" ? "Business" : "Pro"}. Your customers can now use the Automator.` });
+  };
+
+  const cancel = async () => {
+    setBusy("cancel"); setMsg(null);
+    const res = await setPlan(panelId, null);
+    setBusy(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setInfo(res.data);
+    setMsg({ text: "Plan canceled." });
+  };
+
+  if (loading) return <Card title="Campaign Automation" icon={Bot}><p className="fp-text-faint text-sm py-4 text-center">Loading…</p></Card>;
+
+  const current = info?.tier ?? null;
+  const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—");
+
   return (
-    <Card
-      title="Automator add-on"
-      icon={Bot}
-      right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}
-    >
-      <p className="fp-text-dim text-sm mb-4">
-        Mass &amp; automatic order fulfillment — paste or upload many links, auto-detect the platform,
-        and fan each one out to the right services from your presets. You&apos;ll be able to offer it
-        as a paid upgrade to your own customers.
-      </p>
-      <p className="fp-text-faint text-sm">
-        The Automator ships after the core owner, admin, super-admin, and customer tools are complete.
-      </p>
-      <button disabled className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg text-sm mt-4 opacity-50 cursor-not-allowed">
-        Coming soon
-      </button>
-    </Card>
+    <div className="space-y-4 max-w-3xl">
+      <Card title="Campaign Automation" icon={Bot}>
+        <p className="fp-text-dim text-sm mb-3">
+          Subscribe to offer the <span className="fp-text">Automator</span> to your customers — they paste many
+          links and it fans each out to the right services automatically. Your customers pay a fixed
+          <span className="fp-text"> $6.99/mo</span> to use it, and <span className="fp-text">you keep all of it</span>.
+        </p>
+        {current ? (
+          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex items-center justify-between flex-wrap gap-2">
+            <p className="text-xs fp-safe flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> On {current === "business_plus" ? "Business+" : current === "business" ? "Business" : "Pro"}
+              {info?.lapsed ? " · paused (low balance)" : ` · renews ${fmtDate(info?.nextChargeAt ?? null)}`}
+            </p>
+            <button onClick={cancel} disabled={busy !== null} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60 hover:fp-text">
+              {busy === "cancel" ? "…" : "Cancel plan"}
+            </button>
+          </div>
+        ) : (
+          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs fp-text-faint flex items-center gap-2">
+            <Wallet size={13} /> Paid monthly from this panel&apos;s Innvil balance: <span className="fp-mono fp-text">${(info?.innvilBalance ?? 0).toFixed(2)}</span>
+          </div>
+        )}
+        {msg && <p className={`text-xs mt-3 flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>}
+      </Card>
+
+      <div className="grid md:grid-cols-3 gap-3">
+        {AUTOMATOR_TIERS.map((t) => {
+          const price = priceOf(t);
+          const isCurrent = current === t.tier;
+          return (
+            <div key={t.tier} className={`fp-panel border rounded-2xl p-4 flex flex-col ${isCurrent ? "fp-gold-border" : "fp-line"}`}>
+              <div className="flex items-baseline justify-between">
+                <p className="fp-display text-lg">{t.name}</p>
+                <p className="fp-display text-xl fp-gold">${price.toFixed(2)}<span className="fp-text-faint text-xs font-normal">/mo</span></p>
+              </div>
+              <p className="fp-text-faint text-[11px] mt-1">{t.platforms}</p>
+              <ul className="mt-3 space-y-1.5 flex-1">
+                {t.features.map((f) => (
+                  <li key={f} className="fp-text-dim text-xs flex items-start gap-1.5"><CheckCircle2 size={12} className="fp-safe shrink-0 mt-0.5" /> {f}</li>
+                ))}
+              </ul>
+              {isCurrent ? (
+                <span className="text-[11px] fp-gold text-center mt-4">Current plan</span>
+              ) : pending === t.tier ? (
+                <div className="mt-4 space-y-2">
+                  <p className="text-[11px] fp-gold flex items-start gap-1.5 leading-snug">
+                    <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                    You pay ${price.toFixed(2)}/mo. Make sure you have <span className="fp-text">~{breakEven(price)}+ customers</span> who&apos;ll subscribe at $6.99 first, or you&apos;ll be at a loss.
+                  </p>
+                  <div className="flex gap-2">
+                    <button onClick={() => subscribe(t.tier)} disabled={busy !== null} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg flex-1 disabled:opacity-60">
+                      {busy === t.tier ? "…" : "Confirm"}
+                    </button>
+                    <button onClick={() => setPending(null)} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 hover:fp-text">Back</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => { setPending(t.tier); setMsg(null); }} className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-xs mt-4 hover:fp-gold-border">
+                  {current ? "Switch to this" : "Subscribe"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

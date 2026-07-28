@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R1b-ii: owner tier subscribe UI (v1.1.5)
+- **The "Campaign Automation" PanelAdmin tab is now the real owner subscribe UI** (was a "coming soon"
+  placeholder). `AutomationTab({ panelId })` in `AdminTabs.tsx`: loads `getPlan`, shows current plan
+  (renews/paused) + this panel's Innvil balance, and three tier cards — **Pro $9.99 / Business $19.99 /
+  Business+ $49.99** — each with its platform scope + features. Subscribe/Switch → a **confirm step that warns**
+  "you pay $X/mo; make sure you have ~N+ customers who'll subscribe at $6.99 first" (break-even = ceil(price/6.99)
+  → Pro 2, Business 3, Business+ 8), then calls `setPlan`. Cancel supported. Charges from the panel's Innvil balance.
+- **R1 complete** (model + customer sub backend + owner subscribe UI). **NEXT (R2):** replace the owner-preset /
+  regular-priority campaign config with the CUSTOMER keyword-slot automation profile (hidden-by-default, opened by
+  a "Configure" button), then R3 (keyword fan-out) + R4 (storefront teaser + customer subscribe button).
+
 ### 2026-07-25 — Automator v2 — R1b: customer $6.99 subscription (backend) (v1.1.4)
 - **The hard-coded $6.99/mo customer Automator subscription** (100% owner revenue). Migration
   **`0029_automator_subscriptions.sql`** (NEW) — `automator_subscriptions` (panel_id, customer_id, active,
