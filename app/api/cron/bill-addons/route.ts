@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { billDueSupportAddons } from "@/src/lib/billing/assistant";
 import { billDuePlans } from "@/src/lib/billing/plans";
+import { billDueAutomatorSubs } from "@/src/lib/billing/automator";
 
 /* =========================================================
    Add-on recurring billing cron.
@@ -36,8 +37,8 @@ function isAuthorized(req: Request): boolean {
 async function run(req: Request) {
   if (!isAuthorized(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   try {
-    const [addons, plans] = await Promise.all([billDueSupportAddons(), billDuePlans()]);
-    return NextResponse.json({ ok: true, addons, plans });
+    const [addons, plans, automator] = await Promise.all([billDueSupportAddons(), billDuePlans(), billDueAutomatorSubs()]);
+    return NextResponse.json({ ok: true, addons, plans, automator });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : "billing failed" }, { status: 500 });
   }

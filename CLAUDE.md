@@ -127,6 +127,21 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R1b: customer $6.99 subscription (backend) (v1.1.4)
+- **The hard-coded $6.99/mo customer Automator subscription** (100% owner revenue). Migration
+  **`0029_automator_subscriptions.sql`** (NEW) — `automator_subscriptions` (panel_id, customer_id, active,
+  since, last/next_charge_at, lapsed; RLS = panel members / super admin / owning customer). **Run migration 0029.**
+- `actions/automator-sub.ts` (NEW) — `getAutomatorSub` (offered = owner has a tier / active / lapsed / price /
+  wallet balance), `subscribeAutomator` (gated on the owner tier; charges $6.99 from the customer wallet as an
+  **`order`-type** balance change — no provider payout, so it's 100% owner revenue — sets active +30d),
+  `cancelAutomator`. Storefront-auth'd.
+- `billing/automator.ts` (NEW) `billDueAutomatorSubs` — monthly renewal sweep (charge due active subs; lapse any
+  the customer can't cover), wired into the **bill-addons** cron alongside plans + AI add-ons.
+- `money.ts` already has `CUSTOMER_AUTOMATOR_PRICE = 6.99` / `AUTOMATOR_PERIOD_DAYS` (R1).
+- **NEXT (R1b-ii):** owner tier subscribe UI (Pro/Business/Business+ cards + the "have enough demand first"
+  warning) in the Campaign Automation tab. Then R2 (customer keyword config), R3 (keyword fan-out), R4 (storefront
+  teaser + the customer subscribe button that calls `subscribeAutomator`).
+
 ### 2026-07-25 — Gate Design Tools behind a launch flag (coming soon) (v1.1.3)
 - **Design Tools (dashboard layout builder + visual editor) are gated OFF for everyone — even Business/Business+.**
   The editor only reorders today; it needs nav/section placement, hamburger/dropdown layout, component placement,
