@@ -1,17 +1,18 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Rocket, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { Rocket, AlertTriangle, CheckCircle2, Loader2, Sliders } from "lucide-react";
 import { formatMoney } from "@/src/lib/money";
 import { analyzeCampaign } from "@/src/lib/automation/links";
 import { runCampaign, listCampaigns, type CampaignVM, type RunCampaignResult } from "@/src/lib/actions/campaigns";
+import { AutomationConfig } from "./AutomationConfig";
 
 /* Customer-facing Campaign Automation surface: paste many post links, we detect the
    platform per link and fan out one order per service the owner configured. */
 
 export function CampaignSurface({ panelId, currency = "USD" }: { panelId?: string; currency?: string }) {
   const [links, setLinks] = useState("");
-  const [tier, setTier] = useState<"regular" | "priority">("regular");
+  const [configuring, setConfiguring] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<RunCampaignResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +27,7 @@ export function CampaignSurface({ panelId, currency = "USD" }: { panelId?: strin
   const run = async () => {
     if (!panelId || analysis.total === 0) return;
     setBusy(true); setError(null); setResult(null);
-    const res = await runCampaign({ panelId, links, tier });
+    const res = await runCampaign({ panelId, links });
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setResult(res.data);
@@ -64,17 +65,17 @@ export function CampaignSurface({ panelId, currency = "USD" }: { panelId?: strin
         )}
 
         <div className="flex items-center justify-between gap-3 mt-4 flex-wrap">
-          <div className="flex items-center gap-1 fp-panel-raised border fp-line-soft rounded-lg p-1">
-            {(["regular", "priority"] as const).map((t) => (
-              <button key={t} onClick={() => setTier(t)} className={`text-xs px-3 py-1.5 rounded-md capitalize ${tier === t ? "fp-violet-soft-bg fp-violet" : "fp-text-dim hover:fp-text"}`}>{t}</button>
-            ))}
-          </div>
+          <button onClick={() => setConfiguring((v) => !v)} className={`text-xs px-3 py-2 rounded-lg border flex items-center gap-1.5 ${configuring ? "fp-violet-soft-bg fp-violet fp-violet-border" : "fp-panel-raised fp-line-soft fp-text-dim hover:fp-text"}`}>
+            <Sliders size={13} /> Configure
+          </button>
           <button onClick={run} disabled={busy || analysis.total === 0} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-50 flex items-center gap-2">
             {busy ? <><Loader2 size={15} className="animate-spin" /> Running…</> : <>Run campaign ({analysis.total})</>}
           </button>
         </div>
         {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
       </div>
+
+      {configuring && panelId && <AutomationConfig panelId={panelId} onClose={() => setConfiguring(false)} />}
 
       {/* Result */}
       {result && (

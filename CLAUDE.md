@@ -127,6 +127,23 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R2: customer keyword-slot config (v1.1.6)
+- **The config now belongs to the CUSTOMER** (keyword slots), not the owner. `src/lib/automation/profile.ts`
+  (NEW, pure) — `AutomationProfile` = `platforms: { [platform]: AutomationSlot[] }`, each slot = `{serviceId,
+  quantity, keywords[]}`; `slotsForLink(profile, platform, link)` fires keyword-matched slots (substring
+  `matchesAnyKeyword`) or the keyword-less defaults, deduped by service. Read/normalize helpers.
+- **Migration `0030_automation_profiles.sql`** (NEW) — `automation_profiles` (panel_id, customer_id, config
+  jsonb; RLS = panel members / super admin / owning customer). Supersedes 0028's `campaign_service_presets`.
+  **Run migration 0030** (and 0029 if not yet).
+- `actions/automation-profile.ts` (NEW) — `getAutomationProfile` (offered, tier `allowedPlatforms`, profile,
+  customer-orderable `servicesByPlatform` filtered to the owner tier's platforms) + `saveAutomationProfile`
+  (normalized to allowed platforms + valid service ids). Storefront-auth'd.
+- `src/components/customer/AutomationConfig.tsx` (NEW) — per-platform slot editor (service select + qty +
+  comma-keywords, add/remove), **hidden by default**, opened by a **Configure** button in `CampaignSurface`
+  (which dropped the old regular/priority toggle), collapses on Save.
+- **NEXT (R3):** rewrite `runCampaign` to fan out via the customer's profile (`slotsForLink`) + enforce the tier
+  platform scope, dropping the owner-preset lookup. Then R4 (storefront teaser + customer $6.99 subscribe button).
+
 ### 2026-07-25 — Automator v2 — R1b-ii: owner tier subscribe UI (v1.1.5)
 - **The "Campaign Automation" PanelAdmin tab is now the real owner subscribe UI** (was a "coming soon"
   placeholder). `AutomationTab({ panelId })` in `AdminTabs.tsx`: loads `getPlan`, shows current plan
