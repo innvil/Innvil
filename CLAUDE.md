@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Gate Design Tools behind a launch flag (coming soon) (v1.1.3)
+- **Design Tools (dashboard layout builder + visual editor) are gated OFF for everyone — even Business/Business+.**
+  The editor only reorders today; it needs nav/section placement, hamburger/dropdown layout, component placement,
+  etc. before release. New `DESIGN_TOOLS_ENABLED = false` flag in `plans.ts`; `hasDesignTools()` returns false
+  while it's off (flip the flag to re-enable the Business/+ entitlement everywhere it's gated). Design Studio now
+  shows a **"Design tools · coming soon"** teaser instead of the Dashboard world toggle + Visual editor card.
+- Landing + FAQ softened: the visual editor is described as **coming soon** (Design Shop stays live).
+
 ### 2026-07-25 — Automator v2 — R1: three-tier plan model + platform scoping (v1.1.2)
 - **Re-architecting the Automator to the v2 model** (see memory `innvil-automator-v2`): customer keyword config,
   $6.99 customer sub (100% to owner), owner tier plans incl. **Business+**. This slice = the plan/pricing MODEL
