@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Refresh & resend: resend even when the order lost its provider mapping (v1.1.8)
+- Follow-up to 1.1.7 (which still didn't reorder). `submitPendingOrderToProvider` hard-required
+  `order.provider_id`; stuck-pending orders whose service wasn't mapped at placement (provider_id null) were
+  never sendable. Now it **resolves the provider from the service's CURRENT mapping** (`services.provider_id` +
+  `provider_service_id`) when the order's is missing, sets `provider_id` on the order when it sends, and the
+  candidate filter dropped the `provider_id` requirement (any pending order with a service and no
+  `provider_order_id` is a candidate). Still skips orders that already have a `provider_order_id` (no double-send).
+
 ### 2026-07-25 — Refresh & resend now catches stuck-pending orders too (v1.1.7)
 - **"Refresh & resend" only retried orders explicitly flagged held-for-provider-balance** — pending orders that
   simply never got forwarded to the provider (stuck on OUR end) were ignored. `refreshProviderBalancesAndRetry

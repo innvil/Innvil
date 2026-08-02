@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, PenLine, Eye, EyeOff, Trash2, RefreshCw, P
 import { Pill } from "@/src/components/ui";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
 import {
-  listAdminPosts, listTopics, addTopic, deleteTopic, generateDraftNow,
+  listAdminPosts, listTopics, addTopic, addTopicsBulk, deleteTopic, generateDraftNow,
   publishPost, unpublishPost, deletePost, updatePostMeta,
   type AdminBlogPost, type AdminBlogTopic,
 } from "@/src/lib/actions/blog-admin";
@@ -56,6 +56,7 @@ export function BlogReview() {
   const [genTopic, setGenTopic] = useState("");
   const [newTopic, setNewTopic] = useState("");
   const [newKeywords, setNewKeywords] = useState("");
+  const [importText, setImportText] = useState("");
 
   const load = () => {
     setSyncing(true);
@@ -124,6 +125,53 @@ export function BlogReview() {
 
   const drafts = (posts ?? []).filter((p) => p.status === "draft");
   const published = (posts ?? []).filter((p) => p.status === "published");
+  // Bulk topic import — paste (one topic per line, optional "| keywords") or file.
+  const parseTopicLines = (text: string) =>
+    text.split(/\r?\n/).map((line) => {
+      const [topic, kw] = line.split("|");
+      return { topic: (topic ?? "").trim(), keywords: (kw ?? "").split(/[,;]/).map((k) => k.trim()).filter(Boolean) };
+    }).filter((x) => x.topic && x.topic.toLowerCase() !== "topic");
+
+  const runImport = async (items: Array<{ topic: string; keywords: string[] }>) => {
+    if (items.length === 0) { setMsg({ text: "No topics found to import.", error: true }); return; }
+    setBusy("import"); setMsg(null);
+    const res = await addTopicsBulk(items);
+    setBusy(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setImportText("");
+    setMsg({ text: `Imported ${res.data.added} topic${res.data.added === 1 ? "" : "s"}${res.data.skipped ? `, skipped ${res.data.skipped} (blank or duplicate)` : ""}.` });
+    void load();
+  };
+
+  const importFile = async (file: File) => {
+    setBusy("import"); setMsg(null);
+    try {
+      const name = file.name.toLowerCase();
+      let items: Array<{ topic: string; keywords: string[] }> = [];
+      if (name.endsWith(".docx")) {
+        const mammoth = await import("mammoth");
+        const arrayBuffer = await file.arrayBuffer();
+        const { value } = await mammoth.extractRawText({ arrayBuffer });
+        items = parseTopicLines(value);
+      } else if (name.endsWith(".xlsx") || name.endsWith(".csv")) {
+        const XLSX = await import("xlsx");
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
+        items = rows
+          .map((r) => ({ topic: String(r?.[0] ?? "").trim(), keywords: String(r?.[1] ?? "").split(/[,;]/).map((k) => k.trim()).filter(Boolean) }))
+          .filter((x) => x.topic && x.topic.toLowerCase() !== "topic");
+      } else {
+        items = parseTopicLines(await file.text());
+      }
+      setBusy(null);
+      await runImport(items);
+    } catch {
+      setBusy(null);
+      setMsg({ text: "Couldn't read that file. Use .csv, .xlsx, .docx or .txt.", error: true });
+    }
+  };
+
   const pendingTopics = (topics ?? []).filter((t) => t.status === "pending");
 
   return (

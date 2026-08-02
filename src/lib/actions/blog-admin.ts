@@ -155,6 +155,36 @@ export async function addTopic(topic: string, keywords: string[] = [], priority 
   return { ok: true, data: { id: (data as { id: string }).id } };
 }
 
+/** Bulk-add topics (paste or file upload). Skips blanks + duplicates (existing topics
+ *  and repeats within the batch), case-insensitive. */
+export async function addTopicsBulk(
+  items: Array<{ topic: string; keywords: string[] }>,
+): Promise<Result<{ added: number; skipped: number }>> {
+  if (!(await requireSuperAdmin()).ok) return { ok: false, error: "Super admin only." };
+  const admin = createAdminClient();
+
+  // Existing topic set (case-insensitive) to skip duplicates.
+  const { data: existing } = await admin.from("blog_topics").select("topic");
+  const seen = new Set(
+    ((existing as Array<{ topic: string }> | null) ?? []).map((r) => r.topic.trim().toLowerCase()),
+  );
+
+  const rows: Array<{ topic: string; keywords: string[]; priority: number }> = [];
+  let skipped = 0;
+  for (const it of items) {
+    const clean = (it.topic ?? "").trim();
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) { skipped++; continue; }
+    seen.add(key);
+    rows.push({ topic: clean, keywords: (it.keywords ?? []).map((k) => k.trim()).filter(Boolean), priority: 0 });
+  }
+
+  if (rows.length === 0) return { ok: true, data: { added: 0, skipped } };
+  const { error } = await admin.from("blog_topics").insert(rows);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: { added: rows.length, skipped } };
+}
+
 export async function deleteTopic(id: string): Promise<Result<null>> {
   if (!(await requireSuperAdmin()).ok) return { ok: false, error: "Super admin only." };
   const admin = createAdminClient();

@@ -79,28 +79,38 @@ async function submitPendingOrderToProvider(
   },
   historyNote: string
 ): Promise<Result> {
-  if (!order.provider_id || order.provider_order_id) {
-    return { ok: false, error: "This order has no provider mapping to resend to." };
+  // Already at the provider → never resend (avoids a duplicate order).
+  if (order.provider_order_id) {
+    return { ok: false, error: "This order was already sent to the provider." };
+  }
+  if (!order.service_id) {
+    return { ok: false, error: "This order has no service to resend." };
   }
 
+  // Resolve the provider from the order, or fall back to the service's CURRENT mapping
+  // (the service may have been mapped after the order was placed pending).
   const { data: svc } = await admin
     .from("services")
-    .select("provider_service_id")
+    .select("provider_id, provider_service_id")
     .eq("id", order.service_id as string)
     .maybeSingle();
+  const providerId = order.provider_id ?? svc?.provider_id ?? null;
+  if (!providerId || !svc?.provider_service_id) {
+    return { ok: false, error: "This service isn't mapped to a provider yet." };
+  }
   const { data: prov } = await admin
     .from("providers")
     .select("api_url")
-    .eq("id", order.provider_id as string)
+    .eq("id", providerId)
     .maybeSingle();
-  if (!svc?.provider_service_id || !prov) {
-    return { ok: false, error: "Provider or service mapping is missing." };
+  if (!prov) {
+    return { ok: false, error: "Provider not found." };
   }
 
   const payload = (order.provider_payload as { runs?: number; interval?: number; comments?: string[] } | null) ?? {};
   const comments = Array.isArray(payload.comments) ? payload.comments : null;
   try {
-    const creds = await getProviderCredentials(order.provider_id as string, prov.api_url as string);
+    const creds = await getProviderCredentials(providerId as string, prov.api_url as string);
     const resp = await addOrder(creds, {
       service: svc.provider_service_id,
       link: order.link as string,
@@ -113,6 +123,7 @@ async function submitPendingOrderToProvider(
       return { ok: false, error: resp.error || "Provider rejected the order." };
     }
     await admin.from("orders").update({
+      provider_id: providerId,
       provider_order_id: String(resp.order),
       status: "processing",
       provider_response: resp as Record<string, unknown>,
@@ -657,12 +668,14 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
     provider_payload: unknown;
     provider_response: { held?: boolean; reason?: string | null; error?: string | null } | null;
   }> | null) ?? []).filter((order) => (
-    // Pending on OUR end: mapped to a provider but never actually sent (no provider
-    // order id). Covers both balance-held orders AND orders that just never forwarded.
-    // If a provider_order_id exists, it's genuinely pending at the provider — skip it.
-    order.provider_id &&
+    // Pending on OUR end: never actually sent to the provider (no provider order id).
+    // Covers balance-held orders, orders that never forwarded, AND orders whose service
+    // wasn't mapped to a provider at placement (provider_id resolved from the service at
+    // resend time). If a provider_order_id exists, it's genuinely pending at the provider
+    // — skip it. Needs a service to resend.
     !order.provider_order_id &&
-    order.status === "pending"
+    order.status === "pending" &&
+    !!order.service_id
   ));
   const isBalanceHold = (o: (typeof heldOrders)[number]) =>
     o.provider_response?.held === true && o.provider_response?.reason === "provider_balance";
