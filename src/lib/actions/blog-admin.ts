@@ -272,3 +272,42 @@ export async function updatePostMeta(
   revalidateBlog(savedSlug);
   return { ok: true, data: { slug: savedSlug } };
 }
+
+/** Edit the article BODY: lead intro, sections (h2 + blocks), and the closing CTA. */
+export async function updatePostBody(
+  id: string,
+  body: { intro: string; sections: BlogSection[]; cta: { heading: string; text: string } | null },
+): Promise<Result<{ slug: string }>> {
+  if (!(await requireSuperAdmin()).ok) return { ok: false, error: "Super admin only." };
+  const admin = createAdminClient();
+
+  // Sanitise the block structure (drop empty blocks/sections; keep only known kinds).
+  const sections = (body.sections ?? [])
+    .map((s) => ({
+      h2: String(s.h2 ?? "").trim(),
+      blocks: (s.blocks ?? [])
+        .map((b) => {
+          if (b.kind === "ul" || b.kind === "ol") {
+            const items = (b.items ?? []).map((i) => String(i).trim()).filter(Boolean);
+            return items.length ? { kind: b.kind, items } : null;
+          }
+          const text = String((b as { text?: unknown }).text ?? "").trim();
+          return text ? { kind: b.kind, text } : null;
+        })
+        .filter(Boolean) as BlogSection["blocks"],
+    }))
+    .filter((s) => s.h2 || s.blocks.length);
+
+  const cta = body.cta && body.cta.heading.trim() ? { heading: body.cta.heading.trim(), text: (body.cta.text ?? "").trim() } : null;
+
+  const { data, error } = await admin
+    .from("blog_posts")
+    .update({ intro: String(body.intro ?? "").trim(), sections, cta, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("slug")
+    .single();
+  if (error) return { ok: false, error: error.message };
+  const slug = (data as { slug: string }).slug;
+  revalidateBlog(slug);
+  return { ok: true, data: { slug } };
+}

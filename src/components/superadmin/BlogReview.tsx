@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, PenLine, Eye, EyeOff, Trash2, RefreshCw, Plus, ExternalLink } from "lucide-react";
 import { Pill } from "@/src/components/ui";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
+import { BlogBodyEditor } from "./BlogBodyEditor";
 import {
   listAdminPosts, listTopics, addTopic, addTopicsBulk, deleteTopic, generateDraftNow,
   publishPost, unpublishPost, deletePost, updatePostMeta,
@@ -52,6 +53,7 @@ export function BlogReview() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [bodyEditId, setBodyEditId] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditState | null>(null);
   const [genTopic, setGenTopic] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -241,6 +243,12 @@ export function BlogReview() {
                   >
                     <PenLine size={12} /> {isEditing ? "Cancel edit" : "Edit"}
                   </button>
+                  <button
+                    onClick={() => setBodyEditId(bodyEditId === p.id ? null : p.id)}
+                    className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 flex items-center gap-1.5"
+                  >
+                    <PenLine size={12} /> {bodyEditId === p.id ? "Close body" : "Edit body"}
+                  </button>
                   <button onClick={() => act(`pub:${p.id}`, () => publishPost(p.id), "Published — it's now live on /blog.")} disabled={busy === `pub:${p.id}`} className="text-xs fp-safe-soft-bg fp-safe rounded-lg px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-60">
                     <CheckCircle2 size={12} /> Publish
                   </button>
@@ -261,6 +269,16 @@ export function BlogReview() {
                     <button onClick={saveEdit} disabled={busy === `edit:${p.id}`} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
                       {busy === `edit:${p.id}` ? "Saving…" : "Save changes"}
                     </button>
+                  </div>
+                )}
+
+                {bodyEditId === p.id && (
+                  <div className="mt-4 border-t fp-line-soft pt-4">
+                    <BlogBodyEditor
+                      post={p}
+                      onClose={() => setBodyEditId(null)}
+                      onSaved={() => { setBodyEditId(null); setMsg({ text: "Body saved." }); void load(); }}
+                    />
                   </div>
                 )}
 
@@ -316,6 +334,28 @@ export function BlogReview() {
           <button onClick={addTopicSubmit} disabled={busy === "addtopic" || !newTopic.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2.5 rounded-lg disabled:opacity-60 whitespace-nowrap shrink-0 flex items-center gap-1.5">
             <Plus size={14} /> Add
           </button>
+        </div>
+
+        {/* Bulk import — paste many, or upload a file */}
+        <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 space-y-2">
+          <p className="fp-text-faint text-[11px] fp-mono uppercase">Import many topics</p>
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            rows={3}
+            placeholder={"One topic per line. Optional keywords after a | \nHow to price SMM services | pricing, markup\nReducing refunds on an SMM panel | refunds, retention"}
+            className={`${inputCls} font-mono`}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => void runImport(parseTopicLines(importText))} disabled={busy === "import" || !importText.trim()} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60 flex items-center gap-1.5">
+              {busy === "import" ? "Importing…" : <><Plus size={13} /> Import pasted</>}
+            </button>
+            <label className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 hover:fp-text cursor-pointer">
+              Upload file
+              <input type="file" accept=".csv,.txt,.xlsx,.docx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} />
+            </label>
+            <span className="fp-text-faint text-[11px]">.csv / .xlsx (col A = topic, col B = keywords) · .docx / .txt (one per line)</span>
+          </div>
         </div>
         {topics === null ? (
           <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>

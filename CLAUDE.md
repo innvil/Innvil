@@ -127,6 +127,16 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Blog: bulk topic import (paste or file) (v1.1.9)
+- **The AI blog was recycling topics because the queue kept emptying** (falling back to the small built-in
+  pool). Added a **bulk topic import** so the super admin can load many topics at once. `actions/blog-admin.ts`
+  `addTopicsBulk(items[{topic,keywords[]}])` — super-admin gated, inserts `blog_topics` as pending, skips blanks
+  + case-insensitive duplicates (existing + within-batch), returns `{added, skipped}`.
+- `BlogReview.tsx` Topic-queue card gained an **"Import many topics"** block: a textarea (one topic per line,
+  optional `| keywords`) + **Upload file** (.csv/.xlsx → col A topic, col B keywords; .docx/.txt → one per line).
+  Files parsed client-side via dynamic `import("xlsx")` / `import("mammoth")` (both already deps). Refreshes the
+  queue + cache on success. No migration.
+
 ### 2026-07-25 — Refresh & resend: resend even when the order lost its provider mapping (v1.1.8)
 - Follow-up to 1.1.7 (which still didn't reorder). `submitPendingOrderToProvider` hard-required
   `order.provider_id`; stuck-pending orders whose service wasn't mapped at placement (provider_id null) were
