@@ -161,6 +161,76 @@ export interface CampaignVM {
   createdAt: string;
 }
 
+/* ----------------------------------------------------------- mass order ---- */
+
+export interface MassOrderItemVM {
+  raw: string;
+  ok: boolean;
+  orderId?: string;
+  charge?: number;
+  error?: string;
+}
+export interface MassOrderResult {
+  placed: number;
+  totalCharge: number;
+  failed: number;
+  items: MassOrderItemVM[];
+}
+
+/** Manual mass order — FREE for any customer (no automator subscription). One line per
+ *  order, `serviceId | link | quantity` (pipe or space separated). serviceId is the
+ *  service's own number (local id) or its uuid. */
+export async function runMassOrder(input: { panelId: string; text: string }): Promise<Result<MassOrderResult>> {
+  const supa = await createStorefrontClient();
+  const { data: { user } } = await supa.auth.getUser();
+  if (!user) return { ok: false, error: "Please log in." };
+
+  const admin = createAdminClient();
+  const { data: panel } = await admin.from("panels").select("id, status").eq("id", input.panelId).maybeSingle();
+  if (!panel) return { ok: false, error: "Panel not found." };
+  if (panel.status !== "live") return { ok: false, error: "This panel isn't accepting orders right now." };
+
+  const { data: account } = await admin
+    .from("customer_accounts").select("id, status").eq("user_id", user.id).eq("panel_id", input.panelId).maybeSingle();
+  if (!account) return { ok: false, error: "Customer account not found." };
+  if (account.status !== "active") return { ok: false, error: "Your account can't place orders right now." };
+
+  // Resolve services: accept the panel's own service number (local_id) or the uuid.
+  const { data: services } = await admin
+    .from("services").select("id, local_id").eq("panel_id", input.panelId).eq("status", "active");
+  const byLocal = new Map<string, string>();
+  const ids = new Set<string>();
+  for (const s of (services as Array<{ id: string; local_id: number | null }> | null) ?? []) {
+    ids.add(s.id);
+    if (s.local_id != null) byLocal.set(String(s.local_id), s.id);
+  }
+
+  const lines = input.text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return { ok: false, error: "Paste at least one line: serviceId | link | quantity." };
+
+  const items: MassOrderItemVM[] = [];
+  let placed = 0;
+  let failed = 0;
+  let totalCharge = 0;
+
+  for (const raw of lines) {
+    const parts = raw.includes("|") ? raw.split("|").map((p) => p.trim()) : raw.split(/\s+/);
+    if (parts.length < 3) { items.push({ raw, ok: false, error: "Use: serviceId | link | quantity" }); failed++; continue; }
+    const ref = parts[0];
+    const quantity = Number(parts[parts.length - 1]);
+    const link = parts.slice(1, parts.length - 1).join(" ");
+    const serviceId = byLocal.get(ref) ?? (ids.has(ref) ? ref : null);
+    if (!serviceId) { items.push({ raw, ok: false, error: `No service "${ref}"` }); failed++; continue; }
+    if (!link || !Number.isFinite(quantity) || quantity <= 0) { items.push({ raw, ok: false, error: "Missing link or quantity" }); failed++; continue; }
+
+    const res = await placeOrder({ panelId: input.panelId, serviceId, link, quantity });
+    if (res.ok) { placed++; totalCharge = round4(totalCharge + res.charge); items.push({ raw, ok: true, orderId: res.orderId, charge: res.charge }); }
+    else { failed++; items.push({ raw, ok: false, error: res.error }); }
+  }
+
+  return { ok: true, data: { placed, totalCharge, failed, items } };
+}
+
 /** The signed-in customer's recent campaigns on this panel. */
 export async function listCampaigns(panelId: string, limit = 10): Promise<CampaignVM[]> {
   const supa = await createStorefrontClient();

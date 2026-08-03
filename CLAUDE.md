@@ -127,6 +127,26 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R4: storefront teaser + subscribe + always-free mass order (v1.1.14)
+- **The storefront Campaign tab is now the real customer surface — always visible to every customer** (drives
+  demand). `CampaignSurface.tsx` rewritten as a 3-state machine driven by `getAutomatorSub`:
+  1. **Not offered** (owner has no tier) → "How it works" + a **"Contact support to enable it"** button
+     (`onContactSupport` → the Tickets tab).
+  2. **Offered, not subscribed** → the pitch + a **$6.99/mo Subscribe** button (`subscribeAutomator`) with the
+     customer's wallet balance + a lapsed-for-low-balance note.
+  3. **Subscribed** → the full paste-links surface (live per-platform analysis, **Configure** → `AutomationConfig`
+     keyword slots, **Run** → `runCampaign`, per-link results, recent campaigns).
+- **Mass order stays available for FREE in ALL states.** New `runMassOrder({panelId, text})` in
+  `actions/campaigns.ts` — storefront-auth'd, gated only on a **live panel + active customer** (no subscription):
+  one order per line, `serviceId | link | quantity` (pipe or whitespace separated), the service id resolves by the
+  panel's own **local_id** or the uuid, each placed via `placeOrder` (customer wallet). Returns `MassOrderResult`
+  `{placed, totalCharge, failed, items}`. Rendered as a **"Mass order · Free"** card in every state of
+  `CampaignSurface`.
+- `CustomerDashboard.tsx`: the **Campaign** nav item is now always shown (dropped the `campaignEnabled` gate) and
+  passes `onContactSupport={() => go("tickets")}`. `campaignEnabled` prop is now vestigial.
+- **R1–R4 complete.** Run migrations **0028, 0029, 0030**. **NEXT (R5, deferred):** Business+ extras — file-upload
+  link import + watched-accounts auto-order.
+
 ### 2026-07-25 — Faster "Provider balances → Refresh all" (v1.1.13)
 - **The Provider-balances "Refresh all" was slow because each provider was a separate server action** — Next
   serializes server actions from one client, so the client-side `Promise.all(rows.map(fetchProviderBalance))`

@@ -512,7 +512,7 @@ export function CustomerDashboard({
           </div>
 
           <nav className="hidden md:flex items-center gap-1">
-            {NAV.filter((n) => n.k !== "campaign" || campaignEnabled).map((n) => (
+            {NAV.map((n) => (
               <button
                 key={n.k}
                 onClick={() => go(n.k)}
@@ -542,7 +542,7 @@ export function CustomerDashboard({
         {/* Mobile hamburger menu */}
         {menuOpen && (
           <nav className="md:hidden border-t fp-line-soft bg-[#0D0F14] px-4 py-3 space-y-1">
-            {NAV.filter((n) => n.k !== "campaign" || campaignEnabled).map((n) => (
+            {NAV.map((n) => (
               <button
                 key={n.k}
                 onClick={() => go(n.k)}
@@ -667,8 +667,8 @@ export function CustomerDashboard({
         )}
 
         {/* ---------- CAMPAIGN ---------- */}
-        {page === "campaign" && campaignEnabled && (
-          <CampaignSurface panelId={panelId} currency={currency} />
+        {page === "campaign" && (
+          <CampaignSurface panelId={panelId} currency={currency} onContactSupport={() => go("tickets")} />
         )}
 
         {/* ---------- ORDERS ---------- */}
