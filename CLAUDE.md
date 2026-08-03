@@ -127,6 +127,13 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Faster "Provider balances → Refresh all" (v1.1.13)
+- **The Provider-balances "Refresh all" was slow because each provider was a separate server action** — Next
+  serializes server actions from one client, so the client-side `Promise.all(rows.map(fetchProviderBalance))`
+  actually ran one-by-one. New **`refreshAllProviderBalances()`** (`actions/providers.ts`) refreshes EVERY
+  provider across the owner's panels in **one** request, in parallel server-side (`Promise.all`); returns
+  `{ refreshed, total }`. `OwnerProviderBalances.refreshAll` now calls it instead of N separate actions.
+
 ### 2026-07-25 — Faster "Sync statuses" + "Refresh & resend" (v1.1.12)
 - **Parallelized the serial hot loops** in the two owner order actions (were the main wait):
   - `orders/sync.ts` `syncPanelOrders` — the 3 pre-passes (expire/failed/dupe reconcile) now run via `Promise.all`,

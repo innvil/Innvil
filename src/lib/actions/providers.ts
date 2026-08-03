@@ -257,6 +257,29 @@ export async function fetchProviderBalance(
   return test;
 }
 
+/**
+ * Refresh EVERY provider balance across the owner's panels in ONE request, in
+ * parallel server-side. Much faster than N separate `fetchProviderBalance` server
+ * actions (Next serializes actions from a single client, so those run one-by-one).
+ */
+export async function refreshAllProviderBalances(): Promise<
+  { ok: true; refreshed: number; total: number } | { ok: false; error: string }
+> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: panels } = await admin.from("panels").select("id").eq("owner_id", user.id);
+  const panelIds = ((panels as Array<{ id: string }> | null) ?? []).map((p) => p.id);
+  if (!panelIds.length) return { ok: true, refreshed: 0, total: 0 };
+
+  const { data: provs } = await admin.from("providers").select("id").in("panel_id", panelIds);
+  const ids = ((provs as Array<{ id: string }> | null) ?? []).map((p) => p.id);
+  if (!ids.length) return { ok: true, refreshed: 0, total: 0 };
+
+  const results = await Promise.all(ids.map((id) => fetchProviderBalance(id).catch(() => null)));
+  return { ok: true, refreshed: results.filter((r) => r && r.ok).length, total: ids.length };
+}
+
 /** Quick reachability check that also confirms the service list parses. */
 export async function countProviderServices(
   providerId: string

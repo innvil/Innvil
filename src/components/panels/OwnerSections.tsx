@@ -8,7 +8,7 @@ import { formatMoney } from "@/src/lib/money";
 import { listAllOwnerOrders, getOwnerBillingSummary, type OwnerOrderVM, type OwnerBillingSummary } from "@/src/lib/actions/admin-orders";
 import { sendOwnerSupportMessage, listOwnerSupportMessages, listPlatformSupportMessages, setPlatformSupportStatus, type PlatformSupportMessage } from "@/src/lib/actions/platform-support";
 import { listAllOwnerCustomers, adjustCustomerBalance, type OwnerCustomerVM } from "@/src/lib/actions/customers";
-import { listAllOwnerProviders, fetchProviderBalance, type OwnerProviderVM } from "@/src/lib/actions/providers";
+import { listAllOwnerProviders, fetchProviderBalance, refreshAllProviderBalances, type OwnerProviderVM } from "@/src/lib/actions/providers";
 import { listAllOwnerDeposits, type OwnerAllDepositVM } from "@/src/lib/actions/payments";
 
 // Provider (API) balance thresholds — a provider at/under LOW needs a top-up soon.
@@ -512,7 +512,9 @@ export function OwnerProviderBalances() {
   const refreshAll = async () => {
     if (!rows?.length) return;
     setRefreshingAll(true);
-    await Promise.all(rows.map((p) => fetchProviderBalance(p.id).catch(() => null)));
+    // One batched server action refreshes every provider in parallel server-side
+    // (Next serializes separate server actions from one client, so N calls are slow).
+    await refreshAllProviderBalances().catch(() => null);
     await Promise.all([load(), loadTopups()]);
     setRefreshingAll(false);
   };
