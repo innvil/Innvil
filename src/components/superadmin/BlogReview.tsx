@@ -305,17 +305,31 @@ export function BlogReview() {
         <div className="space-y-3">
           <p className="text-sm font-medium">Published · {published.length}</p>
           {published.map((p) => (
-            <div key={p.id} className="fp-panel border fp-line rounded-xl p-4 flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium truncate">{p.title}</p>
-                <a href={`/blog/${p.slug}`} target="_blank" rel="noreferrer" className="fp-text-faint text-xs fp-mono flex items-center gap-1 hover:fp-gold">
-                  /blog/{p.slug} <ExternalLink size={11} />
-                </a>
+            <div key={p.id} className="fp-panel border fp-line rounded-xl p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{p.title}</p>
+                  <a href={`/blog/${p.slug}`} target="_blank" rel="noreferrer" className="fp-text-faint text-xs fp-mono flex items-center gap-1 hover:fp-gold">
+                    /blog/{p.slug} <ExternalLink size={11} />
+                  </a>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => setBodyEditId(bodyEditId === p.id ? null : p.id)} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 flex items-center gap-1.5">
+                    <PenLine size={12} /> {bodyEditId === p.id ? "Close" : "Edit body"}
+                  </button>
+                  <button onClick={() => act(`unpub:${p.id}`, () => unpublishPost(p.id), "Unpublished — back to draft.")} disabled={busy === `unpub:${p.id}`} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60">Unpublish</button>
+                  <button onClick={() => act(`del:${p.id}`, () => deletePost(p.id))} disabled={busy === `del:${p.id}`} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2.5 py-1.5 disabled:opacity-60"><Trash2 size={12} /></button>
+                </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button onClick={() => act(`unpub:${p.id}`, () => unpublishPost(p.id), "Unpublished — back to draft.")} disabled={busy === `unpub:${p.id}`} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60">Unpublish</button>
-                <button onClick={() => act(`del:${p.id}`, () => deletePost(p.id))} disabled={busy === `del:${p.id}`} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2.5 py-1.5 disabled:opacity-60"><Trash2 size={12} /></button>
-              </div>
+              {bodyEditId === p.id && (
+                <div className="mt-4 border-t fp-line-soft pt-4">
+                  <BlogBodyEditor
+                    post={p}
+                    onClose={() => setBodyEditId(null)}
+                    onSaved={() => { setBodyEditId(null); setMsg({ text: "Body saved — live on /blog." }); void load(); }}
+                  />
+                </div>
+              )}
             </div>
           ))}
         </div>

@@ -127,6 +127,16 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Blog: edit the article BODY (v1.1.10)
+- **Only the meta (title/desc/slug/tag/keywords) was editable — now the BODY is too.** `actions/blog-admin.ts`
+  `updatePostBody(id, { intro, sections, cta })` (super-admin gated) sanitises the block structure (drops empty
+  blocks/sections, keeps known kinds) and saves intro + `sections` (jsonb) + `cta`; revalidates the slug.
+- `src/components/superadmin/BlogBodyEditor.tsx` (NEW) — edits the lead **intro**, each **section** (H2 + blocks:
+  paragraph / sub-heading / bullet / numbered / quote, add/remove per block + per section), and the closing
+  **CTA**. Opened by a new **"Edit body"** button on each **draft AND published** post in `BlogReview`
+  (alongside the meta "Edit"); saving refreshes the queue and (for published posts) revalidates the live page.
+  No migration.
+
 ### 2026-07-25 — Blog: bulk topic import (paste or file) (v1.1.9)
 - **The AI blog was recycling topics because the queue kept emptying** (falling back to the small built-in
   pool). Added a **bulk topic import** so the super admin can load many topics at once. `actions/blog-admin.ts`
