@@ -692,17 +692,17 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
 
   const providerRows = (providers as Array<{ id: string; api_url: string; balance: number | null }> | null) ?? [];
   const refreshedBalances = new Map<string, number>();
-  let providersChecked = 0;
+  const providersChecked = providerRows.length;
 
-  for (const provider of providerRows) {
-    providersChecked++;
+  // Refresh every provider's balance in parallel (independent API calls).
+  await Promise.all(providerRows.map(async (provider) => {
     try {
       const creds = await getProviderCredentials(provider.id, provider.api_url);
       const balance = await getBalance(creds);
-      if ("error" in balance) continue;
+      if ("error" in balance) return;
 
       const latest = Number(balance.balance);
-      if (!Number.isFinite(latest)) continue;
+      if (!Number.isFinite(latest)) return;
 
       await admin
         .from("providers")
@@ -714,9 +714,9 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
         .eq("id", provider.id);
       refreshedBalances.set(provider.id, latest);
     } catch {
-      continue;
+      // skip this provider this run
     }
-  }
+  }));
 
   const retryableOrders: typeof heldOrders = [];
   const fundedProviderIds = new Set<string>();
@@ -750,10 +750,15 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
   let resent = 0;
   let failed = 0;
 
-  for (const order of retryableOrders) {
-    const result = await submitPendingOrderToProvider(admin, order, "Resent to provider after balance refresh");
-    if (result.ok) resent++;
-    else failed++;
+  // Resend in bounded-parallel batches (fast, without hammering one provider's API).
+  const BATCH = 5;
+  for (let i = 0; i < retryableOrders.length; i += BATCH) {
+    const results = await Promise.all(
+      retryableOrders.slice(i, i + BATCH).map((order) =>
+        submitPendingOrderToProvider(admin, order, "Resent to provider after balance refresh"),
+      ),
+    );
+    for (const r of results) { if (r.ok) resent++; else failed++; }
   }
 
   return {

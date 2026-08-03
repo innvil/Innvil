@@ -320,7 +320,10 @@ async function refreshPanelStorefrontSnapshots(admin: SupabaseClient, panelId: s
     api_key_hash: string | null;
   }> | null) ?? [];
 
-  for (const acct of list) {
+  // Materialize snapshots in parallel (bounded) — the sequential loop was the main
+  // drag on owner-triggered "Sync statuses" for panels with many customers.
+  for (const group of chunk(list, 10)) {
+    await Promise.all(group.map(async (acct) => {
     try {
       const [{ data: depositsRaw }, { data: ordersRaw }] = await Promise.all([
         admin
@@ -408,6 +411,7 @@ async function refreshPanelStorefrontSnapshots(admin: SupabaseClient, panelId: s
     } catch {
       // Keep order sync non-blocking even if snapshot materialization fails.
     }
+    }));
   }
 }
 
@@ -512,10 +516,12 @@ export async function syncPanelOrders(
   admin: SupabaseClient,
   panelId: string
 ): Promise<{ checked: number; updated: number }> {
-  // First, expire any orders held too long on insufficient provider balance.
-  const expired = await expireHeldOrders(admin, panelId);
-  const reconciledFailed = await reconcileFailedOrders(admin, panelId);
-  const reconciledDupes = await reconcileDuplicateOrders(admin, panelId);
+  // Pre-passes are independent (different order subsets) — run them concurrently.
+  const [expired, reconciledFailed, reconciledDupes] = await Promise.all([
+    expireHeldOrders(admin, panelId),
+    reconcileFailedOrders(admin, panelId),
+    reconcileDuplicateOrders(admin, panelId),
+  ]);
 
   const { data: orders } = await admin
     .from("orders")

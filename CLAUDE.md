@@ -127,6 +127,18 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Faster "Sync statuses" + "Refresh & resend" (v1.1.12)
+- **Parallelized the serial hot loops** in the two owner order actions (were the main wait):
+  - `orders/sync.ts` `syncPanelOrders` — the 3 pre-passes (expire/failed/dupe reconcile) now run via `Promise.all`,
+    and `refreshPanelStorefrontSnapshots` materializes customer snapshots in **bounded-parallel batches of 10**
+    (was a sequential per-customer loop — the big drag on panels with many customers). Per-provider status sync
+    was already parallel; provider selection/commission stay sequential (balance accounting order matters).
+  - `admin-orders.ts` `refreshProviderBalancesAndRetryHeldOrders` — provider **balance refresh** now runs in
+    parallel (independent API calls), and the **resends** run in bounded-parallel **batches of 5** (fast without
+    hammering one provider's API). The balance-gated retryable SELECTION stays sequential (decrements per-provider
+    remaining).
+- No behaviour change — same results, less waiting.
+
 ### 2026-07-25 — Automator v2 — R3: keyword fan-out engine (v1.1.11)
 - **`runCampaign` (`actions/campaigns.ts`) rewritten to the v2 model.** Dropped the owner-preset lookup +
   regular/priority tier. Now: gates on the owner tier (`hasCampaignAutomation`) + an **active customer automator
