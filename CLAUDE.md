@@ -127,6 +127,18 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R3: keyword fan-out engine (v1.1.11)
+- **`runCampaign` (`actions/campaigns.ts`) rewritten to the v2 model.** Dropped the owner-preset lookup +
+  regular/priority tier. Now: gates on the owner tier (`hasCampaignAutomation`) + an **active customer automator
+  subscription** (`automator_subscriptions.active`) + a **configured profile** (`profileIsConfigured`); enforces
+  the tier's **platform scope** (`tierPlatforms` — out-of-scope link → skipped "Not in the panel's plan"); and
+  for each link fans out via **`slotsForLink(profile, platform, link)`** — the customer's keyword-matched slots
+  (or keyword-less defaults), deduped by service — placing one order per slot via `placeOrder`. Records
+  `campaigns`/`campaign_items`. The Instagram-Reel special-case is gone (the customer expresses it via a "reel"
+  keyword slot). `runCampaign` signature dropped `tier`. `campaign_service_presets` (0028) is now fully unused.
+- **NEXT (R4):** the always-on storefront teaser (contact-support when the owner hasn't subscribed) + the
+  customer **$6.99 subscribe button** (calls `subscribeAutomator`) that unlocks the config + run surface.
+
 ### 2026-07-25 — Blog: edit the article BODY (v1.1.10)
 - **Only the meta (title/desc/slug/tag/keywords) was editable — now the BODY is too.** `actions/blog-admin.ts`
   `updatePostBody(id, { intro, sections, cta })` (super-admin gated) sanitises the block structure (drops empty

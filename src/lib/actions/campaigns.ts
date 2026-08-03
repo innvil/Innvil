@@ -3,8 +3,9 @@
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { placeOrder } from "@/src/lib/actions/orders";
-import { analyzeCampaign, isInstagramReel } from "@/src/lib/automation/links";
-import { hasCampaignAutomation, campaignLinkLimit } from "@/src/lib/plans";
+import { analyzeCampaign } from "@/src/lib/automation/links";
+import { hasCampaignAutomation, campaignLinkLimit, planTier, tierPlatforms } from "@/src/lib/plans";
+import { readAutomationProfile, profileIsConfigured, slotsForLink } from "@/src/lib/automation/profile";
 import { round4 } from "@/src/lib/money";
 
 /* =========================================================
@@ -16,12 +17,6 @@ import { round4 } from "@/src/lib/money";
    ========================================================= */
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
-
-interface PresetRow {
-  service_type: string;
-  service_id: string;
-  quantity: number;
-}
 
 export interface CampaignItemVM {
   link: string;
@@ -45,59 +40,50 @@ export interface RunCampaignResult {
 export async function runCampaign(input: {
   panelId: string;
   links: string;
-  tier?: "regular" | "priority";
 }): Promise<Result<RunCampaignResult>> {
   const supa = await createStorefrontClient();
   const { data: { user } } = await supa.auth.getUser();
   if (!user) return { ok: false, error: "Please log in to run a campaign." };
 
   const admin = createAdminClient();
-  const tier = input.tier === "priority" ? "priority" : "regular";
 
-  // Panel + gate: Campaign Automation requires a plan (comp-only until subscribe ships).
+  // Panel + gate: the owner must offer the automator (an active tier).
   const { data: panel } = await admin.from("panels").select("id, status, settings").eq("id", input.panelId).maybeSingle();
   if (!panel) return { ok: false, error: "Panel not found." };
-  if (!hasCampaignAutomation(panel.settings)) return { ok: false, error: "Campaign Automation isn't enabled on this panel." };
+  if (!hasCampaignAutomation(panel.settings)) return { ok: false, error: "The automator isn't available on this panel yet." };
   if (panel.status !== "live") return { ok: false, error: "This panel isn't accepting orders right now." };
 
   // The signed-in customer on this panel.
   const { data: account } = await admin
-    .from("customer_accounts")
-    .select("id, status")
-    .eq("user_id", user.id)
-    .eq("panel_id", input.panelId)
-    .maybeSingle();
+    .from("customer_accounts").select("id, status").eq("user_id", user.id).eq("panel_id", input.panelId).maybeSingle();
   if (!account) return { ok: false, error: "Customer account not found." };
   if (account.status !== "active") return { ok: false, error: "Your account can't place orders right now." };
 
-  // Parse + cap by plan.
+  // The customer must be subscribed to the automator.
+  const { data: sub } = await admin
+    .from("automator_subscriptions").select("active").eq("panel_id", input.panelId).eq("customer_id", account.id).maybeSingle();
+  if (!sub?.active) return { ok: false, error: "Subscribe to the automator to run campaigns." };
+
+  // The customer's keyword-slot configuration.
+  const { data: profileRow } = await admin
+    .from("automation_profiles").select("config").eq("panel_id", input.panelId).eq("customer_id", account.id).maybeSingle();
+  const profile = readAutomationProfile(profileRow?.config);
+  if (!profileIsConfigured(profile)) {
+    return { ok: false, error: "Set up your services first — tap Configure to choose what to order." };
+  }
+
+  const allowed = tierPlatforms(planTier(panel.settings)); // null = all owner platforms
+
   const analysis = analyzeCampaign(input.links);
   if (analysis.total === 0) return { ok: false, error: "No valid links found. Paste one or more post links." };
   const limit = campaignLinkLimit(panel.settings);
-  if (limit !== null && analysis.total > limit) {
+  if (Number.isFinite(limit) && analysis.total > limit) {
     return { ok: false, error: `Your plan allows up to ${limit} links per campaign. You pasted ${analysis.total}.` };
   }
 
-  // Presets for this panel, grouped by platform (this tier).
-  const { data: presetRows } = await admin
-    .from("campaign_service_presets")
-    .select("platform, service_type, service_id, quantity")
-    .eq("panel_id", input.panelId)
-    .eq("tier", tier)
-    .eq("enabled", true)
-    .not("service_id", "is", null)
-    .gt("quantity", 0);
-  const presetsByPlatform = new Map<string, PresetRow[]>();
-  for (const r of (presetRows as Array<{ platform: string; service_type: string; service_id: string; quantity: number }> | null) ?? []) {
-    const list = presetsByPlatform.get(r.platform) ?? [];
-    list.push({ service_type: r.service_type, service_id: r.service_id, quantity: r.quantity });
-    presetsByPlatform.set(r.platform, list);
-  }
-
-  // Campaign header.
   const { data: campaign, error: cErr } = await admin
     .from("campaigns")
-    .insert({ panel_id: input.panelId, customer_id: account.id, tier, status: "processing", total_links: analysis.total })
+    .insert({ panel_id: input.panelId, customer_id: account.id, tier: planTier(panel.settings) ?? "regular", status: "processing", total_links: analysis.total })
     .select("id")
     .single();
   if (cErr || !campaign) return { ok: false, error: cErr?.message ?? "Couldn't start the campaign." };
@@ -115,14 +101,16 @@ export async function runCampaign(input: {
       skipped++;
       continue;
     }
-    let presets = presetsByPlatform.get(platform) ?? [];
-    // Instagram Reel rule: only "views" services on /reel/ links.
-    if (a.isReel) presets = presets.filter((p) => /view/i.test(p.service_type));
-    // Comment pools land in 2c — skip comment presets for now to avoid failed orders.
-    presets = presets.filter((p) => !/comment/i.test(p.service_type));
-
-    if (presets.length === 0) {
-      items.push({ link: a.link, platform, status: "skipped", orders: 0, charge: 0, error: "No matching services configured" });
+    // Enforce the owner tier's platform scope.
+    if (allowed !== null && !(allowed as string[]).includes(platform)) {
+      items.push({ link: a.link, platform, status: "skipped", orders: 0, charge: 0, error: "Not in the panel's plan" });
+      skipped++;
+      continue;
+    }
+    // Keyword routing: the customer's matching slots (or keyword-less defaults), deduped.
+    const slots = slotsForLink(profile, platform, a.link);
+    if (slots.length === 0) {
+      items.push({ link: a.link, platform, status: "skipped", orders: 0, charge: 0, error: "No services set up for this platform" });
       skipped++;
       continue;
     }
@@ -130,13 +118,10 @@ export async function runCampaign(input: {
     let itemOrders = 0;
     let itemCharge = 0;
     let itemError: string | undefined;
-    const doneServices = new Set<string>();
     const orderIds: string[] = [];
 
-    for (const p of presets) {
-      if (doneServices.has(p.service_id)) continue; // dedupe: one order per service per link
-      doneServices.add(p.service_id);
-      const res = await placeOrder({ panelId: input.panelId, serviceId: p.service_id, link: a.link, quantity: p.quantity });
+    for (const slot of slots) {
+      const res = await placeOrder({ panelId: input.panelId, serviceId: slot.serviceId, link: a.link, quantity: slot.quantity });
       if (res.ok) {
         itemOrders++;
         itemCharge = round4(itemCharge + res.charge);
