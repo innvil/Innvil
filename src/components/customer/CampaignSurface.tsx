@@ -167,11 +167,19 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
         {Header}
         <HowItWorks />
         <div className="fp-panel border fp-violet-border rounded-2xl p-5">
-          <div className="flex items-baseline gap-1.5">
+          <div className="flex items-baseline gap-1.5 flex-wrap">
+            {sub.promoActive && <span className="fp-text-faint text-lg line-through">{fmt(sub.basePrice)}</span>}
             <span className="fp-display text-3xl fp-violet">{fmt(sub.price)}</span>
             <span className="fp-text-dim text-sm">/ month</span>
+            {sub.promoActive && <span className="text-[10px] fp-safe-soft-bg fp-safe px-2 py-0.5 rounded-full ml-1">{sub.promoLabel || "Promo"}</span>}
           </div>
-          <p className="fp-text-faint text-xs mt-1.5 mb-4">Unlimited campaigns, keyword-smart routing, your services on every link. Cancel anytime.</p>
+          <p className="fp-text-faint text-xs mt-1.5 mb-2">Unlimited campaigns, keyword-smart routing, your services on every link. Cancel anytime.</p>
+          {(sub.fileUpload || sub.watchedAccounts) && (
+            <ul className="text-xs fp-text-dim space-y-1 mb-4">
+              {sub.fileUpload && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> File upload (csv / xlsx / docx) <span className="fp-text-faint">· coming soon</span></li>}
+              {sub.watchedAccounts && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> Watched accounts · full-auto <span className="fp-text-faint">· coming soon</span></li>}
+            </ul>
+          )}
           {sub.lapsed && <p className="text-xs fp-gold flex items-center gap-1.5 mb-2"><AlertTriangle size={12} /> Your subscription paused for low balance — top up and re-subscribe.</p>}
           <div className="flex items-center gap-2 text-xs fp-text-faint mb-3"><Wallet size={13} /> Wallet balance: <span className="fp-mono fp-text">{fmt(sub.balance)}</span></div>
           <button onClick={subscribe} disabled={subBusy || !sub.canAfford} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60 flex items-center gap-2">

@@ -8,6 +8,7 @@ import {
   MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, Wallet, LucideIcon,
 } from "lucide-react";
 import { getPlan, setPlan, type PlanInfo } from "@/src/lib/actions/plan";
+import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } from "@/src/lib/actions/automator-pricing";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -2906,8 +2907,8 @@ export function AutomationTab({ panelId }: { panelId: string }) {
       <Card title="Campaign Automation" icon={Bot}>
         <p className="fp-text-dim text-sm mb-3">
           Subscribe to offer the <span className="fp-text">Automator</span> to your customers — they paste many
-          links and it fans each out to the right services automatically. Your customers pay a fixed
-          <span className="fp-text"> $6.99/mo</span> to use it, and <span className="fp-text">you keep all of it</span>.
+          links and it fans each out to the right services automatically. Your customers pay a monthly price
+          <span className="fp-text"> you set</span> (default $6.99, or $9.99 on Business+), and <span className="fp-text">you keep all of it</span>.
         </p>
         {current ? (
           <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex items-center justify-between flex-wrap gap-2">
@@ -2967,7 +2968,113 @@ export function AutomationTab({ panelId }: { panelId: string }) {
           );
         })}
       </div>
+
+      {current && <CustomerPricingCard panelId={panelId} />}
     </div>
+  );
+}
+
+/** Owner sets what their CUSTOMERS pay for the Automator subscription + an optional promo. */
+function CustomerPricingCard({ panelId }: { panelId: string }) {
+  const [info, setInfo] = React.useState<AutomatorPricingInfo | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [price, setPrice] = React.useState("");
+  const [promoOn, setPromoOn] = React.useState(false);
+  const [promoPrice, setPromoPrice] = React.useState("");
+  const [promoLabel, setPromoLabel] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const hydrate = React.useCallback((i: AutomatorPricingInfo) => {
+    setInfo(i);
+    setPrice(i.price != null ? String(i.price) : "");
+    setPromoOn(i.promoActive);
+    setPromoPrice(i.promoPrice != null ? String(i.promoPrice) : "");
+    setPromoLabel(i.promoLabel ?? "");
+  }, []);
+
+  React.useEffect(() => {
+    getAutomatorPricing(panelId).then((i) => { if (i) hydrate(i); setLoading(false); }).catch(() => setLoading(false));
+  }, [panelId, hydrate]);
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    const res = await setAutomatorPricing(panelId, {
+      price: price.trim() === "" ? null : Number(price),
+      promoActive: promoOn,
+      promoPrice: promoPrice.trim() === "" ? null : Number(promoPrice),
+      promoLabel: promoLabel.trim() || null,
+    });
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    hydrate(res.data);
+    setMsg({ text: "Customer pricing saved." });
+  };
+
+  if (loading) return <Card title="Customer price" icon={Tag}><p className="fp-text-faint text-sm py-4 text-center">Loading…</p></Card>;
+  if (!info) return null;
+
+  return (
+    <Card title="Customer price" icon={Tag}>
+      <p className="fp-text-dim text-sm mb-3">
+        What your customers pay per month to use the Automator. Leave the price blank to use the suggested
+        default (<span className="fp-mono fp-text">${info.suggested.toFixed(2)}</span>
+        {info.fileUpload ? " · Business+ — includes file upload + watched accounts" : ""}). You keep 100%.
+      </p>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <label className="text-xs fp-text-dim">
+          Monthly price
+          <div className="flex items-center gap-1.5 mt-1">
+            <span className="fp-text-faint">$</span>
+            <input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)}
+              placeholder={info.suggested.toFixed(2)}
+              className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border" />
+            <span className="fp-text-faint">/mo</span>
+          </div>
+        </label>
+        <div className="text-xs fp-text-faint flex items-end pb-2">
+          Customers pay now: <span className="fp-mono fp-text ml-1">${info.effective.toFixed(2)}</span>
+          {info.effective < info.base && <span className="fp-safe ml-1">(promo · was ${info.base.toFixed(2)})</span>}
+        </div>
+      </div>
+
+      <div className="mt-4 border-t fp-line-soft pt-3">
+        <label className="flex items-center gap-2 text-sm fp-text cursor-pointer">
+          <input type="checkbox" checked={promoOn} onChange={(e) => setPromoOn(e.target.checked)} className="accent-[color:var(--fp-gold,#d4af37)]" />
+          Run a promo / discount
+        </label>
+        {promoOn && (
+          <div className="grid sm:grid-cols-2 gap-3 mt-3">
+            <label className="text-xs fp-text-dim">
+              Promo price (must be below the regular price)
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="fp-text-faint">$</span>
+                <input type="number" min="0" step="0.01" value={promoPrice} onChange={(e) => setPromoPrice(e.target.value)}
+                  placeholder={(info.base * 0.8).toFixed(2)}
+                  className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border" />
+                <span className="fp-text-faint">/mo</span>
+              </div>
+            </label>
+            <label className="text-xs fp-text-dim">
+              Promo label (optional)
+              <input value={promoLabel} maxLength={40} onChange={(e) => setPromoLabel(e.target.value)}
+                placeholder="Launch offer"
+                className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border mt-1" />
+            </label>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 mt-4">
+        {msg ? (
+          <p className={`text-xs flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>
+        ) : <span />}
+        <button onClick={save} disabled={busy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+          {busy ? "Saving…" : "Save pricing"}
+        </button>
+      </div>
+    </Card>
   );
 }
 

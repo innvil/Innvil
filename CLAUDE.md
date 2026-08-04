@@ -127,6 +127,26 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R4b: owner-configurable customer price + Business+ tier upgrade (v1.1.15)
+- **The customer Automator subscription is no longer hard-coded** — the owner sets what customers pay and can
+  run a promo. The $6.99 / $9.99 figures are just suggested DEFAULTS.
+  - `src/lib/automation/pricing.ts` (NEW, pure) — `SUGGESTED_AUTOMATOR_PRICE` 6.99 / `SUGGESTED_AUTOMATOR_PLUS_PRICE`
+    9.99; `AutomatorPricing {price?, promoActive, promoPrice?, promoLabel?}` on `panels.settings.automator`;
+    `suggestedAutomatorPrice` (Business+ → 9.99, else 6.99), `baseAutomatorPrice` (override ?? suggested),
+    `effectiveAutomatorPrice` (active valid promo ?? base), `automatorPromoApplies`, `normalizeAutomatorPricing`.
+- **Business+ upgrades the storefront subscription.** The customer sub's feature set follows the OWNER tier:
+  Business+ raises the suggested default to **$9.99** and unlocks **file upload + watched accounts** (surfaced on
+  the storefront subscribe card as included · *coming soon* until R5 builds the surfaces).
+- `actions/automator-sub.ts` — charges the **effective** price (was the flat constant); `AutomatorSubInfo` gained
+  `basePrice`, `promoActive`, `promoLabel`, `fileUpload`, `watchedAccounts`. `billing/automator.ts` renewal sweep
+  now charges each panel's **current effective price** (loads settings per involved panel).
+- `actions/automator-pricing.ts` (NEW, owner-auth) — `getAutomatorPricing` / `setAutomatorPricing` (validates the
+  promo is below the regular price; audit-logged). Owner UI: a **"Customer price"** card in the Campaign
+  Automation tab (`AdminTabs.tsx` `CustomerPricingCard`) — monthly price (blank = suggested default) + a
+  promo/discount toggle (promo price + label), shown once the owner has an active tier.
+- Storefront `CampaignSurface` subscribe card shows the promo (strike-through base + label) and the Business+
+  perks. No migration (`settings.automator` is JSONB config).
+
 ### 2026-07-25 — Automator v2 — R4: storefront teaser + subscribe + always-free mass order (v1.1.14)
 - **The storefront Campaign tab is now the real customer surface — always visible to every customer** (drives
   demand). `CampaignSurface.tsx` rewritten as a 3-state machine driven by `getAutomatorSub`:

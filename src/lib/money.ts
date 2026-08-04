@@ -31,7 +31,8 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
   return INNVIL_PRO_PRICE;
 }
 
-/** The customer-facing automator subscription — HARD-CODED (owners can't change it).
+/** Suggested default for the customer-facing automator subscription. Owners can override
+ *  the price + run a promo (see automation/pricing.ts — the Business+ default is $9.99).
  *  The full amount is the OWNER's revenue; Innvil earns only via the owner's tier fee. */
 export const CUSTOMER_AUTOMATOR_PRICE = 6.99;
 export const AUTOMATOR_PERIOD_DAYS = 30;

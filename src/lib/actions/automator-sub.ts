@@ -2,14 +2,17 @@
 
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { hasCampaignAutomation } from "@/src/lib/plans";
-import { CUSTOMER_AUTOMATOR_PRICE, AUTOMATOR_PERIOD_DAYS, round4 } from "@/src/lib/money";
+import { hasCampaignAutomation, hasFileUpload, hasWatchedAccounts } from "@/src/lib/plans";
+import { AUTOMATOR_PERIOD_DAYS, round4 } from "@/src/lib/money";
+import { effectiveAutomatorPrice, baseAutomatorPrice, automatorPromoApplies, readAutomatorPricing } from "@/src/lib/automation/pricing";
 
 /* =========================================================
-   Customer-facing Automator subscription — hard-coded $6.99/mo.
-   The customer pays from their panel wallet; the charge is an 'order'-type balance
-   change (no provider payout) so the full amount is the OWNER's revenue. Runs on the
-   storefront session. Monthly renewal is handled by billing/automator.ts.
+   Customer-facing Automator subscription — owner-priced (default $6.99/mo, or $9.99
+   on a Business+ owner tier which also unlocks file upload + watched accounts). The
+   owner can override the price and run a promo (see automation/pricing.ts). The
+   customer pays from their panel wallet; the charge is an 'order'-type balance change
+   (no provider payout) so the full amount is the OWNER's revenue. Runs on the storefront
+   session. Monthly renewal is handled by billing/automator.ts.
    ========================================================= */
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -21,7 +24,15 @@ export interface AutomatorSubInfo {
   lapsed: boolean;
   since: string | null;
   nextChargeAt: string | null;
+  /** What the customer pays now (promo applied if active). */
   price: number;
+  /** The non-promo price (for strike-through display). */
+  basePrice: number;
+  promoActive: boolean;
+  promoLabel: string | null;
+  /** Business+ perks unlocked on this storefront (follow the owner's tier). */
+  fileUpload: boolean;
+  watchedAccounts: boolean;
   balance: number;
   canAfford: boolean;
 }
@@ -47,15 +58,21 @@ export async function getAutomatorSub(panelId: string): Promise<AutomatorSubInfo
     .select("active, lapsed, since, next_charge_at")
     .eq("panel_id", panelId).eq("customer_id", c.account.id).maybeSingle();
   const balance = Number(c.account.balance) || 0;
+  const price = effectiveAutomatorPrice(c.panel.settings);
   return {
     offered: hasCampaignAutomation(c.panel.settings),
     active: sub?.active ?? false,
     lapsed: sub?.lapsed ?? false,
     since: (sub?.since as string | null) ?? null,
     nextChargeAt: (sub?.next_charge_at as string | null) ?? null,
-    price: CUSTOMER_AUTOMATOR_PRICE,
+    price,
+    basePrice: baseAutomatorPrice(c.panel.settings),
+    promoActive: automatorPromoApplies(c.panel.settings),
+    promoLabel: readAutomatorPricing(c.panel.settings).promoLabel,
+    fileUpload: hasFileUpload(c.panel.settings),
+    watchedAccounts: hasWatchedAccounts(c.panel.settings),
     balance: round4(balance),
-    canAfford: balance >= CUSTOMER_AUTOMATOR_PRICE,
+    canAfford: balance >= price,
   };
 }
 
@@ -72,15 +89,16 @@ export async function subscribeAutomator(panelId: string): Promise<Result<Automa
     .from("automator_subscriptions").select("id, active, since").eq("panel_id", panelId).eq("customer_id", c.account.id).maybeSingle();
   if (existing?.active) return { ok: false, error: "You're already subscribed." };
 
+  const price = effectiveAutomatorPrice(c.panel.settings);
   const balance = Number(c.account.balance) || 0;
-  if (balance < CUSTOMER_AUTOMATOR_PRICE) {
-    return { ok: false, error: `You need $${CUSTOMER_AUTOMATOR_PRICE.toFixed(2)} in your wallet. Add funds, then subscribe.` };
+  if (balance < price) {
+    return { ok: false, error: `You need $${price.toFixed(2)} in your wallet. Add funds, then subscribe.` };
   }
 
   // Charge the wallet (owner revenue — 'order' type, no provider payout).
   const { error: chargeErr } = await c.admin.rpc("apply_balance_change", {
     p_customer: c.account.id,
-    p_amount: -CUSTOMER_AUTOMATOR_PRICE,
+    p_amount: -price,
     p_type: "order",
     p_reason: "Automator subscription",
   });
