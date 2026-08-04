@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { Rocket, AlertTriangle, CheckCircle2, Loader2, Sliders, Zap, ClipboardList, Wand2, Wallet, LifeBuoy } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Rocket, AlertTriangle, CheckCircle2, Loader2, Sliders, Zap, ClipboardList, Wand2, Wallet, LifeBuoy, Upload } from "lucide-react";
 import { formatMoney } from "@/src/lib/money";
 import { analyzeCampaign } from "@/src/lib/automation/links";
+import { extractLinksFromFile } from "@/src/lib/automation/file-links";
 import { runCampaign, listCampaigns, runMassOrder, type CampaignVM, type RunCampaignResult, type MassOrderResult } from "@/src/lib/actions/campaigns";
 import { getAutomatorSub, subscribeAutomator, type AutomatorSubInfo } from "@/src/lib/actions/automator-sub";
 import { AutomationConfig } from "./AutomationConfig";
@@ -98,6 +99,8 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
   const [result, setResult] = useState<RunCampaignResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<CampaignVM[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [fileMsg, setFileMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
   const analysis = useMemo(() => analyzeCampaign(links), [links]);
   const fmt = (n: number) => formatMoney(n, currency);
@@ -116,6 +119,21 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
     setSubBusy(false);
     if (!res.ok) { setSubErr(res.error); return; }
     setSub(res.data);
+  };
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setFileMsg({ text: "Reading…" });
+    try {
+      const found = await extractLinksFromFile(file);
+      if (!found.length) { setFileMsg({ text: "No links found in that file.", error: true }); return; }
+      setLinks((prev) => (prev.trim() ? prev.trim() + "\n" : "") + found.join("\n"));
+      setFileMsg({ text: `Added ${found.length} link${found.length === 1 ? "" : "s"} from ${file.name}.` });
+    } catch {
+      setFileMsg({ text: "Couldn't read that file. Use csv, xlsx, docx or txt.", error: true });
+    }
   };
 
   const run = async () => {
@@ -176,7 +194,7 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
           <p className="fp-text-faint text-xs mt-1.5 mb-2">Unlimited campaigns, keyword-smart routing, your services on every link. Cancel anytime.</p>
           {(sub.fileUpload || sub.watchedAccounts) && (
             <ul className="text-xs fp-text-dim space-y-1 mb-4">
-              {sub.fileUpload && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> File upload (csv / xlsx / docx) <span className="fp-text-faint">· coming soon</span></li>}
+              {sub.fileUpload && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> File upload (csv / xlsx / docx)</li>}
               {sub.watchedAccounts && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> Watched accounts · full-auto <span className="fp-text-faint">· coming soon</span></li>}
             </ul>
           )}
@@ -220,13 +238,24 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
         )}
 
         <div className="flex items-center justify-between gap-3 mt-4 flex-wrap">
-          <button onClick={() => setConfiguring((v) => !v)} className={`text-xs px-3 py-2 rounded-lg border flex items-center gap-1.5 ${configuring ? "fp-violet-soft-bg fp-violet fp-violet-border" : "fp-panel-raised fp-line-soft fp-text-dim hover:fp-text"}`}>
-            <Sliders size={13} /> Configure
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => setConfiguring((v) => !v)} className={`text-xs px-3 py-2 rounded-lg border flex items-center gap-1.5 ${configuring ? "fp-violet-soft-bg fp-violet fp-violet-border" : "fp-panel-raised fp-line-soft fp-text-dim hover:fp-text"}`}>
+              <Sliders size={13} /> Configure
+            </button>
+            {sub?.fileUpload && (
+              <>
+                <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.docx,.txt" onChange={onFile} className="hidden" />
+                <button onClick={() => fileRef.current?.click()} className="text-xs px-3 py-2 rounded-lg border fp-panel-raised fp-line-soft fp-text-dim hover:fp-text flex items-center gap-1.5">
+                  <Upload size={13} /> Upload file
+                </button>
+              </>
+            )}
+          </div>
           <button onClick={run} disabled={busy || analysis.total === 0} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-50 flex items-center gap-2">
             {busy ? <><Loader2 size={15} className="animate-spin" /> Running…</> : <>Run campaign ({analysis.total})</>}
           </button>
         </div>
+        {fileMsg && <p className={`text-xs mt-3 flex items-center gap-1.5 ${fileMsg.error ? "text-red-400" : "fp-safe"}`}>{fileMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {fileMsg.text}</p>}
         {error && <p className="text-xs text-red-400 mt-3 flex items-center gap-1.5"><AlertTriangle size={12} /> {error}</p>}
       </div>
 

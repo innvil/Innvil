@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R5a: Business+ file-upload link import (v1.1.16)
+- **The Business+ "file upload" perk is now live** (the other half, watched-accounts/full-auto, stays deferred —
+  it needs a cron + social-platform APIs). `src/lib/automation/file-links.ts` (NEW, client) —
+  `extractLinksFromFile(file)` flattens **csv / xlsx / xls** (SheetJS) / **docx** (mammoth) / **txt** to text and
+  runs the existing smart `parseCampaignLinks` (handles concatenated URLs). Both deps already ship.
+- `CampaignSurface` (subscribed state): an **"Upload file"** button next to Configure, shown only when
+  `sub.fileUpload` (owner on Business+). Extracted links are appended to the paste-links textarea (then Run as
+  usual); a per-upload result note. The subscribe-card "file upload" perk dropped its "coming soon" tag
+  (watched accounts keeps it).
+- No migration. **NEXT (R5b, deferred):** watched-accounts / full-auto ordering (cron + platform polling).
+
 ### 2026-07-25 — Automator v2 — R4b: owner-configurable customer price + Business+ tier upgrade (v1.1.15)
 - **The customer Automator subscription is no longer hard-coded** — the owner sets what customers pay and can
   run a promo. The $6.99 / $9.99 figures are just suggested DEFAULTS.
