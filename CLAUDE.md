@@ -127,6 +127,16 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Welcome message: manually send to existing customers (v1.1.18)
+- **The welcome message can now be sent on demand to EXISTING customers** — individually or in bulk (the auto-send
+  only fires for brand-new sign-ups). `actions/admin-tickets.ts` `sendWelcomeToCustomers(panelId, {customerIds?|all})`
+  (owner-auth) renders the panel's configured welcome (`renderWelcome`) and opens a **welcome-kind** ticket per
+  target so replying still grants the free credit **once**; customers who already have a welcome ticket are
+  **skipped** (no second bonus). Returns `{sent, skipped}`.
+- UI: a **"Send welcome"** button in each customer's expanded manage row (Customers tab), and a **"Send to all
+  existing customers"** control in the **Welcome message** card (Notifications tab, with a confirm + result count).
+- Needs migration **0031** (the `kind` column). No new migration.
+
 ### 2026-07-25 — Automated new-customer welcome + mobile payments fix (v1.1.17)
 - **Every new customer now auto-receives an owner welcome message** (as a support ticket) — welcomes them,
   offers a small free credit if they reply, and invites them to Innvil. **Fully owner-editable** (edit the

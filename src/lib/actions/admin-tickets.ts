@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { sendEmail, simpleEmail } from "@/src/lib/email/resend";
+import { readWelcomeConfig, renderWelcome } from "@/src/lib/welcome";
 import type { TicketStatus, TicketMessageVM } from "@/src/lib/actions/tickets";
 
 /* =========================================================
@@ -171,6 +172,65 @@ export async function setTicketStatus(ticketId: string, status: TicketStatus): P
   if (!ticket || !(await ownsPanel(admin, user.id, ticket.panel_id as string))) return { ok: false, error: "Ticket not found." };
   await admin.from("support_tickets").update({ status }).eq("id", ticketId);
   return { ok: true };
+}
+
+/**
+ * Manually send the panel's configured welcome message to EXISTING customers —
+ * individually (customerIds) or to everyone (all). Renders the same owner-editable
+ * welcome (Notifications tab) as a welcome-kind ticket, so replying grants the free
+ * credit once. Customers who already have a welcome ticket are skipped, so nobody can
+ * receive two welcome tickets (and thus two bonus chances).
+ */
+export async function sendWelcomeToCustomers(
+  panelId: string,
+  opts: { customerIds?: string[]; all?: boolean }
+): Promise<{ ok: true; sent: number; skipped: number } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  const { data: panel } = await admin.from("panels").select("owner_id, name, settings").eq("id", panelId).maybeSingle();
+  if (!panel || panel.owner_id !== user.id) return { ok: false, error: "Panel not found." };
+
+  const cfg = readWelcomeConfig(panel.settings);
+  const currency = ((panel.settings as Record<string, unknown> | null)?.currency ?? "USD").toString().toUpperCase();
+  const { subject, body } = renderWelcome(cfg, { panelName: (panel.name as string) ?? "our panel", currency });
+
+  // Resolve the target customer accounts (validated to belong to this panel).
+  let ids: string[] = [];
+  if (opts.all) {
+    const { data } = await admin.from("customer_accounts").select("id").eq("panel_id", panelId);
+    ids = ((data as Array<{ id: string }> | null) ?? []).map((r) => r.id);
+  } else {
+    const wanted = (opts.customerIds ?? []).filter(Boolean);
+    if (wanted.length) {
+      const { data } = await admin.from("customer_accounts").select("id").eq("panel_id", panelId).in("id", wanted);
+      ids = ((data as Array<{ id: string }> | null) ?? []).map((r) => r.id);
+    }
+  }
+  if (!ids.length) return { ok: true, sent: 0, skipped: 0 };
+
+  // Skip anyone who already has a welcome ticket (avoids a second bonus chance).
+  const { data: existing } = await admin
+    .from("support_tickets").select("customer_id").eq("panel_id", panelId).eq("kind", "welcome").in("customer_id", ids);
+  const already = new Set(((existing as Array<{ customer_id: string }> | null) ?? []).map((r) => r.customer_id));
+  const targets = ids.filter((id) => !already.has(id));
+
+  const now = new Date().toISOString();
+  let sent = 0;
+  for (const cid of targets) {
+    const { data: ticket } = await admin
+      .from("support_tickets")
+      .insert({
+        panel_id: panelId, customer_id: cid, subject,
+        status: "open", kind: "welcome", last_sender: "owner",
+        owner_unread: false, customer_unread: true, last_message_at: now,
+      })
+      .select("id")
+      .maybeSingle();
+    if (!ticket) continue;
+    await admin.from("support_ticket_messages").insert({ ticket_id: ticket.id, sender_role: "owner", sender_id: user.id, body });
+    sent++;
+  }
+  return { ok: true, sent, skipped: ids.length - sent };
 }
 
 /** Count of tickets needing the owner's attention (for a badge). */

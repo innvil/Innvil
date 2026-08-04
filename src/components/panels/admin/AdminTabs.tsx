@@ -10,6 +10,7 @@ import {
 import { getPlan, setPlan, type PlanInfo } from "@/src/lib/actions/plan";
 import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } from "@/src/lib/actions/automator-pricing";
 import { getWelcomeSettings, setWelcomeSettings, type WelcomeInfo } from "@/src/lib/actions/welcome";
+import { sendWelcomeToCustomers } from "@/src/lib/actions/admin-tickets";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -2184,6 +2185,18 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
     refresh();
   };
 
+  const sendWelcome = async (ids: string[]) => {
+    setBusy(true); setMsg(null);
+    const res = await sendWelcomeToCustomers(panel.id, { customerIds: ids });
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({
+      text: res.sent > 0
+        ? `Welcome message sent to ${res.sent} customer${res.sent === 1 ? "" : "s"}.${res.skipped ? ` ${res.skipped} skipped (already welcomed).` : ""}`
+        : "Already welcomed — nothing sent.",
+    });
+  };
+
   const commitTopup = async (paymentId: string, customerId: string) => {
     const proceed = window.confirm(
       "This will manually mark the pending top-up as verified and credit the customer's wallet. Make sure you checked the payment provider first."
@@ -2305,6 +2318,16 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
                               <button onClick={() => adjust(c.id, 1)} disabled={busy} className="text-xs font-semibold px-4 py-2 rounded-lg border fp-line-soft fp-text-dim disabled:opacity-50">Credit +</button>
                               <button onClick={() => adjust(c.id, -1)} disabled={busy} className="text-xs font-semibold px-4 py-2 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">Debit −</button>
                             </div>
+                          </div>
+
+                          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                              <p className="text-sm font-medium flex items-center gap-1.5"><Mail size={14} className="fp-text-dim" /> Welcome message</p>
+                              <p className="fp-text-faint text-[11px] mt-0.5">Send this customer the welcome message you set up in Notifications. Skipped if they already got one.</p>
+                            </div>
+                            <button onClick={() => sendWelcome([c.id])} disabled={busy} className="text-xs font-semibold px-4 py-2 rounded-lg fp-panel border fp-line-soft hover:fp-gold-border disabled:opacity-50 whitespace-nowrap">
+                              Send welcome
+                            </button>
                           </div>
 
                           <div className="fp-panel-raised border fp-line-soft rounded-xl p-3">
@@ -2863,6 +2886,8 @@ function WelcomeMessageCard({ panelId }: { panelId: string }) {
   const [creditAmount, setCreditAmount] = React.useState("1");
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+  const [sendBusy, setSendBusy] = React.useState(false);
+  const [sendMsg, setSendMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
 
   const hydrate = React.useCallback((i: WelcomeInfo) => {
     setInfo(i);
@@ -2872,6 +2897,19 @@ function WelcomeMessageCard({ panelId }: { panelId: string }) {
     setCreditEnabled(i.creditEnabled);
     setCreditAmount(String(i.creditAmount));
   }, []);
+
+  const sendToAll = async () => {
+    if (!window.confirm("Send the welcome message to all existing customers? Anyone who already received a welcome is skipped. Save your edits first.")) return;
+    setSendBusy(true); setSendMsg(null);
+    const res = await sendWelcomeToCustomers(panelId, { all: true });
+    setSendBusy(false);
+    if (!res.ok) { setSendMsg({ text: res.error, error: true }); return; }
+    setSendMsg({
+      text: res.sent > 0
+        ? `Sent to ${res.sent} customer${res.sent === 1 ? "" : "s"}.${res.skipped ? ` ${res.skipped} skipped (already welcomed).` : ""}`
+        : "No customers to send to — everyone has already been welcomed.",
+    });
+  };
 
   React.useEffect(() => {
     getWelcomeSettings(panelId).then((i) => { if (i) hydrate(i); setLoading(false); }).catch(() => setLoading(false));
@@ -2957,6 +2995,19 @@ function WelcomeMessageCard({ panelId }: { panelId: string }) {
         <button onClick={save} disabled={busy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
           {busy ? "Saving…" : "Save message"}
         </button>
+      </div>
+
+      <div className="border-t fp-line-soft mt-4 pt-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-sm font-medium">Send to existing customers</p>
+            <p className="fp-text-faint text-[11px] mt-0.5">New sign-ups get this automatically. Send it to customers who joined earlier — anyone already welcomed is skipped. Save your edits first.</p>
+          </div>
+          <button onClick={sendToAll} disabled={sendBusy} className="text-xs font-semibold px-4 py-2 rounded-lg fp-panel-raised border fp-line-soft hover:fp-gold-border disabled:opacity-60 whitespace-nowrap">
+            {sendBusy ? "Sending…" : "Send to all existing customers"}
+          </button>
+        </div>
+        {sendMsg && <p className={`text-xs mt-2 flex items-center gap-1.5 ${sendMsg.error ? "text-red-400" : "fp-safe"}`}>{sendMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {sendMsg.text}</p>}
       </div>
     </Card>
   );
