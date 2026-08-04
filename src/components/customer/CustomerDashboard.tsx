@@ -30,7 +30,22 @@ export type PaymentMethod = {
   minTopup: number;
   discountPct: number | null;
   discountRules: TopupDiscountRule[];
+  /** true = verified by transaction id (Binance Pay), not a hosted redirect. */
+  manual?: boolean;
 };
+
+export type BinanceDepositInfo = {
+  paymentId: string;
+  payId: string;
+  qrImage: string | null;
+  amount: number;
+  asset: string;
+  expiresAt: string;
+  instructions: string[];
+};
+export type BinanceClaimResult =
+  | { ok: true; code: "PAYMENT_CONFIRMED"; message: string; credited: number; received: number }
+  | { ok: false; code: string; message: string; pending?: boolean };
 
 function roundMoney(value: number): number {
   return Math.round(value * 10000) / 10000;
@@ -52,6 +67,114 @@ const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
   { key: "ewallet", label: "E-wallet" },
   { key: "bank", label: "Bank" },
 ];
+
+/** Binance Pay: shows the pay-to details + a transaction-id verify step. */
+function BinancePayPanel({
+  info, currency, onClaim, onDone,
+}: {
+  info: BinanceDepositInfo;
+  currency: string;
+  onClaim?: (paymentId: string, transactionId: string) => Promise<BinanceClaimResult>;
+  onDone: () => void;
+}) {
+  const [txId, setTxId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; tone: "ok" | "error" | "pending" } | null>(null);
+  const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [remaining, setRemaining] = useState(() => Math.max(0, new Date(info.expiresAt).getTime() - Date.now()));
+
+  useEffect(() => {
+    if (done) return;
+    const id = window.setInterval(() => {
+      setRemaining(Math.max(0, new Date(info.expiresAt).getTime() - Date.now()));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [info.expiresAt, done]);
+
+  const expired = remaining <= 0 && !done;
+  const mm = Math.floor(remaining / 60000);
+  const ss = Math.floor((remaining % 60000) / 1000);
+
+  const copyPayId = async () => {
+    try { await navigator.clipboard.writeText(info.payId); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
+  };
+
+  const verify = async () => {
+    if (!onClaim || busy) return;
+    const id = txId.trim();
+    if (!id) { setMsg({ text: "Paste your Binance Pay transaction ID.", tone: "error" }); return; }
+    setBusy(true); setMsg(null);
+    const res = await onClaim(info.paymentId, id);
+    setBusy(false);
+    if (res.ok) { setMsg({ text: res.message, tone: "ok" }); setDone(true); return; }
+    setMsg({ text: res.message, tone: res.pending ? "pending" : "error" });
+  };
+
+  return (
+    <div className="fp-panel-raised border fp-gold-border rounded-xl p-4 space-y-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-sm font-semibold">Pay with Binance Pay</p>
+        <span className="fp-mono fp-gold text-sm">{info.amount} {info.asset}</span>
+      </div>
+
+      {!done && (
+        <p className={`text-xs flex items-center gap-1.5 ${expired ? "text-red-400" : "fp-text-dim"}`}>
+          <Clock size={12} /> {expired ? "Deposit window expired — start a new one." : `Pay within ${mm}:${String(ss).padStart(2, "0")}`}
+        </p>
+      )}
+
+      {info.qrImage && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={info.qrImage} alt="Binance Pay QR" className="w-40 h-40 rounded-lg object-contain mx-auto bg-white p-2" />
+      )}
+
+      <div className="flex items-center justify-between gap-2 bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2">
+        <div className="min-w-0">
+          <p className="fp-text-faint text-[10px] fp-mono uppercase">Binance Pay ID</p>
+          <p className="fp-mono text-sm truncate">{info.payId}</p>
+        </div>
+        <button onClick={copyPayId} className="text-xs fp-gold border fp-line-soft rounded-lg px-2.5 py-1.5 shrink-0">{copied ? "Copied" : "Copy"}</button>
+      </div>
+
+      <ol className="list-decimal list-inside space-y-1 fp-text-dim text-[11px] leading-relaxed">
+        {info.instructions.map((s, i) => <li key={i}>{s}</li>)}
+      </ol>
+
+      {!done && (
+        <>
+          <div>
+            <label className="fp-text-faint text-[10px] fp-mono uppercase">Binance Pay transaction ID</label>
+            <input
+              value={txId}
+              onChange={(e) => { setTxId(e.target.value); setMsg(null); }}
+              onKeyDown={(e) => e.key === "Enter" && verify()}
+              placeholder="M_P_…"
+              className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2] mt-1"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={verify} disabled={busy || expired} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-70 flex items-center gap-2">
+              {busy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+              {busy ? "Verifying…" : expired ? "Expired" : "Verify payment"}
+            </button>
+            <button onClick={onDone} className="text-xs fp-text-dim hover:fp-text underline">{expired ? "Start over" : "Cancel"}</button>
+          </div>
+        </>
+      )}
+
+      {msg && (
+        <p className={`text-xs flex items-center gap-1.5 ${msg.tone === "ok" ? "fp-safe" : msg.tone === "pending" ? "fp-gold" : "text-red-400"}`}>
+          {msg.tone === "ok" ? <CheckCircle2 size={13} /> : <Clock size={13} />} {msg.text}
+        </p>
+      )}
+
+      {done && (
+        <button onClick={onDone} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg w-full">Done</button>
+      )}
+    </div>
+  );
+}
 
 /* =========================================================
    CUSTOMER DASHBOARD — fully independent from the
@@ -148,6 +271,8 @@ export function CustomerDashboard({
   onPlaceOrder,
   onAddFunds,
   onDeposit,
+  onBinanceCreate,
+  onBinanceClaim,
   platformMeta,
   currency = "USD",
   paymentMethods = [],
@@ -192,6 +317,10 @@ export function CustomerDashboard({
   onAddFunds?: () => void;
   /** Start a deposit via the given gateway → returns a checkout URL to redirect to. */
   onDeposit?: (amount: number, gateway?: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+  /** Binance Pay: create a pending deposit → returns pay-to details (no redirect). */
+  onBinanceCreate?: (amount: number) => Promise<{ ok: boolean; data?: BinanceDepositInfo; error?: string }>;
+  /** Binance Pay: verify a submitted transaction id → credits the wallet on success. */
+  onBinanceClaim?: (paymentId: string, transactionId: string) => Promise<BinanceClaimResult>;
   platformMeta?: PlatformMeta;
   /** Panel operating currency (ISO code). */
   currency?: string;
@@ -258,14 +387,28 @@ export function CustomerDashboard({
     }
   }, [catMethods, payGateway]);
 
+  const [binanceInfo, setBinanceInfo] = useState<BinanceDepositInfo | null>(null);
+
   const startDeposit = async () => {
-    if (!onDeposit || depositBusy) return;
+    if (depositBusy) return;
     const amt = Number(depositAmount);
     if (!amt || amt <= 0) { setDepositError("Enter an amount."); return; }
     if (paymentMethods.length > 0 && !activeGateway) { setDepositError("Choose a payment method."); return; }
     if (amt < minTopup) { setDepositError(`Minimum top-up for ${activeMethod?.label ?? "this method"} is ${fmt(minTopup)}.`); return; }
     setDepositError(null);
-    setDepositBusy(true); // shows the "Opening <method>…" overlay immediately (no silent gap)
+    setDepositBusy(true);
+
+    // Binance Pay: no redirect — create a pending deposit and show the pay-to panel.
+    if (activeMethod?.manual) {
+      if (!onBinanceCreate) { setDepositBusy(false); setDepositError("This method isn't available right now."); return; }
+      const res = await onBinanceCreate(amt);
+      setDepositBusy(false);
+      if (!res.ok || !res.data) { setDepositError(res.error ?? "Could not start the deposit."); return; }
+      setBinanceInfo(res.data);
+      return;
+    }
+
+    if (!onDeposit) { setDepositBusy(false); return; }
     const res = await onDeposit(amt, activeGateway || undefined);
     if (!res.ok || !res.url) { setDepositBusy(false); setDepositError(res.error ?? "Could not start the deposit."); return; }
     setRedirecting(true); // keep the overlay up through navigation — no flash back to the form
@@ -839,6 +982,20 @@ export function CustomerDashboard({
                     </p>
                   )}
 
+                  {binanceInfo ? (
+                    <BinancePayPanel
+                      info={binanceInfo}
+                      currency={currency}
+                      onClaim={onBinanceClaim}
+                      onDone={() => { setBinanceInfo(null); setDepositAmount(""); }}
+                    />
+                  ) : (
+                  <>
+                  {activeMethod?.manual && (
+                    <p className="fp-text-faint text-[11px] leading-relaxed">
+                      Pay with Binance Pay, then paste your transaction ID to confirm. Use Binance Pay only — not an on-chain withdrawal.
+                    </p>
+                  )}
                   {/* Amount */}
                   <div className="flex gap-2">
                     <div className="relative flex-1">
@@ -853,7 +1010,7 @@ export function CustomerDashboard({
                     </div>
                     <button onClick={startDeposit} disabled={depositBusy} className="fp-btn-primary text-sm font-semibold px-5 rounded-xl disabled:opacity-70 whitespace-nowrap flex items-center gap-1.5">
                       {depositBusy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
-                      {redirecting ? "Redirecting…" : depositBusy ? "Opening…" : "Add funds"}
+                      {redirecting ? "Redirecting…" : depositBusy ? (activeMethod?.manual ? "Preparing…" : "Opening…") : (activeMethod?.manual ? "Continue" : "Add funds")}
                     </button>
                   </div>
                   <div className="flex gap-2">
@@ -871,7 +1028,9 @@ export function CustomerDashboard({
                   ) : depositError ? (
                     <p className="text-xs text-red-400">{depositError}</p>
                   ) : (
-                    <p className="fp-text-faint text-[11px]">You&apos;ll be sent to a secure checkout. Your balance updates automatically once the payment confirms.</p>
+                    <p className="fp-text-faint text-[11px]">{activeMethod?.manual ? "Enter the amount you'll send, then you'll get the Binance Pay details." : "You'll be sent to a secure checkout. Your balance updates automatically once the payment confirms."}</p>
+                  )}
+                  </>
                   )}
                 </div>
               )}

@@ -4,6 +4,7 @@ import { cryptomusAdapter } from "./cryptomus";
 import { razorpayAdapter } from "./razorpay";
 import { stripeAdapter } from "./stripe";
 import { nowpaymentsAdapter } from "./nowpayments";
+import { binancePayAdapter } from "./binance";
 
 export * from "./types";
 
@@ -13,6 +14,7 @@ const ADAPTERS: Record<string, GatewayAdapter> = {
   razorpay: razorpayAdapter,
   stripe: stripeAdapter,
   nowpayments: nowpaymentsAdapter,
+  binance_pay: binancePayAdapter,
 };
 
 export function getAdapter(id: string): GatewayAdapter | null {
@@ -35,6 +37,7 @@ export const GATEWAY_CATALOG: CatalogEntry[] = [
   { id: "gcash", label: "GCash", note: "Philippines · e-wallet", category: "ewallet", available: false },
   { id: "maya", label: "Maya", note: "Philippines · e-wallet", category: "ewallet", available: false },
   { id: "nowpayments", label: "NOWPayments", note: "Crypto · 300+ coins", category: "crypto", available: true },
+  { id: "binance_pay", label: "Binance Pay", note: "Crypto · pay your Binance, verify by transaction id", category: "crypto", available: true },
   { id: "coinbase", label: "Coinbase Commerce", note: "Crypto · BTC, ETH, USDC", category: "crypto", available: false },
 ];
 

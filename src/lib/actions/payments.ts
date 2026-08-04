@@ -154,7 +154,7 @@ async function getGlobalDiscountRules(category: PaymentCategory): Promise<TopupD
   return legacy == null ? [] : [{ minAmount: 0, discountPct: legacy }];
 }
 
-async function resolveGatewayDiscountPct(
+export async function resolveGatewayDiscountPct(
   gateway: string,
   gwConfig: Record<string, unknown> | null,
   amount: number

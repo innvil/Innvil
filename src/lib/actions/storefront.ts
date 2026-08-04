@@ -150,6 +150,8 @@ export interface PublicPaymentMethod {
   minTopup: number;
   discountPct: number | null;
   discountRules: TopupDiscountRule[];
+  /** true when this method is verified by transaction id (Binance Pay), not a redirect. */
+  manual?: boolean;
 }
 
 function normalizeMinTopup(raw: unknown): number {
@@ -256,6 +258,7 @@ export async function getPanelPaymentMethods(panelId: string): Promise<PublicPay
         minTopup: normalizeMinTopup(cfg?.minTopup),
         discountPct: baseRule?.discountPct ?? null,
         discountRules: effectiveRules,
+        manual: cat.id === "binance_pay",
       } satisfies PublicPaymentMethod];
     });
 }

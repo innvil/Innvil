@@ -127,6 +127,47 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Binance Pay: top-up bonus + 10-minute expiry (v1.1.20)
+- **Binance Pay deposits now earn the same tiered top-up bonus** as the other gateways (e.g. 100 USDT → +1%).
+  `claimBinancePayment` resolves the panel's discount tier for the base amount via the shared
+  `resolveGatewayDiscountPct` (exported from `actions/payments.ts` — per-gateway `discountRules`, else the crypto
+  category default), credits `base + bonus`, and records `bonus_amount` on the payment. Base = received
+  (credit_actual) or requested (exact). Storefront shows the "send X → receive X+bonus" line before paying
+  (dropped the earlier binance discount suppression).
+- **10-minute deposit window.** `createBinanceDeposit` returns `expiresAt` (created_at + 10 min);
+  `claimBinancePayment` rejects with `EXPIRED` past it. The customer `BinancePayPanel` shows a live mm:ss
+  countdown and disables Verify when it lapses.
+- **Each TXID is single-use** (unchanged) — the partial unique index on `payments.binance_tx_id` plus a
+  pre-check. Receiver match is against the owner's configured Binance UID.
+
+### 2026-07-25 — Binance Pay (personal-account reconciliation) — Phase 1 (v1.1.19)
+- **New per-panel payment method: Binance Pay** — the owner connects their OWN read-only Binance key; the
+  customer pays the owner's Pay ID and submits the transaction id; the server pulls the owner's Pay history,
+  matches + validates, and credits the wallet. **NOT** an official merchant checkout (personal-account
+  reconciliation). Internal id `binance_pay`; accepted asset **USDT**, credited 1:1 into the wallet.
+- **Migration `0032_binance_pay.sql`** (NEW) — `binance_pay_transactions` (per-panel Pay-history cache, RLS on
+  with no policies = service-role only) + `payments.binance_tx_id` with a **partial unique index** (one Binance
+  tx credits at most one deposit). **Run migration 0032.**
+- `src/lib/payments/binance.ts` (NEW) — signed HMAC-SHA256 client for `sapi/v1/pay/transactions`.
+  `src/lib/payments/binance-sync.ts` (NEW) — `syncPanelBinanceHistory(panelId)` (decrypts the owner key, upserts
+  the overlapping window; single-flight). `adapters/binance.ts` (NEW) — a fields-only "adapter" so the owner
+  CONNECT form + encrypted secret storage reuse the gateway machinery (`createCheckout`/`verifyWebhook` never
+  run). Registered in the adapter map + `GATEWAY_CATALOG` (crypto, available).
+- `src/lib/actions/binance-pay.ts` (NEW) — `createBinanceDeposit` (pending payment + pay-to details, no redirect)
+  + `claimBinancePayment` (validate tx format → local lookup → sync-on-miss → checks: incoming/positive, currency
+  == USDT, order type ∈ {C2C,PAY}, receiver UID when set, not older than the deposit, anti-replay → amount policy
+  → atomic claim + `apply_balance_change('deposit')`, roll back on credit failure). **Amount policy** per gateway:
+  `credit_actual` (default, credits what was received) or `exact` (mismatch stays pending for owner review).
+- Storefront: `getPanelPaymentMethods` flags `binance_pay` as `manual`; `Storefront` passes `onBinanceCreate` /
+  `onBinanceClaim`; `CustomerDashboard` renders a **BinancePayPanel** (QR + Pay ID + amount + paste-transaction-id
+  → Verify) instead of a redirect. On success the wallet refreshes immediately.
+- **Owner setup:** Payments tab → connect Binance Pay (Pay ID, optional UID/QR/amount-policy, read-only API key +
+  secret). **Caveats surfaced in the connect help:** Innvil is serverless (no fixed egress IP → key IP-allowlist
+  isn't reliable; keep it read-only); it's a personal-account workaround — confirm commercial receipts are
+  allowed with Binance.
+- **NEXT (Phase 2, deferred):** pg_cron poller (`/api/cron/binance-sync`), unique-payable-amount anti-theft,
+  richer admin review + alerts.
+
 ### 2026-07-25 — Welcome message: manually send to existing customers (v1.1.18)
 - **The welcome message can now be sent on demand to EXISTING customers** — individually or in bulk (the auto-send
   only fires for brand-new sign-ups). `actions/admin-tickets.ts` `sendWelcomeToCustomers(panelId, {customerIds?|all})`
