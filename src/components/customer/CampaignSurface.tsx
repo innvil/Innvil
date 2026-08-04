@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Rocket, AlertTriangle, CheckCircle2, Loader2, Sliders, Zap, ClipboardList, Wand2, Wallet, LifeBuoy, Upload } from "lucide-react";
+import { Rocket, AlertTriangle, CheckCircle2, Loader2, Sliders, Zap, ClipboardList, Wand2, Wallet, LifeBuoy, Upload, Eye, Trash2, Rss } from "lucide-react";
 import { formatMoney } from "@/src/lib/money";
 import { analyzeCampaign } from "@/src/lib/automation/links";
 import { extractLinksFromFile } from "@/src/lib/automation/file-links";
 import { runCampaign, listCampaigns, runMassOrder, type CampaignVM, type RunCampaignResult, type MassOrderResult } from "@/src/lib/actions/campaigns";
 import { getAutomatorSub, subscribeAutomator, type AutomatorSubInfo } from "@/src/lib/actions/automator-sub";
+import { getWatchedAccounts, addWatchedAccount, setWatchedActive, removeWatchedAccount, type WatchedAccountVM } from "@/src/lib/actions/watched";
 import { AutomationConfig } from "./AutomationConfig";
 
 /* Storefront Campaign Automation surface — always visible (steady). States:
@@ -33,6 +34,85 @@ function HowItWorks() {
           <p className="fp-text-dim text-xs mt-1 leading-relaxed">{s.d}</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Watched accounts (Business+) — register feeds that auto-order new posts. */
+function WatchedAccountsCard({ panelId }: { panelId?: string }) {
+  const [accounts, setAccounts] = useState<WatchedAccountVM[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [feedUrl, setFeedUrl] = useState("");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!panelId) return;
+    getWatchedAccounts(panelId).then((i) => { if (i) setAccounts(i.accounts); setLoaded(true); }).catch(() => setLoaded(true));
+  }, [panelId]);
+
+  const add = async () => {
+    if (!panelId || busy) return;
+    if (!feedUrl.trim()) { setMsg({ text: "Paste a feed URL.", error: true }); return; }
+    setBusy(true); setMsg(null);
+    const res = await addWatchedAccount(panelId, feedUrl, label);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setAccounts((prev) => [res.data, ...prev]);
+    setFeedUrl(""); setLabel("");
+    setMsg({ text: "Watching — new posts will auto-order." });
+  };
+
+  const toggle = async (a: WatchedAccountVM) => {
+    if (!panelId) return;
+    setAccounts((prev) => prev.map((x) => (x.id === a.id ? { ...x, active: !x.active } : x)));
+    await setWatchedActive(panelId, a.id, !a.active);
+  };
+
+  const remove = async (a: WatchedAccountVM) => {
+    if (!panelId) return;
+    setAccounts((prev) => prev.filter((x) => x.id !== a.id));
+    await removeWatchedAccount(panelId, a.id);
+  };
+
+  return (
+    <div className="fp-panel border fp-line rounded-2xl p-4 space-y-3">
+      <div>
+        <p className="text-sm font-medium flex items-center gap-1.5"><Eye size={15} className="fp-violet" /> Watched accounts <span className="text-[10px] fp-violet-soft-bg fp-violet px-1.5 py-0.5 rounded-full">Business+</span></p>
+        <p className="fp-text-faint text-[11px] mt-0.5">Auto-order new posts. Paste an account&apos;s <span className="fp-mono">RSS/Atom feed</span> — YouTube channels have one built in; for X / Instagram / TikTok use an RSS bridge (e.g. RSS.app). We check every few minutes and fire your configured services on each new post.</p>
+      </div>
+
+      <div className="grid sm:grid-cols-[1fr_auto] gap-2">
+        <div className="space-y-2">
+          <input value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)} placeholder="https://…/feed.xml"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border" />
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (optional) — e.g. @myhandle"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border" />
+        </div>
+        <button onClick={add} disabled={busy || !feedUrl.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 flex items-center gap-2 self-start">
+          {busy ? <><Loader2 size={14} className="animate-spin" /> Adding…</> : <><Rss size={14} /> Watch</>}
+        </button>
+      </div>
+      {msg && <p className={`text-xs flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>}
+
+      {loaded && accounts.length > 0 && (
+        <div className="space-y-1.5">
+          {accounts.map((a) => (
+            <div key={a.id} className="flex items-center justify-between gap-2 text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-2">
+              <div className="min-w-0">
+                <p className="fp-text truncate">{a.label || a.feedUrl}</p>
+                <p className="fp-text-faint truncate">{a.lastCheckedAt ? `Checked ${new Date(a.lastCheckedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "Not checked yet"}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button onClick={() => toggle(a)} className={`px-2 py-1 rounded-md border ${a.active ? "fp-safe-soft-bg fp-safe border-[rgba(126,200,140,0.3)]" : "fp-text-faint fp-line-soft"}`}>{a.active ? "Active" : "Paused"}</button>
+                <button onClick={() => remove(a)} className="text-red-400 border border-red-500/30 rounded-md p-1"><Trash2 size={13} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="fp-text-faint text-[11px]">Requires a configured profile (Configure above) and wallet balance. Only posts on your plan&apos;s platforms are ordered.</p>
     </div>
   );
 }
@@ -195,7 +275,7 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
           {(sub.fileUpload || sub.watchedAccounts) && (
             <ul className="text-xs fp-text-dim space-y-1 mb-4">
               {sub.fileUpload && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> File upload (csv / xlsx / docx)</li>}
-              {sub.watchedAccounts && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> Watched accounts · full-auto <span className="fp-text-faint">· coming soon</span></li>}
+              {sub.watchedAccounts && <li className="flex items-center gap-1.5"><CheckCircle2 size={12} className="fp-safe" /> Watched accounts · full-auto</li>}
             </ul>
           )}
           {sub.lapsed && <p className="text-xs fp-gold flex items-center gap-1.5 mb-2"><AlertTriangle size={12} /> Your subscription paused for low balance — top up and re-subscribe.</p>}
@@ -300,6 +380,8 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
           </div>
         </div>
       )}
+
+      {sub?.watchedAccounts && <WatchedAccountsCard panelId={panelId} />}
 
       <MassOrderCard panelId={panelId} currency={currency} />
     </div>

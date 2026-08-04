@@ -127,6 +127,28 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automator v2 — R5b: watched accounts / full-auto (feed-based) (v1.1.23)
+- **The Business+ "watched accounts" perk is now live** — full-auto ordering of new posts. Innvil can't reliably
+  scrape X/IG/TikTok from serverless, so it's **feed-based** (bring-your-own, like providers): the customer
+  registers an **RSS/Atom feed URL** per account; a cron polls it and fans new post links out through their
+  automation profile.
+- **Session-less ordering refactor:** the order money-path moved from `actions/orders.ts` into
+  `src/lib/orders/place.ts` (`placeOrderForAccount`) so the cron can place orders on behalf of a resolved
+  customer account (no session). `placeOrder` is now a thin auth wrapper over it — behaviour unchanged.
+- `src/lib/automation/feed.ts` (NEW) — `fetchFeedLinks` / `parseFeedLinks` (RSS + Atom, no dep, newest-first,
+  baseline-diffed). `src/lib/automation/watch-sweep.ts` (NEW) — `sweepWatchedAccounts`: for each active feed on a
+  live Business+ panel with an active sub + configured profile, detects new posts (capped 3/run), enforces the
+  tier platform scope, and orders via `slotsForLink` → `placeOrderForAccount`; advances the baseline; records a
+  campaign. Route **`app/api/cron/watch-accounts`** + schedule **`0036_supabase_watch_accounts_cron.sql`** (every
+  5 min).
+- **Migration `0035_watched_accounts.sql`** (NEW) — `watched_accounts` (panel/customer/label/feed_url/
+  last_item_url/active; RLS = panel members / super admin / owning customer). **Run 0035 + 0036.**
+- `actions/watched.ts` (NEW) — `getWatchedAccounts` / `addWatchedAccount` (validates the feed + baselines to the
+  newest item so history isn't ordered) / `setWatchedActive` / `removeWatchedAccount` (gated: Business+ tier +
+  active sub). Storefront `CampaignSurface` gained a **Watched accounts** card (Business+ only); the subscribe-card
+  perk dropped its "coming soon" tag.
+- **Automator v2 R1–R5 complete.** Run migrations **0035, 0036** (+ schedule the `innvil-watch-accounts` cron).
+
 ### 2026-07-25 — Binance Pay: landing/SEO marketing + USDT-only hints (v1.1.22)
 - **Landing:** the "Wallets + crypto deposits" card now lists Binance Pay; added a dedicated **"Accept USDT via
   Binance Pay"** feature card (unique-amount auto-reconcile, no merchant account, optional bonuses)
