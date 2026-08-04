@@ -16,7 +16,7 @@ import type { StorefrontService, StorefrontPlatformMeta, PublicPaymentMethod, Pu
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
 import { placeOrder, listCustomerOrdersPage, type CustomerOrderVM } from "@/src/lib/actions/orders";
 import { createDeposit, type DepositVM } from "@/src/lib/actions/payments";
-import { createBinanceDeposit, claimBinancePayment } from "@/src/lib/actions/binance-pay";
+import { createBinanceDeposit, checkBinanceDeposit, claimBinancePayment } from "@/src/lib/actions/binance-pay";
 import { formatMoney } from "@/src/lib/money";
 import type { OrderStatus } from "@/src/types/db";
 import {
@@ -335,16 +335,23 @@ export function Storefront({
     return res.ok ? { ok: true, data: res.data } : { ok: false, error: res.error };
   };
 
+  const refreshWalletFromSnapshot = async () => {
+    const snap = await fetchBackendSnapshot();
+    if (snap) {
+      setLiveBalance(snap.balance);
+      setLiveDeposits(Array.isArray(snap.deposits) ? snap.deposits : []);
+    }
+  };
+
+  const handleBinanceCheck = async (paymentId: string) => {
+    const res = await checkBinanceDeposit(panel.id, paymentId);
+    if (res.ok) await refreshWalletFromSnapshot();
+    return res;
+  };
+
   const handleBinanceClaim = async (paymentId: string, transactionId: string) => {
     const res = await claimBinancePayment(panel.id, paymentId, transactionId);
-    if (res.ok) {
-      // Reflect the new balance immediately (the 12s poll would catch it anyway).
-      const snap = await fetchBackendSnapshot();
-      if (snap) {
-        setLiveBalance(snap.balance);
-        setLiveDeposits(Array.isArray(snap.deposits) ? snap.deposits : []);
-      }
-    }
+    if (res.ok) await refreshWalletFromSnapshot();
     return res;
   };
 
@@ -721,6 +728,7 @@ export function Storefront({
         onPlaceOrder={handlePlaceOrder}
         onDeposit={handleDeposit}
         onBinanceCreate={handleBinanceCreate}
+        onBinanceCheck={handleBinanceCheck}
         onBinanceClaim={handleBinanceClaim}
         platformMeta={platformMeta}
         currency={panel.currency}

@@ -16,7 +16,7 @@ export const binancePayAdapter: GatewayAdapter = {
   note: "Crypto · pay to your Binance, verified by transaction id",
   fields: [
     { key: "payId", label: "Your Binance Pay ID", secret: false, placeholder: "123456789",
-      help: "Shown to customers so they can pay you. Public — find it in Binance → Pay." },
+      help: "Shown to customers so they can pay you. Public — find it in Binance → Pay. Accepted asset: USDT only." },
     { key: "binanceUid", label: "Your Binance UID", secret: false, optional: true, placeholder: "e.g. 987654321",
       help: "Optional. When set, a payment is only accepted if it was received by this UID." },
     { key: "qrImage", label: "Receiving QR image URL", secret: false, optional: true, placeholder: "https://…/binance-qr.png",

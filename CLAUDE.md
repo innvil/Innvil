@@ -127,6 +127,35 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Binance Pay: landing/SEO marketing + USDT-only hints (v1.1.22)
+- **Landing:** the "Wallets + crypto deposits" card now lists Binance Pay; added a dedicated **"Accept USDT via
+  Binance Pay"** feature card (unique-amount auto-reconcile, no merchant account, optional bonuses)
+  (`PublicLanding.tsx`). **SEO:** added keywords "smm panel binance pay", "accept usdt smm panel", "smm panel
+  crypto payments" (`app/layout.tsx`).
+- **USDT-only surfaced to customers:** the Add-Funds Binance hint leads with "USDT only"; the pay panel shows a
+  "**USDT only** — sending any other coin won't be credited" warning under the exact amount. Owner connect help
+  notes "Accepted asset: USDT only". (Enforced server-side already — currency must equal USDT.)
+
+### 2026-07-25 — Binance Pay — Phase 2: unique payable amount + auto-credit poller (v1.1.21)
+- **Anti-theft via unique payable amounts.** Each pending Binance deposit is assigned a unique amount
+  (base + a tiny 0.0001-step tail, unique among the panel's open deposits) — the customer sends *exactly* that.
+  A transaction maps to exactly one deposit by (amount + receiver UID + time window), so nobody can claim a
+  payment that isn't theirs, and the exact-amount match replaces loose amount policies. Migration
+  **`0033_binance_payable.sql`** (NEW) adds `payments.binance_payable` + a partial index. **Run 0033.**
+- **Hands-free auto-credit.** `src/lib/payments/binance-match.ts` (NEW, server-only, non-action so it can export
+  sync helpers) holds the shared `pickPayable` / `validateTx` / `findMatchingTx` / `creditMatch` core.
+  `actions/binance-pay.ts` now exposes **`checkBinanceDeposit`** (no TXID — sync + match by unique amount →
+  credit) alongside the TXID-submit `claimBinancePayment` (now also amount-guarded). `src/lib/payments/binance-poll.ts`
+  (`sweepBinanceDeposits`) + route **`app/api/cron/binance-sync`** sweep every panel with an open deposit and
+  auto-credit matches. Scheduled by **`0034_supabase_binance_sync_cron.sql`** (NEW, every minute, vault
+  `app_url`/`cron_secret`). **Run 0034.**
+- Storefront `BinancePayPanel` rebuilt: shows the **exact amount to send** (the match key, copyable), **polls
+  every 12s** to auto-detect the payment (plus an "I've paid — check now" button), and keeps the transaction-id
+  entry as a collapsible fallback. `Storefront` passes `onBinanceCheck`. The requested top-up is credited (+ bonus);
+  the tiny unique tail is a disclosed processing margin.
+- **Binance Pay is now production-ready** (Phase 1 + 2 complete). Deferred nice-to-haves: richer admin
+  review/alerts. **NEXT (per user): add Binance Pay to the Innvil SEO + landing marketing.**
+
 ### 2026-07-25 — Binance Pay: top-up bonus + 10-minute expiry (v1.1.20)
 - **Binance Pay deposits now earn the same tiered top-up bonus** as the other gateways (e.g. 100 USDT → +1%).
   `claimBinancePayment` resolves the panel's discount tier for the base amount via the shared

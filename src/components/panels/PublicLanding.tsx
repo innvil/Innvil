@@ -230,7 +230,8 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
           {[
             { icon: Globe, t: "Custom domains, reversible", d: "Connect your own domain with automatic SSL. Disconnect anytime and your storefront falls back to the included subdomain — no lock-in." },
             { icon: Trash2, t: "Create & delete freely", d: "Spin up test panels to experiment, then delete unwanted ones in one guarded step — the whole panel and its data removed cleanly. No clutter, no lock-in." },
-            { icon: Wallet, t: "Wallets + crypto deposits", d: "Every panel has a customer wallet. Take deposits via Cryptomus or NOWPayments (300+ coins) — funds credit automatically on confirmation." },
+            { icon: Wallet, t: "Wallets + crypto deposits", d: "Every panel has a customer wallet. Take deposits via Cryptomus, NOWPayments (300+ coins), Stripe, Razorpay or Binance Pay — funds credit automatically on confirmation." },
+            { icon: Zap, t: "Accept USDT via Binance Pay", d: "Connect your own Binance account and take USDT straight to it. Each deposit gets a unique amount so payments reconcile and credit automatically — no merchant account needed — with optional tiered top-up bonuses." },
             { icon: MessageSquare, t: "Support tickets, both sides", d: "Customers open and reply to tickets in their dashboard; you answer from the panel's Support inbox, with unread badges and email notices." },
             { icon: FileText, t: "Earnings & downloadable receipts", d: "See top-ups minus provider cost as real profit, and export a self-contained receipt for any date range." },
             { icon: Copy, t: "Duplicate detection + mass cancel", d: "Repeat orders on the same link land in a Duplicate slot instead of your provider. Cancel in bulk — every owner cancel auto-refunds the customer." },
