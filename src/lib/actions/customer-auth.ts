@@ -1,8 +1,10 @@
 "use server";
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { ensureProfile } from "@/src/lib/auth";
+import { readWelcomeConfig, renderWelcome } from "@/src/lib/welcome";
 import type { CustomerAccountRow } from "@/src/types/db";
 
 /**
@@ -15,15 +17,46 @@ export type CustomerAuthResult =
   | { ok: true; needsConfirmation?: boolean }
   | { ok: false; error: string };
 
-/** Ensure the signed-in user has a customer_account on this panel. */
+/** Auto-open the owner's welcome ticket for a brand-new customer (best-effort). */
+async function sendWelcomeTicket(admin: SupabaseClient, panelId: string, accountId: string): Promise<void> {
+  const { data: panel } = await admin.from("panels").select("owner_id, name, settings").eq("id", panelId).maybeSingle();
+  if (!panel) return;
+  const cfg = readWelcomeConfig(panel.settings);
+  if (!cfg.enabled) return;
+  const currency = ((panel.settings as Record<string, unknown> | null)?.currency ?? "USD").toString().toUpperCase();
+  const { subject, body } = renderWelcome(cfg, { panelName: (panel.name as string) ?? "our panel", currency });
+
+  const now = new Date().toISOString();
+  const { data: ticket } = await admin
+    .from("support_tickets")
+    .insert({
+      panel_id: panelId, customer_id: accountId, subject,
+      status: "open", kind: "welcome", last_sender: "owner",
+      owner_unread: false, customer_unread: true, last_message_at: now,
+    })
+    .select("id")
+    .maybeSingle();
+  if (!ticket) return;
+  await admin.from("support_ticket_messages").insert({
+    ticket_id: ticket.id, sender_role: "owner", sender_id: (panel.owner_id as string) ?? null, body,
+  });
+}
+
+/** Ensure the signed-in user has a customer_account on this panel. Sends the welcome
+ *  ticket exactly once — only when THIS call created the account (loses a race → skip). */
 async function ensureCustomerAccount(userId: string, panelId: string): Promise<void> {
   const admin = createAdminClient();
-  await admin
+  const { data: existing } = await admin
+    .from("customer_accounts").select("id").eq("panel_id", panelId).eq("user_id", userId).maybeSingle();
+  if (existing) return;
+
+  const { data, error } = await admin
     .from("customer_accounts")
-    .upsert(
-      { panel_id: panelId, user_id: userId, status: "active" },
-      { onConflict: "panel_id,user_id", ignoreDuplicates: true }
-    );
+    .insert({ panel_id: panelId, user_id: userId, status: "active" })
+    .select("id")
+    .maybeSingle();
+  if (error || !data) return; // lost the unique-constraint race → the winner sends the welcome
+  await sendWelcomeTicket(admin, panelId, data.id as string).catch(() => {});
 }
 
 export async function customerSignUp(

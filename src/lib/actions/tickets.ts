@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { sendEmail, simpleEmail } from "@/src/lib/email/resend";
+import { readWelcomeConfig } from "@/src/lib/welcome";
 
 /* =========================================================
    §8 SUPPORT TICKETS — customer side (storefront session)
@@ -155,7 +156,7 @@ export async function customerReply(ticketId: string, message: string): Promise<
   if (!body) return { ok: false, error: "Write your message." };
 
   const admin = createAdminClient();
-  const { data: ticket } = await admin.from("support_tickets").select("id, customer_id, panel_id, subject").eq("id", ticketId).maybeSingle();
+  const { data: ticket } = await admin.from("support_tickets").select("id, customer_id, panel_id, subject, kind, welcome_bonus_granted").eq("id", ticketId).maybeSingle();
   if (!ticket) return { ok: false, error: "Ticket not found." };
   const c = await getCustomer(ticket.panel_id as string);
   if (!c || ticket.customer_id !== c.accountId) return { ok: false, error: "Ticket not found." };
@@ -165,6 +166,34 @@ export async function customerReply(ticketId: string, message: string): Promise<
     status: "open", last_sender: "customer", owner_unread: true, customer_unread: false,
     last_message_at: new Date().toISOString(),
   }).eq("id", ticketId);
+
+  // Welcome bonus: the first time a customer replies to their welcome ticket, grant the
+  // owner's configured free credit — once, atomically flagged so it can't be farmed.
+  if (ticket.kind === "welcome" && !ticket.welcome_bonus_granted) {
+    const { data: panel } = await admin.from("panels").select("settings").eq("id", ticket.panel_id).maybeSingle();
+    const cfg = readWelcomeConfig(panel?.settings);
+    if (cfg.creditEnabled && cfg.creditAmount > 0) {
+      // Claim the flag first (idempotent guard against concurrent double-claims).
+      const { data: claimed } = await admin
+        .from("support_tickets")
+        .update({ welcome_bonus_granted: true })
+        .eq("id", ticketId)
+        .eq("welcome_bonus_granted", false)
+        .select("id")
+        .maybeSingle();
+      if (claimed) {
+        const { error: creditErr } = await admin.rpc("apply_balance_change", {
+          p_customer: c.accountId,
+          p_amount: cfg.creditAmount,
+          p_type: "manual_adjust",
+          p_reason: "Welcome bonus",
+        });
+        // Roll the flag back on failure so it can be granted on a later reply.
+        if (creditErr) await admin.from("support_tickets").update({ welcome_bonus_granted: false }).eq("id", ticketId);
+      }
+    }
+  }
+
   await notifyOwner(admin, ticket.panel_id as string, ticket.subject as string);
   return { ok: true };
 }

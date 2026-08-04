@@ -127,6 +127,29 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Automated new-customer welcome + mobile payments fix (v1.1.17)
+- **Every new customer now auto-receives an owner welcome message** (as a support ticket) — welcomes them,
+  offers a small free credit if they reply, and invites them to Innvil. **Fully owner-editable** (edit the
+  subject/body entirely, or turn it off).
+  - `src/lib/welcome.ts` (NEW, pure) — `WelcomeConfig {enabled, subject?, body?, creditEnabled, creditAmount}` on
+    `panels.settings.welcome`; `DEFAULT_WELCOME_SUBJECT`/`DEFAULT_WELCOME_BODY` (default copy with `{panel}` /
+    `{credit}` placeholders), `readWelcomeConfig`, `normalizeWelcomeConfig`, `renderWelcome` (fills placeholders).
+  - **Migration `0031_welcome_tickets.sql`** (NEW) — `support_tickets.kind` (default `general`, welcome ticket =
+    `welcome`) + `welcome_bonus_granted` (one-time flag). **Run migration 0031.**
+  - `actions/customer-auth.ts` — `ensureCustomerAccount` now detects a genuinely NEW account (insert, not upsert;
+    loses the unique-constraint race → skips) and fires `sendWelcomeTicket` (owner-authored ticket, `customer_unread`).
+  - `actions/tickets.ts` `customerReply` — first reply to the welcome ticket grants the owner's configured credit
+    **once** (atomic flag-claim → `apply_balance_change` `manual_adjust` "Welcome bonus"; rolls back the flag on
+    failure). Can't be farmed.
+  - `actions/welcome.ts` (NEW, owner-auth) — `getWelcomeSettings` / `setWelcomeSettings` (audit-logged). Owner UI:
+    the **Notifications tab** now hosts a real **"Welcome message"** card (`AdminTabs.tsx` `WelcomeMessageCard`) —
+    toggle, subject, body, free-credit toggle + amount, reset-to-default; the email-notifications part stays "coming soon".
+  - NOTE (white-label): the default body includes an Innvil invite line; owners can delete it since the whole
+    message is editable.
+- **Payments tab mobile fix** — the gateway rows were cramped on phones (badges + Edit/Disconnect crushed onto one
+  line). The row now **stacks vertically on mobile** (label/badges wrap; the action buttons drop below full-width)
+  and sits inline on `sm+`.
+
 ### 2026-07-25 — Automator v2 — R5a: Business+ file-upload link import (v1.1.16)
 - **The Business+ "file upload" perk is now live** (the other half, watched-accounts/full-auto, stays deferred —
   it needs a cron + social-platform APIs). `src/lib/automation/file-links.ts` (NEW, client) —

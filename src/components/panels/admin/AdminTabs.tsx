@@ -5,10 +5,11 @@ import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Gauge, Sliders, Tag,
   ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
-  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, Wallet, LucideIcon,
+  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, Wallet, Mail, LucideIcon,
 } from "lucide-react";
 import { getPlan, setPlan, type PlanInfo } from "@/src/lib/actions/plan";
 import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } from "@/src/lib/actions/automator-pricing";
+import { getWelcomeSettings, setWelcomeSettings, type WelcomeInfo } from "@/src/lib/actions/welcome";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -2559,9 +2560,9 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
               const hasDiscountPct = Number.isFinite(discountPct);
               return (
                 <div key={c.id} className="border fp-line-soft rounded-xl overflow-hidden">
-                  <div className="flex items-center justify-between gap-3 px-4 py-3 fp-panel-raised">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 px-4 py-3 fp-panel-raised">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium flex items-center gap-2">
+                      <p className="text-sm font-medium flex items-center flex-wrap gap-x-2 gap-y-1">
                         {c.label}
                         {conn && <span className="text-[10px] fp-safe-soft-bg fp-safe px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> Connected</span>}
                         {conn && hasMinTopup && (
@@ -2582,16 +2583,16 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
                       </p>
                       <p className="fp-text-faint text-xs mt-0.5">{c.note}</p>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0 sm:justify-end">
                       {!c.available ? (
                         <span className="text-xs fp-text-faint px-2 py-1">Coming soon</span>
                       ) : conn ? (
                         <>
-                          <button onClick={() => openForm(c.id)} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 hover:fp-gold-border">Edit</button>
-                          <button onClick={() => remove(c.id, c.label)} disabled={busy} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-3 py-1.5 disabled:opacity-50">Disconnect</button>
+                          <button onClick={() => openForm(c.id)} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 hover:fp-gold-border flex-1 sm:flex-none">Edit</button>
+                          <button onClick={() => remove(c.id, c.label)} disabled={busy} className="text-xs text-red-400 border border-red-500/30 rounded-lg px-3 py-1.5 disabled:opacity-50 flex-1 sm:flex-none">Disconnect</button>
                         </>
                       ) : (
-                        <button onClick={() => openForm(c.id)} className="fp-btn-primary text-xs font-semibold px-4 py-1.5 rounded-lg">Connect</button>
+                        <button onClick={() => openForm(c.id)} className="fp-btn-primary text-xs font-semibold px-4 py-1.5 rounded-lg flex-1 sm:flex-none">Connect</button>
                       )}
                     </div>
                   </div>
@@ -2839,12 +2840,125 @@ export function RiskTab() {
   );
 }
 
-export function NotificationsTab() {
+export function NotificationsTab({ panelId }: { panelId: string }) {
   return (
-    <ComingSoon title="Notifications" icon={Bell}>
-      Owner and customer email notifications (new orders, failed orders, deposits, provider errors,
-      and more) are coming soon.
-    </ComingSoon>
+    <div className="space-y-4 max-w-3xl">
+      <WelcomeMessageCard panelId={panelId} />
+      <ComingSoon title="Email notifications" icon={Bell}>
+        Owner and customer email notifications (new orders, failed orders, deposits, provider errors,
+        and more) are coming soon.
+      </ComingSoon>
+    </div>
+  );
+}
+
+/** Owner edits the automated welcome message every new customer receives (+ free-credit offer). */
+function WelcomeMessageCard({ panelId }: { panelId: string }) {
+  const [info, setInfo] = React.useState<WelcomeInfo | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [enabled, setEnabled] = React.useState(true);
+  const [subject, setSubject] = React.useState("");
+  const [body, setBody] = React.useState("");
+  const [creditEnabled, setCreditEnabled] = React.useState(true);
+  const [creditAmount, setCreditAmount] = React.useState("1");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const hydrate = React.useCallback((i: WelcomeInfo) => {
+    setInfo(i);
+    setEnabled(i.enabled);
+    setSubject(i.subjectText);
+    setBody(i.bodyText);
+    setCreditEnabled(i.creditEnabled);
+    setCreditAmount(String(i.creditAmount));
+  }, []);
+
+  React.useEffect(() => {
+    getWelcomeSettings(panelId).then((i) => { if (i) hydrate(i); setLoading(false); }).catch(() => setLoading(false));
+  }, [panelId, hydrate]);
+
+  const save = async () => {
+    setBusy(true); setMsg(null);
+    const res = await setWelcomeSettings(panelId, {
+      enabled,
+      subject: subject.trim() || null,
+      body: body.trim() || null,
+      creditEnabled,
+      creditAmount: creditAmount.trim() === "" ? 1 : Number(creditAmount),
+    });
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    hydrate(res.data);
+    setMsg({ text: "Welcome message saved." });
+  };
+
+  const resetDefault = async () => {
+    setBusy(true); setMsg(null);
+    const res = await setWelcomeSettings(panelId, { enabled, subject: null, body: null, creditEnabled, creditAmount: Number(creditAmount) || 1 });
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    hydrate(res.data);
+    setMsg({ text: "Reset to the default message." });
+  };
+
+  if (loading) return <Card title="Welcome message" icon={Mail}><p className="fp-text-faint text-sm py-4 text-center">Loading…</p></Card>;
+  if (!info) return null;
+
+  return (
+    <Card title="Welcome message" icon={Mail}>
+      <p className="fp-text-dim text-sm mb-3">
+        Every new customer automatically gets this as a support message. Use
+        <span className="fp-mono fp-text"> {"{panel}"}</span> for your panel name and
+        <span className="fp-mono fp-text"> {"{credit}"}</span> for the free-credit amount. Edit it or turn it off.
+      </p>
+
+      <label className="flex items-center gap-2 text-sm fp-text cursor-pointer mb-3">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[color:var(--fp-gold,#d4af37)]" />
+        Send an automated welcome to new customers
+      </label>
+
+      {enabled && (
+        <div className="space-y-3">
+          <label className="text-xs fp-text-dim block">
+            Subject
+            <input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={200}
+              className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border mt-1" />
+          </label>
+          <label className="text-xs fp-text-dim block">
+            Message
+            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={9} maxLength={4000}
+              className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm fp-text outline-none focus:fp-gold-border mt-1 resize-y leading-relaxed" />
+          </label>
+
+          <div className="border-t fp-line-soft pt-3">
+            <label className="flex items-center gap-2 text-sm fp-text cursor-pointer">
+              <input type="checkbox" checked={creditEnabled} onChange={(e) => setCreditEnabled(e.target.checked)} className="accent-[color:var(--fp-gold,#d4af37)]" />
+              Grant free credit when they reply
+            </label>
+            {creditEnabled && (
+              <label className="text-xs fp-text-dim block mt-2 max-w-[16rem]">
+                Credit amount (granted once, on their first reply)
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span className="fp-text-faint">$</span>
+                  <input type="number" min="0" step="0.01" value={creditAmount} onChange={(e) => setCreditAmount(e.target.value)}
+                    className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border" />
+                </div>
+              </label>
+            )}
+            <p className="fp-text-faint text-[11px] mt-2">Credit is added to the customer&apos;s wallet as a manual adjustment — you cover it, so keep the amount small.</p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-2 mt-4">
+        {msg ? (
+          <p className={`text-xs flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>
+        ) : <button onClick={resetDefault} disabled={busy} className="text-xs fp-text-dim hover:fp-text underline disabled:opacity-60">Reset to default</button>}
+        <button onClick={save} disabled={busy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+          {busy ? "Saving…" : "Save message"}
+        </button>
+      </div>
+    </Card>
   );
 }
 

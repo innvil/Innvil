@@ -198,7 +198,7 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange, onAddFund
         {tab === "payments" && <PaymentsTab panelId={panel.id} />}
         {tab === "api" && <CustomerApiTab panelId={panel.id} />}
         {tab === "risk" && <RiskTab />}
-        {tab === "notifications" && <NotificationsTab />}
+        {tab === "notifications" && <NotificationsTab panelId={panel.id} />}
         {tab === "support" && <SupportTab panelId={panel.id} />}
         {tab === "assistant" && <OwnerAssistantTab panelId={panel.id} panelName={panel.name} />}
         {tab === "automation" && <AutomationTab panelId={panel.id} />}
