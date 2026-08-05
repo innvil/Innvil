@@ -32,21 +32,29 @@ function hashOtp(code: string): string {
   return crypto.createHash("sha256").update(code.trim()).digest("hex");
 }
 
+type OtpKind = "signup" | "reset" | "change";
+const OTP_COPY: Record<OtpKind, { heading: (n: string) => string; line: string }> = {
+  signup: { heading: (n) => `Verify your ${n} account`, line: "Enter this code to finish creating your account:" },
+  reset: { heading: (n) => `Reset your ${n} password`, line: "Enter this code to reset your password:" },
+  change: { heading: (n) => `Confirm your new email on ${n}`, line: "Enter this code to confirm your new email address:" },
+};
+
 /** Email a branded 6-digit code for a panel (best-effort). */
-async function sendOtpEmail(admin: SupabaseClient, panelId: string, email: string, code: string): Promise<void> {
+async function sendOtpEmail(admin: SupabaseClient, panelId: string, email: string, code: string, kind: OtpKind = "signup"): Promise<void> {
   const { data: panel } = await admin.from("panels").select("name").eq("id", panelId).maybeSingle();
   const name = (panel?.name as string) || "your panel";
+  const copy = OTP_COPY[kind];
   await sendEmail({
     to: email,
     fromName: name,
-    subject: `${name} — your verification code is ${code}`,
+    subject: `${name} — your code is ${code}`,
     html: `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px">
-      <h2 style="font-size:18px;color:#0E1522;margin:0 0 12px">Verify your ${name} account</h2>
-      <p style="margin:0 0 16px;color:#3f3f46;font-size:14px;line-height:1.6">Enter this code to finish creating your account:</p>
+      <h2 style="font-size:18px;color:#0E1522;margin:0 0 12px">${copy.heading(name)}</h2>
+      <p style="margin:0 0 16px;color:#3f3f46;font-size:14px;line-height:1.6">${copy.line}</p>
       <p style="font-size:30px;letter-spacing:8px;font-weight:700;color:#0E1522;margin:0 0 16px">${code}</p>
       <p style="margin:0;color:#71717a;font-size:12px">This code expires in ${OTP_TTL_MIN} minutes. If you didn't request it, you can ignore this email.</p>
     </div>`,
-    text: `Your ${name} verification code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`,
+    text: `Your ${name} code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`,
   });
 }
 
@@ -125,11 +133,11 @@ export async function customerSignUp(
   // Store + email a branded 6-digit code (own OTP, not Supabase's confirmation email).
   const code = genOtp();
   await admin.from("customer_signup_otps").upsert({
-    email: mail, user_id: userId, panel_id: panelId,
+    email: mail, user_id: userId, panel_id: panelId, purpose: "signup",
     code_hash: hashOtp(code), expires_at: new Date(Date.now() + OTP_TTL_MIN * 60_000).toISOString(),
     attempts: 0, updated_at: new Date().toISOString(),
   }, { onConflict: "email" });
-  await sendOtpEmail(admin, panelId, mail, code);
+  await sendOtpEmail(admin, panelId, mail, code, "signup");
 
   return { ok: true, needsOtp: true };
 }
@@ -234,22 +242,56 @@ export async function customerSignOut(): Promise<void> {
   await supabase.auth.signOut();
 }
 
+/** Send a branded password-reset OTP. Always returns ok (no account enumeration). */
 export async function customerForgotPassword(
+  panelId: string,
   email: string,
-  redirectTo: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createStorefrontClient();
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-  if (error) return { ok: false, error: error.message };
+  const mail = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(mail)) return { ok: false, error: "Enter a valid email." };
+  const admin = createAdminClient();
+  const { data: userId } = await admin.rpc("auth_user_id_by_email", { p_email: mail });
+  if (userId) {
+    const code = genOtp();
+    await admin.from("customer_signup_otps").upsert({
+      email: mail, user_id: userId as string, panel_id: panelId, purpose: "reset",
+      code_hash: hashOtp(code), expires_at: new Date(Date.now() + OTP_TTL_MIN * 60_000).toISOString(),
+      attempts: 0, updated_at: new Date().toISOString(),
+    }, { onConflict: "email" });
+    await sendOtpEmail(admin, panelId, mail, code, "reset");
+  }
   return { ok: true };
 }
 
+/** Verify the reset OTP and set a new password. */
 export async function customerResetPassword(
-  password: string
+  panelId: string,
+  email: string,
+  code: string,
+  newPassword: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const supabase = await createStorefrontClient();
-  const { error } = await supabase.auth.updateUser({ password });
+  const mail = email.trim().toLowerCase();
+  const clean = (code ?? "").replace(/\s/g, "");
+  if (!/^\d{6}$/.test(clean)) return { ok: false, error: "Enter the 6-digit code." };
+  if (!newPassword || newPassword.length < 8) return { ok: false, error: "Password must be at least 8 characters." };
+
+  const admin = createAdminClient();
+  const { data: row } = await admin
+    .from("customer_signup_otps")
+    .select("user_id, code_hash, expires_at, attempts, purpose")
+    .eq("email", mail)
+    .maybeSingle();
+  if (!row || row.purpose !== "reset") return { ok: false, error: "No pending reset — request a new code." };
+  if (new Date(row.expires_at as string).getTime() < Date.now()) return { ok: false, error: "That code expired. Request a new one." };
+  if ((row.attempts as number) >= OTP_MAX_ATTEMPTS) return { ok: false, error: "Too many attempts. Request a new code." };
+  if (hashOtp(clean) !== row.code_hash) {
+    await admin.from("customer_signup_otps").update({ attempts: (row.attempts as number) + 1 }).eq("email", mail);
+    return { ok: false, error: "Incorrect code. Please try again." };
+  }
+
+  const { error } = await admin.auth.admin.updateUserById(row.user_id as string, { password: newPassword });
   if (error) return { ok: false, error: error.message };
+  await admin.from("customer_signup_otps").delete().eq("email", mail);
   return { ok: true };
 }
 

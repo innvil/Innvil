@@ -34,5 +34,5 @@ export default async function StorefrontForgotPasswordPage({ params }: Params) {
     );
   }
 
-  return <ForgotPasswordClient panelName={panel.name} subdomain={panel.subdomain} />;
+  return <ForgotPasswordClient panelId={panel.id} panelName={panel.name} subdomain={panel.subdomain} />;
 }

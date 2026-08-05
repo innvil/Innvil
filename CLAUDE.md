@@ -127,6 +127,19 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Branded password-reset OTP (no more Supabase reset link) (v1.1.32)
+- **Password reset is now our own panel-branded OTP too** (like signup), so the reset email carries the panel's
+  name and there's no Supabase magic link → no localhost/Innvil link. `customerForgotPassword(panelId, email)`
+  resolves the user via new SQL `auth_user_id_by_email` (migration **0038**), stores a `reset`-purpose code in
+  `customer_signup_otps` (new `purpose` column) and emails it via Resend; **always returns ok** (no account
+  enumeration). `customerResetPassword(panelId, email, code, newPassword)` verifies (15-min TTL, 5 attempts) →
+  `admin.updateUserById({password})`.
+- `ForgotPasswordClient` is a 2-stage flow (email → code + new password); the old link-based `reset-password`
+  route now just redirects there (kept for old bookmarks). `sendOtpEmail` gained a `kind` (signup/reset/change)
+  for the copy. **Run migration 0038.**
+- **Still Supabase-flow (small follow-up):** the logged-in **email-change** confirmation (`customerUpdateEmail`)
+  — convert to the same OTP pattern next.
+
 ### 2026-07-25 — Platform-focus hero: single icon revolves + lights-out pulse (v1.1.31)
 - Supersedes the v1.1.30 fly-across version. **On a platform-focused panel, the Orbit hero shows ONE platform icon revolving** continuously around the orbit
   ring surrounding the "+18% growth" card, instead of the multi-platform orbit. Kept **upright** (no self-spin) via
