@@ -127,8 +127,8 @@ innvil/
 
 ## Recent Updates
 
-### 2026-07-25 — Platform-focus hero: single icon revolves around the orbit (v1.1.30)
-- **On a platform-focused panel, the Orbit hero shows ONE platform icon revolving** continuously around the orbit
+### 2026-07-25 — Platform-focus hero: single icon revolves + lights-out pulse (v1.1.31)
+- Supersedes the v1.1.30 fly-across version. **On a platform-focused panel, the Orbit hero shows ONE platform icon revolving** continuously around the orbit
   ring surrounding the "+18% growth" card, instead of the multi-platform orbit. Kept **upright** (no self-spin) via
   an arm/counter-rotate pattern; relaxed **16s** revolution; and a **"lights-out" pulse every 5s** — visible ~2s,
   then a gentle ~3s fade-away-and-reappear (opacity out/in + slight shrink), still orbiting. Pulse period (5s) ≠
