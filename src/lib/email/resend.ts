@@ -12,9 +12,14 @@ export async function sendEmail(opts: {
   html: string;
   text?: string;
   replyTo?: string | null;
+  /** Optional display-name override, e.g. a panel's name. Domain stays the verified one. */
+  fromName?: string;
 }): Promise<void> {
   const key = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.RESEND_FROM?.trim() || "Innvil <noreply@innvil.cloud>";
+  const defaultFrom = process.env.RESEND_FROM?.trim() || "Innvil <noreply@innvil.cloud>";
+  // Keep the verified sender domain/address, but let callers set the display name.
+  const addr = defaultFrom.match(/<([^>]+)>/)?.[1] || defaultFrom;
+  const from = opts.fromName ? `${opts.fromName.replace(/[<>"]/g, "").slice(0, 60)} <${addr}>` : defaultFrom;
   if (!key || !opts.to) return;
   try {
     const payload: Record<string, unknown> = {

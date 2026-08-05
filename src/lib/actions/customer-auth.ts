@@ -1,20 +1,57 @@
 "use server";
 
+import crypto from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { ensureProfile } from "@/src/lib/auth";
 import { readWelcomeConfig, renderWelcome } from "@/src/lib/welcome";
+import { sendEmail } from "@/src/lib/email/resend";
 import type { CustomerAccountRow } from "@/src/types/db";
 
 /**
  * Panel-scoped customer auth. A customer is a Supabase auth user with role
  * "customer" plus a `customer_accounts` row per panel (holds their wallet).
  * The same person can hold accounts on many panels.
+ *
+ * Email verification is a CUSTOM OTP (not Supabase's project-wide confirmation email):
+ * we create the user unconfirmed via the admin API (no Supabase email), email a 6-digit
+ * code branded per panel (Resend), verify it here, then confirm the user — so the
+ * confirmation email carries the PANEL's name, not Innvil's. Requires the Supabase
+ * project "Confirm email" setting ON (so an unconfirmed user can't sign in until we
+ * confirm them).
  */
 
+const OTP_TTL_MIN = 15;
+const OTP_MAX_ATTEMPTS = 5;
+
+function genOtp(): string {
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+}
+function hashOtp(code: string): string {
+  return crypto.createHash("sha256").update(code.trim()).digest("hex");
+}
+
+/** Email a branded 6-digit code for a panel (best-effort). */
+async function sendOtpEmail(admin: SupabaseClient, panelId: string, email: string, code: string): Promise<void> {
+  const { data: panel } = await admin.from("panels").select("name").eq("id", panelId).maybeSingle();
+  const name = (panel?.name as string) || "your panel";
+  await sendEmail({
+    to: email,
+    fromName: name,
+    subject: `${name} — your verification code is ${code}`,
+    html: `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="font-size:18px;color:#0E1522;margin:0 0 12px">Verify your ${name} account</h2>
+      <p style="margin:0 0 16px;color:#3f3f46;font-size:14px;line-height:1.6">Enter this code to finish creating your account:</p>
+      <p style="font-size:30px;letter-spacing:8px;font-weight:700;color:#0E1522;margin:0 0 16px">${code}</p>
+      <p style="margin:0;color:#71717a;font-size:12px">This code expires in ${OTP_TTL_MIN} minutes. If you didn't request it, you can ignore this email.</p>
+    </div>`,
+    text: `Your ${name} verification code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`,
+  });
+}
+
 export type CustomerAuthResult =
-  | { ok: true; needsConfirmation?: boolean }
+  | { ok: true; needsConfirmation?: boolean; needsOtp?: boolean }
   | { ok: false; error: string };
 
 /** Auto-open the owner's welcome ticket for a brand-new customer (best-effort). */
@@ -64,26 +101,86 @@ export async function customerSignUp(
   email: string,
   password: string,
   displayName?: string,
-  emailRedirectTo?: string
 ): Promise<CustomerAuthResult> {
-  const supabase = await createStorefrontClient();
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { display_name: displayName ?? null },
-      ...(emailRedirectTo ? { emailRedirectTo } : {}),
-    },
-  });
-  if (error) return { ok: false, error: error.message };
+  const mail = email.trim().toLowerCase();
+  const admin = createAdminClient();
 
-  if (data.user && data.session) {
-    await ensureProfile(data.user.id, "customer", displayName);
-    await ensureCustomerAccount(data.user.id, panelId);
-    return { ok: true };
+  // Create the user UNCONFIRMED via the admin API (this sends NO Supabase email).
+  const { data, error } = await admin.auth.admin.createUser({
+    email: mail,
+    password,
+    email_confirm: false,
+    user_metadata: { display_name: displayName ?? null },
+  });
+  if (error || !data.user) {
+    const msg = error?.message ?? "Could not create your account.";
+    if (/already|registered|exists/i.test(msg)) {
+      return { ok: false, error: "That email is already registered — log in instead." };
+    }
+    return { ok: false, error: msg };
   }
-  // Email confirmation is on — account is created on first confirmed login.
-  return { ok: true, needsConfirmation: true };
+  const userId = data.user.id;
+  await ensureProfile(userId, "customer", displayName);
+
+  // Store + email a branded 6-digit code (own OTP, not Supabase's confirmation email).
+  const code = genOtp();
+  await admin.from("customer_signup_otps").upsert({
+    email: mail, user_id: userId, panel_id: panelId,
+    code_hash: hashOtp(code), expires_at: new Date(Date.now() + OTP_TTL_MIN * 60_000).toISOString(),
+    attempts: 0, updated_at: new Date().toISOString(),
+  }, { onConflict: "email" });
+  await sendOtpEmail(admin, panelId, mail, code);
+
+  return { ok: true, needsOtp: true };
+}
+
+/** Verify the signup OTP → confirm the user + create their account. Client then signs in. */
+export async function customerVerifyOtp(panelId: string, email: string, code: string): Promise<CustomerAuthResult> {
+  const mail = email.trim().toLowerCase();
+  const clean = (code ?? "").replace(/\s/g, "");
+  if (!/^\d{6}$/.test(clean)) return { ok: false, error: "Enter the 6-digit code." };
+
+  const admin = createAdminClient();
+  const { data: row } = await admin
+    .from("customer_signup_otps")
+    .select("user_id, code_hash, expires_at, attempts")
+    .eq("email", mail)
+    .maybeSingle();
+  if (!row) return { ok: false, error: "No pending verification — please sign up again." };
+  if (new Date(row.expires_at as string).getTime() < Date.now()) {
+    return { ok: false, error: "That code expired. Tap resend to get a new one." };
+  }
+  if ((row.attempts as number) >= OTP_MAX_ATTEMPTS) {
+    return { ok: false, error: "Too many attempts. Tap resend to get a new code." };
+  }
+  if (hashOtp(clean) !== row.code_hash) {
+    await admin.from("customer_signup_otps").update({ attempts: (row.attempts as number) + 1 }).eq("email", mail);
+    return { ok: false, error: "Incorrect code. Please try again." };
+  }
+
+  const userId = row.user_id as string;
+  const { error: confirmErr } = await admin.auth.admin.updateUserById(userId, { email_confirm: true });
+  if (confirmErr) return { ok: false, error: "Could not confirm your account. Please try again." };
+
+  await ensureCustomerAccount(userId, panelId);
+  await admin.from("customer_signup_otps").delete().eq("email", mail);
+  return { ok: true };
+}
+
+/** Resend a fresh signup OTP (rate-limited by the code TTL on the client). */
+export async function customerResendOtp(panelId: string, email: string): Promise<CustomerAuthResult> {
+  const mail = email.trim().toLowerCase();
+  const admin = createAdminClient();
+  const { data: row } = await admin.from("customer_signup_otps").select("user_id").eq("email", mail).maybeSingle();
+  if (!row) return { ok: false, error: "No pending verification — please sign up again." };
+
+  const code = genOtp();
+  await admin.from("customer_signup_otps").update({
+    code_hash: hashOtp(code), expires_at: new Date(Date.now() + OTP_TTL_MIN * 60_000).toISOString(),
+    attempts: 0, updated_at: new Date().toISOString(),
+  }).eq("email", mail);
+  await sendOtpEmail(admin, panelId, mail, code);
+  return { ok: true, needsOtp: true };
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

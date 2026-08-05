@@ -127,6 +127,21 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Custom panel-branded signup OTP (replaces Supabase confirmation email) (v1.1.29)
+- **Customer email verification is now our OWN OTP**, so the confirmation email carries the PANEL's name (not
+  Innvil) and no longer depends on Supabase's project-wide template / Site-URL (which caused the localhost + Innvil
+  emails). Flow: `customerSignUp` creates the user **unconfirmed via the admin API** (`createUser email_confirm:false`
+  — sends NO Supabase email), stores a hashed 6-digit code (`customer_signup_otps`, migration **0037**), and emails
+  it via **Resend** branded with the panel name. `customerVerifyOtp` checks the code (15-min TTL, 5 attempts) →
+  `updateUserById email_confirm:true` → creates the customer account; the SignUpClient then auto-signs-in with the
+  same credentials. `customerResendOtp` reissues a code. `sendEmail` gained a `fromName` (panel display name; domain
+  stays the verified Resend one).
+- `SignUpClient` is now a 2-stage form (details → **6-digit code** entry with Resend/Back), works in both the
+  standalone page and the embedded design auth slot.
+- **REQUIRES:** `RESEND_API_KEY` set (+ a verified `RESEND_FROM` domain) — without it the code can't be delivered and
+  signup can't complete. Keep the Supabase **"Confirm email" setting ON** (so an unconfirmed user can't sign in until
+  the OTP confirms them). **Run migration 0037.**
+
 ### 2026-07-25 — Customer login by username-or-email + Binance Order-ID flow (v1.1.28)
 - **Customer login now accepts a username OR an email.** `customerSignIn(panelId, identifier, password)` resolves a
   non-email identifier to its login email WITHIN that panel (`customer_accounts` → `profiles.display_name` →
