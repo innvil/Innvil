@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Repo handoff docs for resuming the major update (v1.1.33)
+- Added `docs/handoff/` so another agent/session can continue cleanly: `README.md` (current state,
+  migrations 0031–0038 + pg_cron + env/Supabase settings to apply, "build first" warning),
+  `pending-items.md` (email-change OTP → Binance admin review → collage mockup → default-landing TG
+  sections → Telegram add-on, each with files + build steps), and `conventions.md` (gotchas:
+  never `export type` from a `"use server"` file, pg_cron not vercel.json + the `*/`-in-comment
+  bug, OTP/Resend requirements, `placeOrderForAccount` money-core, platform-focus wiring, version/
+  commit protocol). Docs only.
+
 ### 2026-07-25 — Branded password-reset OTP (no more Supabase reset link) (v1.1.32)
 - **Password reset is now our own panel-branded OTP too** (like signup), so the reset email carries the panel's
   name and there's no Supabase magic link → no localhost/Innvil link. `customerForgotPassword(panelId, email)`
