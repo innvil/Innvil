@@ -40,9 +40,13 @@ No migration needed (0038 already added `purpose`).
 
 ---
 
-## 2. Binance Pay — admin review + alerts
+## 2. Binance Pay — admin review + alerts ✅ DONE (v1.1.34)
 
-**Goal:** an owner surface to see/resolve Binance deposits that didn't auto-credit (amount
+Shipped: `src/lib/actions/binance-admin.ts` `getBinanceReview` + `AdminTabs.tsx` `BinanceReviewCard`
+(Payments tab, shown when Binance connected). Deposits list with Credit/Cancel (reusing
+`commitPendingPayment`/`cancelPendingPayment`), cached Pay history, stale-sync alert.
+
+**Original goal (for reference):** an owner surface to see/resolve Binance deposits that didn't auto-credit (amount
 mismatch, wrong currency/recipient, stuck pending), plus a "sync hasn't run" alert. Today
 mismatches just stay `pending` and the owner has only the generic pending-payment tools.
 

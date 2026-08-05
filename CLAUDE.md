@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Binance Pay: owner review + reconcile (v1.1.34)
+- **New "Binance Pay review" card** in the Payments tab (shown only when Binance Pay is connected) — the last
+  deferred Binance nice-to-have. Lets the owner see every Binance deposit (amount wanted / exact payable / bonus /
+  status / matched tx), and **Credit or Cancel** the ones that didn't auto-credit (wrong amount, recipient, or stuck
+  pending) after verifying in their Binance account. Also shows the **cached Pay history** (received transactions,
+  flagged credited/unmatched) and a **stale-sync alert** when history hasn't refreshed while deposits are open.
+- `src/lib/actions/binance-admin.ts` (NEW, owner-auth) — `getBinanceReview(panelId)` returns `{deposits,
+  transactions, lastSyncAt, syncStale}` (payments where `gateway='binance_pay'` + `binance_pay_transactions`,
+  customer identity resolved). Credit/Cancel reuse the existing `commitPendingPayment` / `cancelPendingPayment`.
+  `AdminTabs.tsx` `BinanceReviewCard` renders it. No migration.
+
 ### 2026-07-25 — Repo handoff docs for resuming the major update (v1.1.33)
 - Added `docs/handoff/` so another agent/session can continue cleanly: `README.md` (current state,
   migrations 0031–0038 + pg_cron + env/Supabase settings to apply, "build first" warning),

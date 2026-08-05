@@ -11,6 +11,7 @@ import { getPlan, setPlan, type PlanInfo } from "@/src/lib/actions/plan";
 import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } from "@/src/lib/actions/automator-pricing";
 import { getWelcomeSettings, setWelcomeSettings, type WelcomeInfo } from "@/src/lib/actions/welcome";
 import { sendWelcomeToCustomers } from "@/src/lib/actions/admin-tickets";
+import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-admin";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -2713,7 +2714,107 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
           gateways are on the roadmap and will connect the same way.
         </p>
       </Card>
+
+      {connectedMap.has("binance_pay") && <BinanceReviewCard panelId={panelId} />}
     </div>
+  );
+}
+
+/** Owner review of Binance Pay deposits + the cached Pay history (reconcile manually). */
+function BinanceReviewCard({ panelId }: { panelId: string }) {
+  const [review, setReview] = React.useState<BinanceReview | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+  const [showTx, setShowTx] = React.useState(false);
+
+  const load = React.useCallback(() => {
+    getBinanceReview(panelId).then((r) => { setReview(r); setLoading(false); }).catch(() => setLoading(false));
+  }, [panelId]);
+  React.useEffect(() => { load(); }, [load]);
+
+  const commit = async (id: string) => {
+    if (!window.confirm("Manually credit this Binance deposit? Confirm you verified the payment in your Binance account first.")) return;
+    setBusy(id); setMsg(null);
+    const res = await commitPendingPayment(id);
+    setBusy(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: `Credited. Customer balance is now $${res.data.balance.toFixed(2)}.` });
+    load();
+  };
+  const cancel = async (id: string) => {
+    if (!window.confirm("Cancel this pending Binance deposit? No wallet credit is applied.")) return;
+    setBusy(id); setMsg(null);
+    const res = await cancelPendingPayment(id);
+    setBusy(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setMsg({ text: "Deposit canceled." });
+    load();
+  };
+
+  const money = (n: number) => n.toFixed(2);
+  const STATUS_TONE: Record<string, string> = { completed: "fp-safe", pending: "fp-gold", approved: "fp-gold", rejected: "text-red-400" };
+
+  if (loading) return <Card title="Binance Pay review" icon={CreditCard}><p className="fp-text-faint text-sm py-4 text-center">Loading…</p></Card>;
+  if (!review) return null;
+
+  return (
+    <Card title="Binance Pay review" icon={CreditCard}>
+      <p className="fp-text-dim text-sm mb-3">Deposits that didn&apos;t auto-credit (wrong amount, recipient, or still pending) can be verified against your Binance account and credited or canceled here.</p>
+      {review.syncStale && (
+        <p className="text-xs fp-gold flex items-center gap-1.5 mb-3"><AlertTriangle size={12} /> Pay history hasn&apos;t synced recently — auto-credit may be delayed. Deposits can still be verified manually below.</p>
+      )}
+      {msg && <p className={`text-xs mb-3 flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {msg.text}</p>}
+
+      {review.deposits.length === 0 ? (
+        <p className="fp-text-faint text-sm py-3">No Binance deposits yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {review.deposits.map((d) => (
+            <div key={d.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    {d.customerUsername ?? d.customerEmail ?? "Customer"}
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full fp-panel border fp-line-soft ${STATUS_TONE[d.status] ?? "fp-text-dim"}`}>{d.status}</span>
+                  </p>
+                  <p className="fp-text-faint text-[11px] mt-0.5">
+                    Wants <span className="fp-mono fp-text">{money(d.amount)}</span>
+                    {d.payable != null && <> · pays exactly <span className="fp-mono">{d.payable}</span> {d.currency}</>}
+                    {d.bonus > 0 && <> · +{money(d.bonus)} bonus</>}
+                    {d.txId && <> · tx <span className="fp-mono break-all">{d.txId}</span></>}
+                  </p>
+                  <p className="fp-text-faint text-[10px] mt-0.5">{new Date(d.createdAt).toLocaleString()}</p>
+                </div>
+                {(d.status === "pending" || d.status === "approved") && (
+                  <div className="flex gap-2 shrink-0">
+                    <button onClick={() => commit(d.id)} disabled={busy !== null} className="fp-btn-primary text-[11px] font-semibold px-3 py-1.5 rounded-lg disabled:opacity-50">{busy === d.id ? "…" : "Credit"}</button>
+                    <button onClick={() => cancel(d.id)} disabled={busy !== null} className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">Cancel</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button onClick={() => setShowTx((v) => !v)} className="text-xs fp-text-dim hover:fp-text underline mt-4">{showTx ? "Hide" : "Show"} received Pay history ({review.transactions.length})</button>
+      {showTx && (
+        <div className="mt-2 space-y-1.5">
+          {review.transactions.length === 0 ? (
+            <p className="fp-text-faint text-xs">No Pay transactions cached yet.</p>
+          ) : review.transactions.map((t) => (
+            <div key={t.transactionId} className="flex items-center justify-between gap-2 text-[11px] fp-panel-raised border fp-line-soft rounded-lg px-3 py-2">
+              <div className="min-w-0">
+                <p className="fp-mono truncate">{t.amount} {t.currency} · {t.orderType}{t.payerName ? ` · ${t.payerName}` : ""}</p>
+                <p className="fp-text-faint fp-mono break-all">{t.transactionId} · {new Date(t.transactionTime).toLocaleString()}</p>
+              </div>
+              <span className={`shrink-0 ${t.used ? "fp-safe" : "fp-gold"}`}>{t.used ? "credited" : "unmatched"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
