@@ -5,6 +5,8 @@ import { X, Save, Type, Gem, Plus, Trash2, Monitor, LayoutDashboard, Layers } fr
 import { DefaultLogo } from "@/src/components/ui/BrandMark";
 import { THEMES, themeVars } from "@/src/data/themes";
 import { updatePanelBranding, type LandingSection } from "@/src/lib/actions/panels";
+import { PLATFORM_FOCUS_OPTIONS, normalizePlatformFocus } from "@/src/lib/platform-focus";
+import { applyPlatformContent, getPlatformContentPack } from "@/src/lib/design/platform-content";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
 import { DashboardLayoutBuilder, DashboardHomePreview } from "./DashboardLayoutBuilder";
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
@@ -31,6 +33,7 @@ export interface StudioValues {
   description: string;
   favicon: string;
   sections: LandingSection[];
+  platformFocus: string | null;
 }
 
 let SECTION_SEQ = 0;
@@ -82,13 +85,18 @@ export function DesignStudio({
       .catch(() => setHasTools(false));
   }, [panel.id]);
   const activePkg = activeDesign ? getDesignPackage(activeDesign) : undefined;
+  // Preview reflects the platform focus live: overlay the platform copy onto the design,
+  // and TG-flavour the default landing hero — matching what the live storefront renders.
+  const focus = normalizePlatformFocus(v.platformFocus);
+  const focusPack = getPlatformContentPack(focus);
+  const previewPkg = activePkg ? applyPlatformContent(activePkg, focus) : undefined;
 
   const save = async () => {
     setBusy(true); setMsg(null);
     const res = await updatePanelBranding(panel.id, {
       name: v.name, theme: v.theme, logoUrl: v.logoUrl, accent: v.accent,
       headline: v.headline, description: v.description, favicon: v.favicon,
-      sections: v.sections,
+      sections: v.sections, platformFocus: v.platformFocus,
     });
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
@@ -160,6 +168,17 @@ export function DesignStudio({
               )}
             </label>
             <input value={v.favicon} onChange={(e) => set({ favicon: e.target.value })} placeholder="https://…/favicon.png (blank = use logo)" className={`${inputCls} mt-1 fp-mono`} />
+          </section>
+
+          <section>
+            <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Platform focus</p>
+            <p className="fp-text-faint text-[11px] mb-2">Make this a single-platform panel — its landing + storefront theme for that platform and show only its services. Switch back to “All platforms” anytime.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => set({ platformFocus: null })} className={`text-xs px-3 py-1.5 rounded-lg border ${!v.platformFocus ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim hover:fp-text"}`}>All platforms</button>
+              {PLATFORM_FOCUS_OPTIONS.map((o) => (
+                <button key={o.key} type="button" onClick={() => set({ platformFocus: o.key })} className={`text-xs px-3 py-1.5 rounded-lg border ${v.platformFocus === o.key ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim hover:fp-text"}`}>{o.label} only</button>
+              ))}
+            </div>
           </section>
 
           <section>
@@ -307,14 +326,14 @@ export function DesignStudio({
             <>
               <div style={preview} className="mx-auto max-w-3xl rounded-2xl overflow-hidden border fp-line shadow-2xl">
                 {/* Landing — the ACTIVE purchased design when there is one, else the Innvil default. */}
-                {activePkg ? (
+                {previewPkg ? (
                   <DesignRenderer
-                    pkg={activePkg}
+                    pkg={previewPkg}
                     data={{
-                      panelName: v.name || activePkg.preview.panelName,
+                      panelName: v.name || previewPkg.preview.panelName,
                       logoUrl: v.logoUrl || undefined,
-                      services: activePkg.preview.services,
-                      categories: activePkg.preview.categories,
+                      services: previewPkg.preview.services,
+                      categories: previewPkg.preview.categories,
                       currencySymbol: currencySymbol(currency),
                     }}
                     tokenOverrides={themeToDesignTokens(v.theme, v.accent)}
@@ -331,8 +350,8 @@ export function DesignStudio({
                       )}
                       <span className="fp-display text-lg">{v.name || "Your panel"}</span>
                     </div>
-                    <h1 className="fp-display text-2xl mb-2 leading-tight">{v.headline || "Grow every platform from one wallet."}</h1>
-                    <p className="fp-text-dim text-sm mb-4">{v.description || "Instant delivery, transparent pricing, and one balance for all your social growth."}</p>
+                    <h1 className="fp-display text-2xl mb-2 leading-tight">{v.headline || focusPack?.landing.headline || "Grow every platform from one wallet."}</h1>
+                    <p className="fp-text-dim text-sm mb-4">{v.description || focusPack?.landing.description || "Instant delivery, transparent pricing, and one balance for all your social growth."}</p>
                     <button className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg">Create account</button>
                     <div className="fp-panel border fp-line rounded-xl p-3 mt-5 flex items-center justify-between">
                       <div><p className="text-sm font-medium">Instagram Followers — HQ</p><p className="fp-text-faint text-xs fp-mono">Followers · min 100</p></div>

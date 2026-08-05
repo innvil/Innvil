@@ -443,6 +443,7 @@ export function BrandingTab({ panel }: { panel: Panel }) {
   const [description, setDescription] = useState("");
   const [favicon, setFavicon] = useState("");
   const [sections, setSections] = useState<LandingSection[]>([]);
+  const [platformFocus, setPlatformFocus] = useState<string | null>(null);
   const [studioFull, setStudioFull] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
@@ -459,13 +460,14 @@ export function BrandingTab({ panel }: { panel: Panel }) {
       setDescription(b.description);
       setFavicon(b.favicon);
       setSections(b.sections);
+      setPlatformFocus(b.platformFocus);
     });
   }, [panel.id, realPanel]);
 
   const save = async () => {
     if (!realPanel) { setMsg({ text: "Save this panel first.", error: true }); return; }
     setBusy(true); setMsg(null);
-    const res = await updatePanelBranding(panel.id, { name, theme, logoUrl, accent, headline, description, favicon, sections });
+    const res = await updatePanelBranding(panel.id, { name, theme, logoUrl, accent, headline, description, favicon, sections, platformFocus });
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setMsg({ text: "Branding saved — reload your live panel to see it." });
@@ -478,12 +480,12 @@ export function BrandingTab({ panel }: { panel: Panel }) {
       {studioFull && realPanel && (
         <DesignStudio
           panel={{ id: panel.id, name, subdomain: panel.subdomain }}
-          initial={{ name, theme, logoUrl, accent, headline, description, favicon, sections }}
+          initial={{ name, theme, logoUrl, accent, headline, description, favicon, sections, platformFocus }}
           onClose={() => setStudioFull(false)}
           onSaved={(vv) => {
             setName(vv.name); setTheme(vv.theme); setLogoUrl(vv.logoUrl);
             setAccent(vv.accent); setHeadline(vv.headline); setDescription(vv.description);
-            setFavicon(vv.favicon); setSections(vv.sections);
+            setFavicon(vv.favicon); setSections(vv.sections); setPlatformFocus(vv.platformFocus);
             setMsg({ text: "Design saved — reload your live panel to see it." });
           }}
         />

@@ -28,6 +28,7 @@ import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
 import { getOwnerBillingSummary, listAllOwnerOrders, type OwnerBillingSummary, type OwnerOrderVM } from "@/src/lib/actions/admin-orders";
 import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
+import { PLATFORM_FOCUS_OPTIONS, type PlatformFocus } from "@/src/lib/platform-focus";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { BlogReview } from "@/src/components/superadmin/BlogReview";
 import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdmin";
@@ -765,13 +766,14 @@ function DeletePanelModal({ panel, onClose, onDeleted }: {
 
 /* --- Create Panel Wizard --- */
 function CreatePanelWizard({ onCreate }: {
-  onCreate: (input: { name: string; subdomain: string; theme: string; connectProvider: boolean }) => Promise<{ ok: boolean; error?: string }>;
+  onCreate: (input: { name: string; subdomain: string; theme: string; connectProvider: boolean; platformFocus: PlatformFocus | null }) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [subdomain, setSubdomain] = useState("");
   const [theme, setTheme] = useState(themes[0].name);
   const [connectProvider, setConnectProvider] = useState(true);
+  const [platformFocus, setPlatformFocus] = useState<PlatformFocus | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const steps = ["Basics", "Theme", "Provider", "Launch"];
@@ -781,7 +783,7 @@ function CreatePanelWizard({ onCreate }: {
     setError(null);
     setBusy(true);
     try {
-      const res = await onCreate({ name, subdomain, theme, connectProvider });
+      const res = await onCreate({ name, subdomain, theme, connectProvider, platformFocus: platformFocus || null });
       if (!res.ok) {
         setError(res.error || "Could not create the panel.");
         setBusy(false);
@@ -838,6 +840,28 @@ function CreatePanelWizard({ onCreate }: {
             <p className="fp-text-faint text-xs mt-2">
               You can connect a custom domain later from the panel&apos;s Domain settings.
             </p>
+
+            <label className="fp-text-dim text-xs fp-mono uppercase block mt-6">Platform focus</label>
+            <p className="fp-text-faint text-xs mt-1 mb-2">Build a single-platform panel — its storefront + landing are themed for that platform and show only its services. Leave on “All platforms” for a general panel. Changeable later.</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setPlatformFocus("")}
+                className={`text-sm px-3 py-2 rounded-lg border ${platformFocus === "" ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim hover:fp-text"}`}
+              >
+                All platforms
+              </button>
+              {PLATFORM_FOCUS_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setPlatformFocus(o.key)}
+                  className={`text-sm px-3 py-2 rounded-lg border ${platformFocus === o.key ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim hover:fp-text"}`}
+                >
+                  {o.label} only
+                </button>
+              ))}
+            </div>
           </>
         )}
         {step === 1 && (
@@ -1283,8 +1307,8 @@ export function InnvilApp({ setWorld, initialSection }: {
   const goCreate = () => setSection("create");
   const goPanels = () => setSection("panels");
 
-  const handleCreate = async (input: { name: string; subdomain: string; theme: string; connectProvider: boolean }) => {
-    const res = await createPanel({ name: input.name, subdomain: input.subdomain, theme: input.theme });
+  const handleCreate = async (input: { name: string; subdomain: string; theme: string; connectProvider: boolean; platformFocus: PlatformFocus | null }) => {
+    const res = await createPanel({ name: input.name, subdomain: input.subdomain, theme: input.theme, platformFocus: input.platformFocus });
     if (!res.ok) return { ok: false, error: res.error };
     await refreshPanels();
     // Land the owner straight in the new panel — on Providers if they opted to set one up.

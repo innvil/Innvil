@@ -6,6 +6,7 @@ import { hasDesignTools, hasCampaignAutomation } from "@/src/lib/plans";
 import { readDashboardHome, type DashboardWidget } from "@/src/lib/dashboard-layout";
 import { activeDesignId } from "@/src/lib/design/library";
 import { readEditorState, type EditorDesign } from "@/src/lib/design/editor";
+import { readPlatformFocus, platformAllowedByFocus, type PlatformFocus } from "@/src/lib/platform-focus";
 import type { PanelStatus, ServiceRow } from "@/src/types/db";
 
 /**
@@ -39,6 +40,8 @@ export interface PublicPanel {
   aiSupport: boolean;
   campaignAutomation: boolean;
   dashboardLayout: DashboardWidget[] | null;
+  /** Single-platform focus (e.g. "telegram") or null for an all-platforms panel. */
+  platformFocus: PlatformFocus | null;
   /** Purchased marketplace design applied to the landing (null = default landing). */
   activeDesign: string | null;
   /** Owner's published visual-editor landing (null = none). Marketplace design wins if both. */
@@ -131,6 +134,7 @@ export async function getPublicPanel(identifier: string): Promise<PublicPanel | 
     // Custom layout only applies while Design Tools (Business) is active — a
     // downgrade reverts customers to the default dashboard.
     dashboardLayout: hasDesignTools(data.settings) ? readDashboardHome(data.settings) : null,
+    platformFocus: readPlatformFocus(data.settings),
     // Owned forever — a purchased design keeps working regardless of subscription.
     activeDesign: activeDesignId(data.settings),
     customDesign: readEditorState(data.settings).published,
@@ -280,10 +284,11 @@ type ServiceJoin = Pick<
   "id" | "local_id" | "name" | "platform" | "sell_rate" | "min" | "max" | "description" | "category_id"
 >;
 
-/** Active services for a panel's storefront (customer-safe fields only). */
+/** Active services for a panel's storefront (customer-safe fields only). A
+ *  platform-focused panel (e.g. Telegram-only) hard-filters to that platform. */
 export async function getStorefrontServices(panelId: string): Promise<StorefrontService[]> {
   const admin = createAdminClient();
-  const [{ data: services }, { data: categories }] = await Promise.all([
+  const [{ data: services }, { data: categories }, { data: panel }] = await Promise.all([
     admin
       .from("services")
       .select("id, local_id, name, platform, sell_rate, min, max, description, category_id")
@@ -295,14 +300,18 @@ export async function getStorefrontServices(panelId: string): Promise<Storefront
       .from("provider_categories")
       .select("id, name, parent_id")
       .eq("panel_id", panelId),
+    admin.from("panels").select("settings").eq("id", panelId).maybeSingle(),
   ]);
 
+  const focus = readPlatformFocus(panel?.settings);
   const categoryById = new Map(
     ((categories as Array<{ id: string; name: string | null; parent_id: string | null }> | null) ?? [])
       .map((c) => [c.id, c])
   );
 
-  return ((services as ServiceJoin[] | null) ?? []).map((r) => ({
+  return ((services as ServiceJoin[] | null) ?? [])
+    .filter((r) => platformAllowedByFocus(focus, r.platform))
+    .map((r) => ({
     id: r.id,
     localId: r.local_id,
     name: r.name,

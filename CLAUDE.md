@@ -127,6 +127,33 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Platform focus: live in the Design Studio preview (v1.1.27)
+- **Fix: toggling "Telegram only" in the Design Studio didn't change the preview** — the preview rendered the
+  design's own copy and never applied the overlay (the overlay only ran server-side on the live storefront).
+  `DesignStudio` now computes `applyPlatformContent(activePkg, focus)` and renders that; the default (non-design)
+  preview hero falls back to the platform pack's headline/description. So selecting a focus re-themes the preview
+  instantly, matching what the live storefront shows after Save & apply.
+
+### 2026-07-25 — Platform-specific panels (Telegram first) (v1.1.26)
+- **A panel can now be scoped to ONE platform** (e.g. Telegram-only) or left as all-platforms (default). A
+  focused panel gets **platform-specific landing marketing** AND a **hard catalog filter** (storefront shows only
+  that platform's services). Set at creation and **editable later**. Grows one platform at a time — Telegram now.
+- `src/lib/platform-focus.ts` (NEW, pure) — `PlatformFocus` ("telegram"), `PLATFORM_FOCUS_OPTIONS`,
+  `readPlatformFocus`/`normalizePlatformFocus`, `platformAllowedByFocus`. Stored on `panels.settings.platformFocus`
+  (no migration).
+- **Content overlay:** `src/lib/design/platform-content.ts` (NEW) — `PlatformContentPack` + `applyPlatformContent(pkg, focus)`
+  which overlays the platform pack's COPY onto a design's LANDING page (hero/features/steps/testimonials/faq/cta),
+  preserving tokens/layout/animation. So **even a purchased design (Pulse, etc.) reads as Telegram-only.**
+  `src/data/platform-content/telegram.ts` (NEW) — the Telegram pack (hero, features, steps, testimonials, FAQ, CTA, SEO).
+- **Wiring:** `createPanel` accepts `platformFocus`; create wizard Basics step has an "All platforms / Telegram only"
+  choice; `getPublicPanel` returns `platformFocus`; `getStorefrontServices` hard-filters services to the focus;
+  `app/p/[subdomain]/page.tsx` applies `applyPlatformContent` to the active design, overrides the default landing
+  hero copy, and sets Telegram-flavored SEO. Owner can change focus in the **Design Studio → Platform focus**
+  (`updatePanelBranding`/`getPanelBranding` gained `platformFocus`).
+- **Known follow-up:** the DEFAULT (non-design) landing gets TG hero + TG-only catalog + TG SEO now; its deeper
+  sections (benefits/FAQ/how-it-works in `Storefront.tsx`) still show generic copy — theme those from the pack next.
+  Purchased designs are already fully TG-themed.
+
 ### 2026-07-25 — Fix: "PlaceOrderInput is not defined" on panel create (v1.1.25)
 - **Root cause:** re-exporting a TYPE from a `"use server"` module (`export type { PlaceOrderInput, PlaceOrderResult }`
   in `actions/orders.ts`, `export type { BinanceClaimResult }` in `actions/binance-pay.ts`). Next treats every export

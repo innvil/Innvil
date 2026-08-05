@@ -11,6 +11,7 @@ import { themeVars } from "@/src/data/themes";
 import { currencySymbol } from "@/src/lib/money";
 import { getDesignPackage } from "@/src/data/designs";
 import { editorToPackage } from "@/src/lib/design/editor";
+import { applyPlatformContent, getPlatformContentPack } from "@/src/lib/design/platform-content";
 import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { Storefront } from "./Storefront";
 
@@ -20,10 +21,11 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { subdomain } = await params;
   const panel = await getPublicPanel(subdomain);
   if (!panel) return { title: "Panel not found", robots: { index: false, follow: false } };
-  const title = `${panel.name} — Order social media services`;
+  const pack = getPlatformContentPack(panel.platformFocus);
+  const title = pack ? `${panel.name} — ${pack.seo.title}` : `${panel.name} — Order social media services`;
   const description =
     panel.description ||
-    `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`;
+    (pack ? pack.seo.description : `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`);
   // Only browsable states get indexed; draft/suspended/maintenance are hidden.
   const indexable = panel.status === "live" || panel.status === "inactive";
   return {
@@ -110,11 +112,14 @@ export default async function StorefrontPage({ params }: Params) {
   /* A purchased marketplace design replaces the DEFAULT GUEST LANDING only. Signed-in
      customers always get the real dashboard, and the design's CTAs point at this
      panel's own auth routes — never Innvil's. */
-  const designPkg = panel.activeDesign
+  const designPkgRaw = panel.activeDesign
     ? getDesignPackage(panel.activeDesign)
     : panel.customDesign
       ? editorToPackage(panel.customDesign, panel.name)
       : undefined;
+  // A platform-focused panel (e.g. Telegram-only) overlays that platform's marketing
+  // copy onto the design — so even a bought design (Pulse, etc.) reads as Telegram-only.
+  const designPkg = designPkgRaw ? applyPlatformContent(designPkgRaw, panel.platformFocus) : undefined;
   if (designPkg && !account) {
     const base = await storefrontBase(panel.subdomain);
     const sym = currencySymbol(panel.currency);
@@ -171,10 +176,16 @@ export default async function StorefrontPage({ params }: Params) {
       ? (designToThemeVars(designPkg.tokens, themeToDesignTokens(panel.theme, panel.accent)) as CSSProperties)
       : themeStyle;
 
+  // Default (non-design) landing: on a platform-focused panel, lead with the platform's
+  // hero copy unless the owner has set their own headline/description.
+  const focusPack = getPlatformContentPack(panel.platformFocus);
+  const heroHeadline = panel.headline || (focusPack ? focusPack.landing.headline : panel.headline);
+  const heroDescription = panel.description || (focusPack ? focusPack.landing.description : panel.description);
+
   return (
     <div style={dashboardStyle}>
       <Storefront
-        panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: panel.headline, description: panel.description, sections: panel.sections, aiSupport: panel.aiSupport, campaignAutomation: panel.campaignAutomation, dashboardLayout: panel.dashboardLayout }}
+        panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: heroHeadline, description: heroDescription, sections: panel.sections, aiSupport: panel.aiSupport, campaignAutomation: panel.campaignAutomation, dashboardLayout: panel.dashboardLayout }}
         services={services}
         initialAccount={account}
         platformMeta={platformMeta}

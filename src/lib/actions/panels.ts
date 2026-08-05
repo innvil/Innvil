@@ -1,6 +1,7 @@
 "use server";
 
 import { getAuthedAdmin, ensureProfile } from "@/src/lib/auth";
+import { normalizePlatformFocus, readPlatformFocus } from "@/src/lib/platform-focus";
 import type { Panel } from "@/src/types";
 import type { PanelRow, PanelStatus } from "@/src/types/db";
 
@@ -42,6 +43,7 @@ export async function createPanel(input: {
   name: string;
   subdomain: string;
   theme?: string;
+  platformFocus?: string | null;
 }): Promise<CreatePanelResult> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
@@ -55,6 +57,7 @@ export async function createPanel(input: {
   // A panel owner must have a profile row (FK target); ensure it exists.
   await ensureProfile(user.id, "panel_owner");
 
+  const focus = normalizePlatformFocus(input.platformFocus);
   const { data, error } = await admin
     .from("panels")
     .insert({
@@ -63,6 +66,7 @@ export async function createPanel(input: {
       subdomain,
       status: "draft",
       theme: input.theme ?? null,
+      ...(focus ? { settings: { platformFocus: focus } } : {}),
     })
     .select("*")
     .single();
@@ -268,6 +272,7 @@ export interface PanelBranding {
   description: string; // storefront hero subtext
   favicon: string; // browser-tab icon URL ("" = use logo)
   sections: LandingSection[]; // extra owner-added landing blocks
+  platformFocus: string | null; // single-platform focus, or null for all platforms
 }
 
 type BrandingBlob = { logoUrl: string; accent: string; headline: string; description: string; favicon: string; sections: LandingSection[] };
@@ -330,13 +335,14 @@ export async function getPanelBranding(panelId: string): Promise<PanelBranding |
     description: b.description,
     favicon: b.favicon,
     sections: b.sections,
+    platformFocus: readPlatformFocus(data.settings),
   };
 }
 
 /** Save panel branding (name, theme, logo, accent, hero headline/description). */
 export async function updatePanelBranding(
   panelId: string,
-  patch: { name?: string; theme?: string; logoUrl?: string; accent?: string; headline?: string; description?: string; favicon?: string; sections?: LandingSection[] }
+  patch: { name?: string; theme?: string; logoUrl?: string; accent?: string; headline?: string; description?: string; favicon?: string; sections?: LandingSection[]; platformFocus?: string | null }
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
@@ -357,9 +363,14 @@ export async function updatePanelBranding(
   if (patch.theme !== undefined) update.theme = patch.theme;
 
   const brandingKeys = ["logoUrl", "accent", "headline", "description", "favicon", "sections"] as const;
-  if (brandingKeys.some((k) => patch[k] !== undefined)) {
+  if (patch.platformFocus !== undefined || brandingKeys.some((k) => patch[k] !== undefined)) {
     const settings: Record<string, unknown> =
       panel.settings && typeof panel.settings === "object" ? { ...(panel.settings as Record<string, unknown>) } : {};
+    if (patch.platformFocus !== undefined) {
+      const focus = normalizePlatformFocus(patch.platformFocus);
+      if (focus) settings.platformFocus = focus;
+      else delete settings.platformFocus;
+    }
     const current = readBranding(settings);
     settings.branding = {
       logoUrl: patch.logoUrl !== undefined ? patch.logoUrl.trim() : current.logoUrl,
