@@ -86,12 +86,40 @@ export async function customerSignUp(
   return { ok: true, needsConfirmation: true };
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Resolve a username to its login email WITHIN this panel (customers only). */
+async function emailForUsername(panelId: string, username: string): Promise<string | null> {
+  const admin = createAdminClient();
+  const { data: accts } = await admin.from("customer_accounts").select("user_id").eq("panel_id", panelId);
+  const ids = ((accts as Array<{ user_id: string }> | null) ?? []).map((a) => a.user_id);
+  if (!ids.length) return null;
+  const { data: profs } = await admin.from("profiles").select("id, display_name").in("id", ids);
+  const uname = username.trim().toLowerCase();
+  const match = ((profs as Array<{ id: string; display_name: string | null }> | null) ?? [])
+    .find((p) => (p.display_name ?? "").trim().toLowerCase() === uname);
+  if (!match) return null;
+  try {
+    const { data } = await admin.auth.admin.getUserById(match.id);
+    return data.user?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function customerSignIn(
   panelId: string,
-  email: string,
+  identifier: string,
   password: string
 ): Promise<CustomerAuthResult> {
   const supabase = await createStorefrontClient();
+  // Accept an email OR a username — resolve a username to its email on this panel.
+  let email = identifier.trim();
+  if (!EMAIL_RE.test(email)) {
+    const resolved = await emailForUsername(panelId, email);
+    if (!resolved) return { ok: false, error: "No account found with that email or username on this panel." };
+    email = resolved;
+  }
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { ok: false, error: error.message };
   if (data.user) {

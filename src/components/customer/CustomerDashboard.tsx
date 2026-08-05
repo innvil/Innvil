@@ -70,18 +70,18 @@ const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
   { key: "bank", label: "Bank" },
 ];
 
-/** Binance Pay: shows the pay-to details, auto-detects the payment by its unique
- *  amount, and offers a transaction-id fallback. */
+/** Binance Pay — a 2-step flow: (1) Make payment, (2) Verify by Binance Order ID.
+ *  Transaction-id based (no auto-detect). The customer pays the exact amount, then
+ *  pastes their Binance Order ID / transaction id, which the server verifies. */
 function BinancePayPanel({
-  info, onCheck, onClaim, onDone,
+  info, onClaim, onDone,
 }: {
   info: BinanceDepositInfo;
-  onCheck?: (paymentId: string) => Promise<BinanceClaimResult>;
   onClaim?: (paymentId: string, transactionId: string) => Promise<BinanceClaimResult>;
   onDone: () => void;
 }) {
+  const [step, setStep] = useState<"pay" | "verify">("pay");
   const [txId, setTxId] = useState("");
-  const [showTxId, setShowTxId] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "error" | "pending" } | null>(null);
   const [done, setDone] = useState(false);
@@ -90,9 +90,7 @@ function BinancePayPanel({
 
   useEffect(() => {
     if (done) return;
-    const id = window.setInterval(() => {
-      setRemaining(Math.max(0, new Date(info.expiresAt).getTime() - Date.now()));
-    }, 1000);
+    const id = window.setInterval(() => setRemaining(Math.max(0, new Date(info.expiresAt).getTime() - Date.now())), 1000);
     return () => window.clearInterval(id);
   }, [info.expiresAt, done]);
 
@@ -104,28 +102,10 @@ function BinancePayPanel({
     try { await navigator.clipboard.writeText(text); setCopied(which); setTimeout(() => setCopied(null), 1500); } catch { /* ignore */ }
   };
 
-  const check = async (auto = false) => {
-    if (!onCheck || busy || done || expired) return;
-    if (!auto) { setBusy(true); setMsg(null); }
-    const res = await onCheck(info.paymentId);
-    if (!auto) setBusy(false);
-    if (res.ok) { setMsg({ text: res.message, tone: "ok" }); setDone(true); return; }
-    // On auto-poll, stay quiet unless it's a hard failure.
-    if (!auto || !res.pending) setMsg({ text: res.message, tone: res.pending ? "pending" : "error" });
-  };
-
-  // Auto-detect: poll for the matching payment every 12s while the panel is open.
-  useEffect(() => {
-    if (!onCheck || done || expired) return;
-    const id = window.setInterval(() => { check(true); }, 12000);
-    return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onCheck, done, expired, info.paymentId]);
-
   const verify = async () => {
     if (!onClaim || busy) return;
     const id = txId.trim();
-    if (!id) { setMsg({ text: "Paste your Binance Pay transaction ID.", tone: "error" }); return; }
+    if (!id) { setMsg({ text: "Paste your Binance Order ID.", tone: "error" }); return; }
     setBusy(true); setMsg(null);
     const res = await onClaim(info.paymentId, id);
     setBusy(false);
@@ -133,10 +113,25 @@ function BinancePayPanel({
     setMsg({ text: res.message, tone: res.pending ? "pending" : "error" });
   };
 
+  const Stepper = (
+    <div className="flex items-center justify-center gap-3 text-xs">
+      <span className={`flex items-center gap-1.5 ${step === "pay" ? "fp-gold" : "fp-safe"}`}>
+        <span className={`w-5 h-5 rounded-full grid place-items-center text-[10px] ${step === "pay" ? "fp-gold-soft-bg fp-gold-border border" : "fp-safe-soft-bg"}`}>{step === "verify" ? <CheckCircle2 size={12} /> : "1"}</span>
+        Make payment
+      </span>
+      <span className="w-8 h-px fp-line" />
+      <span className={`flex items-center gap-1.5 ${step === "verify" ? "fp-gold" : "fp-text-faint"}`}>
+        <span className={`w-5 h-5 rounded-full grid place-items-center text-[10px] border ${step === "verify" ? "fp-gold-soft-bg fp-gold-border" : "fp-line-soft"}`}>2</span>
+        Verify payment
+      </span>
+    </div>
+  );
+
   return (
     <div className="fp-panel-raised border fp-gold-border rounded-xl p-4 space-y-3">
+      {Stepper}
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold">Pay with Binance Pay</p>
+        <p className="text-sm font-semibold">Binance Pay</p>
         {!done && (
           <span className={`text-xs flex items-center gap-1 ${expired ? "text-red-400" : "fp-text-dim"}`}>
             <Clock size={12} /> {expired ? "Expired" : `${mm}:${String(ss).padStart(2, "0")}`}
@@ -144,57 +139,59 @@ function BinancePayPanel({
         )}
       </div>
 
-      {info.qrImage && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={info.qrImage} alt="Binance Pay QR" className="w-40 h-40 rounded-lg object-contain mx-auto bg-white p-2" />
-      )}
-
-      {/* The EXACT amount is the match key — make it prominent + copyable. */}
-      <div className="flex items-center justify-between gap-2 bg-[#1B1E27] border border-[rgba(201,165,116,0.35)] rounded-lg px-3 py-2">
-        <div className="min-w-0">
-          <p className="fp-text-faint text-[10px] fp-mono uppercase">Send exactly</p>
-          <p className="fp-mono text-base fp-gold">{info.payable} {info.asset}</p>
-        </div>
-        <button onClick={() => copy(String(info.payable), "amt")} className="text-xs fp-gold border fp-line-soft rounded-lg px-2.5 py-1.5 shrink-0">{copied === "amt" ? "Copied" : "Copy"}</button>
+      <div className="text-center">
+        <span className="fp-display text-2xl fp-gold">{info.payable}</span> <span className="fp-text-dim text-sm">{info.asset}</span>
       </div>
-      <p className="text-[11px] text-amber-400/90 flex items-center gap-1.5"><AlertTriangle size={12} /> {info.asset} only — sending any other coin won&apos;t be credited.</p>
 
       <div className="flex items-center justify-between gap-2 bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2">
         <div className="min-w-0">
-          <p className="fp-text-faint text-[10px] fp-mono uppercase">Binance Pay ID</p>
+          <p className="fp-text-faint text-[10px] fp-mono uppercase">Send to Binance ID</p>
           <p className="fp-mono text-sm truncate">{info.payId}</p>
         </div>
         <button onClick={() => copy(info.payId, "pay")} className="text-xs fp-gold border fp-line-soft rounded-lg px-2.5 py-1.5 shrink-0">{copied === "pay" ? "Copied" : "Copy"}</button>
       </div>
 
-      <ol className="list-decimal list-inside space-y-1 fp-text-dim text-[11px] leading-relaxed">
-        {info.instructions.map((s, i) => <li key={i}>{s}</li>)}
-      </ol>
-
-      {!done && (
+      {step === "pay" && !done && (
         <>
+          {info.qrImage && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={info.qrImage} alt="Binance Pay QR" className="w-40 h-40 rounded-lg object-contain mx-auto bg-white p-2" />
+          )}
+          <p className="text-[11px] text-amber-400/90 flex items-center gap-1.5"><AlertTriangle size={12} /> {info.asset} only, exact amount — sending any other coin or amount won&apos;t be credited.</p>
+          <ol className="list-decimal list-inside space-y-1 fp-text-dim text-[11px] leading-relaxed">
+            <li>Scan the QR with the Binance app, or send to the Binance ID above.</li>
+            <li>Send exactly <span className="fp-mono fp-text">{info.payable} {info.asset}</span> via Binance Pay (not an on-chain withdrawal).</li>
+            <li>After it completes, tap “I’ve paid — verify”.</li>
+          </ol>
           <div className="flex items-center gap-2">
-            <button onClick={() => check(false)} disabled={busy || expired} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-70 flex items-center gap-2">
-              {busy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
-              {busy ? "Checking…" : expired ? "Expired" : "I've paid — check now"}
+            <button onClick={() => { setMsg(null); setStep("verify"); }} disabled={expired} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-70">
+              {expired ? "Expired" : "I've paid — verify"}
             </button>
-            <button onClick={onDone} className="text-xs fp-text-dim hover:fp-text underline">{expired ? "Start over" : "Cancel"}</button>
+            <button onClick={onDone} className="text-xs fp-text-dim hover:fp-text underline">Cancel</button>
           </div>
-          {!expired && (
-            <p className="fp-text-faint text-[11px]">We check automatically every few seconds after you pay. Having trouble? <button onClick={() => setShowTxId((v) => !v)} className="fp-gold underline">enter your transaction ID</button>.</p>
-          )}
-          {showTxId && (
-            <div className="space-y-2">
-              <input
-                value={txId}
-                onChange={(e) => { setTxId(e.target.value); setMsg(null); }}
-                onKeyDown={(e) => e.key === "Enter" && verify()}
-                placeholder="M_P_…"
-                className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2]"
-              />
-              <button onClick={verify} disabled={busy || expired} className="text-xs font-semibold px-4 py-2 rounded-lg border fp-line-soft fp-text-dim hover:fp-gold-border disabled:opacity-60">Verify by transaction ID</button>
-            </div>
-          )}
+        </>
+      )}
+
+      {step === "verify" && !done && (
+        <>
+          <div>
+            <label className="fp-text-faint text-[10px] fp-mono uppercase">Enter your Binance Order ID</label>
+            <input
+              value={txId}
+              onChange={(e) => { setTxId(e.target.value); setMsg(null); }}
+              onKeyDown={(e) => e.key === "Enter" && verify()}
+              placeholder="e.g. 123456789012345678"
+              className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2] mt-1"
+            />
+            <p className="fp-text-faint text-[11px] mt-1.5">Copy the Order ID from the successful payment details in your Binance account, paste it here, then tap Verify.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={verify} disabled={busy || expired} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-70 flex items-center gap-2">
+              {busy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+              {busy ? "Verifying…" : expired ? "Expired" : "Verify payment"}
+            </button>
+            <button onClick={() => setStep("pay")} className="text-xs fp-text-dim hover:fp-text underline">Back</button>
+          </div>
         </>
       )}
 
@@ -1029,7 +1026,6 @@ export function CustomerDashboard({
                   {binanceInfo ? (
                     <BinancePayPanel
                       info={binanceInfo}
-                      onCheck={onBinanceCheck}
                       onClaim={onBinanceClaim}
                       onDone={() => { setBinanceInfo(null); setDepositAmount(""); }}
                     />

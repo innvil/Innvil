@@ -127,6 +127,20 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Customer login by username-or-email + Binance Order-ID flow (v1.1.28)
+- **Customer login now accepts a username OR an email.** `customerSignIn(panelId, identifier, password)` resolves a
+  non-email identifier to its login email WITHIN that panel (`customer_accounts` → `profiles.display_name` →
+  `auth.admin.getUserById`), then signs in. Storefront login input is now `type=text` placeholder "Email or username".
+- **Binance Pay is now transaction-id based (no auto-detect), matching the requested 2-step UX.** `BinancePayPanel`
+  rebuilt as **(1) Make payment → (2) Verify payment**: step 1 shows amount + Binance ID + QR + "I've paid — verify";
+  step 2 has an **"Enter your Binance Order ID"** field + Verify (`claimBinancePayment`). Dropped the 12s auto-poll +
+  "check now" (`checkBinanceDeposit` / the `binance-sync` cron still exist as a background safety net; the customer
+  path is TXID-only). Unique-amount anti-theft + 10-min expiry retained.
+- **NOTE (config, not code):** customer confirmation emails going to *localhost* and showing *Innvil* branding are a
+  **Supabase Auth** issue, not the app — set the project **Site URL** to prod, allowlist panel redirect URLs, add
+  **custom SMTP** (deliverability), and note Auth email templates are **project-wide** (can't be per-panel branded
+  without a custom OTP/magic-link flow via Resend). The signup code already passes the panel's own URL as `emailRedirectTo`.
+
 ### 2026-07-25 — Platform focus: live in the Design Studio preview (v1.1.27)
 - **Fix: toggling "Telegram only" in the Design Studio didn't change the preview** — the preview rendered the
   design's own copy and never applied the overlay (the overlay only ran server-side on the live storefront).

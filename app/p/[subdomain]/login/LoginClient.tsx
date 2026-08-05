@@ -81,10 +81,10 @@ export function LoginClient({
       <input
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        type="email"
+        type="text"
         name="email"
-        autoComplete={`section-innvil-customer-login-${panelId} email`}
-        placeholder="Email"
+        autoComplete={`section-innvil-customer-login-${panelId} username`}
+        placeholder="Email or username"
         className={`${inputCls} mb-3`}
         style={embeddedInputStyle}
       />
