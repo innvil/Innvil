@@ -4,10 +4,9 @@ import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { syncPanelOrders } from "@/src/lib/orders/sync";
-import { placeOrderForAccount, type PlaceOrderInput, type PlaceOrderResult } from "@/src/lib/orders/place";
+import { placeOrderForAccount } from "@/src/lib/orders/place";
+import type { PlaceOrderInput, PlaceOrderResult } from "@/src/lib/orders/place";
 import type { OrderStatus } from "@/src/types/db";
-
-export type { PlaceOrderInput, PlaceOrderResult };
 
 /* =========================================================
    §4 ORDER PIPELINE (customer-facing)

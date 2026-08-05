@@ -5,7 +5,7 @@ import { Rocket, AlertTriangle, CheckCircle2, Loader2, Sliders, Zap, ClipboardLi
 import { formatMoney } from "@/src/lib/money";
 import { analyzeCampaign } from "@/src/lib/automation/links";
 import { extractLinksFromFile } from "@/src/lib/automation/file-links";
-import { runCampaign, listCampaigns, runMassOrder, type CampaignVM, type RunCampaignResult, type MassOrderResult } from "@/src/lib/actions/campaigns";
+import { runCampaign, listCampaigns, type CampaignVM, type RunCampaignResult } from "@/src/lib/actions/campaigns";
 import { getAutomatorSub, subscribeAutomator, type AutomatorSubInfo } from "@/src/lib/actions/automator-sub";
 import { getWatchedAccounts, addWatchedAccount, setWatchedActive, removeWatchedAccount, type WatchedAccountVM } from "@/src/lib/actions/watched";
 import { AutomationConfig } from "./AutomationConfig";
@@ -117,56 +117,6 @@ function WatchedAccountsCard({ panelId }: { panelId?: string }) {
   );
 }
 
-/** Manual mass order — always available (free). One line per order: serviceId | link | quantity. */
-function MassOrderCard({ panelId, currency }: { panelId?: string; currency: string }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState<MassOrderResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const fmt = (n: number) => formatMoney(n, currency);
-
-  const submit = async () => {
-    if (!panelId || !text.trim()) return;
-    setBusy(true); setErr(null); setRes(null);
-    const r = await runMassOrder({ panelId, text });
-    setBusy(false);
-    if (!r.ok) { setErr(r.error); return; }
-    setRes(r.data);
-    if (r.data.failed === 0) setText("");
-  };
-
-  return (
-    <div className="fp-panel border fp-line rounded-2xl p-4 space-y-3">
-      <div>
-        <p className="text-sm font-medium flex items-center gap-1.5"><ClipboardList size={15} className="fp-text-dim" /> Mass order <span className="text-[10px] fp-safe-soft-bg fp-safe px-1.5 py-0.5 rounded-full">Free</span></p>
-        <p className="fp-text-faint text-[11px] mt-0.5">One order per line — <span className="fp-mono">serviceId | link | quantity</span>. The service id is its number in the catalog.</p>
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={4}
-        placeholder={"12 | https://instagram.com/p/… | 1000\n7 | https://tiktok.com/@user/video/… | 500"}
-        className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border font-mono resize-y"
-      />
-      <div className="flex items-center justify-between gap-2">
-        <span className="fp-text-faint text-[11px]">Charged to your wallet, like any order.</span>
-        <button onClick={submit} disabled={busy || !text.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 flex items-center gap-2">
-          {busy ? <><Loader2 size={14} className="animate-spin" /> Placing…</> : "Place orders"}
-        </button>
-      </div>
-      {err && <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {err}</p>}
-      {res && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium flex items-center gap-1.5"><CheckCircle2 size={13} className="fp-safe" /> {res.placed} placed · {fmt(res.totalCharge)}{res.failed > 0 && <span className="text-red-400"> · {res.failed} failed</span>}</p>
-          {res.items.filter((i) => !i.ok).map((i, idx) => (
-            <p key={idx} className="text-[11px] text-red-400/90 fp-mono truncate">✕ {i.raw} — {i.error}</p>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function CampaignSurface({ panelId, currency = "USD", onContactSupport }: { panelId?: string; currency?: string; onContactSupport?: () => void }) {
   const [sub, setSub] = useState<AutomatorSubInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -253,7 +203,6 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
             </button>
           )}
         </div>
-        <MassOrderCard panelId={panelId} currency={currency} />
       </div>
     );
   }
@@ -286,7 +235,6 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
           {!sub.canAfford && <p className="fp-text-faint text-xs mt-2">Add at least {fmt(sub.price)} to your wallet, then subscribe.</p>}
           {subErr && <p className="text-xs text-red-400 mt-2 flex items-center gap-1.5"><AlertTriangle size={12} /> {subErr}</p>}
         </div>
-        <MassOrderCard panelId={panelId} currency={currency} />
       </div>
     );
   }
@@ -382,8 +330,6 @@ export function CampaignSurface({ panelId, currency = "USD", onContactSupport }:
       )}
 
       {sub?.watchedAccounts && <WatchedAccountsCard panelId={panelId} />}
-
-      <MassOrderCard panelId={panelId} currency={currency} />
     </div>
   );
 }

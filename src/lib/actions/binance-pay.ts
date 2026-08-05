@@ -20,8 +20,6 @@ import {
    (fallback). Personal-account reconciliation — NOT a merchant checkout.
    ========================================================= */
 
-export type { BinanceClaimResult };
-
 function readPanelCurrency(settings: unknown): string {
   if (settings && typeof settings === "object") {
     const c = (settings as Record<string, unknown>).currency;

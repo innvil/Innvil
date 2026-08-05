@@ -127,6 +127,31 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Fix: "PlaceOrderInput is not defined" on panel create (v1.1.25)
+- **Root cause:** re-exporting a TYPE from a `"use server"` module (`export type { PlaceOrderInput, PlaceOrderResult }`
+  in `actions/orders.ts`, `export type { BinanceClaimResult }` in `actions/binance-pay.ts`). Next treats every export
+  of a server-action module as an action; the erased type became an undefined runtime reference, crashing any client
+  bundle that transitively loaded it (e.g. the create-panel wizard → `PlaceOrderInput is not defined`).
+- **Fix:** dropped both `export type { … }` re-exports and switched to `import type { … }` for the annotations.
+  Nothing external imported those types from the action modules (they also live in `orders/place.ts` /
+  `payments/binance-match.ts`). **Rule:** never `export type` from a `"use server"` file — re-export shared types
+  from a plain server-only module instead.
+
+### 2026-07-25 — Mass order split out + build/launch fixes (v1.1.24)
+- **Mass order is now its OWN tab, separate from Campaign.** `MassOrderCard` (nested inside `CampaignSurface` in
+  all three states) was extracted to `src/components/customer/MassOrder.tsx` and mounted as a dedicated
+  **"Mass order"** nav item/page in `CustomerDashboard` (`CustomerPage` gained `massorder`). `CampaignSurface` no
+  longer renders it (dropped the three inline instances + the now-unused `runMassOrder`/`MassOrderResult` imports).
+- **Fix: create-panel stuck on "Launching…".** The wizard's `launch` had no try/catch, so a thrown server action
+  (e.g. while the build was broken) left `busy=true` forever. Now wrapped — surfaces the error + resets the button.
+- **Fix: build error `Expression expected` in `app/api/cron/watch-accounts/route.ts`.** A `*/5 * * * *` cron
+  expression inside a `/* … */` block comment closed the comment early. Reworded the comment (schedule lives in
+  migration 0036).
+- **Completed R5b's missing dependency:** the session-less order core. `src/lib/orders/place.ts` (NEW,
+  server-only) holds `placeOrderForAccount(admin, panel, acct, input)` — the full money path (price → duplicate
+  guard → charge → provider forward → refund). `actions/orders.ts` `placeOrder` is now a thin auth wrapper over
+  it; `watch-sweep.ts` (R5b) uses it to order on behalf of a resolved customer with no session. No behaviour change.
+
 ### 2026-07-25 — Automator v2 — R5b: watched accounts / full-auto (feed-based) (v1.1.23)
 - **The Business+ "watched accounts" perk is now live** — full-auto ordering of new posts. Innvil can't reliably
   scrape X/IG/TikTok from serverless, so it's **feed-based** (bring-your-own, like providers): the customer

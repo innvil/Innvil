@@ -780,12 +780,18 @@ function CreatePanelWizard({ onCreate }: {
     if (busy) return;
     setError(null);
     setBusy(true);
-    const res = await onCreate({ name, subdomain, theme, connectProvider });
-    if (!res.ok) {
-      setError(res.error || "Could not create the panel.");
+    try {
+      const res = await onCreate({ name, subdomain, theme, connectProvider });
+      if (!res.ok) {
+        setError(res.error || "Could not create the panel.");
+        setBusy(false);
+      }
+      // On success the parent navigates away; leave busy=true to avoid a flash.
+    } catch (e) {
+      // A server error would otherwise leave the button stuck on "Launching…".
+      setError(e instanceof Error ? e.message : "Could not create the panel. Please try again.");
       setBusy(false);
     }
-    // On success the parent navigates away; leave busy=true to avoid a flash.
   };
 
   return (
