@@ -175,7 +175,7 @@ function BinancePayPanel({
       {step === "verify" && !done && (
         <>
           <div>
-            <label className="fp-text-faint text-[10px] fp-mono uppercase">Enter your Binance Order ID</label>
+            <label className="fp-text-faint text-[10px] fp-mono uppercase">Enter your Binance Transaction ID</label>
             <input
               value={txId}
               onChange={(e) => { setTxId(e.target.value); setMsg(null); }}
@@ -183,7 +183,7 @@ function BinancePayPanel({
               placeholder="e.g. 123456789012345678"
               className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2] mt-1"
             />
-            <p className="fp-text-faint text-[11px] mt-1.5">Copy the Order ID from the successful payment details in your Binance account, paste it here, then tap Verify.</p>
+            <p className="fp-text-faint text-[11px] mt-1.5">Copy the transaction ID from the successful payment details in your Binance account, paste it here, then tap Verify.</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={verify} disabled={busy || expired} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-70 flex items-center gap-2">

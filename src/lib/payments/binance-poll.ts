@@ -35,7 +35,13 @@ export async function sweepBinanceDeposits(): Promise<BinanceSweepResult> {
   const byPanel = new Map<string, PendingIntent[]>();
   for (const r of rows) {
     const list = byPanel.get(r.panel_id) ?? [];
-    list.push({ id: r.id, customer_id: r.customer_id, amount: r.amount, binance_payable: r.binance_payable, created_at: r.created_at });
+    list.push({
+      id: r.id,
+      customer_id: r.customer_id,
+      amount: String(r.amount),
+      binance_payable: r.binance_payable == null ? null : String(r.binance_payable),
+      created_at: r.created_at,
+    });
     byPanel.set(r.panel_id, list);
   }
 
@@ -49,7 +55,10 @@ export async function sweepBinanceDeposits(): Promise<BinanceSweepResult> {
       try { await syncPanelBinanceHistory(panelId); } catch { return; }
       const expectedUid = (ctx.config.binanceUid ?? "").trim();
       for (const intent of intents) {
-        const tx = await findMatchingTx(admin, panelId, intent, expectedUid);
+        const created = new Date(intent.created_at).getTime();
+        const windowStart = Math.max(0, created - 5 * 60 * 1000);
+        const windowEnd = Math.max(windowStart, created + EXPIRY_MINUTES * 60_000 + 5 * 60 * 1000);
+        const tx = await findMatchingTx(admin, panelId, intent, expectedUid, windowStart, windowEnd);
         if (!tx) continue;
         matched++;
         const res = await creditMatch(admin, intent, tx, ctx.config);

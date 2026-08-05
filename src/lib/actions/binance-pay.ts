@@ -5,10 +5,12 @@ import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getGatewayContext } from "@/src/lib/payments";
 import { syncPanelBinanceHistory } from "@/src/lib/payments/binance-sync";
+import { BinanceApiError } from "@/src/lib/payments/binance";
 import { round4 } from "@/src/lib/money";
 import {
   ACCEPTED_ASSET, EXPIRY_MINUTES, TX_COLS,
   pickPayable, validateTx, findMatchingTx, creditMatch,
+  normalizeEnteredTransactionId, isValidTransactionIdFormat,
   type PendingIntent, type BinanceTx, type BinanceClaimResult,
 } from "@/src/lib/payments/binance-match";
 
@@ -48,6 +50,32 @@ export interface BinanceDepositInfo {
 }
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MAX_SYNC_PAGES = 8;
+
+function paymentWindowMs(intent: PendingIntent): { startTime: number; endTime: number } {
+  const created = new Date(intent.created_at).getTime();
+  const startTime = Math.max(0, created - CLOCK_SKEW_MS);
+  const endTime = Math.max(startTime, created + EXPIRY_MINUTES * 60_000 + CLOCK_SKEW_MS);
+  return { startTime, endTime };
+}
+
+function maskValue(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (value.length <= 6) return "***";
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+function mapSyncError(error: unknown): BinanceClaimResult {
+  if (error instanceof BinanceApiError && error.kind === "auth") {
+    return { ok: false, code: "BINANCE_AUTH_FAILURE", message: "Binance authentication failed for this panel's receiving account key." };
+  }
+  if (error instanceof BinanceApiError) {
+    return { ok: false, code: "BINANCE_API_FAILURE", message: "Binance API request failed. Please try again shortly." };
+  }
+  return { ok: false, code: "BINANCE_API_FAILURE", message: "Could not query Binance right now. Please try again shortly." };
+}
 
 /** Create a pending Binance Pay deposit and return the pay-to details. */
 export async function createBinanceDeposit(panelId: string, amount: number): Promise<Result<BinanceDepositInfo>> {
@@ -126,8 +154,8 @@ async function loadOpenIntent(
   return {
     id: payment.id as string,
     customer_id: payment.customer_id as string,
-    amount: Number(payment.amount),
-    binance_payable: payment.binance_payable != null ? Number(payment.binance_payable) : null,
+    amount: String(payment.amount),
+    binance_payable: payment.binance_payable != null ? String(payment.binance_payable) : null,
     created_at: payment.created_at as string,
   };
 }
@@ -148,20 +176,24 @@ export async function checkBinanceDeposit(panelId: string, paymentId: string): P
   if ("error" in loaded) return loaded.error;
   const intent = loaded;
   if (intent.binance_payable == null) {
-    return { ok: false, code: "PAYMENT_NOT_FOUND", pending: true, message: "Auto-detect isn't available for this deposit — paste your transaction ID instead." };
+    return { ok: false, code: "TRANSACTION_NOT_FOUND", pending: true, message: "Auto-detect isn't available for this deposit — paste your transaction ID instead." };
   }
 
   const ctx = await getGatewayContext(panelId, "binance_pay");
   const expectedUid = (ctx?.config.binanceUid ?? "").trim();
-  const payable = round4(Number(intent.binance_payable));
+  const { startTime, endTime } = paymentWindowMs(intent);
 
-  let tx = await findMatchingTx(admin, panelId, intent, expectedUid);
+  let tx = await findMatchingTx(admin, panelId, intent, expectedUid, startTime, endTime);
   if (!tx) {
-    try { await syncPanelBinanceHistory(panelId); } catch { /* fall through to not-found */ }
-    tx = await findMatchingTx(admin, panelId, intent, expectedUid);
+    try {
+      await syncPanelBinanceHistory(panelId, { startTime, endTime, maxPages: MAX_SYNC_PAGES });
+    } catch (error) {
+      return mapSyncError(error);
+    }
+    tx = await findMatchingTx(admin, panelId, intent, expectedUid, startTime, endTime);
   }
   if (!tx) {
-    return { ok: false, code: "PAYMENT_NOT_FOUND", pending: true, message: `We haven't detected a ${payable} ${ACCEPTED_ASSET} payment yet. If you just paid, give it a few seconds.` };
+    return { ok: false, code: "TRANSACTION_NOT_FOUND", pending: true, message: `We haven't detected your C2C Binance Pay transfer yet. If you just paid, give it a few seconds.` };
   }
   return creditMatch(admin, intent, tx, ctx?.config ?? null);
 }
@@ -172,8 +204,8 @@ export async function claimBinancePayment(
   paymentId: string,
   transactionId: string
 ): Promise<BinanceClaimResult> {
-  const txId = String(transactionId || "").trim();
-  if (!/^[A-Za-z0-9_-]{5,128}$/.test(txId)) {
+  const txId = normalizeEnteredTransactionId(transactionId);
+  if (!isValidTransactionIdFormat(txId)) {
     return { ok: false, code: "INVALID_TRANSACTION_ID", message: "That doesn't look like a Binance Pay transaction ID." };
   }
 
@@ -189,24 +221,51 @@ export async function claimBinancePayment(
   const loaded = await loadOpenIntent(admin, panelId, paymentId, acct.id as string);
   if ("error" in loaded) return loaded.error;
   const intent = loaded;
+  const { startTime, endTime } = paymentWindowMs(intent);
 
   const { data: usedElsewhere } = await admin.from("payments").select("id").eq("binance_tx_id", txId).maybeSingle();
   if (usedElsewhere) return { ok: false, code: "TRANSACTION_ALREADY_USED", message: "This Binance transaction has already been used." };
+
+  console.info("[binance-claim] verifying", {
+    panelId,
+    paymentId,
+    txId: maskValue(txId),
+    windowStart: new Date(startTime).toISOString(),
+    windowEnd: new Date(endTime).toISOString(),
+  });
 
   const loadTx = async (): Promise<BinanceTx | null> =>
     (await admin.from("binance_pay_transactions").select(TX_COLS).eq("panel_id", panelId).eq("transaction_id", txId).maybeSingle()).data as BinanceTx | null;
   let tx = await loadTx();
   if (!tx) {
-    try { await syncPanelBinanceHistory(panelId); } catch { /* surface below */ }
+    try {
+      await syncPanelBinanceHistory(panelId, {
+        startTime,
+        endTime,
+        maxPages: MAX_SYNC_PAGES,
+        stopWhenTransactionId: txId,
+      });
+    } catch (error) {
+      return mapSyncError(error);
+    }
     tx = await loadTx();
   }
   if (!tx) {
-    return { ok: false, code: "PAYMENT_NOT_FOUND", pending: true, message: "That transaction hasn't shown up in Binance yet. Double-check the ID and try again shortly." };
+    return { ok: false, code: "TRANSACTION_NOT_FOUND", pending: true, message: "That transaction ID was not found in Binance Pay history for this deposit window." };
+  }
+
+  if (normalizeEnteredTransactionId(tx.transaction_id) !== txId) {
+    return { ok: false, code: "TRANSACTION_ID_MISMATCH", message: "The entered transaction ID does not match Binance's transactionId for this payment." };
   }
 
   const ctx = await getGatewayContext(panelId, "binance_pay");
   const expectedUid = (ctx?.config.binanceUid ?? "").trim();
-  const fail = validateTx(tx, intent, { expectedUid, requirePayableMatch: true });
+  const fail = validateTx(tx, intent, {
+    expectedUid,
+    requirePayableMatch: true,
+    windowStartMs: startTime,
+    windowEndMs: endTime,
+  });
   if (fail) return { ok: false, ...fail };
 
   return creditMatch(admin, intent, tx, ctx?.config ?? null);
