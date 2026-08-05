@@ -82,25 +82,20 @@ const DESIGN_CSS = `
 @keyframes dzSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .dz-spin { animation: dzSpin 26s linear infinite; }
 .dz-spin-rev { animation: dzSpin 34s linear infinite reverse; }
-/* Single icon flying horizontally across the orbit (upright, gentle curve + bob + scale),
-   then a brief off-screen pause before looping. Bob is done by a nested element so the
-   outer transform stays purely horizontal (keeps the icon upright). */
-@keyframes dzFlyX {
-  0%   { transform: translateX(-92px); opacity: 0; }
-  6%   { opacity: 1; }
-  75%  { transform: translateX(412px); opacity: 1; }
-  78%  { opacity: 0; }
-  100% { transform: translateX(412px); opacity: 0; }
+/* Single icon ORBITING the growth card: an arm rotates around the centre while the icon
+   counter-rotates to stay upright; a nested element adds a soft scale/glow pulse. */
+@keyframes dzOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes dzOrbitCounter { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+/* 5s cycle: visible ~2s, then a gentle ~3s "lights-out" pulse — fades away then reappears
+   (opacity out/in + a slight shrink), while it keeps orbiting. Not a brighten. */
+@keyframes dzOrbitPulse {
+  0%, 40%, 100% { opacity: 1; transform: scale(1); }
+  70%           { opacity: 0; transform: scale(.7); }
 }
-@keyframes dzFlyBob {
-  0%   { transform: translateY(8px) scale(.9); }
-  35%  { transform: translateY(-16px) scale(1.06); }
-  55%  { transform: translateY(-20px) scale(1.1); }
-  75%  { transform: translateY(6px) scale(.9); }
-  100% { transform: translateY(6px) scale(.9); }
-}
-.dz-fly { animation: dzFlyX 6.5s ease-in-out infinite; }
-.dz-fly-bob { animation: dzFlyBob 6.5s ease-in-out infinite; }
+/* Relaxed revolution — NOT synced to the 5s pulse (16s ≠ 5s). */
+.dz-orbit-arm { animation: dzOrbit 16s linear infinite; }
+.dz-orbit-item { animation: dzOrbitCounter 16s linear infinite; }
+.dz-orbit-pulse { animation: dzOrbitPulse 5s ease-in-out infinite; }
 .dz-anim-fade-up { animation: dzFadeUp .7s cubic-bezier(.2,.7,.3,1) both; }
 .dz-anim-fade-in { animation: dzFadeIn .8s ease both; }
 .dz-float { animation: dzFloat 5s ease-in-out infinite; }
@@ -307,12 +302,15 @@ function Hero({ s, data, inert }: { s: HeroSection; data: DesignRenderData; iner
                 <div className="dz-faint" style={{ fontSize: ".58rem", textTransform: "uppercase", letterSpacing: ".08em" }}>Growth / wk</div>
               </div>
               {data.focusPlatform ? (
-                /* Single-platform focus: ONE icon flies horizontally across, over the
-                   orbit + growth card (upright; bob/scale/glow handled by the keyframes). */
-                <div className="dz-fly" style={{ position: "absolute", top: 149, left: 0, zIndex: 5, willChange: "transform, opacity", pointerEvents: "none" }}>
-                  <span className="dz-fly-bob" style={{ display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 13, color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "0 0 22px color-mix(in srgb, var(--d-accent) 60%, transparent), var(--d-shadow)" }}>
-                    <PlatformGlyph platform={data.focusPlatform} size={22} />
-                  </span>
+                /* Single-platform focus: ONE icon revolves around the growth card. The arm
+                   rotates around centre; the item counter-rotates to stay upright; a nested
+                   span pulses (scale + glow) every 5s. */
+                <div className="dz-orbit-arm" style={{ position: "absolute", top: "50%", left: "50%", width: 0, height: 0, zIndex: 5, pointerEvents: "none" }}>
+                  <div className="dz-orbit-item" style={{ position: "absolute", top: -159, left: -21, width: 42, height: 42 }}>
+                    <span className="dz-orbit-pulse" style={{ display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 13, color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "var(--d-shadow)" }}>
+                      <PlatformGlyph platform={data.focusPlatform} size={22} />
+                    </span>
+                  </div>
                 </div>
               ) : (
                 /* Platform badges orbiting the node (upright) */

@@ -127,13 +127,15 @@ innvil/
 
 ## Recent Updates
 
-### 2026-07-25 — Platform-focus hero: single icon flies across the orbit (v1.1.30)
-- **On a platform-focused panel, the Orbit hero shows ONE platform icon flying horizontally** across the whole
-  visual (off-left → over the orbit rings + "+18% growth" card → off-right), instead of the multi-platform orbit.
-  Upright (no rotate), gentle up/down curve, subtle scale + soft glow, ~6.5s loop with a brief off-screen pause.
-- `DesignRenderer`: new `dzFlyX` (horizontal translate + off-screen pause) + `dzFlyBob` (nested bob/scale so the
-  outer transform stays purely horizontal) keyframes; `DesignRenderData.focusPlatform` drives the branch in the
-  `mockup:"orbit"` section (focus set → single flying icon `zIndex:5` above rings/card; else the orbiting badges).
+### 2026-07-25 — Platform-focus hero: single icon revolves around the orbit (v1.1.30)
+- **On a platform-focused panel, the Orbit hero shows ONE platform icon revolving** continuously around the orbit
+  ring surrounding the "+18% growth" card, instead of the multi-platform orbit. Kept **upright** (no self-spin) via
+  an arm/counter-rotate pattern; relaxed **16s** revolution; and a **"lights-out" pulse every 5s** — visible ~2s,
+  then a gentle ~3s fade-away-and-reappear (opacity out/in + slight shrink), still orbiting. Pulse period (5s) ≠
+  revolution (16s).
+- `DesignRenderer`: `dzOrbit` (arm rotates around centre) + `dzOrbitCounter` (item counter-rotates to stay upright)
+  + `dzOrbitPulse` (5s: ~2s visible, ~3s fade out→in) keyframes. `DesignRenderData.focusPlatform` drives the branch in
+  the `mockup:"orbit"` section (focus → single revolving icon `zIndex:5` above rings/card; else the orbiting badges).
   Threaded from `app/p/[subdomain]/page.tsx` (`panel.platformFocus`) and the Design Studio preview (`focus`).
 
 ### 2026-07-25 — Custom panel-branded signup OTP (replaces Supabase confirmation email) (v1.1.29)
