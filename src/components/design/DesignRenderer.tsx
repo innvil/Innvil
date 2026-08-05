@@ -30,6 +30,8 @@ export interface DesignRenderData {
   currencySymbol?: string;
   /** Live-derived stat values (fall back to the design's static values). */
   liveStats?: { services?: string; platforms?: string; from?: string };
+  /** Single-platform focus (e.g. "telegram") → hero shows one flying platform icon. */
+  focusPlatform?: string;
 }
 
 /** Where the design's CTAs point. A storefront must pass its OWN auth routes —
@@ -80,6 +82,25 @@ const DESIGN_CSS = `
 @keyframes dzSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .dz-spin { animation: dzSpin 26s linear infinite; }
 .dz-spin-rev { animation: dzSpin 34s linear infinite reverse; }
+/* Single icon flying horizontally across the orbit (upright, gentle curve + bob + scale),
+   then a brief off-screen pause before looping. Bob is done by a nested element so the
+   outer transform stays purely horizontal (keeps the icon upright). */
+@keyframes dzFlyX {
+  0%   { transform: translateX(-92px); opacity: 0; }
+  6%   { opacity: 1; }
+  75%  { transform: translateX(412px); opacity: 1; }
+  78%  { opacity: 0; }
+  100% { transform: translateX(412px); opacity: 0; }
+}
+@keyframes dzFlyBob {
+  0%   { transform: translateY(8px) scale(.9); }
+  35%  { transform: translateY(-16px) scale(1.06); }
+  55%  { transform: translateY(-20px) scale(1.1); }
+  75%  { transform: translateY(6px) scale(.9); }
+  100% { transform: translateY(6px) scale(.9); }
+}
+.dz-fly { animation: dzFlyX 6.5s ease-in-out infinite; }
+.dz-fly-bob { animation: dzFlyBob 6.5s ease-in-out infinite; }
 .dz-anim-fade-up { animation: dzFadeUp .7s cubic-bezier(.2,.7,.3,1) both; }
 .dz-anim-fade-in { animation: dzFadeIn .8s ease both; }
 .dz-float { animation: dzFloat 5s ease-in-out infinite; }
@@ -285,19 +306,29 @@ function Hero({ s, data, inert }: { s: HeroSection; data: DesignRenderData; iner
                 <div className="dz-accent" style={{ fontWeight: 800, fontSize: "1.05rem", marginTop: ".35rem" }}>+18%</div>
                 <div className="dz-faint" style={{ fontSize: ".58rem", textTransform: "uppercase", letterSpacing: ".08em" }}>Growth / wk</div>
               </div>
-              {/* Platform badges orbiting the node (upright) */}
-              {Array.from(new Set(data.services.map((x) => x.platform))).slice(0, 6).map((p, i, arr) => {
-                const ang = (i / arr.length) * Math.PI * 2 - Math.PI / 2;
-                const r = 138;
-                const x = 170 + r * Math.cos(ang) - 21;
-                const y = 170 + r * Math.sin(ang) - 21;
-                return (
-                  <span key={p} className="dz-float dz-hide-mobile"
-                    style={{ position: "absolute", top: y, left: x, width: 42, height: 42, borderRadius: 13, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "var(--d-shadow)", animationDelay: `${i * 0.5}s` }}>
-                    <PlatformGlyph platform={p} size={22} />
+              {data.focusPlatform ? (
+                /* Single-platform focus: ONE icon flies horizontally across, over the
+                   orbit + growth card (upright; bob/scale/glow handled by the keyframes). */
+                <div className="dz-fly" style={{ position: "absolute", top: 149, left: 0, zIndex: 5, willChange: "transform, opacity", pointerEvents: "none" }}>
+                  <span className="dz-fly-bob" style={{ display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 13, color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "0 0 22px color-mix(in srgb, var(--d-accent) 60%, transparent), var(--d-shadow)" }}>
+                    <PlatformGlyph platform={data.focusPlatform} size={22} />
                   </span>
-                );
-              })}
+                </div>
+              ) : (
+                /* Platform badges orbiting the node (upright) */
+                Array.from(new Set(data.services.map((x) => x.platform))).slice(0, 6).map((p, i, arr) => {
+                  const ang = (i / arr.length) * Math.PI * 2 - Math.PI / 2;
+                  const r = 138;
+                  const x = 170 + r * Math.cos(ang) - 21;
+                  const y = 170 + r * Math.sin(ang) - 21;
+                  return (
+                    <span key={p} className="dz-float dz-hide-mobile"
+                      style={{ position: "absolute", top: y, left: x, width: 42, height: 42, borderRadius: 13, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "var(--d-shadow)", animationDelay: `${i * 0.5}s` }}>
+                      <PlatformGlyph platform={p} size={22} />
+                    </span>
+                  );
+                })
+              )}
             </div>
           )}
 

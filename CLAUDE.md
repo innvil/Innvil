@@ -127,6 +127,15 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Platform-focus hero: single icon flies across the orbit (v1.1.30)
+- **On a platform-focused panel, the Orbit hero shows ONE platform icon flying horizontally** across the whole
+  visual (off-left → over the orbit rings + "+18% growth" card → off-right), instead of the multi-platform orbit.
+  Upright (no rotate), gentle up/down curve, subtle scale + soft glow, ~6.5s loop with a brief off-screen pause.
+- `DesignRenderer`: new `dzFlyX` (horizontal translate + off-screen pause) + `dzFlyBob` (nested bob/scale so the
+  outer transform stays purely horizontal) keyframes; `DesignRenderData.focusPlatform` drives the branch in the
+  `mockup:"orbit"` section (focus set → single flying icon `zIndex:5` above rings/card; else the orbiting badges).
+  Threaded from `app/p/[subdomain]/page.tsx` (`panel.platformFocus`) and the Design Studio preview (`focus`).
+
 ### 2026-07-25 — Custom panel-branded signup OTP (replaces Supabase confirmation email) (v1.1.29)
 - **Customer email verification is now our OWN OTP**, so the confirmation email carries the PANEL's name (not
   Innvil) and no longer depends on Supabase's project-wide template / Site-URL (which caused the localhost + Innvil

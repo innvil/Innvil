@@ -335,6 +335,7 @@ export function DesignStudio({
                       services: previewPkg.preview.services,
                       categories: previewPkg.preview.categories,
                       currencySymbol: currencySymbol(currency),
+                      focusPlatform: focus ?? undefined,
                     }}
                     tokenOverrides={themeToDesignTokens(v.theme, v.accent)}
                     inert

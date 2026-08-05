@@ -145,6 +145,7 @@ export default async function StorefrontPage({ params }: Params) {
               platforms: String(new Set(services.map((s) => s.platform).filter(Boolean)).size),
               from: prices.length ? `${sym}${Math.min(...prices).toFixed(2)}` : undefined,
             },
+            focusPlatform: panel.platformFocus ?? undefined,
           }}
           tokenOverrides={themeToDesignTokens(panel.theme, panel.accent)}
           hrefs={{ signup: `${base}/signup`, login: `${base}/login`, services: "#services" }}
