@@ -37,12 +37,16 @@ export type BinanceClaimResult =
       | "AUTH"
       | "NO_ACCOUNT"
       | "ORDER_PENDING_BINANCE_HISTORY"
+  | "ORDER_ID_NOT_IN_CACHE"
       | "ORDER_ID_NOT_FOUND"
       | "ORDER_ID_ALREADY_USED"
       | "AMOUNT_MISMATCH"
       | "CURRENCY_MISMATCH"
       | "WRONG_RECEIVER"
       | "TRANSACTION_OUTSIDE_WINDOW"
+  | "DATABASE_WRITE_FAILURE"
+  | "DATABASE_LOOKUP_FAILURE"
+  | "PAYMENT_CREDIT_FAILURE"
       | "BINANCE_AUTH_FAILURE"
       | "BINANCE_REGION_RESTRICTED"
       | "BINANCE_API_FAILURE"
@@ -191,23 +195,32 @@ export async function creditMatch(
     p_reason: `Binance Pay ${tx.order_id ?? tx.transaction_id}`,
   });
 
-  if (claimErr) return { ok: false, code: "BINANCE_API_FAILURE", message: "Could not verify the payment right now." };
+  if (claimErr) {
+    const code = String(claimErr.code ?? "").toUpperCase();
+    if (code === "PGRST202" || code === "PGRST205" || code === "42703") {
+      return { ok: false, code: "DATABASE_WRITE_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
+    }
+    return { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
+  }
   if (claimCode === "PAYMENT_ALREADY_CREDITED") {
-    return { ok: false, code: "PAYMENT_ALREADY_CREDITED", message: "This deposit has already been credited." };
+    return { ok: false, code: "PAYMENT_ALREADY_CREDITED", message: "Payment was already confirmed and credited." };
   }
   if (claimCode === "ORDER_ID_ALREADY_USED") {
     return { ok: false, code: "ORDER_ID_ALREADY_USED", message: "This Binance Order ID has already been used." };
   }
   if (claimCode === "DEPOSIT_NOT_OPEN") {
-    return { ok: false, code: "DEPOSIT_NOT_OPEN", message: "This deposit was already processed." };
+    return { ok: false, code: "DEPOSIT_NOT_OPEN", message: "We found the payment, but could not complete the credit. Please try again." };
+  }
+  if (claimCode === "CREDIT_FAILED") {
+    return { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
   }
   if (claimCode !== "OK") {
-    return { ok: false, code: "BINANCE_API_FAILURE", message: "Payment matched, but crediting failed. Please try again." };
+    return { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
   }
 
   return {
     ok: true, code: "PAYMENT_CONFIRMED",
-    message: bonus > 0 ? `${credit} ${ACCEPTED_ASSET} added to your balance (${base} + ${bonus} bonus).` : `${credit} ${ACCEPTED_ASSET} added to your balance.`,
+    message: "Payment confirmed and credited.",
     credited: credit, received,
   };
 }

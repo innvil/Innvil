@@ -119,7 +119,20 @@ async function doSync(panelId: string, opts: SyncBinanceHistoryOptions = {}): Pr
   const { error } = await admin
     .from("binance_pay_transactions")
     .upsert(payload, { onConflict: "panel_id,transaction_id" });
-  if (error) throw new Error(error.message);
+  if (error) {
+    const syncErr = new Error(error.message) as Error & {
+      code?: string;
+      details?: string;
+      hint?: string;
+      stage?: string;
+    };
+    syncErr.name = "BinanceSyncDatabaseError";
+    syncErr.code = error.code;
+    syncErr.details = error.details ?? undefined;
+    syncErr.hint = error.hint ?? undefined;
+    syncErr.stage = "upsert_binance_pay_transactions";
+    throw syncErr;
+  }
   return { synced: payload.length };
 }
 

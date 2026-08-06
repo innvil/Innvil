@@ -156,8 +156,8 @@ test("creditMatch submits both order_id and transaction_id to the claim RPC", as
   } as any;
   const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
   assert.equal(out.ok, true);
-  assert.equal(rpcArgs?.p_order_id, "446982297682452480");
-  assert.equal(rpcArgs?.p_tx_id, "M_P_71505104267788288");
+  assert.equal(rpcArgs?.["p_order_id"], "446982297682452480");
+  assert.equal(rpcArgs?.["p_tx_id"], "M_P_71505104267788288");
 });
 
 test("duplicate order id is rejected by the claim core", async () => {
@@ -167,6 +167,48 @@ test("duplicate order id is rejected by the claim core", async () => {
   const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
   assert.equal(out.ok, false);
   if (!out.ok) assert.equal(out.code, "ORDER_ID_ALREADY_USED");
+});
+
+test("missing claim RPC signature maps to DATABASE_WRITE_FAILURE", async () => {
+  const fakeAdmin = {
+    rpc: async () => ({ data: null, error: { code: "PGRST202", message: "function not found" } }),
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) {
+    assert.equal(out.code, "DATABASE_WRITE_FAILURE");
+    assert.notEqual(out.code, "BINANCE_API_FAILURE");
+  }
+});
+
+test("credit runtime errors map to PAYMENT_CREDIT_FAILURE", async () => {
+  const fakeAdmin = {
+    rpc: async () => ({ data: null, error: { code: "57014", message: "statement timeout" } }),
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) {
+    assert.equal(out.code, "PAYMENT_CREDIT_FAILURE");
+    assert.notEqual(out.code, "BINANCE_API_FAILURE");
+  }
+});
+
+test("exact Order ID credits once and repeat returns PAYMENT_ALREADY_CREDITED", async () => {
+  let calls = 0;
+  const fakeAdmin = {
+    rpc: async () => {
+      calls += 1;
+      if (calls === 1) return { data: "OK", error: null };
+      return { data: "PAYMENT_ALREADY_CREDITED", error: null };
+    },
+  } as any;
+
+  const first = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(first.ok, true);
+
+  const second = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(second.ok, false);
+  if (!second.ok) assert.equal(second.code, "PAYMENT_ALREADY_CREDITED");
 });
 
 test("malformed Binance response is rejected", async () => {

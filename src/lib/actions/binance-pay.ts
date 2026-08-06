@@ -16,10 +16,10 @@ import {
 
 /* =========================================================
    Binance Pay — customer deposit actions (create + confirm).
-   The customer pays a UNIQUE amount to the owner's Pay ID; we match it to exactly one
-   pending deposit and credit the wallet (+ tiered bonus). Two confirm paths share the
-   credit core in binance-match.ts: auto-detect (no TXID) and an explicit TXID submit
-   (fallback). Personal-account reconciliation — NOT a merchant checkout.
+  The customer pays a UNIQUE amount to the owner's Pay ID, then submits the Binance
+  C2C Order ID. We sync history, resolve the row for this panel+order_id, validate, and
+  atomically credit the wallet (+ tiered bonus). Personal-account reconciliation — NOT a
+  merchant checkout.
    ========================================================= */
 
 function readPanelCurrency(settings: unknown): string {
@@ -50,11 +50,19 @@ export interface BinanceDepositInfo {
 }
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+type FailureResult = Extract<BinanceClaimResult, { ok: false }>;
 
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_SYNC_PAGES = 8;
 const ORDER_ID_RETRY_DELAYS_MS = [0, 2_000, 4_000, 8_000] as const;
 const ORDER_PENDING_MESSAGE = "Binance has not returned this Order ID yet. Please wait a moment and check again.";
+const CREDIT_FAILURE_MESSAGE = "We found the payment, but could not complete the credit. Please try again.";
+
+type DbErrorLike = { code?: string; message?: string; details?: string; hint?: string; stage?: string };
+type OrderLookupResult =
+  | { kind: "found"; tx: BinanceTx; repairedOrderId: boolean }
+  | { kind: "not_found"; code: "ORDER_ID_NOT_IN_CACHE" }
+  | { kind: "error"; code: "DATABASE_LOOKUP_FAILURE"; dbCode?: string; message: string };
 
 function paymentWindowMs(intent: PendingIntent): { startTime: number; endTime: number } {
   const created = new Date(intent.created_at).getTime();
@@ -69,7 +77,32 @@ function maskValue(value: string | null | undefined): string | null {
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
 }
 
-function mapSyncError(error: unknown): BinanceClaimResult {
+function toDbErrorLike(error: unknown): DbErrorLike {
+  if (!error || typeof error !== "object") return {};
+  const e = error as Record<string, unknown>;
+  return {
+    code: typeof e.code === "string" ? e.code : undefined,
+    message: typeof e.message === "string" ? e.message : undefined,
+    details: typeof e.details === "string" ? e.details : undefined,
+    hint: typeof e.hint === "string" ? e.hint : undefined,
+    stage: typeof e.stage === "string" ? e.stage : undefined,
+  };
+}
+
+function logStage(event: string, payload: Record<string, unknown>): void {
+  console.info(`[binance-pay] ${event}`, payload);
+}
+
+function manualFailure(
+  code: FailureResult['code'],
+  message: string,
+  logPayload: Record<string, unknown>
+): FailureResult {
+  logStage("manual-check-failed", { code, ...logPayload });
+  return { ok: false, code, message };
+}
+
+function mapSyncError(error: unknown): FailureResult {
   if (error instanceof BinanceApiError) {
     const code = error.binanceCode ?? "";
     const msg = String(error.binanceMessage ?? error.message ?? "").toLowerCase();
@@ -86,16 +119,20 @@ function mapSyncError(error: unknown): BinanceClaimResult {
     if (error.kind === "auth" || code === "-2008" || code === "-2014" || code === "-2015" || /invalid api[- ]?key|api key|permission|unauthorized|signature/.test(msg)) {
       return { ok: false, code: "BINANCE_AUTH_FAILURE", message: "Binance rejected authentication for this request." };
     }
-    return { ok: false, code: "BINANCE_API_FAILURE", message: "Binance Pay verification failed. Please try again shortly." };
+    return { ok: false, code: "BINANCE_API_FAILURE", message: "Could not query Binance right now. Please try again shortly." };
   }
-  return { ok: false, code: "BINANCE_API_FAILURE", message: "Could not query Binance right now. Please try again shortly." };
+  const dbErr = toDbErrorLike(error);
+  if (dbErr.code || dbErr.stage) {
+    return { ok: false, code: "DATABASE_WRITE_FAILURE", message: CREDIT_FAILURE_MESSAGE };
+  }
+  return { ok: false, code: "DATABASE_WRITE_FAILURE", message: CREDIT_FAILURE_MESSAGE };
 }
 
-function notConfigured(): BinanceClaimResult {
+function notConfigured(): FailureResult {
   return { ok: false, code: "BINANCE_NOT_CONFIGURED", message: "Binance Pay is not configured for this panel." };
 }
 
-function orderIdPending(): BinanceClaimResult {
+function orderIdPending(): FailureResult {
   return { ok: false, code: "ORDER_PENDING_BINANCE_HISTORY", pending: true, message: ORDER_PENDING_MESSAGE };
 }
 
@@ -107,14 +144,85 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function findOrderById(admin: SupabaseClient, panelId: string, orderId: string): Promise<BinanceTx | null> {
-  const { data } = await admin
+export async function findOrderById(
+  admin: SupabaseClient,
+  panelId: string,
+  orderId: string
+): Promise<OrderLookupResult> {
+  const primary = await admin
     .from("binance_pay_transactions")
     .select(TX_COLS)
     .eq("panel_id", panelId)
     .eq("order_id", orderId)
     .maybeSingle();
-  return (data as BinanceTx | null) ?? null;
+
+  if (primary.error && primary.error.code !== "PGRST116") {
+    // Missing `order_id` column on production should fall back to raw_payload lookup.
+    if (primary.error.code !== "42703") {
+      return {
+        kind: "error",
+        code: "DATABASE_LOOKUP_FAILURE",
+        dbCode: primary.error.code,
+        message: primary.error.message,
+      };
+    }
+  }
+
+  if (primary.data) {
+    return { kind: "found", tx: primary.data as BinanceTx, repairedOrderId: false };
+  }
+
+  const compat = await admin
+    .from("binance_pay_transactions")
+    .select("panel_id, transaction_id, order_type, transaction_time, amount, currency, receiver_binance_id")
+    .eq("panel_id", panelId)
+    .filter("raw_payload->>orderId", "eq", orderId)
+    .maybeSingle();
+
+  if (compat.error && compat.error.code !== "PGRST116") {
+    return {
+      kind: "error",
+      code: "DATABASE_LOOKUP_FAILURE",
+      dbCode: compat.error.code,
+      message: compat.error.message,
+    };
+  }
+
+  if (!compat.data) {
+    return { kind: "not_found", code: "ORDER_ID_NOT_IN_CACHE" };
+  }
+
+  const tx = {
+    transaction_id: String((compat.data as Record<string, unknown>).transaction_id ?? ""),
+    order_id: orderId,
+    order_type: String((compat.data as Record<string, unknown>).order_type ?? ""),
+    transaction_time: String((compat.data as Record<string, unknown>).transaction_time ?? ""),
+    amount: String((compat.data as Record<string, unknown>).amount ?? "0"),
+    currency: String((compat.data as Record<string, unknown>).currency ?? "").toUpperCase(),
+    receiver_binance_id: (compat.data as Record<string, unknown>).receiver_binance_id == null
+      ? null
+      : String((compat.data as Record<string, unknown>).receiver_binance_id),
+  } satisfies BinanceTx;
+
+  const repair = await admin
+    .from("binance_pay_transactions")
+    .update({ order_id: orderId })
+    .eq("panel_id", panelId)
+    .eq("transaction_id", tx.transaction_id)
+    .is("order_id", null)
+    .select("transaction_id")
+    .maybeSingle();
+
+  if (repair.error && repair.error.code !== "PGRST116" && repair.error.code !== "42703") {
+    return {
+      kind: "error",
+      code: "DATABASE_LOOKUP_FAILURE",
+      dbCode: repair.error.code,
+      message: repair.error.message,
+    };
+  }
+
+  return { kind: "found", tx, repairedOrderId: Boolean(repair.data) };
 }
 
 /** Create a pending Binance Pay deposit and return the pay-to details. */
@@ -177,7 +285,7 @@ export async function createBinanceDeposit(panelId: string, amount: number): Pro
 
 async function loadOpenIntent(
   admin: SupabaseClient, panelId: string, paymentId: string, customerId: string
-): Promise<PendingIntent | { error: BinanceClaimResult }> {
+): Promise<PendingIntent | { error: FailureResult }> {
   const { data: payment } = await admin
     .from("payments")
     .select("id, panel_id, customer_id, amount, binance_payable, status, gateway, created_at")
@@ -210,9 +318,16 @@ export async function claimBinancePayment(
   paymentId: string,
   orderIdInput: string
 ): Promise<BinanceClaimResult> {
+  const t0 = Date.now();
+  const maskedPanelId = maskValue(panelId);
+  const maskedPaymentId = maskValue(paymentId);
   const submittedOrderId = normalizeOrderId(orderIdInput);
   if (!submittedOrderId) {
-    return { ok: false, code: "ORDER_ID_NOT_FOUND", message: "That doesn't look like a Binance Order ID." };
+    return manualFailure("ORDER_ID_NOT_FOUND", "That doesn't look like a Binance Order ID.", {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      elapsedMs: Date.now() - t0,
+    });
   }
 
   const supa = await createStorefrontClient();
@@ -225,18 +340,32 @@ export async function claimBinancePayment(
   if (!acct) return { ok: false, code: "NO_ACCOUNT", message: "No account found on this panel." };
 
   const loaded = await loadOpenIntent(admin, panelId, paymentId, acct.id as string);
-  if ("error" in loaded) return loaded.error;
+  if ("error" in loaded) {
+    return manualFailure(loaded.error.code, loaded.error.message, {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      elapsedMs: Date.now() - t0,
+    });
+  }
   const intent = loaded;
   const creds = await loadActiveBinanceCredentials(panelId);
-  if (!creds.ok) return notConfigured();
+  if (!creds.ok) {
+    const out = notConfigured();
+    return manualFailure(out.code, out.message, {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      elapsedMs: Date.now() - t0,
+    });
+  }
   const { startTime, endTime } = paymentWindowMs(intent);
 
-  console.info("[binance-claim] verifying", {
-    panelId,
-    paymentId,
-    orderId: submittedOrderId,
+  logStage("order-lookup-start", {
+    panelId: maskedPanelId,
+    paymentId: maskedPaymentId,
+    orderId: maskValue(submittedOrderId),
     windowStart: new Date(startTime).toISOString(),
     windowEnd: new Date(endTime).toISOString(),
+    elapsedMs: Date.now() - t0,
   });
 
   const expectedUid = (creds.config.binanceUid ?? "").trim();
@@ -247,20 +376,88 @@ export async function claimBinancePayment(
       await sleep(ORDER_ID_RETRY_DELAYS_MS[attempt]);
     }
     try {
-      await syncPanelBinanceHistory(panelId, { startTime, endTime, maxPages: MAX_SYNC_PAGES });
+      const syncStart = Date.now();
+      const syncRes = await syncPanelBinanceHistory(panelId, { startTime, endTime, maxPages: MAX_SYNC_PAGES });
+      logStage("sync-complete", {
+        panelId: maskedPanelId,
+        paymentId: maskedPaymentId,
+        orderId: maskValue(submittedOrderId),
+        synced: syncRes.synced,
+        attempt,
+        elapsedMs: Date.now() - syncStart,
+      });
     } catch (error) {
-      return mapSyncError(error);
+      const mapped = mapSyncError(error);
+      const dbErr = toDbErrorLike(error);
+      return manualFailure(mapped.code, mapped.message, {
+        panelId: maskedPanelId,
+        paymentId: maskedPaymentId,
+        orderId: maskValue(submittedOrderId),
+        dbCode: dbErr.code ?? null,
+        dbStage: dbErr.stage ?? null,
+        attempt,
+        elapsedMs: Date.now() - t0,
+      });
     }
-    tx = await findOrderById(admin, panelId, submittedOrderId);
-    if (tx) break;
+
+    const lookup = await findOrderById(admin, panelId, submittedOrderId);
+    if (lookup.kind === "error") {
+      logStage("order-lookup-result", {
+        panelId: maskedPanelId,
+        paymentId: maskedPaymentId,
+        orderFound: false,
+        internalCode: lookup.code,
+        dbCode: lookup.dbCode ?? null,
+        attempt,
+        elapsedMs: Date.now() - t0,
+      });
+      return manualFailure("DATABASE_LOOKUP_FAILURE", CREDIT_FAILURE_MESSAGE, {
+        panelId: maskedPanelId,
+        paymentId: maskedPaymentId,
+        dbCode: lookup.dbCode ?? null,
+        attempt,
+        elapsedMs: Date.now() - t0,
+      });
+    }
+    if (lookup.kind === "found") {
+      tx = lookup.tx;
+      logStage("order-lookup-result", {
+        panelId: maskedPanelId,
+        paymentId: maskedPaymentId,
+        orderFound: true,
+        repairedOrderId: lookup.repairedOrderId,
+        attempt,
+        elapsedMs: Date.now() - t0,
+      });
+      break;
+    }
+
+    logStage("order-lookup-result", {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      orderFound: false,
+      internalCode: lookup.code,
+      attempt,
+      elapsedMs: Date.now() - t0,
+    });
   }
 
   if (!tx) {
-    return orderIdPending();
+    const pending = orderIdPending();
+    return manualFailure(pending.code, pending.message, {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      internalCode: "ORDER_ID_NOT_IN_CACHE",
+      elapsedMs: Date.now() - t0,
+    });
   }
 
   if (String(tx.order_id ?? "") !== submittedOrderId) {
-    return { ok: false, code: "ORDER_ID_NOT_FOUND", message: "That Binance Order ID was not found in this panel's history." };
+    return manualFailure("ORDER_ID_NOT_FOUND", "That Binance Order ID was not found in this panel's history.", {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      elapsedMs: Date.now() - t0,
+    });
   }
 
   const fail = validateTx(tx, intent, {
@@ -270,8 +467,54 @@ export async function claimBinancePayment(
     windowEndMs: endTime,
   });
   if (fail) {
-    return { ok: false, code: fail.code as Exclude<BinanceClaimResult["code"], "PAYMENT_CONFIRMED">, message: fail.message };
+    logStage("validation-result", {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      orderFound: true,
+      validationField: fail.code,
+      elapsedMs: Date.now() - t0,
+    });
+    return manualFailure(fail.code as Exclude<BinanceClaimResult["code"], "PAYMENT_CONFIRMED">, fail.message, {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      validationField: fail.code,
+      elapsedMs: Date.now() - t0,
+    });
   }
 
-  return creditMatch(admin, intent, tx, creds.config ?? null);
+  logStage("validation-result", {
+    panelId: maskedPanelId,
+    paymentId: maskedPaymentId,
+    orderFound: true,
+    validationField: "ok",
+    elapsedMs: Date.now() - t0,
+  });
+
+  logStage("credit-start", {
+    panelId: maskedPanelId,
+    paymentId: maskedPaymentId,
+    elapsedMs: Date.now() - t0,
+  });
+
+  const creditRes = await creditMatch(admin, intent, tx, creds.config ?? null);
+  logStage("credit-result", {
+    panelId: maskedPanelId,
+    paymentId: maskedPaymentId,
+    internalCode: creditRes.code,
+    elapsedMs: Date.now() - t0,
+  });
+
+  if (creditRes.ok) return creditRes;
+  if (creditRes.code === "PAYMENT_ALREADY_CREDITED") {
+    return { ...creditRes, message: "Payment was already confirmed and credited." };
+  }
+  if (creditRes.code === "DATABASE_WRITE_FAILURE" || creditRes.code === "PAYMENT_CREDIT_FAILURE") {
+    return manualFailure(creditRes.code, CREDIT_FAILURE_MESSAGE, {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      elapsedMs: Date.now() - t0,
+    });
+  }
+
+  return creditRes;
 }
