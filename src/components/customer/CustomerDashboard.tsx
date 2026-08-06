@@ -31,7 +31,7 @@ export type PaymentMethod = {
   minTopup: number;
   discountPct: number | null;
   discountRules: TopupDiscountRule[];
-  /** true = verified by transaction id (Binance Pay), not a hosted redirect. */
+  /** true = verified by Binance Order ID (Binance Pay), not a hosted redirect. */
   manual?: boolean;
 };
 
@@ -71,17 +71,17 @@ const PAY_CATEGORY_ORDER: { key: string; label: string }[] = [
 ];
 
 /** Binance Pay — a 2-step flow: (1) Make payment, (2) Verify by Binance Order ID.
- *  Transaction-id based (no auto-detect). The customer pays the exact amount, then
- *  pastes their Binance Order ID / transaction id, which the server verifies. */
+ *  The customer pays the exact amount, then pastes their Binance Order ID, which
+ *  the server verifies. */
 function BinancePayPanel({
   info, onClaim, onDone,
 }: {
   info: BinanceDepositInfo;
-  onClaim?: (paymentId: string, transactionId: string) => Promise<BinanceClaimResult>;
+  onClaim?: (paymentId: string, orderId: string) => Promise<BinanceClaimResult>;
   onDone: () => void;
 }) {
   const [step, setStep] = useState<"pay" | "verify">("pay");
-  const [txId, setTxId] = useState("");
+  const [orderId, setOrderId] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "error" | "pending" } | null>(null);
   const [done, setDone] = useState(false);
@@ -104,13 +104,13 @@ function BinancePayPanel({
 
   const verify = async () => {
     if (!onClaim || busy) return;
-    const id = txId.trim();
+    const id = orderId.trim();
     if (!id) { setMsg({ text: "Paste your Binance Order ID.", tone: "error" }); return; }
     setBusy(true); setMsg(null);
     const res = await onClaim(info.paymentId, id);
     setBusy(false);
-    if (res.ok) { setMsg({ text: res.message, tone: "ok" }); setDone(true); return; }
-    setMsg({ text: res.message, tone: res.pending ? "pending" : "error" });
+    if (res.ok || res.code === "PAYMENT_ALREADY_CREDITED") { setMsg({ text: res.message, tone: "ok" }); setDone(true); return; }
+    setMsg({ text: res.message, tone: res.code === "ORDER_PENDING_BINANCE_HISTORY" ? "pending" : "error" });
   };
 
   const Stepper = (
@@ -175,15 +175,15 @@ function BinancePayPanel({
       {step === "verify" && !done && (
         <>
           <div>
-            <label className="fp-text-faint text-[10px] fp-mono uppercase">Enter your Binance Transaction ID</label>
+            <label className="fp-text-faint text-[10px] fp-mono uppercase">Enter your Binance Order ID</label>
             <input
-              value={txId}
-              onChange={(e) => { setTxId(e.target.value); setMsg(null); }}
+              value={orderId}
+              onChange={(e) => { setOrderId(e.target.value); setMsg(null); }}
               onKeyDown={(e) => e.key === "Enter" && verify()}
-              placeholder="e.g. 123456789012345678"
+              placeholder="e.g. 446982297682452480"
               className="w-full bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2.5 text-sm fp-mono outline-none focus:border-[rgba(201,165,116,0.35)] text-[#EDEAE2] mt-1"
             />
-            <p className="fp-text-faint text-[11px] mt-1.5">Copy the transaction ID from the successful payment details in your Binance account, paste it here, then tap Verify.</p>
+            <p className="fp-text-faint text-[11px] mt-1.5">Copy the Order ID from your successful Binance C2C payment details, paste it here, then tap Verify.</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={verify} disabled={busy || expired} className="fp-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-70 flex items-center gap-2">
@@ -305,7 +305,6 @@ export function CustomerDashboard({
   onAddFunds,
   onDeposit,
   onBinanceCreate,
-  onBinanceCheck,
   onBinanceClaim,
   platformMeta,
   currency = "USD",
@@ -353,10 +352,8 @@ export function CustomerDashboard({
   onDeposit?: (amount: number, gateway?: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
   /** Binance Pay: create a pending deposit → returns pay-to details (no redirect). */
   onBinanceCreate?: (amount: number) => Promise<{ ok: boolean; data?: BinanceDepositInfo; error?: string }>;
-  /** Binance Pay: auto-detect the payment by its unique amount (no transaction id). */
-  onBinanceCheck?: (paymentId: string) => Promise<BinanceClaimResult>;
-  /** Binance Pay: verify a submitted transaction id → credits the wallet on success. */
-  onBinanceClaim?: (paymentId: string, transactionId: string) => Promise<BinanceClaimResult>;
+  /** Binance Pay: verify a submitted Binance Order ID → credits the wallet on success. */
+  onBinanceClaim?: (paymentId: string, orderId: string) => Promise<BinanceClaimResult>;
   platformMeta?: PlatformMeta;
   /** Panel operating currency (ISO code). */
   currency?: string;

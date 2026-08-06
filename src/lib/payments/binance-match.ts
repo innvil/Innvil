@@ -12,7 +12,7 @@ import { round4 } from "@/src/lib/money";
 export const ACCEPTED_ORDER_TYPES = new Set(["C2C"]);
 export const ACCEPTED_ASSET = "USDT";
 export const EXPIRY_MINUTES = 10;
-export const TX_COLS = "transaction_id, order_type, transaction_time, amount, currency, receiver_binance_id";
+export const TX_COLS = "transaction_id, order_id, order_type, transaction_time, amount, currency, receiver_binance_id";
 
 export interface PendingIntent {
   id: string;
@@ -23,6 +23,7 @@ export interface PendingIntent {
 }
 export interface BinanceTx {
   transaction_id: string;
+  order_id: string | null;
   order_type: string;
   transaction_time: string;
   amount: string;
@@ -31,7 +32,24 @@ export interface BinanceTx {
 }
 export type BinanceClaimResult =
   | { ok: true; code: "PAYMENT_CONFIRMED"; message: string; credited: number; received: number }
-  | { ok: false; code: string; message: string; pending?: boolean };
+  | { ok: false; code:
+      | "PAYMENT_ALREADY_CREDITED"
+      | "AUTH"
+      | "NO_ACCOUNT"
+      | "ORDER_PENDING_BINANCE_HISTORY"
+      | "ORDER_ID_NOT_FOUND"
+      | "ORDER_ID_ALREADY_USED"
+      | "AMOUNT_MISMATCH"
+      | "CURRENCY_MISMATCH"
+      | "WRONG_RECEIVER"
+      | "TRANSACTION_OUTSIDE_WINDOW"
+      | "BINANCE_AUTH_FAILURE"
+      | "BINANCE_REGION_RESTRICTED"
+      | "BINANCE_API_FAILURE"
+      | "BINANCE_NOT_CONFIGURED"
+      | "INVALID_ORDER_ID"
+      | "DEPOSIT_NOT_OPEN"
+      | "INTERNAL_ERROR"; message: string; pending?: boolean };
 
 export function normalizeEnteredTransactionId(input: string): string {
   return String(input || "").normalize("NFKC").trim().replace(/\s+/g, "");
@@ -101,9 +119,9 @@ export function validateTx(
   intent: PendingIntent,
   opts: { expectedUid: string; requirePayableMatch: boolean; windowStartMs: number; windowEndMs: number }
 ): { code: string; message: string } | null {
-  if (!isPositiveDecimal(tx.amount)) return { code: "NOT_INCOMING", message: "That transaction isn't an incoming payment." };
+  if (!isPositiveDecimal(tx.amount)) return { code: "AMOUNT_MISMATCH", message: "That transaction isn't an incoming payment." };
   if (String(tx.currency).toUpperCase() !== ACCEPTED_ASSET) return { code: "CURRENCY_MISMATCH", message: `That transaction used ${tx.currency}, but ${ACCEPTED_ASSET} is required.` };
-  if (String(tx.order_type).toUpperCase() !== "C2C") return { code: "TRANSACTION_NOT_FOUND", message: "No matching Binance Pay C2C transaction was found." };
+  if (String(tx.order_type).toUpperCase() !== "C2C") return { code: "ORDER_ID_NOT_FOUND", message: "No matching Binance Pay C2C transaction was found." };
   if (opts.expectedUid) {
     const got = String(tx.receiver_binance_id ?? "").trim();
     if (!got || got !== opts.expectedUid) {
@@ -111,12 +129,12 @@ export function validateTx(
     }
   }
   if (!ACCEPTED_ORDER_TYPES.has(String(tx.order_type).toUpperCase())) {
-    return { code: "TRANSACTION_NOT_FOUND", message: "No matching Binance Pay C2C transaction was found." };
+    return { code: "ORDER_ID_NOT_FOUND", message: "No matching Binance Pay C2C transaction was found." };
   }
 
   const txTime = new Date(tx.transaction_time).getTime();
   if (!Number.isFinite(txTime) || txTime < opts.windowStartMs || txTime > opts.windowEndMs) {
-    return { code: "TRANSACTION_OUTSIDE_TIME_WINDOW", message: "That transaction is outside the allowed verification time window for this deposit." };
+    return { code: "TRANSACTION_OUTSIDE_WINDOW", message: "That transaction is outside the allowed verification time window for this deposit." };
   }
 
   if (opts.requirePayableMatch && intent.binance_payable != null && !decimalEquals(tx.amount, intent.binance_payable)) {
@@ -129,28 +147,18 @@ export function validateTx(
 export async function findMatchingTx(
   admin: SupabaseClient,
   panelId: string,
-  intent: PendingIntent,
-  expectedUid: string,
-  windowStartMs: number,
-  windowEndMs: number
+  orderId: string
 ): Promise<BinanceTx | null> {
-  if (intent.binance_payable == null) return null;
+  const normalizedOrderId = normalizeEnteredTransactionId(orderId);
+  if (!normalizedOrderId) return null;
   const { data } = await admin
     .from("binance_pay_transactions")
     .select(TX_COLS)
     .eq("panel_id", panelId)
-    .eq("amount", intent.binance_payable)
+    .eq("order_id", normalizedOrderId)
     .order("transaction_time", { ascending: false })
-    .limit(10);
+    .limit(1);
   for (const tx of ((data as BinanceTx[] | null) ?? [])) {
-    if (validateTx(tx, intent, {
-      expectedUid,
-      requirePayableMatch: true,
-      windowStartMs,
-      windowEndMs,
-    })) continue;
-    const { data: used } = await admin.from("payments").select("id").eq("binance_tx_id", tx.transaction_id).maybeSingle();
-    if (used) continue;
     return tx;
   }
   return null;
@@ -158,7 +166,8 @@ export async function findMatchingTx(
 
 /**
  * Atomically claim `intent` for `tx` and credit the wallet (+ tiered bonus). The unique
- * index on payments.binance_tx_id guarantees a transaction credits at most one deposit.
+ * indexes on payments.binance_order_id and payments.binance_tx_id guarantee one use per
+ * Order ID and per transaction id.
  */
 export async function creditMatch(
   admin: SupabaseClient,
@@ -175,21 +184,25 @@ export async function creditMatch(
   const { data: claimCode, error: claimErr } = await admin.rpc("claim_binance_payment", {
     p_payment_id: intent.id,
     p_customer_id: intent.customer_id,
+    p_order_id: tx.order_id ?? "",
     p_tx_id: tx.transaction_id,
     p_bonus_amount: bonus,
     p_credit_amount: credit,
-    p_reason: `Binance Pay ${tx.transaction_id}`,
+    p_reason: `Binance Pay ${tx.order_id ?? tx.transaction_id}`,
   });
 
-  if (claimErr) return { ok: false, code: "INTERNAL_ERROR", message: "Could not verify the payment right now." };
-  if (claimCode === "TRANSACTION_ALREADY_USED") {
-    return { ok: false, code: "TRANSACTION_ALREADY_USED", message: "This Binance transaction has already been used." };
+  if (claimErr) return { ok: false, code: "BINANCE_API_FAILURE", message: "Could not verify the payment right now." };
+  if (claimCode === "PAYMENT_ALREADY_CREDITED") {
+    return { ok: false, code: "PAYMENT_ALREADY_CREDITED", message: "This deposit has already been credited." };
+  }
+  if (claimCode === "ORDER_ID_ALREADY_USED") {
+    return { ok: false, code: "ORDER_ID_ALREADY_USED", message: "This Binance Order ID has already been used." };
   }
   if (claimCode === "DEPOSIT_NOT_OPEN") {
     return { ok: false, code: "DEPOSIT_NOT_OPEN", message: "This deposit was already processed." };
   }
   if (claimCode !== "OK") {
-    return { ok: false, code: "INTERNAL_ERROR", message: "Payment matched, but crediting failed. Please try again." };
+    return { ok: false, code: "BINANCE_API_FAILURE", message: "Payment matched, but crediting failed. Please try again." };
   }
 
   return {

@@ -2,12 +2,11 @@ import "server-only";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { loadActiveBinanceCredentials } from "@/src/lib/payments/binance-credentials";
 import { syncPanelBinanceHistory } from "@/src/lib/payments/binance-sync";
-import { findMatchingTx, creditMatch, EXPIRY_MINUTES, type PendingIntent } from "@/src/lib/payments/binance-match";
+import { EXPIRY_MINUTES, type PendingIntent } from "@/src/lib/payments/binance-match";
 
 /* =========================================================
-   Cron sweep: for every panel with an open Binance deposit, sync the owner's Pay
-   history once and auto-credit any deposit whose unique payable amount now matches an
-   incoming transaction. Hands-free credit without the customer pasting a transaction id.
+  Cron sweep: for every panel with an open Binance deposit, sync the owner's Pay
+  history once so the manual Order ID lookup can see the latest transactions.
    ========================================================= */
 
 export interface BinanceSweepResult {
@@ -53,17 +52,7 @@ export async function sweepBinanceDeposits(): Promise<BinanceSweepResult> {
       const creds = await loadActiveBinanceCredentials(panelId);
       if (!creds.ok) return;
       try { await syncPanelBinanceHistory(panelId); } catch { return; }
-      const expectedUid = (creds.config.binanceUid ?? "").trim();
-      for (const intent of intents) {
-        const created = new Date(intent.created_at).getTime();
-        const windowStart = Math.max(0, created - 5 * 60 * 1000);
-        const windowEnd = Math.max(windowStart, created + EXPIRY_MINUTES * 60_000 + 5 * 60 * 1000);
-        const tx = await findMatchingTx(admin, panelId, intent, expectedUid, windowStart, windowEnd);
-        if (!tx) continue;
-        matched++;
-        const res = await creditMatch(admin, intent, tx, creds.config);
-        if (res.ok) credited++;
-      }
+      void intents;
     })
   );
 

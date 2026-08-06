@@ -4,6 +4,7 @@ import {
   validateTx,
   matchesTransactionId,
   normalizeEnteredTransactionId,
+  findMatchingTx,
   creditMatch,
   type PendingIntent,
   type BinanceTx,
@@ -25,6 +26,7 @@ function makeIntent(overrides: Partial<PendingIntent> = {}): PendingIntent {
 function makeTx(overrides: Partial<BinanceTx> = {}): BinanceTx {
   return {
     transaction_id: "M_P_71505104267788288",
+    order_id: "446982297682452480",
     order_type: "C2C",
     transaction_time: "2026-08-06T10:06:00.000Z",
     amount: "100.1234",
@@ -57,15 +59,15 @@ test("outgoing negative C2C transaction is rejected", () => {
       windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
     }
   );
-  assert.equal(fail?.code, "NOT_INCOMING");
+  assert.equal(fail?.code, "AMOUNT_MISMATCH");
 });
 
-test("wrong transactionId is not treated as a match", () => {
+test("wrong order id is not treated as a match", () => {
   assert.equal(matchesTransactionId("M_P_71505104267788288", "M_P_71505104267788288"), true);
   assert.equal(matchesTransactionId("M_P_71505104267788289", "M_P_71505104267788288"), false);
 });
 
-test("transaction IDs keep M_P_ prefix and case", () => {
+test("internal transaction ids keep M_P_ prefix and case", () => {
   const normalized = normalizeEnteredTransactionId("  M_P_71505104267788288  ");
   assert.equal(normalized, "M_P_71505104267788288");
 });
@@ -112,7 +114,7 @@ test("wrong receiver returns WRONG_RECEIVER", () => {
   assert.equal(fail?.code, "WRONG_RECEIVER");
 });
 
-test("transaction outside time window returns TRANSACTION_OUTSIDE_TIME_WINDOW", () => {
+test("transaction outside time window returns TRANSACTION_OUTSIDE_WINDOW", () => {
   const fail = validateTx(
     makeTx({ transaction_time: "2026-08-06T11:00:00.000Z" }),
     makeIntent(),
@@ -123,16 +125,48 @@ test("transaction outside time window returns TRANSACTION_OUTSIDE_TIME_WINDOW", 
       windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
     }
   );
-  assert.equal(fail?.code, "TRANSACTION_OUTSIDE_TIME_WINDOW");
+  assert.equal(fail?.code, "TRANSACTION_OUTSIDE_WINDOW");
 });
 
-test("duplicate transaction maps to TRANSACTION_ALREADY_USED", async () => {
+test("findMatchingTx returns the stored row by Order ID", async () => {
+  let selectedOrderId = "";
+  const query = {
+    eq: (_column: string, value: string) => {
+      selectedOrderId = value;
+      return query;
+    },
+    order: () => ({ limit: () => ({ data: [makeTx()], error: null }) }),
+    maybeSingle: async () => ({ data: makeTx(), error: null }),
+  };
   const fakeAdmin = {
-    rpc: async () => ({ data: "TRANSACTION_ALREADY_USED", error: null }),
+    from: () => ({ select: () => query }),
+  } as any;
+  const out = await findMatchingTx(fakeAdmin, "panel_1", "446982297682452480");
+  assert.equal(selectedOrderId, "446982297682452480");
+  assert.equal(out?.order_id, "446982297682452480");
+});
+
+test("creditMatch submits both order_id and transaction_id to the claim RPC", async () => {
+  let rpcArgs: Record<string, unknown> | null = null;
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      rpcArgs = args;
+      return { data: "OK", error: null };
+    },
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, true);
+  assert.equal(rpcArgs?.p_order_id, "446982297682452480");
+  assert.equal(rpcArgs?.p_tx_id, "M_P_71505104267788288");
+});
+
+test("duplicate order id is rejected by the claim core", async () => {
+  const fakeAdmin = {
+    rpc: async () => ({ data: "ORDER_ID_ALREADY_USED", error: null }),
   } as any;
   const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
   assert.equal(out.ok, false);
-  if (!out.ok) assert.equal(out.code, "TRANSACTION_ALREADY_USED");
+  if (!out.ok) assert.equal(out.code, "ORDER_ID_ALREADY_USED");
 });
 
 test("malformed Binance response is rejected", async () => {

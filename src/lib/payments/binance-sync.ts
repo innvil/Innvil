@@ -63,6 +63,7 @@ export async function collectTransactionsForWindow(
     for (const t of sorted) {
       rows.push({
         transaction_id: String(t.transactionId),
+        order_id: t.orderId != null ? String(t.orderId) : null,
         order_type: String(t.orderType ?? ""),
         transaction_time: new Date(Number(t.transactionTime) || Date.now()).toISOString(),
         amount: String(t.amount ?? "0"),

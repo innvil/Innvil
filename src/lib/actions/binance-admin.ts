@@ -46,12 +46,14 @@ export interface BinanceDepositVM {
   bonus: number;
   currency: string;
   status: string;          // pending | completed | rejected | approved
+  orderId: string | null;   // app-visible Binance C2C Order ID
   txId: string | null;     // matched Binance transaction id
   createdAt: string;
 }
 
 export interface BinanceTxVM {
   transactionId: string;
+  orderId: string | null;
   orderType: string;
   amount: number;
   currency: string;
@@ -76,7 +78,7 @@ export async function getBinanceReview(panelId: string): Promise<BinanceReview |
 
   const { data: payRows } = await admin
     .from("payments")
-    .select("id, customer_id, amount, bonus_amount, binance_payable, binance_tx_id, currency, status, created_at")
+    .select("id, customer_id, amount, bonus_amount, binance_payable, binance_order_id, binance_tx_id, currency, status, created_at")
     .eq("panel_id", panelId)
     .eq("gateway", "binance_pay")
     .order("created_at", { ascending: false })
@@ -94,13 +96,14 @@ export async function getBinanceReview(panelId: string): Promise<BinanceReview |
     bonus: Number(p.bonus_amount ?? 0) || 0,
     currency: (p.currency as string) ?? "USD",
     status: p.status as string,
+    orderId: (p.binance_order_id as string | null) ?? null,
     txId: (p.binance_tx_id as string | null) ?? null,
     createdAt: p.created_at as string,
   }));
 
   const { data: txRows } = await admin
     .from("binance_pay_transactions")
-    .select("transaction_id, order_type, amount, currency, receiver_binance_id, payer_name, transaction_time, updated_at")
+    .select("transaction_id, order_id, order_type, amount, currency, receiver_binance_id, payer_name, transaction_time, updated_at")
     .eq("panel_id", panelId)
     .order("transaction_time", { ascending: false })
     .limit(50);
@@ -108,6 +111,7 @@ export async function getBinanceReview(panelId: string): Promise<BinanceReview |
   const usedTxIds = new Set(deposits.map((d) => d.txId).filter(Boolean) as string[]);
   const transactions: BinanceTxVM[] = txs.map((t) => ({
     transactionId: t.transaction_id as string,
+    orderId: (t.order_id as string | null) ?? null,
     orderType: (t.order_type as string) ?? "",
     amount: Number(t.amount) || 0,
     currency: ((t.currency as string) ?? "").toUpperCase(),
