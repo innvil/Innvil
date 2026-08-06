@@ -991,6 +991,7 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const [bulkMkOpen, setBulkMkOpen] = useState(false);
   const [bulkKind, setBulkKind] = useState<MarkupKind>("percent");
   const [bulkVal, setBulkVal] = useState("20");
+  const [catalogSearch, setCatalogSearch] = useState("");
 
   // Import panel
   const [importOpen, setImportOpen] = useState(false);
@@ -1075,6 +1076,40 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const filtered = (provCatalog ?? []).filter((s) =>
     !search.trim() || `${s.name} ${s.category} ${s.service}`.toLowerCase().includes(search.toLowerCase())
   );
+
+  const catalogFiltered = useMemo(() => {
+    const q = catalogSearch.trim().toLowerCase();
+    if (!q) return catalog ?? [];
+    const isNumeric = /^\d+$/.test(q);
+    return (catalog ?? [])
+      .map((p) => {
+        const subs = p.subs
+          .map((sub) => {
+            const services = sub.services.filter((s) => {
+              const localIdText = s.localId != null ? String(s.localId) : "";
+              const providerIdText = String(s.providerServiceId ?? "");
+              if (isNumeric) {
+                return localIdText.includes(q) || providerIdText.includes(q);
+              }
+              const hay = [
+                s.name,
+                sub.name,
+                p.name,
+                localIdText,
+                providerIdText,
+              ]
+                .join(" ")
+                .toLowerCase();
+              return hay.includes(q);
+            });
+            return { ...sub, services, count: services.length };
+          })
+          .filter((sub) => sub.services.length > 0);
+        const count = subs.reduce((n, sub) => n + sub.services.length, 0);
+        return { ...p, subs, count };
+      })
+      .filter((p) => p.count > 0);
+  }, [catalog, catalogSearch]);
   const selectableIds = filtered.filter((s) => !importedIds.has(String(s.service))).map((s) => String(s.service));
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
@@ -1387,6 +1422,15 @@ export function ServicesTab({ panelId }: { panelId: string }) {
           </div>
         }
       >
+        <div className="relative mb-3">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
+          <input
+            value={catalogSearch}
+            onChange={(e) => setCatalogSearch(e.target.value)}
+            placeholder="Search catalog by service name, panel ID, or provider ID…"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg pl-9 pr-3 py-2.5 text-sm outline-none focus:fp-gold-border"
+          />
+        </div>
         {sel.size > 0 && (
           <div className="flex items-center gap-2 flex-wrap mb-3 p-2.5 rounded-lg fp-gold-soft-bg border fp-gold-border">
             <span className="text-sm fp-gold font-medium mr-1">{sel.size} selected</span>
@@ -1408,7 +1452,7 @@ export function ServicesTab({ panelId }: { panelId: string }) {
             )}
           </div>
         )}
-        {catalog && catalog.length > 0 && (
+        {catalogFiltered.length > 0 && (
           <label className="flex items-center gap-2 mb-3 text-xs fp-text-dim cursor-pointer select-none">
             <input
               type="checkbox"
@@ -1416,16 +1460,20 @@ export function ServicesTab({ panelId }: { panelId: string }) {
               onChange={toggleCatalogSelectAll}
               className="accent-[#C9A574]"
             />
-            Select all services ({allServiceIds.length})
+              Select all services ({allServiceIds.length})
           </label>
         )}
         {catalog === null ? (
           <p className="fp-text-faint text-sm py-4 text-center">Loading catalog…</p>
-        ) : catalog.length === 0 ? (
-          <p className="fp-text-faint text-sm py-6 text-center">No services yet. Import them from a connected provider — categories are created automatically.</p>
+        ) : catalogFiltered.length === 0 ? (
+          <p className="fp-text-faint text-sm py-6 text-center">
+            {catalogSearch.trim()
+              ? `No catalog services match "${catalogSearch}".`
+              : "No services yet. Import them from a connected provider — categories are created automatically."}
+          </p>
         ) : (
           <div className="space-y-2">
-            {catalog.map((p) => {
+            {catalogFiltered.map((p) => {
               const pk = p.id ?? `_${p.name}`;
               const pOpen = openP.has(pk);
               return (

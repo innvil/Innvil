@@ -57,6 +57,12 @@ function matchesQuery(s: CustomerService, query: string): boolean {
     .every((token) => haystack.includes(token));
 }
 
+function matchesNumericId(id: number, numericQuery: string): boolean {
+  const sid = String(id);
+  // Numeric search is ID-only to prevent matches from text fields (e.g. "20 days").
+  return sid.startsWith(numericQuery);
+}
+
 const FAVORITES_CATEGORY = "★ Favorites";
 
 /* =========================================================
@@ -96,6 +102,7 @@ export function NewOrder({
   const [category, setCategory] = useState<string | null>(null);
   const [service, setService] = useState<CustomerService | null>(null);
   const [query, setQuery] = useState("");
+  const [serviceSearch, setServiceSearch] = useState("");
   const [link, setLink] = useState("");
   const [qty, setQty] = useState<string>("");
   const [placed, setPlaced] = useState(false);
@@ -140,6 +147,7 @@ export function NewOrder({
     setPlaceError(null);
     setDrip(false);
     setComments("");
+    setServiceSearch("");
     setPickerOpen(false); // collapse the list to a dropdown once chosen
   };
 
@@ -157,14 +165,18 @@ export function NewOrder({
   const searchResults = useMemo(() => {
     const q = query.trim();
     if (!q) return [];
-    const matches = services.filter((s) => matchesQuery(s, q));
-    // Numeric query: services whose ID starts with it rank first
     if (/^\d+$/.test(q)) {
-      matches.sort(
-        (a, b) =>
-          Number(String(b.id).startsWith(q)) - Number(String(a.id).startsWith(q))
-      );
+      const matches = services.filter((s) => matchesNumericId(s.id, q));
+      matches.sort((a, b) => {
+        const aId = Number(a.id);
+        const bId = Number(b.id);
+        if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
+        return a.name.localeCompare(b.name);
+      });
+      return matches.slice(0, 8);
     }
+
+    const matches = services.filter((s) => matchesQuery(s, q));
     return matches.slice(0, 8);
   }, [query, services]);
 
@@ -192,6 +204,28 @@ export function NewOrder({
     );
   }, [platform, category, platformFavorites, services]);
 
+  const filteredServicesInCategory = useMemo(() => {
+    const q = serviceSearch.trim();
+    if (!q) return servicesInCategory;
+    if (/^\d+$/.test(q)) {
+      const matches = servicesInCategory.filter((s) => matchesNumericId(s.id, q));
+      matches.sort((a, b) => {
+        const aId = Number(a.id);
+        const bId = Number(b.id);
+        if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
+        return a.name.localeCompare(b.name);
+      });
+      return matches;
+    }
+
+    const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = servicesInCategory.filter((s) => {
+      const hay = [s.name, s.category, String(s.id), ...s.aliases].join(" ").toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+    return matches;
+  }, [serviceSearch, servicesInCategory]);
+
   const isComments = !!service?.comments;
   const commentLines = useMemo(
     () => comments.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
@@ -211,6 +245,7 @@ export function NewOrder({
     setQty("");
     setPlaced(false);
     setDrip(false);
+    setServiceSearch("");
     setPickerOpen(true);
   };
 
@@ -296,7 +331,7 @@ export function NewOrder({
             className={`${inputCls} pl-10 py-3`}
           />
           {searchResults.length > 0 && (
-            <div className="absolute top-full left-0 right-0 mt-2 fp-panel border fp-line rounded-xl shadow-2xl z-30 overflow-hidden">
+            <div className="absolute top-full left-0 right-0 mt-2 bg-[#151922] border border-[#2A3040] rounded-xl shadow-[0_18px_40px_rgba(0,0,0,0.55)] z-30 overflow-hidden backdrop-blur-0">
               {searchResults.map((s) => (
                 <button
                   key={s.id}
@@ -317,7 +352,7 @@ export function NewOrder({
             </div>
           )}
           {query.trim() && searchResults.length === 0 && (
-            <div className="absolute top-full left-0 right-0 mt-2 fp-panel border fp-line rounded-xl shadow-2xl z-30 px-4 py-4 text-sm fp-text-dim">
+            <div className="absolute top-full left-0 right-0 mt-2 bg-[#151922] border border-[#2A3040] rounded-xl shadow-[0_18px_40px_rgba(0,0,0,0.55)] z-30 px-4 py-4 text-sm fp-text-dim">
               No services match &quot;{query}&quot;. Try a platform name, category, or service ID.
             </div>
           )}
@@ -371,7 +406,20 @@ export function NewOrder({
             </button>
           ) : (
             <div className="space-y-2">
-              {servicesInCategory.map((s) => (
+              <div className="relative mb-2">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
+                <input
+                  value={serviceSearch}
+                  onChange={(e) => setServiceSearch(e.target.value)}
+                  placeholder="Search services in this category"
+                  className={`${inputCls} pl-9`}
+                />
+              </div>
+              {filteredServicesInCategory.length === 0 ? (
+                <p className="text-sm fp-text-faint py-3 px-1">
+                  No services match &quot;{serviceSearch}&quot; in this category.
+                </p>
+              ) : filteredServicesInCategory.map((s) => (
                 <button
                   key={s.id}
                   onClick={() => selectService(s)}
