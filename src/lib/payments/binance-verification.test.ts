@@ -9,6 +9,7 @@ import {
   type PendingIntent,
   type BinanceTx,
 } from "./binance-match";
+import { getBinanceDepositBreakdown, addDecimalExact } from "./binance-amounts";
 import { getPayTransactions, BinanceApiError } from "./binance";
 import { collectTransactionsForWindow } from "./binance-sync";
 
@@ -158,6 +159,42 @@ test("creditMatch submits both order_id and transaction_id to the claim RPC", as
   assert.equal(out.ok, true);
   assert.equal(rpcArgs?.["p_order_id"], "446982297682452480");
   assert.equal(rpcArgs?.["p_tx_id"], "M_P_71505104267788288");
+  assert.equal(rpcArgs?.["p_credit_amount"], "100.1234");
+  assert.equal(rpcArgs?.["p_bonus_amount"], "0");
+});
+
+test("exact increment arithmetic: requested 10.000 + increment 0.001 = total 10.001", () => {
+  const breakdown = getBinanceDepositBreakdown("10.000", "10.001", 4);
+  assert.equal(breakdown.base, "10");
+  assert.equal(breakdown.increment, "0.001");
+  assert.equal(breakdown.totalToSend, "10.001");
+  assert.equal(breakdown.walletCredit, "10.001");
+  assert.equal(addDecimalExact("10.000", "0.001", 4), "10.001");
+});
+
+test("successful payment credits the full exact Binance amount with no silent discard", async () => {
+  let rpcArgs: Record<string, unknown> | null = null;
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      rpcArgs = args;
+      return { data: "OK", error: null };
+    },
+  } as any;
+
+  const out = await creditMatch(
+    fakeAdmin,
+    makeIntent({ amount: "10.0000", binance_payable: "10.0010" }),
+    makeTx({ amount: "10.0010" }),
+    null
+  );
+
+  assert.equal(out.ok, true);
+  if (out.ok) {
+    assert.equal(out.credited, 10.001);
+    assert.equal(out.received, 10.001);
+  }
+  assert.equal(rpcArgs?.["p_credit_amount"], "10.001");
+  assert.notEqual(rpcArgs?.["p_credit_amount"], "10");
 });
 
 test("duplicate order id is rejected by the claim core", async () => {

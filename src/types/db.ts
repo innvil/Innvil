@@ -169,6 +169,9 @@ export interface PaymentRow {
   gateway: string | null;
   gateway_ref: string | null;
   approved_by: string | null;
+  superadmin_hidden_at: string | null;
+  superadmin_hidden_by: string | null;
+  superadmin_hidden_reason: string | null;
   created_at: string;
   updated_at: string;
 }

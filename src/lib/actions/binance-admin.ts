@@ -81,6 +81,7 @@ export async function getBinanceReview(panelId: string): Promise<BinanceReview |
     .select("id, customer_id, amount, bonus_amount, binance_payable, binance_order_id, binance_tx_id, currency, status, created_at")
     .eq("panel_id", panelId)
     .eq("gateway", "binance_pay")
+    .is("superadmin_hidden_at", null)
     .order("created_at", { ascending: false })
     .limit(100);
   const pays = (payRows as Array<Record<string, unknown>> | null) ?? [];

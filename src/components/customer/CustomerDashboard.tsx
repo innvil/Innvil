@@ -20,6 +20,7 @@ import { CampaignSurface } from "./CampaignSurface";
 import { MassOrder } from "./MassOrder";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
+import { getBinanceDepositBreakdown } from "@/src/lib/payments/binance-amounts";
 
 type Deposit = { amount: string; method: string; date: string; status: string };
 type Ticket = { id: string; subj: string; status: string; updated: string };
@@ -97,6 +98,19 @@ function BinancePayPanel({
   const expired = remaining <= 0 && !done;
   const mm = Math.floor(remaining / 60000);
   const ss = Math.floor((remaining % 60000) / 1000);
+  const breakdown = useMemo(() => {
+    try {
+      return getBinanceDepositBreakdown(info.amount, info.payable, 4);
+    } catch {
+      // Fallback should never happen for valid server payloads.
+      return {
+        base: String(info.amount),
+        increment: "0",
+        totalToSend: String(info.payable),
+        walletCredit: String(info.payable),
+      };
+    }
+  }, [info.amount, info.payable]);
 
   const copy = async (text: string, which: "pay" | "amt") => {
     try { await navigator.clipboard.writeText(text); setCopied(which); setTimeout(() => setCopied(null), 1500); } catch { /* ignore */ }
@@ -140,8 +154,30 @@ function BinancePayPanel({
       </div>
 
       <div className="text-center">
-        <span className="fp-display text-2xl fp-gold">{info.payable}</span> <span className="fp-text-dim text-sm">{info.asset}</span>
+        <span className="fp-display text-2xl fp-gold">{breakdown.totalToSend}</span> <span className="fp-text-dim text-sm">{info.asset}</span>
       </div>
+
+      <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 space-y-2 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className="fp-text-faint">Base deposit amount</span>
+          <span className="fp-mono fp-text">{breakdown.base} {info.asset}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="fp-text-faint">Unique verification increment</span>
+          <span className="fp-mono fp-gold">+{breakdown.increment} {info.asset}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t fp-line-soft pt-2">
+          <span className="fp-text-faint">Total amount to send</span>
+          <span className="fp-mono fp-text">{breakdown.totalToSend} {info.asset}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="fp-text-faint">Exact wallet amount credited</span>
+          <span className="fp-mono fp-safe">{breakdown.walletCredit} {info.asset}</span>
+        </div>
+      </div>
+      <p className="text-[11px] fp-text-dim leading-relaxed">
+        The small decimal increment helps us uniquely identify your payment. The full amount you send will be credited to your wallet.
+      </p>
 
       <div className="flex items-center justify-between gap-2 bg-[#1B1E27] border border-[#1E212A] rounded-lg px-3 py-2">
         <div className="min-w-0">
@@ -160,7 +196,7 @@ function BinancePayPanel({
           <p className="text-[11px] text-amber-400/90 flex items-center gap-1.5"><AlertTriangle size={12} /> {info.asset} only, exact amount — sending any other coin or amount won&apos;t be credited.</p>
           <ol className="list-decimal list-inside space-y-1 fp-text-dim text-[11px] leading-relaxed">
             <li>Scan the QR with the Binance app, or send to the Binance ID above.</li>
-            <li>Send exactly <span className="fp-mono fp-text">{info.payable} {info.asset}</span> via Binance Pay (not an on-chain withdrawal).</li>
+            <li>Send exactly <span className="fp-mono fp-text">{breakdown.totalToSend} {info.asset}</span> via Binance Pay (not an on-chain withdrawal).</li>
             <li>After it completes, tap “I’ve paid — verify”.</li>
           </ol>
           <div className="flex items-center gap-2">
@@ -407,7 +443,7 @@ export function CustomerDashboard({
   const discountPct = activeMethod?.discountPct ?? null;
   const depositAmt = Number(depositAmount) || 0;
   const appliedRule = pickDiscountRule(depositAmt, discountRules);
-  const appliedDiscountPct = appliedRule?.discountPct ?? discountPct;
+  const appliedDiscountPct = activeMethod?.manual ? null : (appliedRule?.discountPct ?? discountPct);
   const discountBonus = roundMoney(depositAmt * ((appliedDiscountPct ?? 0) / 100));
   const creditedAmount = roundMoney(depositAmt + discountBonus);
 

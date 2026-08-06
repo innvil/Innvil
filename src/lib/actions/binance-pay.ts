@@ -39,7 +39,7 @@ export interface BinanceDepositInfo {
   paymentId: string;
   payId: string;
   qrImage: string | null;
-  /** The requested top-up (what gets credited, before bonus). */
+  /** The requested top-up amount before unique verification increment. */
   amount: number;
   /** The EXACT amount the customer must send (base + unique tail). */
   payable: number;

@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { resolveGatewayDiscountPct } from "@/src/lib/actions/payments";
+import { asNonNegativeDecimal, toNumberFromDecimal } from "@/src/lib/payments/binance-amounts";
 import { round4 } from "@/src/lib/money";
 
 /* =========================================================
@@ -202,14 +202,15 @@ export async function creditMatch(
   admin: SupabaseClient,
   intent: PendingIntent,
   tx: BinanceTx,
-  gwConfig: Record<string, string> | null,
+  _gwConfig: Record<string, string> | null,
   logContext?: CreditLogContext
 ): Promise<BinanceClaimResult> {
-  const received = round4(decimalToNumber(tx.amount));
-  const base = round4(decimalToNumber(intent.amount)); // credit the requested top-up; the unique tail is a tiny margin
-  const bonusPct = await resolveGatewayDiscountPct("binance_pay", gwConfig, base);
-  const bonus = bonusPct != null ? round4((base * bonusPct) / 100) : 0;
-  const credit = round4(base + bonus);
+  // Credit the exact Binance amount received (including the unique verification increment).
+  const receivedDecimal = asNonNegativeDecimal(tx.amount, 4);
+  const received = toNumberFromDecimal(receivedDecimal);
+  const bonusDecimal = "0";
+  const creditDecimal = receivedDecimal;
+  const credit = toNumberFromDecimal(creditDecimal);
 
   let txAlreadyClaimed: boolean | null = null;
   let orderAlreadyClaimed: boolean | null = tx.order_id ? null : false;
@@ -248,8 +249,8 @@ export async function creditMatch(
     p_customer_id: intent.customer_id,
     p_order_id: tx.order_id ?? "",
     p_tx_id: tx.transaction_id,
-    p_bonus_amount: bonus,
-    p_credit_amount: credit,
+    p_bonus_amount: bonusDecimal,
+    p_credit_amount: creditDecimal,
     p_reason: `Binance Pay ${tx.order_id ?? tx.transaction_id}`,
   });
 
@@ -275,8 +276,8 @@ export async function creditMatch(
       p_payment_id: intent.id,
       p_customer_id: intent.customer_id,
       p_tx_id: tx.transaction_id,
-      p_bonus_amount: bonus,
-      p_credit_amount: credit,
+      p_bonus_amount: bonusDecimal,
+      p_credit_amount: creditDecimal,
       p_reason: `Binance Pay ${tx.order_id ?? tx.transaction_id}`,
     });
 

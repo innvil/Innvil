@@ -493,6 +493,7 @@ export async function listDeposits(panelId: string): Promise<DepositVM[]> {
     .from("payments")
     .select("id, amount, bonus_amount, currency, status, method, created_at")
     .eq("customer_id", acct.id)
+    .is("superadmin_hidden_at", null)
     .order("created_at", { ascending: false })
     .limit(50);
 
@@ -572,6 +573,7 @@ export async function listCustomerDeposits(customerAccountId: string): Promise<O
     .from("payments")
     .select("id, customer_id, amount, bonus_amount, currency, status, method, created_at")
     .eq("customer_id", customerAccountId)
+    .is("superadmin_hidden_at", null)
     .order("created_at", { ascending: false })
     .limit(25);
 
@@ -598,6 +600,7 @@ export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM
     .from("payments")
     .select("id, customer_id, amount, bonus_amount, currency, status, method, created_at")
     .eq("panel_id", panelId)
+    .is("superadmin_hidden_at", null)
     .order("created_at", { ascending: false })
     .limit(100);
   if (!data?.length) return [];
@@ -655,6 +658,7 @@ export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDeposit
     .from("payments")
     .select("id, panel_id, customer_id, amount, bonus_amount, currency, status, method, created_at")
     .in("panel_id", list.map((p) => p.id))
+    .is("superadmin_hidden_at", null)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (!data?.length) return [];
