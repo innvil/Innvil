@@ -3,9 +3,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { getGatewayContext } from "@/src/lib/payments";
 import { syncPanelBinanceHistory } from "@/src/lib/payments/binance-sync";
 import { BinanceApiError } from "@/src/lib/payments/binance";
+import { loadActiveBinanceCredentials } from "@/src/lib/payments/binance-credentials";
+import { paymentBelongsToRequestScope } from "@/src/lib/payments/binance-scope";
 import { round4 } from "@/src/lib/money";
 import {
   ACCEPTED_ASSET, EXPIRY_MINUTES, TX_COLS,
@@ -68,13 +69,43 @@ function maskValue(value: string | null | undefined): string | null {
 }
 
 function mapSyncError(error: unknown): BinanceClaimResult {
-  if (error instanceof BinanceApiError && error.kind === "auth") {
-    return { ok: false, code: "BINANCE_AUTH_FAILURE", message: "Binance authentication failed for this panel's receiving account key." };
-  }
   if (error instanceof BinanceApiError) {
-    return { ok: false, code: "BINANCE_API_FAILURE", message: "Binance API request failed. Please try again shortly." };
+    const code = error.binanceCode ?? "";
+    const msg = String(error.binanceMessage ?? error.message ?? "").toLowerCase();
+    if (code === "BINANCE_NOT_CONFIGURED") {
+      return { ok: false, code: "BINANCE_NOT_CONFIGURED", message: "Binance Pay is not configured for this panel." };
+    }
+    if (error.kind === "network") {
+      return { ok: false, code: "BINANCE_NETWORK_ERROR", message: "Could not reach Binance (network/DNS/TLS). Please try again shortly." };
+    }
+    if (error.kind === "parse") {
+      return { ok: false, code: "BINANCE_NON_JSON_RESPONSE", message: "Binance returned an unexpected non-JSON response." };
+    }
+    if (code === "-1022" || /signature/.test(msg)) {
+      return { ok: false, code: "BINANCE_INVALID_SIGNATURE", message: "Binance rejected the request signature." };
+    }
+    if (code === "-1021" || /timestamp|recvwindow/.test(msg)) {
+      return { ok: false, code: "BINANCE_TIMESTAMP_OUTSIDE_WINDOW", message: "Binance rejected the request time window." };
+    }
+    if (code === "-2008" || code === "-2014" || code === "-2015" || /invalid api[- ]?key|api key/.test(msg)) {
+      if (/ip/.test(msg)) {
+        return { ok: false, code: "BINANCE_IP_RESTRICTED", message: "Binance API key IP restriction rejected this request." };
+      }
+      return { ok: false, code: "BINANCE_INVALID_API_KEY", message: "Binance API key or secret is invalid for this request." };
+    }
+    if (error.httpStatus === 403 || /permission|not authorized|forbidden/.test(msg)) {
+      return { ok: false, code: "BINANCE_PERMISSION_DENIED", message: "Binance denied permission for this API key." };
+    }
+    if (error.httpStatus === 429 || code === "-1003" || /too many requests|rate limit/.test(msg)) {
+      return { ok: false, code: "BINANCE_RATE_LIMITED", message: "Binance rate limit reached. Please try again shortly." };
+    }
+    return { ok: false, code: "BINANCE_UNKNOWN_ERROR", message: "Binance request failed. Please try again shortly." };
   }
-  return { ok: false, code: "BINANCE_API_FAILURE", message: "Could not query Binance right now. Please try again shortly." };
+  return { ok: false, code: "BINANCE_UNKNOWN_ERROR", message: "Could not query Binance right now. Please try again shortly." };
+}
+
+function notConfigured(): BinanceClaimResult {
+  return { ok: false, code: "BINANCE_NOT_CONFIGURED", message: "Binance Pay is not configured for this panel." };
 }
 
 /** Create a pending Binance Pay deposit and return the pay-to details. */
@@ -96,13 +127,13 @@ export async function createBinanceDeposit(panelId: string, amount: number): Pro
   const amt = round4(Number(amount));
   if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter a valid amount." };
 
-  const ctx = await getGatewayContext(panelId, "binance_pay");
-  if (!ctx) return { ok: false, error: "Binance Pay isn't set up on this panel." };
-  const payId = (ctx.config.payId ?? "").trim();
-  if (!payId || !ctx.secrets.apiKey || !ctx.secrets.apiSecret) {
+  const creds = await loadActiveBinanceCredentials(panelId);
+  if (!creds.ok) return { ok: false, error: "Binance Pay isn't fully configured yet." };
+  const payId = (creds.config.payId ?? "").trim();
+  if (!payId) {
     return { ok: false, error: "Binance Pay isn't fully configured yet." };
   }
-  const min = minTopup(ctx.config);
+  const min = minTopup(creds.config);
   if (amt < min) return { ok: false, error: `Minimum Binance Pay deposit is ${min.toFixed(2)} ${ACCEPTED_ASSET}.` };
 
   const payable = await pickPayable(admin, panelId, amt);
@@ -120,7 +151,7 @@ export async function createBinanceDeposit(panelId: string, amount: number): Pro
     data: {
       paymentId: pay.id as string,
       payId,
-      qrImage: (ctx.config.qrImage ?? "").trim() || null,
+      qrImage: (creds.config.qrImage ?? "").trim() || null,
       amount: amt,
       payable,
       asset: ACCEPTED_ASSET,
@@ -143,7 +174,7 @@ async function loadOpenIntent(
     .select("id, panel_id, customer_id, amount, binance_payable, status, gateway, created_at")
     .eq("id", paymentId)
     .maybeSingle();
-  if (!payment || payment.customer_id !== customerId || payment.panel_id !== panelId || payment.gateway !== "binance_pay") {
+  if (!paymentBelongsToRequestScope(payment, panelId, customerId)) {
     return { error: { ok: false, code: "DEPOSIT_NOT_FOUND", message: "Deposit request not found." } };
   }
   if (payment.status === "completed") return { error: { ok: false, code: "ALREADY_PAID", message: "This deposit has already been credited." } };
@@ -179,8 +210,9 @@ export async function checkBinanceDeposit(panelId: string, paymentId: string): P
     return { ok: false, code: "TRANSACTION_NOT_FOUND", pending: true, message: "Auto-detect isn't available for this deposit — paste your transaction ID instead." };
   }
 
-  const ctx = await getGatewayContext(panelId, "binance_pay");
-  const expectedUid = (ctx?.config.binanceUid ?? "").trim();
+  const creds = await loadActiveBinanceCredentials(panelId);
+  if (!creds.ok) return notConfigured();
+  const expectedUid = (creds.config.binanceUid ?? "").trim();
   const { startTime, endTime } = paymentWindowMs(intent);
 
   let tx = await findMatchingTx(admin, panelId, intent, expectedUid, startTime, endTime);
@@ -195,7 +227,7 @@ export async function checkBinanceDeposit(panelId: string, paymentId: string): P
   if (!tx) {
     return { ok: false, code: "TRANSACTION_NOT_FOUND", pending: true, message: `We haven't detected your C2C Binance Pay transfer yet. If you just paid, give it a few seconds.` };
   }
-  return creditMatch(admin, intent, tx, ctx?.config ?? null);
+  return creditMatch(admin, intent, tx, creds.config ?? null);
 }
 
 /** Fallback: verify a specific transaction id the customer pasted. */
@@ -221,6 +253,8 @@ export async function claimBinancePayment(
   const loaded = await loadOpenIntent(admin, panelId, paymentId, acct.id as string);
   if ("error" in loaded) return loaded.error;
   const intent = loaded;
+  const creds = await loadActiveBinanceCredentials(panelId);
+  if (!creds.ok) return notConfigured();
   const { startTime, endTime } = paymentWindowMs(intent);
 
   const { data: usedElsewhere } = await admin.from("payments").select("id").eq("binance_tx_id", txId).maybeSingle();
@@ -258,8 +292,7 @@ export async function claimBinancePayment(
     return { ok: false, code: "TRANSACTION_ID_MISMATCH", message: "The entered transaction ID does not match Binance's transactionId for this payment." };
   }
 
-  const ctx = await getGatewayContext(panelId, "binance_pay");
-  const expectedUid = (ctx?.config.binanceUid ?? "").trim();
+  const expectedUid = (creds.config.binanceUid ?? "").trim();
   const fail = validateTx(tx, intent, {
     expectedUid,
     requirePayableMatch: true,
@@ -268,5 +301,5 @@ export async function claimBinancePayment(
   });
   if (fail) return { ok: false, ...fail };
 
-  return creditMatch(admin, intent, tx, ctx?.config ?? null);
+  return creditMatch(admin, intent, tx, creds.config ?? null);
 }

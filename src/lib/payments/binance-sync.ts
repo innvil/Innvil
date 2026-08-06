@@ -1,6 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { getGatewayContext } from "@/src/lib/payments";
+import { loadActiveBinanceCredentials } from "@/src/lib/payments/binance-credentials";
 import { getPayTransactions, type BinancePayRecord } from "@/src/lib/payments/binance";
 
 /* =========================================================
@@ -103,13 +103,10 @@ async function collectTransactions(
 }
 
 async function doSync(panelId: string, opts: SyncBinanceHistoryOptions = {}): Promise<{ synced: number }> {
-  const ctx = await getGatewayContext(panelId, "binance_pay");
-  if (!ctx) return { synced: 0 };
-  const apiKey = ctx.secrets.apiKey;
-  const apiSecret = ctx.secrets.apiSecret;
-  if (!apiKey || !apiSecret) return { synced: 0 };
+  const creds = await loadActiveBinanceCredentials(panelId);
+  if (!creds.ok) return { synced: 0 };
 
-  const { rows, pages } = await collectTransactions(apiKey, apiSecret, opts);
+  const { rows, pages } = await collectTransactions(creds.secrets.apiKey, creds.secrets.apiSecret, opts);
   if (rows.length === 0) return { synced: 0 };
   console.info("[binance-sync] collected", { panelId, pages, rows: rows.length });
 

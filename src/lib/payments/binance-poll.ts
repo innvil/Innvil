@@ -1,6 +1,6 @@
 import "server-only";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { getGatewayContext } from "@/src/lib/payments";
+import { loadActiveBinanceCredentials } from "@/src/lib/payments/binance-credentials";
 import { syncPanelBinanceHistory } from "@/src/lib/payments/binance-sync";
 import { findMatchingTx, creditMatch, EXPIRY_MINUTES, type PendingIntent } from "@/src/lib/payments/binance-match";
 
@@ -50,10 +50,10 @@ export async function sweepBinanceDeposits(): Promise<BinanceSweepResult> {
 
   await Promise.all(
     Array.from(byPanel.entries()).map(async ([panelId, intents]) => {
-      const ctx = await getGatewayContext(panelId, "binance_pay");
-      if (!ctx?.secrets.apiKey || !ctx.secrets.apiSecret) return;
+      const creds = await loadActiveBinanceCredentials(panelId);
+      if (!creds.ok) return;
       try { await syncPanelBinanceHistory(panelId); } catch { return; }
-      const expectedUid = (ctx.config.binanceUid ?? "").trim();
+      const expectedUid = (creds.config.binanceUid ?? "").trim();
       for (const intent of intents) {
         const created = new Date(intent.created_at).getTime();
         const windowStart = Math.max(0, created - 5 * 60 * 1000);
@@ -61,7 +61,7 @@ export async function sweepBinanceDeposits(): Promise<BinanceSweepResult> {
         const tx = await findMatchingTx(admin, panelId, intent, expectedUid, windowStart, windowEnd);
         if (!tx) continue;
         matched++;
-        const res = await creditMatch(admin, intent, tx, ctx.config);
+        const res = await creditMatch(admin, intent, tx, creds.config);
         if (res.ok) credited++;
       }
     })

@@ -140,7 +140,7 @@ test("malformed Binance response is rejected", async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({ code: "000000", message: "success", data: {} }), { status: 200 });
   await assert.rejects(
     () => getPayTransactions({ apiKey: "abc123", apiSecret: "def456" }, { startTime: 1, endTime: 2, limit: 10 }),
-    (err: unknown) => err instanceof BinanceApiError && err.kind === "api"
+    (err: unknown) => err instanceof BinanceApiError && err.kind === "parse"
   );
   globalThis.fetch = originalFetch;
 });
