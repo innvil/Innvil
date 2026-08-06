@@ -96,6 +96,26 @@ function isAuthFailure(httpStatus: number, binanceCode: string | null, msg: stri
   return /api-key|api key|signature|invalid key|permission|unauthorized/.test(text);
 }
 
+function deriveInternalCode(httpStatus: number | null, binanceCode: string | null, msg: string | null, kind: BinanceErrorKind): string {
+  const text = String(msg ?? "").toLowerCase();
+  if (httpStatus === 451) return "BINANCE_REGION_RESTRICTED";
+  if (kind === "network") return "BINANCE_NETWORK_ERROR";
+  if (kind === "parse") return "BINANCE_NON_JSON_RESPONSE";
+  if (binanceCode === "-1022" || /signature/.test(text)) return "BINANCE_INVALID_SIGNATURE";
+  if (binanceCode === "-1021" || /timestamp|recvwindow/.test(text)) return "BINANCE_TIMESTAMP_OUTSIDE_WINDOW";
+  if (binanceCode === "-2008" || binanceCode === "-2014" || binanceCode === "-2015" || /invalid api[- ]?key|api key/.test(text)) {
+    if (/ip/.test(text)) return "BINANCE_IP_RESTRICTED";
+    return "BINANCE_INVALID_API_KEY";
+  }
+  if (httpStatus === 403 || /permission|not authorized|forbidden/.test(text)) return "BINANCE_PERMISSION_DENIED";
+  if (httpStatus === 429 || binanceCode === "-1003" || /too many requests|rate limit/.test(text)) return "BINANCE_RATE_LIMITED";
+  return "BINANCE_UNKNOWN_ERROR";
+}
+
+function shortTextPreview(value: string, max = 300): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
 function toText(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "bigint") return String(value);
@@ -315,6 +335,9 @@ async function executePayTransactions(secrets: BinanceSecrets, opts: PayTxParams
   });
 
   const requestUrl = `${API_BASE_URL}/sapi/v1/pay/transactions?${signatureMeta.signedQuery}`;
+  const targetHost = new URL(API_BASE_URL).hostname;
+  const vercelEnvironment = process.env.VERCEL_ENV === "production" ? "Production" : process.env.VERCEL_ENV === "preview" ? "Preview" : "Development";
+  const vercelRegion = process.env.VERCEL_REGION ?? null;
   const timeSync = await fetchBinanceServerTime();
 
   const diagnostics: BinanceRequestDiagnostics = {
@@ -367,15 +390,36 @@ async function executePayTransactions(secrets: BinanceSecrets, opts: PayTxParams
   let res: Response;
   try {
     diagnostics.stage = "during_network_tls_dns";
+    console.info("[binance-pay] runtime-region", {
+      vercelRegion: process.env.VERCEL_REGION ?? "unknown",
+      vercelEnv: process.env.VERCEL_ENV ?? "unknown",
+      nodeEnv: process.env.NODE_ENV ?? "unknown",
+      hostname: "api.binance.com",
+    });
     res = await fetch(requestUrl, {
       method: "GET",
       headers: { "X-MBX-APIKEY": secrets.apiKey },
       signal: controller.signal,
     });
   } catch (error) {
+    const networkErrorName = error instanceof Error ? error.name : "UnknownError";
+    const networkErrorCode = extractNetworkErrorCode(error);
+    const internalCode = deriveInternalCode(null, null, null, "network");
+    console.error("[binance-pay] network-failed", {
+      internalCode,
+      networkErrorName,
+      networkErrorCode,
+      vercelRegion,
+      vercelEnvironment,
+      targetHost,
+      timestampOffsetMs: diagnostics.localVsBinanceTimeDiffMs,
+      recvWindow: diagnostics.recvWindow,
+      apiKeyPresent: Boolean(secrets.apiKey),
+      apiSecretPresent: Boolean(secrets.apiSecret),
+    });
     diagnostics.stage = "during_network_tls_dns";
     diagnostics.networkError = error instanceof Error ? error.message : String(error);
-    diagnostics.networkErrorCode = extractNetworkErrorCode(error);
+    diagnostics.networkErrorCode = networkErrorCode;
     throw new BinanceApiError("Binance network request failed.", {
       kind: "network",
       stage: "during_network_tls_dns",
@@ -399,7 +443,6 @@ async function executePayTransactions(secrets: BinanceSecrets, opts: PayTxParams
     timestamp: diagnostics.timestampMs,
     recvWindow: diagnostics.recvWindow,
     queryParamNames: diagnostics.queryParamNames,
-    finalUrl: diagnostics.finalUrlRedacted,
     unsignedQuery: diagnostics.unsignedQueryString,
     signedParamOrder: diagnostics.signedParamOrder,
     xMbxApiKeyHeaderPresent: diagnostics.xMbxApiKeyHeaderPresent,
@@ -409,16 +452,46 @@ async function executePayTransactions(secrets: BinanceSecrets, opts: PayTxParams
   if (!res.ok) {
     let code: string | null = null;
     let message: string | null = null;
+    let nonJsonPreview: string | null = null;
+    const responsePreview = shortTextPreview(text, 300) || null;
     try {
       const parsed = JSON.parse(text) as BinanceTransactionsResponse;
       code = toText(parsed.code);
       message = toText(parsed.message) ?? toText(parsed.msg);
     } catch {
-      message = text.slice(0, 300);
+      nonJsonPreview = shortTextPreview(text, 300);
+      message = "non-json-error-response";
     }
     diagnostics.binanceCode = code;
     diagnostics.binanceMessage = message;
     const auth = isAuthFailure(res.status, code, message);
+    const internalCode = deriveInternalCode(res.status, code, message, auth ? "auth" : "api");
+    if (res.status === 451) {
+      console.error("[binance-pay] region-restricted", {
+        httpStatus: 451,
+        internalCode: "BINANCE_REGION_RESTRICTED",
+        vercelRegion: process.env.VERCEL_REGION ?? "unknown",
+        responseContentType: diagnostics.contentType,
+        responsePreview,
+      });
+    }
+    console.error("[binance-pay] request-failed", {
+      httpStatus: res.status,
+      binanceCode: code,
+      binanceMessage: message,
+      internalCode,
+      responseContentType: diagnostics.contentType,
+      responsePreview: nonJsonPreview,
+      vercelRegion,
+      vercelEnvironment,
+      targetHost,
+      networkErrorName: null,
+      networkErrorCode: null,
+      timestampOffsetMs: diagnostics.localVsBinanceTimeDiffMs,
+      recvWindow: diagnostics.recvWindow,
+      apiKeyPresent: Boolean(secrets.apiKey),
+      apiSecretPresent: Boolean(secrets.apiSecret),
+    });
     throw new BinanceApiError(
       auth ? "Binance authentication failed." : `Binance API request failed (HTTP ${res.status}).`,
       {

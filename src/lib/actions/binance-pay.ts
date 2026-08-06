@@ -72,6 +72,13 @@ function mapSyncError(error: unknown): BinanceClaimResult {
   if (error instanceof BinanceApiError) {
     const code = error.binanceCode ?? "";
     const msg = String(error.binanceMessage ?? error.message ?? "").toLowerCase();
+    if (error.httpStatus === 451) {
+      return {
+        ok: false,
+        code: "BINANCE_REGION_RESTRICTED",
+        message: "Binance Pay verification is unavailable from the current server region.",
+      };
+    }
     if (code === "BINANCE_NOT_CONFIGURED") {
       return { ok: false, code: "BINANCE_NOT_CONFIGURED", message: "Binance Pay is not configured for this panel." };
     }
