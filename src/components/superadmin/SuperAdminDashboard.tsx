@@ -32,9 +32,9 @@ import {
   archivePayment,
   restoreArchivedPayment,
   archiveEligiblePanelPayments,
-  PAYMENT_ARCHIVE_CONFIRM_COPY,
   type ArchivedPaymentRow,
 } from "@/src/lib/actions/payment-archive";
+import { PAYMENT_ARCHIVE_CONFIRM_COPY } from "@/src/lib/payments/payment-archive-copy";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
 import { BlogReview } from "./BlogReview";
 import { DesignPricingAdmin } from "./DesignPricingAdmin";

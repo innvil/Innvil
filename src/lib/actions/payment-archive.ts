@@ -3,8 +3,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { canArchivePaymentStatus } from "@/src/lib/payments/payment-archive-core";
+import { PAYMENT_ARCHIVE_CONFIRM_COPY } from "@/src/lib/payments/payment-archive-copy";
 
-const ARCHIVE_NOTICE = "This hides completed or rejected payment records from visible history only. Financial, Binance, ledger, reconciliation, and audit records remain unchanged.";
+const ARCHIVE_NOTICE = PAYMENT_ARCHIVE_CONFIRM_COPY;
 
 type Result<T = void> =
   | ({ ok: true } & (T extends void ? object : { data: T }))
@@ -288,5 +289,3 @@ export async function archiveEligiblePanelPayments(panelId: string, reason: stri
 
   return { ok: true, data: { affected: rows.length, note: ARCHIVE_NOTICE } };
 }
-
-export const PAYMENT_ARCHIVE_CONFIRM_COPY = ARCHIVE_NOTICE;
