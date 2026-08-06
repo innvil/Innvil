@@ -27,8 +27,6 @@ export type PlaceOrderResult =
   | { ok: true; orderId: string; charge: number; balance: number; status: OrderStatus }
   | { ok: false; error: string };
 
-type DuplicateServiceMeta = { id: string; category_id: string | null };
-
 export function normalizeDupLink(link: string): string {
   const raw = (link || "").trim();
   if (!raw) return "";
@@ -102,24 +100,18 @@ export async function placeOrderForAccount(
   const normalizedLink = normalizeDupLink(link);
   const { data: relatedOrders } = await admin
     .from("orders")
-    .select("id, service_id, service_category_id, link, status")
+    .select("id, service_id, link, status")
     .eq("panel_id", input.panelId)
     .eq("customer_id", acct.id)
-    .in("status", ["pending", "processing", "in_progress", "partial", "completed"])
+    .in("status", ["pending", "processing", "in_progress"])
     .order("created_at", { ascending: false })
     .limit(200);
 
-  const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; service_category_id: string | null; link: string; status: OrderStatus }> | null) ?? [];
+  const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; link: string; status: OrderStatus }> | null) ?? [];
   if (relatedRows.length) {
-    const serviceIds = [...new Set(relatedRows.map((r) => r.service_id).filter(Boolean))];
-    const { data: serviceMetaRows } = await admin.from("services").select("id, category_id").in("id", serviceIds);
-    const serviceMeta = new Map(((serviceMetaRows as DuplicateServiceMeta[] | null) ?? []).map((row) => [row.id, row]));
-
-    const matchesDuplicate = (row: { service_id: string; service_category_id: string | null; link: string }): boolean => {
+    const matchesDuplicate = (row: { service_id: string; link: string }): boolean => {
       if (normalizeDupLink(row.link) !== normalizedLink) return false;
-      if (row.service_id === svc.id) return true;
-      const rowCategory = row.service_category_id ?? serviceMeta.get(row.service_id)?.category_id ?? null;
-      return !!(svc.category_id && rowCategory && rowCategory === svc.category_id);
+      return row.service_id === svc.id;
     };
 
     const dupe = relatedRows.find((row) => matchesDuplicate(row));
@@ -131,7 +123,7 @@ export async function placeOrderForAccount(
           panel_id: input.panelId, customer_id: acct.id, service_id: svc.id, service_category_id: svc.category_id,
           provider_id: svc.provider_id, link, quantity: qty, charge, provider_cost: providerCost, profit, status: "duplicate",
           provider_payload: { service: svc.provider_service_id, quantity: qty, ...(dripDup ? { runs: input.runs, interval: input.interval } : {}), ...(hasComments ? { comments: commentList } : {}) },
-          provider_response: { duplicate: true, reason: "Matched existing order with same link + service/category.", duplicate_of: dupe.id },
+          provider_response: { duplicate: true, reason: "Matched existing active order with same link + service.", duplicate_of: dupe.id },
         })
         .select("id")
         .single();

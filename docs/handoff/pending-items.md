@@ -73,9 +73,12 @@ service-role only (RLS on, no policies) — read it via the admin client in the 
 
 ---
 
-## 3. Collage mockup — single-platform treatment (Agency design)
+## 3. Collage mockup — single-platform treatment (Agency design) ✅ DONE (v1.1.44)
 
-**Goal:** on a platform-focused panel, the Agency design's `mockup:"collage"` shows a row of
+Shipped: `DesignRenderer.tsx` collage "platform card" branches on `data.focusPlatform` → one big
+"Built for [platform]" tile instead of the icon row.
+
+**Original goal (for reference):** on a platform-focused panel, the Agency design's `mockup:"collage"` shows a row of
 platform icons from the catalog; make it read single-platform (e.g. one big Telegram tile) like
 the orbit hero does.
 

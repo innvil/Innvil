@@ -10,7 +10,7 @@ import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
   getPlatformOverview, listPanelsForSuperAdmin, adjustPanelBalance, setPanelCommissionRate, setPanelAiAddon, setPanelPlan,
-  type PlatformOverview, type SuperAdminPanelVM,
+  getOrderSyncHealth, type PlatformOverview, type SuperAdminPanelVM, type OrderSyncHealth,
 } from "@/src/lib/actions/superadmin";
 import { commissionBracketRate } from "@/src/lib/money";
 import { getLandingVideo, setLandingVideo, getSupportEmail, setSupportEmail } from "@/src/lib/actions/platform-settings";
@@ -58,13 +58,15 @@ const inputCls =
 /* ---------------- Overview ---------------- */
 function OverviewTab() {
   const [data, setData] = useState<PlatformOverview | null>(null);
+  const [syncHealth, setSyncHealth] = useState<OrderSyncHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    getPlatformOverview()
-      .then((next) => {
+    Promise.all([getPlatformOverview(), getOrderSyncHealth()])
+      .then(([next, health]) => {
         if (!alive) return;
         setData(next);
+        setSyncHealth(health);
         setError(null);
       })
       .catch((e) => {
@@ -83,11 +85,41 @@ function OverviewTab() {
   }
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <StatCard label="Panels" value={data ? String(data.panels) : "—"} tone="gold" />
-      <StatCard label="Live panels" value={data ? String(data.livePanels) : "—"} />
-      <StatCard label="Panel owners" value={data ? String(data.owners) : "—"} />
-      <StatCard label="Customers" value={data ? String(data.customers) : "—"} />
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="Panels" value={data ? String(data.panels) : "—"} tone="gold" />
+        <StatCard label="Live panels" value={data ? String(data.livePanels) : "—"} />
+        <StatCard label="Panel owners" value={data ? String(data.owners) : "—"} />
+        <StatCard label="Customers" value={data ? String(data.customers) : "—"} />
+      </div>
+      <Card title="Order Auto-sync" icon={RefreshCw}>
+        {!syncHealth?.lastRunAt ? (
+          <p className="fp-text-faint text-sm">No auto-sync runs logged yet.</p>
+        ) : (
+          <div className="space-y-2 text-sm">
+            <p className="flex items-center gap-2">
+              <span className="fp-text-faint">Last run:</span>
+              <span>{new Date(syncHealth.lastRunAt).toLocaleString()}</span>
+              {syncHealth.lastOk === true ? (
+                <Pill tone="safe" icon={CheckCircle2}>OK</Pill>
+              ) : syncHealth.lastOk === false ? (
+                <Pill tone="danger" icon={AlertTriangle}>Failed</Pill>
+              ) : (
+                <Pill tone="muted">Unknown</Pill>
+              )}
+            </p>
+            <p className="fp-text-dim text-xs fp-mono">
+              Panels {syncHealth.lastPanels} · Checked {syncHealth.lastChecked} · Updated {syncHealth.lastUpdated}
+            </p>
+            {syncHealth.lastError && (
+              <p className="text-red-400 text-xs">{syncHealth.lastError}</p>
+            )}
+            {syncHealth.lastSuccessAt && (
+              <p className="fp-text-faint text-xs">Last successful run: {new Date(syncHealth.lastSuccessAt).toLocaleString()}</p>
+            )}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
@@ -972,6 +1004,7 @@ function ArchivedPaymentsTab() {
   const [status, setStatus] = useState<"all" | "pending" | "approved" | "rejected" | "completed">("all");
   const [reason, setReason] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState<null | { kind: "archive" | "restore"; title: string; message: string }>(null);
 
   const loadPanels = async () => {
     const p = await listPanelsForSuperAdmin(300);
@@ -1130,7 +1163,7 @@ function ArchivedPaymentsTab() {
       return;
     }
     if (!selectedCount) return;
-    const text = [
+    const message = [
       `Archive ${selectedCount} selected payment records?`,
       "",
       "This hides them from visible history only. Their statuses and financial records remain unchanged.",
@@ -1140,7 +1173,11 @@ function ArchivedPaymentsTab() {
       "Status breakdown:",
       breakdownLines || "(none)",
     ].join("\n");
-    if (!window.confirm(text)) return;
+    setConfirmBulk({ kind: "archive", title: "Archive Selected Payments", message });
+  };
+
+  const runArchiveSelected = async () => {
+    if (!panelId || !selectedCount) return;
 
     setBusy("archive-selected");
     setMsg(null);
@@ -1165,7 +1202,7 @@ function ArchivedPaymentsTab() {
       return;
     }
     if (!selectedCount) return;
-    const text = [
+    const message = [
       `Restore ${selectedCount} selected payment records?`,
       "",
       `Panel: ${panelName}`,
@@ -1173,7 +1210,11 @@ function ArchivedPaymentsTab() {
       "Status breakdown:",
       breakdownLines || "(none)",
     ].join("\n");
-    if (!window.confirm(text)) return;
+    setConfirmBulk({ kind: "restore", title: "Restore Selected Payments", message });
+  };
+
+  const runRestoreSelected = async () => {
+    if (!panelId || !selectedCount) return;
 
     setBusy("restore-selected");
     setMsg(null);
@@ -1192,12 +1233,33 @@ function ArchivedPaymentsTab() {
     if (shouldReloadAfterBulkMutation(res.ok)) setReloadNonce((v) => v + 1);
   };
 
+  const confirmBulkAction = async () => {
+    if (!confirmBulk) return;
+    const action = confirmBulk;
+    setConfirmBulk(null);
+    if (action.kind === "archive") {
+      await runArchiveSelected();
+      return;
+    }
+    await runRestoreSelected();
+  };
+
   const fmt = (n: number) => `$${n.toFixed(4).replace(/\.?0+$/, "")}`;
   const archiveDisabled = isBulkArchiveDisabled({ selectedCount, panelId, view, busy });
   const restoreDisabled = isBulkRestoreDisabled({ selectedCount, panelId, view, busy });
 
   return (
     <div className="space-y-4">
+      {confirmBulk && (
+        <SuperadminConfirmModal
+          title={confirmBulk.title}
+          message={confirmBulk.message}
+          confirmLabel={confirmBulk.kind === "archive" ? "Archive" : "Restore"}
+          busy={busy === "archive-selected" || busy === "restore-selected"}
+          onCancel={() => setConfirmBulk(null)}
+          onConfirm={confirmBulkAction}
+        />
+      )}
       <Card title="Archive payment history" icon={Lock}>
         <p className="fp-text-dim text-sm leading-relaxed">{PAYMENT_ARCHIVE_CONFIRM_COPY}</p>
         <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr] mt-4">
@@ -1328,6 +1390,40 @@ function ArchivedPaymentsTab() {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+function SuperadminConfirmModal({
+  title,
+  message,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onCancel}>
+      <div className="w-full max-w-lg fp-panel border fp-line rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b fp-line-soft">
+          <p className="fp-display text-sm flex items-center gap-2"><Lock size={14} className="fp-gold" /> {title}</p>
+          <button onClick={onCancel} className="fp-text-faint hover:fp-text" aria-label="Close confirmation"><Trash2 size={15} /></button>
+        </div>
+        <div className="px-5 py-4">
+          <p className="text-sm fp-text-dim whitespace-pre-line leading-relaxed">{message}</p>
+        </div>
+        <div className="px-5 pb-5 flex items-center justify-end gap-2">
+          <button onClick={onCancel} disabled={busy} className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text-dim hover:fp-text disabled:opacity-50">Cancel</button>
+          <button onClick={() => { void onConfirm(); }} disabled={busy} className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50">{busy ? "Working…" : confirmLabel}</button>
+        </div>
+      </div>
     </div>
   );
 }

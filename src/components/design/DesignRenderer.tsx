@@ -275,16 +275,25 @@ function Hero({ s, data, inert }: { s: HeroSection; data: DesignRenderData; iner
                 <span style={{ fontSize: "2rem" }}>🏆</span>
                 <div style={{ fontWeight: 800, fontSize: ".9rem", marginTop: ".5rem" }}>World-class quality</div>
               </div>
-              {/* Platform icons row */}
+              {/* Platform card — single-platform focus shows ONE big tile; else the icon row. */}
               <div className="dz-card" style={{ padding: "1rem" }}>
-                <div className="dz-faint" style={{ fontSize: ".62rem", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: ".6rem" }}>Every platform</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: ".45rem" }}>
-                  {Array.from(new Set(data.services.map((x) => x.platform))).slice(0, 6).map((p) => (
-                    <span key={p} style={{ width: 34, height: 34, borderRadius: 11, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))" }}>
-                      <PlatformGlyph platform={p} size={18} />
+                <div className="dz-faint" style={{ fontSize: ".62rem", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: ".6rem" }}>{data.focusPlatform ? "Built for" : "Every platform"}</div>
+                {data.focusPlatform ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: ".6rem" }}>
+                    <span style={{ width: 44, height: 44, borderRadius: 13, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))", boxShadow: "var(--d-shadow)" }}>
+                      <PlatformGlyph platform={data.focusPlatform} size={24} />
                     </span>
-                  ))}
-                </div>
+                    <span style={{ fontWeight: 800, fontSize: ".95rem", textTransform: "capitalize" }}>{data.focusPlatform}</span>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: ".45rem" }}>
+                    {Array.from(new Set(data.services.map((x) => x.platform))).slice(0, 6).map((p) => (
+                      <span key={p} style={{ width: 34, height: 34, borderRadius: 11, display: "grid", placeItems: "center", color: "#fff", background: "linear-gradient(140deg, var(--d-accent), var(--d-accent-alt))" }}>
+                        <PlatformGlyph platform={p} size={18} />
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

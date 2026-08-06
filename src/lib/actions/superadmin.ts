@@ -25,6 +25,16 @@ export interface PlatformOverview {
   orders: number;
 }
 
+export interface OrderSyncHealth {
+  lastRunAt: string | null;
+  lastOk: boolean | null;
+  lastPanels: number;
+  lastChecked: number;
+  lastUpdated: number;
+  lastError: string | null;
+  lastSuccessAt: string | null;
+}
+
 export interface SuperAdminPanelVM {
   id: string;
   name: string;
@@ -70,6 +80,51 @@ export async function getPlatformOverview(): Promise<PlatformOverview | null> {
     owners: owners.count ?? 0,
     customers: customers.count ?? 0,
     orders: orders.count ?? 0,
+  };
+}
+
+/** Latest order auto-sync heartbeat from cron audit logs (super admin only). */
+export async function getOrderSyncHealth(): Promise<OrderSyncHealth | null> {
+  if (!(await requireSuperAdmin())) return null;
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("audit_logs")
+    .select("created_at, meta")
+    .eq("action", "cron.order_sync")
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  const rows = (data as Array<{ created_at: string; meta: unknown }> | null) ?? [];
+  if (!rows.length) {
+    return {
+      lastRunAt: null,
+      lastOk: null,
+      lastPanels: 0,
+      lastChecked: 0,
+      lastUpdated: 0,
+      lastError: null,
+      lastSuccessAt: null,
+    };
+  }
+
+  const latest = rows[0];
+  const latestMeta = latest.meta && typeof latest.meta === "object"
+    ? (latest.meta as Record<string, unknown>)
+    : {};
+  const latestOk = typeof latestMeta.ok === "boolean" ? latestMeta.ok : null;
+  const successRow = rows.find((r) => {
+    const m = r.meta && typeof r.meta === "object" ? (r.meta as Record<string, unknown>) : {};
+    return m.ok === true;
+  });
+
+  return {
+    lastRunAt: latest.created_at,
+    lastOk: latestOk,
+    lastPanels: Number(latestMeta.panels ?? 0) || 0,
+    lastChecked: Number(latestMeta.checked ?? 0) || 0,
+    lastUpdated: Number(latestMeta.updated ?? 0) || 0,
+    lastError: typeof latestMeta.error === "string" ? latestMeta.error : null,
+    lastSuccessAt: successRow?.created_at ?? null,
   };
 }
 

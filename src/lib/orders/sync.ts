@@ -77,24 +77,11 @@ type DupCandidate = {
   service_id: string;
   link: string;
   status: OrderStatus;
+  provider_order_id: string | null;
 };
 
-const DUP_SOURCE: OrderStatus[] = ["in_progress"];
+const DUP_ACTIVE: OrderStatus[] = ["pending", "processing", "in_progress"];
 const DUP_MUTABLE: OrderStatus[] = ["pending", "processing"];
-
-type ServiceMeta = {
-  id: string;
-  name: string | null;
-  platform: string | null;
-  category_id: string | null;
-};
-
-type DupFingerprint = {
-  link: string;
-  serviceId: string;
-  serviceName: string;
-  category: string;
-};
 
 function normalizeDupLink(link: string): string {
   const raw = (link || "").trim();
@@ -114,82 +101,40 @@ function normalizeDupLink(link: string): string {
   }
 }
 
-function normText(v: string | null | undefined): string {
-  return (v ?? "").trim().toLowerCase();
-}
-
 /**
- * Reconcile duplicates with a strict rule:
- * - Keep all `in_progress` orders untouched (already transferred to provider).
- * - Mark only `pending` / `processing` orders as `duplicate` when they match an
- *   existing `in_progress` order on the same link plus service ID, service name,
- *   or category.
+ * Reconcile duplicates with a strict active-order rule:
+ * - Only active statuses (`pending`, `processing`, `in_progress`) participate.
+ * - Mark only newer `pending` / `processing` rows as `duplicate`.
+ * - Match only same normalized link + same service ID.
  */
 async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string): Promise<number> {
   const { data } = await admin
     .from("orders")
-    .select("id, service_id, link, status")
+    .select("id, service_id, link, status, provider_order_id, created_at")
     .eq("panel_id", panelId)
-    .in("status", [...DUP_SOURCE, ...DUP_MUTABLE])
+    .in("status", DUP_ACTIVE)
     .not("service_id", "is", null)
     .not("link", "is", null)
     .order("created_at", { ascending: true });
 
-  const rows = (data as DupCandidate[] | null) ?? [];
+  const rows = (data as Array<DupCandidate & { created_at: string }> | null) ?? [];
   if (!rows.length) return 0;
-
-  const serviceIds = [...new Set(rows.map((r) => r.service_id).filter(Boolean))];
-  const { data: svcRows } = await admin
-    .from("services")
-    .select("id, name, platform, category_id")
-    .in("id", serviceIds);
-  const services = (svcRows as ServiceMeta[] | null) ?? [];
-  const serviceById = new Map(services.map((s) => [s.id, s]));
-
-  const categoryIds = [...new Set(services.map((s) => s.category_id).filter((v): v is string => !!v))];
-  let categoryNameById = new Map<string, string>();
-  if (categoryIds.length) {
-    const { data: cats } = await admin.from("provider_categories").select("id, name").in("id", categoryIds);
-    categoryNameById = new Map(((cats as Array<{ id: string; name: string }> | null) ?? []).map((c) => [c.id, c.name]));
-  }
-
-  const inProgress: DupFingerprint[] = [];
-  const pendingOrProcessing: Array<{ id: string; fp: DupFingerprint }> = [];
-
+  const toDuplicate: string[] = [];
+  const seenActive = new Set<string>();
   for (const r of rows) {
-    const link = normalizeDupLink(r.link);
-    if (!link) continue;
-    const svc = serviceById.get(r.service_id);
-    const categoryName = svc?.category_id ? (categoryNameById.get(svc.category_id) ?? "") : "";
-    const fp: DupFingerprint = {
-      link,
-      serviceId: r.service_id,
-      serviceName: normText(svc?.name),
-      category: normText(categoryName),
-    };
-
-    if (DUP_SOURCE.includes(r.status)) {
-      inProgress.push(fp);
+    const normLink = normalizeDupLink(r.link);
+    if (!normLink) continue;
+    const key = `${normLink}::${r.service_id}`;
+    if (!seenActive.has(key)) {
+      seenActive.add(key);
       continue;
     }
-    if (DUP_MUTABLE.includes(r.status)) {
-      pendingOrProcessing.push({ id: r.id, fp });
+    // Never re-mark an order as duplicate after it has already been submitted
+    // to the provider (manual resend sets provider_order_id + processing).
+    if (DUP_MUTABLE.includes(r.status) && !r.provider_order_id) {
+      toDuplicate.push(r.id);
     }
   }
-
-  if (!inProgress.length || !pendingOrProcessing.length) return 0;
-
-  const matchesInProgress = (cand: DupFingerprint): boolean =>
-    inProgress.some((src) => {
-      if (src.link !== cand.link) return false;
-      if (src.serviceId === cand.serviceId) return true;
-      if (src.serviceName && cand.serviceName && src.serviceName === cand.serviceName) return true;
-      if (src.category && cand.category && src.category === cand.category) return true;
-      return false;
-    });
-
-  const toDuplicate: string[] = [];
-  for (const r of pendingOrProcessing) if (matchesInProgress(r.fp)) toDuplicate.push(r.id);
 
   if (!toDuplicate.length) return 0;
 

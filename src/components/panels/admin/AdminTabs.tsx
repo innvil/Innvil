@@ -46,7 +46,7 @@ import { getPanelBranding, updatePanelBranding, getPanelStatusHistory, type Land
 import {
   listPanelOrdersPage, getPanelOverview, getPanelCurrency,
   resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
-  cancelAndRefundOrder, bulkCancelAndRefund, refreshProviderBalancesAndRetryHeldOrders,
+  cancelAndRefundOrder, bulkCancelAndRefund, bulkResendOrders, refreshProviderBalancesAndRetryHeldOrders,
   type AdminOrderVM, type PanelOverview,
 } from "@/src/lib/actions/admin-orders";
 import { syncOrdersNow } from "@/src/lib/actions/orders";
@@ -992,6 +992,17 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const [bulkKind, setBulkKind] = useState<MarkupKind>("percent");
   const [bulkVal, setBulkVal] = useState("20");
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<
+    | null
+    | {
+        kind: "service" | "category" | "bulk";
+        serviceId?: string;
+        categoryId?: string | null;
+        categoryName?: string;
+        serviceIds?: string[];
+        count: number;
+      }
+  >(null);
 
   // Import panel
   const [importOpen, setImportOpen] = useState(false);
@@ -1205,8 +1216,11 @@ export function ServicesTab({ panelId }: { panelId: string }) {
     refresh();
   };
   const doDelete = async (s: ServiceVM) => {
-    if (!window.confirm(`Delete "${s.name}"? This can't be undone.`)) return;
-    const res = await deleteService(s.id);
+    setConfirmDelete({ kind: "service", serviceId: s.id, categoryName: s.name, count: 1 });
+  };
+
+  const runDeleteService = async (serviceId: string) => {
+    const res = await deleteService(serviceId);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     refresh();
   };
@@ -1214,7 +1228,10 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   // Delete a whole category (platform or sub) + every service in it. Falls back
   // to deleting by service ids for id-less groups (Uncategorized/legacy flat).
   const doDeleteCategory = async (id: string | null, name: string, serviceIds: string[]) => {
-    if (!window.confirm(`Delete "${name}" and its ${serviceIds.length} service(s)? This can't be undone.`)) return;
+    setConfirmDelete({ kind: "category", categoryId: id, categoryName: name, serviceIds, count: serviceIds.length });
+  };
+
+  const runDeleteCategory = async (id: string | null, name: string, serviceIds: string[]) => {
     setBusy(true);
     const res = id ? await deleteCategory(id) : await bulkDeleteServices(serviceIds);
     setBusy(false);
@@ -1276,10 +1293,27 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   const bulkEnable = () => runBulk(() => bulkSetServiceStatus([...sel], "active"), (n) => `Enabled ${n} service(s).`);
   const bulkDisable = () => runBulk(() => bulkSetServiceStatus([...sel], "disabled"), (n) => `Disabled ${n} service(s).`);
   const bulkDelete = () => {
-    if (!window.confirm(`Delete ${sel.size} selected service(s)? This can't be undone.`)) return;
-    runBulk(() => bulkDeleteServices([...sel]), (n) => `Deleted ${n} service(s).`);
+    if (!sel.size) return;
+    setConfirmDelete({ kind: "bulk", serviceIds: [...sel], count: sel.size });
   };
   const bulkMarkup = () => runBulk(() => bulkSetMarkup([...sel], bulkKind, Number(bulkVal) || 0), (n) => `Updated markup on ${n} service(s).`);
+
+  const confirmDeleteAction = async () => {
+    if (!confirmDelete) return;
+    const action = confirmDelete;
+    setConfirmDelete(null);
+    if (action.kind === "service" && action.serviceId) {
+      await runDeleteService(action.serviceId);
+      return;
+    }
+    if (action.kind === "category") {
+      await runDeleteCategory(action.categoryId ?? null, action.categoryName ?? "Category", action.serviceIds ?? []);
+      return;
+    }
+    if (action.kind === "bulk") {
+      await runBulk(() => bulkDeleteServices(action.serviceIds ?? []), (n) => `Deleted ${n} service(s).`);
+    }
+  };
 
   if (!realPanel) {
     return (
@@ -1292,6 +1326,21 @@ export function ServicesTab({ panelId }: { panelId: string }) {
 
   return (
     <div className="space-y-4">
+      {confirmDelete && (
+        <ConfirmActionModal
+          title={confirmDelete.kind === "category" ? "Delete Category" : "Delete Services"}
+          message={confirmDelete.kind === "service"
+            ? `Delete "${confirmDelete.categoryName}"? This cannot be undone.`
+            : confirmDelete.kind === "category"
+              ? `Delete "${confirmDelete.categoryName}" and its ${confirmDelete.count} service(s)? This cannot be undone.`
+              : `Delete ${confirmDelete.count} selected service(s)? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          busy={busy}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={confirmDeleteAction}
+        />
+      )}
       {msg && (
         <div className={`text-sm px-4 py-2.5 rounded-lg border flex items-center justify-between gap-3 ${msg.error ? "bg-red-500/10 border-red-500/20 text-red-400" : "fp-safe-soft-bg fp-safe-border fp-safe"}`}>
           <span>{msg.text}</span>
@@ -1701,6 +1750,15 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [allOrders, setAllOrders] = useState(0);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [commentsView, setCommentsView] = useState<string[] | null>(null);
+  const [refundTarget, setRefundTarget] = useState<AdminOrderVM | null>(null);
+  const [refundAmountInput, setRefundAmountInput] = useState("");
+  const [confirmAction, setConfirmAction] = useState<
+    | null
+    | {
+        kind: "bulkResend" | "bulkCancel";
+        ids: string[];
+      }
+  >(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const loadingRef = useRef(false);
 
@@ -1793,11 +1851,21 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   };
 
   const doRefund = async (o: AdminOrderVM) => {
-    const input = window.prompt(`Refund amount for order #${o.shortId} (max ${o.charge}). Leave blank for full refund.`, "");
-    if (input === null) return;
-    const amount = input.trim() === "" ? undefined : Number(input);
-    if (amount !== undefined && (!Number.isFinite(amount) || amount <= 0)) { setMsg({ text: "Enter a valid amount.", error: true }); return; }
-    await act(o.id, () => refundOrder(o.id, amount), "Refund issued.");
+    setRefundTarget(o);
+    setRefundAmountInput("");
+  };
+
+  const confirmRefund = async () => {
+    if (!refundTarget) return;
+    const trimmed = refundAmountInput.trim();
+    const amount = trimmed === "" ? undefined : Number(trimmed);
+    if (amount !== undefined && (!Number.isFinite(amount) || amount <= 0)) {
+      setMsg({ text: "Enter a valid amount.", error: true });
+      return;
+    }
+    const target = refundTarget;
+    setRefundTarget(null);
+    await act(target.id, () => refundOrder(target.id, amount), "Refund issued.");
   };
 
   const syncNow = async () => {
@@ -1847,10 +1915,8 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const toggleSelectAll = () => setSel((prev) =>
     allSelected ? new Set([...prev].filter((id) => !selectableIds.includes(id))) : new Set([...prev, ...selectableIds])
   );
-  const doBulkCancel = async () => {
-    const ids = [...sel];
+  const runBulkCancel = async (ids: string[]) => {
     if (!ids.length) return;
-    if (!window.confirm(`Cancel & refund ${ids.length} order(s)? The customers will be refunded.`)) return;
     setSyncing(true); setMsg(null);
     const res = await bulkCancelAndRefund(ids);
     setSyncing(false);
@@ -1858,6 +1924,44 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     setMsg({ text: `Canceled & refunded ${res.canceled} order(s).` });
     setSel(new Set());
     await load();
+  };
+
+  const runBulkResend = async (ids: string[]) => {
+    if (!ids.length) return;
+    setSyncing(true); setMsg(null);
+    const res = await bulkResendOrders(ids);
+    setSyncing(false);
+    if (!res.ok) {
+      setMsg({ text: res.error, error: true });
+      return;
+    }
+    const details = res.errors.length ? ` ${res.errors.join(" | ")}` : "";
+    setMsg({ text: `Requested ${res.requested}: resent ${res.resent}, skipped ${res.skipped}, failed ${res.failed}.${details}` });
+    setSel(new Set());
+    await load();
+  };
+
+  const requestBulkCancel = () => {
+    const ids = [...sel];
+    if (!ids.length) return;
+    setConfirmAction({ kind: "bulkCancel", ids });
+  };
+
+  const requestBulkResend = () => {
+    const ids = [...sel];
+    if (!ids.length) return;
+    setConfirmAction({ kind: "bulkResend", ids });
+  };
+
+  const confirmBulkAction = async () => {
+    if (!confirmAction) return;
+    const action = confirmAction;
+    setConfirmAction(null);
+    if (action.kind === "bulkCancel") {
+      await runBulkCancel(action.ids);
+      return;
+    }
+    await runBulkResend(action.ids);
   };
 
   const previousPage = () => setPage((p) => Math.max(0, p - 1));
@@ -1873,6 +1977,30 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
 
   return (
     <>
+    {refundTarget && (
+      <RefundAmountModal
+        orderId={refundTarget.shortId}
+        maxAmount={refundTarget.charge}
+        value={refundAmountInput}
+        busy={busyId === refundTarget.id}
+        onChange={setRefundAmountInput}
+        onCancel={() => setRefundTarget(null)}
+        onConfirm={confirmRefund}
+      />
+    )}
+    {confirmAction && (
+      <ConfirmActionModal
+        title={confirmAction.kind === "bulkResend" ? "Resend Selected Orders" : "Cancel & Refund Selected Orders"}
+        message={confirmAction.kind === "bulkResend"
+          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Only pending/duplicate orders can be resent.`
+          : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}
+        confirmLabel={confirmAction.kind === "bulkResend" ? "Resend now" : "Cancel & refund"}
+        danger={confirmAction.kind === "bulkCancel"}
+        busy={syncing}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={confirmBulkAction}
+      />
+    )}
     {commentsView && <CommentsModal comments={commentsView} onClose={() => setCommentsView(null)} />}
     <Card
       title="Orders"
@@ -1925,7 +2053,10 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
           <span className="text-xs fp-gold">{sel.size} selected</span>
           <div className="flex items-center gap-2">
             <button onClick={() => setSel(new Set())} className="text-xs fp-text-dim hover:fp-text">Clear</button>
-            <button onClick={doBulkCancel} disabled={syncing} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">
+            <button onClick={requestBulkResend} disabled={syncing || retryingHeld || busyId !== null} className="text-xs font-semibold px-3 py-1.5 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-50">
+              Resend selected to provider
+            </button>
+            <button onClick={requestBulkCancel} disabled={syncing} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">
               Cancel &amp; refund selected
             </button>
           </div>
@@ -2122,6 +2253,104 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   );
 }
 
+function RefundAmountModal({
+  orderId,
+  maxAmount,
+  value,
+  busy,
+  onChange,
+  onCancel,
+  onConfirm,
+}: {
+  orderId: string;
+  maxAmount: number;
+  value: string;
+  busy?: boolean;
+  onChange: (next: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return (
+    <div className="fixed inset-0 z-[82] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onCancel}>
+      <div className="w-full max-w-md fp-panel border fp-line rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b fp-line-soft">
+          <p className="fp-display text-sm flex items-center gap-2"><CreditCard size={14} className="text-red-400" /> Refund order #{orderId}</p>
+          <button onClick={onCancel} className="fp-text-faint hover:fp-text" aria-label="Close refund modal"><X size={16} /></button>
+        </div>
+        <div className="px-5 py-4 space-y-2">
+          <p className="text-sm fp-text-dim">Leave amount blank for full refund. Maximum: <span className="fp-mono fp-text">{maxAmount}</span></p>
+          <input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Full refund"
+            type="number"
+            min="0"
+            step="0.0001"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border"
+            autoFocus
+          />
+        </div>
+        <div className="px-5 pb-5 flex items-center justify-end gap-2">
+          <button onClick={onCancel} disabled={busy} className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text-dim hover:fp-text disabled:opacity-50">Cancel</button>
+          <button onClick={() => { void onConfirm(); }} disabled={busy} className="rounded-lg px-3 py-2 text-sm font-semibold border border-red-500/30 text-red-400 hover:opacity-90 disabled:opacity-50">{busy ? "Working…" : "Issue refund"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmActionModal({
+  title,
+  message,
+  confirmLabel,
+  danger,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4" onClick={onCancel}>
+      <div className="w-full max-w-lg fp-panel border fp-line rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b fp-line-soft">
+          <p className="fp-display text-sm flex items-center gap-2">
+            {danger ? <AlertTriangle size={14} className="text-red-400" /> : <RefreshCw size={14} className="fp-gold" />}
+            {title}
+          </p>
+          <button onClick={onCancel} className="fp-text-faint hover:fp-text" aria-label="Close confirmation">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="px-5 py-4">
+          <p className="text-sm fp-text-dim leading-relaxed">{message}</p>
+        </div>
+        <div className="px-5 pb-5 flex items-center justify-end gap-2">
+          <button onClick={onCancel} disabled={busy} className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text-dim hover:fp-text disabled:opacity-50">
+            Keep as is
+          </button>
+          <button
+            onClick={() => { void onConfirm(); }}
+            disabled={busy}
+            className={danger
+              ? "rounded-lg px-3 py-2 text-sm font-semibold border border-red-500/30 text-red-400 hover:opacity-90 disabled:opacity-50"
+              : "fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50"
+            }
+          >
+            {busy ? "Working…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Floating popup that shows a Custom Comments order's comment list. */
 function CommentsModal({ comments, onClose }: { comments: string[]; onClose: () => void }) {
   return (
@@ -2160,6 +2389,7 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
   const [depositBusyId, setDepositBusyId] = useState<string | null>(null);
   const [depositRows, setDepositRows] = useState<Record<string, OwnerDepositVM[]>>({});
   const [detailsBusyId, setDetailsBusyId] = useState<string | null>(null);
+  const [confirmTopup, setConfirmTopup] = useState<null | { kind: "commit" | "cancel"; paymentId: string; customerId: string }>(null);
   const [manageDetails, setManageDetails] = useState<Record<string, { userId: string; email: string | null; username: string | null }>>({});
   const rowsRef = useRef<PanelCustomerVM[] | null>(rows);
 
@@ -2249,10 +2479,10 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
   };
 
   const commitTopup = async (paymentId: string, customerId: string) => {
-    const proceed = window.confirm(
-      "This will manually mark the pending top-up as verified and credit the customer's wallet. Make sure you checked the payment provider first."
-    );
-    if (!proceed) return;
+    setConfirmTopup({ kind: "commit", paymentId, customerId });
+  };
+
+  const runCommitTopup = async (paymentId: string, customerId: string) => {
     setBusy(true);
     const res = await commitPendingPayment(paymentId);
     setBusy(false);
@@ -2264,10 +2494,10 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
   };
 
   const cancelTopup = async (paymentId: string, customerId: string) => {
-    const proceed = window.confirm(
-      "Cancel this pending top-up? This will not credit the customer's wallet."
-    );
-    if (!proceed) return;
+    setConfirmTopup({ kind: "cancel", paymentId, customerId });
+  };
+
+  const runCancelTopup = async (paymentId: string, customerId: string) => {
     setBusy(true);
     const res = await cancelPendingPayment(paymentId);
     setBusy(false);
@@ -2275,6 +2505,17 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
     setMsg({ text: "Pending top-up canceled. No wallet credit was applied." });
     const next = await listCustomerDeposits(customerId);
     setDepositRows((prev) => ({ ...prev, [customerId]: next }));
+  };
+
+  const confirmTopupAction = async () => {
+    if (!confirmTopup) return;
+    const action = confirmTopup;
+    setConfirmTopup(null);
+    if (action.kind === "commit") {
+      await runCommitTopup(action.paymentId, action.customerId);
+      return;
+    }
+    await runCancelTopup(action.paymentId, action.customerId);
   };
 
   if (!realPanel) {
@@ -2290,6 +2531,19 @@ export function CustomersTab({ panel, focusCustomerId }: { panel: Panel; onView?
 
   return (
     <Card title="Customers" icon={Users}>
+      {confirmTopup && (
+        <ConfirmActionModal
+          title={confirmTopup.kind === "commit" ? "Credit Pending Top-up" : "Cancel Pending Top-up"}
+          message={confirmTopup.kind === "commit"
+            ? "This will manually mark the pending top-up as verified and credit the customer's wallet. Confirm you checked the payment provider first."
+            : "Cancel this pending top-up? No wallet credit will be applied."}
+          confirmLabel={confirmTopup.kind === "commit" ? "Credit now" : "Cancel top-up"}
+          danger={confirmTopup.kind === "cancel"}
+          busy={busy}
+          onCancel={() => setConfirmTopup(null)}
+          onConfirm={confirmTopupAction}
+        />
+      )}
       {msg && (
         <div className={`text-sm px-4 py-2.5 rounded-lg border flex items-center justify-between gap-3 mb-4 ${msg.error ? "bg-red-500/10 border-red-500/20 text-red-400" : "fp-safe-soft-bg fp-safe-border fp-safe"}`}>
           <span>{msg.text}</span>
@@ -2472,6 +2726,7 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
   const [discountRules, setDiscountRules] = useState<DiscountTierDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<null | { id: string; label: string }>(null);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const metaRef = useRef<PaymentsMeta | null>(meta);
 
@@ -2557,7 +2812,10 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
     refresh();
   };
   const remove = async (id: string, label: string) => {
-    if (!window.confirm(`Disconnect ${label}? Customers won't be able to pay with it.`)) return;
+    setConfirmDisconnect({ id, label });
+  };
+
+  const runRemove = async (id: string) => {
     setBusy(true); setMsg(null);
     const res = await disconnectGateway(panelId, id);
     setBusy(false);
@@ -2578,6 +2836,22 @@ export function PaymentsTab({ panelId }: { panelId: string }) {
 
   return (
     <div className="space-y-4">
+      {confirmDisconnect && (
+        <ConfirmActionModal
+          title="Disconnect Payment Method"
+          message={`Disconnect ${confirmDisconnect.label}? Customers won't be able to pay with it.`}
+          confirmLabel="Disconnect"
+          danger
+          busy={busy}
+          onCancel={() => setConfirmDisconnect(null)}
+          onConfirm={async () => {
+            const action = confirmDisconnect;
+            setConfirmDisconnect(null);
+            if (!action) return;
+            await runRemove(action.id);
+          }}
+        />
+      )}
       {msg && (
         <div className={`text-sm px-4 py-2.5 rounded-lg border flex items-center justify-between gap-3 ${msg.error ? "bg-red-500/10 border-red-500/20 text-red-400" : "fp-safe-soft-bg fp-safe-border fp-safe"}`}>
           <span>{msg.text}</span>
@@ -2775,6 +3049,7 @@ function BinanceReviewCard({ panelId }: { panelId: string }) {
   const [busy, setBusy] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
   const [showTx, setShowTx] = React.useState(false);
+  const [confirmDeposit, setConfirmDeposit] = React.useState<null | { kind: "commit" | "cancel"; id: string }>(null);
 
   const load = React.useCallback(() => {
     getBinanceReview(panelId).then((r) => { setReview(r); setLoading(false); }).catch(() => setLoading(false));
@@ -2782,7 +3057,10 @@ function BinanceReviewCard({ panelId }: { panelId: string }) {
   React.useEffect(() => { load(); }, [load]);
 
   const commit = async (id: string) => {
-    if (!window.confirm("Manually credit this Binance deposit? Confirm you verified the payment in your Binance account first.")) return;
+    setConfirmDeposit({ kind: "commit", id });
+  };
+
+  const runCommit = async (id: string) => {
     setBusy(id); setMsg(null);
     const res = await commitPendingPayment(id);
     setBusy(null);
@@ -2791,13 +3069,27 @@ function BinanceReviewCard({ panelId }: { panelId: string }) {
     load();
   };
   const cancel = async (id: string) => {
-    if (!window.confirm("Cancel this pending Binance deposit? No wallet credit is applied.")) return;
+    setConfirmDeposit({ kind: "cancel", id });
+  };
+
+  const runCancel = async (id: string) => {
     setBusy(id); setMsg(null);
     const res = await cancelPendingPayment(id);
     setBusy(null);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     setMsg({ text: "Deposit canceled." });
     load();
+  };
+
+  const confirmDepositAction = async () => {
+    if (!confirmDeposit) return;
+    const action = confirmDeposit;
+    setConfirmDeposit(null);
+    if (action.kind === "commit") {
+      await runCommit(action.id);
+      return;
+    }
+    await runCancel(action.id);
   };
 
   const money = (n: number) => n.toFixed(2);
@@ -2808,6 +3100,19 @@ function BinanceReviewCard({ panelId }: { panelId: string }) {
 
   return (
     <Card title="Binance Pay review" icon={CreditCard}>
+      {confirmDeposit && (
+        <ConfirmActionModal
+          title={confirmDeposit.kind === "commit" ? "Credit Binance Deposit" : "Cancel Binance Deposit"}
+          message={confirmDeposit.kind === "commit"
+            ? "Manually credit this Binance deposit? Confirm you verified the payment in your Binance account first."
+            : "Cancel this pending Binance deposit? No wallet credit will be applied."}
+          confirmLabel={confirmDeposit.kind === "commit" ? "Credit now" : "Cancel deposit"}
+          danger={confirmDeposit.kind === "cancel"}
+          busy={busy !== null}
+          onCancel={() => setConfirmDeposit(null)}
+          onConfirm={confirmDepositAction}
+        />
+      )}
       <p className="fp-text-dim text-sm mb-3">Deposits that didn&apos;t auto-credit (wrong amount, recipient, or still pending) can be verified against your Binance account and credited or canceled here.</p>
       {review.syncStale && (
         <p className="text-xs fp-gold flex items-center gap-1.5 mb-3"><AlertTriangle size={12} /> Pay history hasn&apos;t synced recently — auto-credit may be delayed. Deposits can still be verified manually below.</p>
@@ -2873,6 +3178,7 @@ export function CustomerApiTab({ panelId }: { panelId: string }) {
   const [totalCustomers, setTotalCustomers] = useState(0);
   const [activeKeys, setActiveKeys] = useState(0);
   const [rows, setRows] = useState<Array<{ id: string; username: string | null; email: string | null; status: string; hasKey: boolean; updatedAt: string }>>([]);
+  const [confirmRevoke, setConfirmRevoke] = useState<null | { customerId: string; label: string }>(null);
 
   const baseUrl = typeof window !== "undefined" ? `${window.location.origin}/api/v2` : "/api/v2";
 
@@ -2905,7 +3211,10 @@ export function CustomerApiTab({ panelId }: { panelId: string }) {
 
   const revokeKey = async (customerId: string, username: string | null, email: string | null) => {
     const label = username ?? email ?? "this customer";
-    if (!window.confirm(`Revoke API key for ${label}? They will need to generate a new one.`)) return;
+    setConfirmRevoke({ customerId, label });
+  };
+
+  const runRevoke = async (customerId: string) => {
     setBusy(true);
     setMsg(null);
     const res = await revokeCustomerApiKey(panelId, customerId);
@@ -2920,6 +3229,22 @@ export function CustomerApiTab({ panelId }: { panelId: string }) {
 
   return (
     <div className="space-y-4">
+      {confirmRevoke && (
+        <ConfirmActionModal
+          title="Revoke Customer API Key"
+          message={`Revoke API key for ${confirmRevoke.label}? They will need to generate a new one.`}
+          confirmLabel="Revoke key"
+          danger
+          busy={busy}
+          onCancel={() => setConfirmRevoke(null)}
+          onConfirm={async () => {
+            const action = confirmRevoke;
+            setConfirmRevoke(null);
+            if (!action) return;
+            await runRevoke(action.customerId);
+          }}
+        />
+      )}
       {msg && (
         <div className={`text-sm px-4 py-2.5 rounded-lg border flex items-center justify-between gap-3 ${msg.error ? "bg-red-500/10 border-red-500/20 text-red-400" : "fp-safe-soft-bg fp-safe-border fp-safe"}`}>
           <span>{msg.text}</span>
@@ -3039,6 +3364,7 @@ function WelcomeMessageCard({ panelId }: { panelId: string }) {
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
   const [sendBusy, setSendBusy] = React.useState(false);
   const [sendMsg, setSendMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+  const [confirmSendAll, setConfirmSendAll] = React.useState(false);
 
   const hydrate = React.useCallback((i: WelcomeInfo) => {
     setInfo(i);
@@ -3050,7 +3376,10 @@ function WelcomeMessageCard({ panelId }: { panelId: string }) {
   }, []);
 
   const sendToAll = async () => {
-    if (!window.confirm("Send the welcome message to all existing customers? Anyone who already received a welcome is skipped. Save your edits first.")) return;
+    setConfirmSendAll(true);
+  };
+
+  const runSendToAll = async () => {
     setSendBusy(true); setSendMsg(null);
     const res = await sendWelcomeToCustomers(panelId, { all: true });
     setSendBusy(false);
@@ -3095,6 +3424,19 @@ function WelcomeMessageCard({ panelId }: { panelId: string }) {
 
   return (
     <Card title="Welcome message" icon={Mail}>
+      {confirmSendAll && (
+        <ConfirmActionModal
+          title="Send Welcome to Existing Customers"
+          message="Send the welcome message to all existing customers? Anyone already welcomed is skipped. Save your edits first."
+          confirmLabel="Send welcome"
+          busy={sendBusy}
+          onCancel={() => setConfirmSendAll(false)}
+          onConfirm={async () => {
+            setConfirmSendAll(false);
+            await runSendToAll();
+          }}
+        />
+      )}
       <p className="fp-text-dim text-sm mb-3">
         Every new customer automatically gets this as a support message. Use
         <span className="fp-mono fp-text"> {"{panel}"}</span> for your panel name and

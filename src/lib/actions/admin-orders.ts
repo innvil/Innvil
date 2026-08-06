@@ -627,8 +627,51 @@ export async function resendOrder(orderId: string): Promise<Result> {
   const r = await authorizeOrder(orderId);
   if ("error" in r) return { ok: false, error: r.error };
   const { admin, order } = r;
-  if (order.status !== "pending") return { ok: false, error: "Only pending orders can be resent." };
+  if (order.status !== "pending" && order.status !== "duplicate") {
+    return { ok: false, error: "Only pending or duplicate orders can be resent." };
+  }
   return submitPendingOrderToProvider(admin, order, "Resent to provider by owner");
+}
+
+/**
+ * Resend selected orders in bulk. Supports duplicate-marked orders so an owner can
+ * manually force a provider send once they decide the order should proceed.
+ */
+export async function bulkResendOrders(
+  orderIds: string[]
+): Promise<
+  | { ok: true; requested: number; resent: number; skipped: number; failed: number; errors: string[] }
+  | { ok: false; error: string }
+> {
+  if (!orderIds.length) return { ok: false, error: "No orders selected." };
+
+  let resent = 0;
+  let skipped = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const orderId of orderIds) {
+    const auth = await authorizeOrder(orderId);
+    if ("error" in auth) {
+      failed++;
+      if (errors.length < 5) errors.push(`#${String(orderId).slice(0, 8)}: ${auth.error}`);
+      continue;
+    }
+    const { admin, order } = auth;
+    if (order.status !== "pending" && order.status !== "duplicate") {
+      skipped++;
+      continue;
+    }
+    const sent = await submitPendingOrderToProvider(admin, order, "Resent to provider by owner (bulk)");
+    if (sent.ok) {
+      resent++;
+    } else {
+      failed++;
+      if (errors.length < 5) errors.push(`#${String(order.id).slice(0, 8)}: ${sent.error}`);
+    }
+  }
+
+  return { ok: true, requested: orderIds.length, resent, skipped, failed, errors };
 }
 
 export async function refreshProviderBalancesAndRetryHeldOrders(

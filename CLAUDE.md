@@ -127,6 +127,13 @@ innvil/
 
 ## Recent Updates
 
+### 2026-07-25 — Collage mockup: single-platform tile on a focused panel (v1.1.44)
+- Finishes the platform-focus visual pass. On a platform-focused panel, the Agency design's `mockup:"collage"`
+  platform card now shows **ONE big "Built for [platform]" tile** (large `PlatformGlyph` + capitalized name) instead
+  of the multi-platform icon row; all-platforms panels keep the row. `DesignRenderer` branches on
+  `data.focusPlatform` (already plumbed). Matches the orbit hero's single-platform treatment.
+  (Versions 1.1.35–1.1.43 were the owner's Binance Order-ID rework — order_id column, C2C-only matching, etc.)
+
 ### 2026-07-25 — Binance Pay: owner review + reconcile (v1.1.34)
 - **New "Binance Pay review" card** in the Payments tab (shown only when Binance Pay is connected) — the last
   deferred Binance nice-to-have. Lets the owner see every Binance deposit (amount wanted / exact payable / bonus /
