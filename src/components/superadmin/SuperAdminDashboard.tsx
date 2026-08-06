@@ -27,14 +27,27 @@ import {
   type AdminBlogPost, type AdminBlogTopic,
 } from "@/src/lib/actions/blog-admin";
 import {
-  listVisiblePayments,
-  listArchivedPayments,
-  archivePayment,
-  restoreArchivedPayment,
-  archiveEligiblePanelPayments,
+  listVisiblePaymentsForPanel,
+  listArchivedPaymentsForPanel,
+  archiveSelectedPayments,
+  restoreSelectedPayments,
   type ArchivedPaymentRow,
 } from "@/src/lib/actions/payment-archive";
 import { PAYMENT_ARCHIVE_CONFIRM_COPY } from "@/src/lib/payments/payment-archive-copy";
+import {
+  isBulkArchiveDisabled,
+  isBulkRestoreDisabled,
+  shouldClearSelection,
+  type PaymentArchiveSelectionScope,
+} from "@/src/lib/payments/payment-archive-selection";
+import {
+  deriveArchiveRenderState,
+  filterPaymentArchiveRows,
+  maskPanelIdForLog,
+  shouldReloadAfterBulkMutation,
+  shouldReloadForPanelChange,
+  shouldReloadForViewChange,
+} from "@/src/lib/payments/payment-archive-view";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
 import { BlogReview } from "./BlogReview";
 import { DesignPricingAdmin } from "./DesignPricingAdmin";
@@ -941,114 +954,309 @@ function BlogTab() {
 
 /* ---------------- Archived payments ---------------- */
 function ArchivedPaymentsTab() {
+  const selectAllRef = React.useRef<HTMLInputElement | null>(null);
+  const prevScopeRef = React.useRef<PaymentArchiveSelectionScope | null>(null);
   const [panels, setPanels] = useState<SuperAdminPanelVM[] | null>(null);
   const [activeRows, setActiveRows] = useState<ArchivedPaymentRow[] | null>(null);
   const [archivedRows, setArchivedRows] = useState<ArchivedPaymentRow[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [prevPanelId, setPrevPanelId] = useState("");
+  const [prevView, setPrevView] = useState<"active" | "archived">("active");
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [panelId, setPanelId] = useState("");
+  const [view, setView] = useState<"active" | "archived">("active");
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState<"all" | "pending" | "approved" | "rejected" | "completed">("all");
   const [reason, setReason] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const load = async () => {
-    const [p, v, a] = await Promise.all([
-      listPanelsForSuperAdmin(300),
-      listVisiblePayments(300),
-      listArchivedPayments(300),
-    ]);
+  const loadPanels = async () => {
+    const p = await listPanelsForSuperAdmin(300);
     setPanels(p);
-    if ("error" in v) {
-      setMsg({ text: v.error, error: true });
+  };
+
+  const loadPanelRows = async (pid: string) => {
+    const maskedPanelId = maskPanelIdForLog(pid);
+    const startedAt = Date.now();
+    console.info("[superadmin-payment-archive] load-start", {
+      panelId: maskedPanelId,
+      visibleCount: 0,
+      archivedCount: 0,
+      dbErrorCode: null,
+      elapsedTime: 0,
+    });
+
+    setLoading(true);
+    setLoadFailed(false);
+    const [visibleRes, archivedRes] = await Promise.all([
+      listVisiblePaymentsForPanel(pid, 1000),
+      listArchivedPaymentsForPanel(pid, 1000),
+    ]);
+    const elapsedTime = Date.now() - startedAt;
+
+    const visibleIsError = "error" in visibleRes;
+    const archivedIsError = "error" in archivedRes;
+
+    if (visibleIsError || archivedIsError) {
+      const visibleCount = visibleIsError ? 0 : visibleRes.length;
+      const archivedCount = archivedIsError ? 0 : archivedRes.length;
+      const dbErrorCode = (visibleIsError ? (visibleRes.code ?? null) : null) ?? (archivedIsError ? (archivedRes.code ?? null) : null);
+      console.error("[superadmin-payment-archive] load-failed", {
+        panelId: maskedPanelId,
+        visibleCount,
+        archivedCount,
+        dbErrorCode,
+        elapsedTime,
+      });
       setActiveRows([]);
-    } else {
-      setActiveRows(v);
-    }
-    if ("error" in a) {
-      setMsg({ text: a.error, error: true });
       setArchivedRows([]);
-    } else {
-      setArchivedRows(a);
+      setLoadFailed(true);
+      setLoading(false);
+      return;
     }
+
+    console.info("[superadmin-payment-archive] load-result", {
+      panelId: maskedPanelId,
+      visibleCount: visibleRes.length,
+      archivedCount: archivedRes.length,
+      dbErrorCode: null,
+      elapsedTime,
+    });
+
+    setActiveRows(visibleRes);
+    setArchivedRows(archivedRes);
+    setLoadFailed(false);
+    setLoading(false);
   };
 
   useEffect(() => {
-    void load();
+    void loadPanels();
   }, []);
 
-  const doArchiveOne = async (paymentId: string) => {
-    if (!window.confirm(PAYMENT_ARCHIVE_CONFIRM_COPY)) return;
-    setBusy(`archive:${paymentId}`);
-    setMsg(null);
-    const res = await archivePayment(paymentId, reason);
-    setBusy(null);
-    if (!res.ok) {
-      setMsg({ text: res.error, error: true });
+  useEffect(() => {
+    const panelChanged = shouldReloadForPanelChange(prevPanelId, panelId);
+    const viewChanged = shouldReloadForViewChange(prevView, view);
+    setPrevPanelId(panelId);
+    setPrevView(view);
+
+    if (!panelId) {
+      setActiveRows(null);
+      setArchivedRows(null);
+      setLoading(false);
+      setLoadFailed(false);
       return;
     }
-    setMsg({ text: `Archived ${res.data.affected} payment.` });
-    await load();
-  };
 
-  const doRestoreOne = async (paymentId: string) => {
-    setBusy(`restore:${paymentId}`);
-    setMsg(null);
-    const res = await restoreArchivedPayment(paymentId, reason);
-    setBusy(null);
-    if (!res.ok) {
-      setMsg({ text: res.error, error: true });
-      return;
+    if (panelChanged || viewChanged || reloadNonce > 0) {
+      void loadPanelRows(panelId);
     }
-    setMsg({ text: `Restored ${res.data.affected} payment.` });
-    await load();
+  }, [panelId, view, reloadNonce]);
+
+  useEffect(() => {
+    const nextScope: PaymentArchiveSelectionScope = { panelId, search, status, view };
+    if (prevScopeRef.current && shouldClearSelection(prevScopeRef.current, nextScope)) {
+      setSelected(new Set());
+    }
+    prevScopeRef.current = nextScope;
+  }, [panelId, search, status, view]);
+
+  const filteredActive = filterPaymentArchiveRows(activeRows ?? [], { panelId, status, search });
+  const filteredArchived = filterPaymentArchiveRows(archivedRows ?? [], { panelId, status, search });
+  const visibleRows = view === "active" ? filteredActive : filteredArchived;
+  const panelTotalCount = (activeRows?.length ?? 0) + (archivedRows?.length ?? 0);
+  const renderState = deriveArchiveRenderState({
+    panelId,
+    loading,
+    loadFailed,
+    panelTotalCount,
+    filteredCount: visibleRows.length,
+  });
+  const visibleIds = visibleRows.map((r) => r.id);
+  const selectedCount = selected.size;
+  const selectedVisibleCount = visibleIds.filter((id) => selected.has(id)).length;
+  const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+  const indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    selectAllRef.current.indeterminate = indeterminate;
+  }, [indeterminate, visibleIds.length, selectedVisibleCount]);
+
+  useEffect(() => {
+    if (!selected.size) return;
+    const visible = new Set(visibleIds);
+    for (const id of selected) {
+      if (!visible.has(id)) {
+        setSelected(new Set());
+        return;
+      }
+    }
+  }, [selected, visibleIds]);
+
+  const toggleOne = (paymentId: string, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(paymentId);
+      else next.delete(paymentId);
+      return next;
+    });
   };
 
-  const doArchivePanel = async () => {
+  const toggleAllVisible = (checked: boolean) => {
+    setSelected(() => {
+      if (!checked) return new Set();
+      return new Set(visibleIds);
+    });
+  };
+
+  const selectedRows = visibleRows.filter((r) => selected.has(r.id));
+  const breakdown = selectedRows.reduce<Record<string, number>>((acc, row) => {
+    acc[row.status] = (acc[row.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const panelName = (panels ?? []).find((p) => p.id === panelId)?.name ?? "Selected panel";
+  const breakdownLines = ["pending", "approved", "rejected", "completed"]
+    .filter((k) => (breakdown[k] ?? 0) > 0)
+    .map((k) => `${breakdown[k]} ${k}`)
+    .join("\n");
+
+  const doArchiveSelected = async () => {
     if (!panelId) {
       setMsg({ text: "Select a panel first.", error: true });
       return;
     }
-    if (!window.confirm(PAYMENT_ARCHIVE_CONFIRM_COPY)) return;
-    setBusy(`archive-panel:${panelId}`);
+    if (!selectedCount) return;
+    const text = [
+      `Archive ${selectedCount} selected payment records?`,
+      "",
+      "This hides them from visible history only. Their statuses and financial records remain unchanged.",
+      "",
+      `Panel: ${panelName}`,
+      "",
+      "Status breakdown:",
+      breakdownLines || "(none)",
+    ].join("\n");
+    if (!window.confirm(text)) return;
+
+    setBusy("archive-selected");
     setMsg(null);
-    const res = await archiveEligiblePanelPayments(panelId, reason);
+    const res = await archiveSelectedPayments({ panelId, paymentIds: Array.from(selected), reason });
     setBusy(null);
     if (!res.ok) {
       setMsg({ text: res.error, error: true });
       return;
     }
-    setMsg({ text: `Archived ${res.data.affected} eligible payment records for the selected panel.` });
-    await load();
+    if (res.data.skippedCount > 0) {
+      setMsg({ text: `Archived ${res.data.archivedCount} selected payment records. ${res.data.skippedCount} record was skipped.` });
+    } else {
+      setMsg({ text: `Archived ${res.data.archivedCount} selected payment records.` });
+    }
+    setSelected(new Set());
+    if (shouldReloadAfterBulkMutation(res.ok)) setReloadNonce((v) => v + 1);
+  };
+
+  const doRestoreSelected = async () => {
+    if (!panelId) {
+      setMsg({ text: "Select a panel first.", error: true });
+      return;
+    }
+    if (!selectedCount) return;
+    const text = [
+      `Restore ${selectedCount} selected payment records?`,
+      "",
+      `Panel: ${panelName}`,
+      "",
+      "Status breakdown:",
+      breakdownLines || "(none)",
+    ].join("\n");
+    if (!window.confirm(text)) return;
+
+    setBusy("restore-selected");
+    setMsg(null);
+    const res = await restoreSelectedPayments({ panelId, paymentIds: Array.from(selected), reason });
+    setBusy(null);
+    if (!res.ok) {
+      setMsg({ text: res.error, error: true });
+      return;
+    }
+    if (res.data.skippedCount > 0) {
+      setMsg({ text: `Restored ${res.data.restoredCount} selected payment records. ${res.data.skippedCount} record was skipped.` });
+    } else {
+      setMsg({ text: `Restored ${res.data.restoredCount} selected payment records.` });
+    }
+    setSelected(new Set());
+    if (shouldReloadAfterBulkMutation(res.ok)) setReloadNonce((v) => v + 1);
   };
 
   const fmt = (n: number) => `$${n.toFixed(4).replace(/\.?0+$/, "")}`;
+  const archiveDisabled = isBulkArchiveDisabled({ selectedCount, panelId, view, busy });
+  const restoreDisabled = isBulkRestoreDisabled({ selectedCount, panelId, view, busy });
 
   return (
     <div className="space-y-4">
       <Card title="Archive payment history" icon={Lock}>
         <p className="fp-text-dim text-sm leading-relaxed">{PAYMENT_ARCHIVE_CONFIRM_COPY}</p>
-        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] mt-4">
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr] mt-4">
           <select
             value={panelId}
             onChange={(e) => setPanelId(e.target.value)}
             className={inputCls}
           >
-            <option value="">Select panel for scoped archive</option>
+            <option value="">Select panel</option>
             {(panels ?? []).map((p) => (
               <option key={p.id} value={p.id}>{p.name} ({p.subdomain})</option>
             ))}
           </select>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search payment ID, customer, gateway, panel"
+            className={inputCls}
+          />
+          <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)} className={inputCls}>
+            <option value="all">All statuses</option>
+            <option value="pending">pending</option>
+            <option value="approved">approved</option>
+            <option value="rejected">rejected</option>
+            <option value="completed">completed</option>
+          </select>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr] mt-3">
           <input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Reason (optional)"
             className={inputCls}
           />
-          <button
-            onClick={doArchivePanel}
-            disabled={busy === `archive-panel:${panelId}` || !panelId}
-            className="fp-btn-primary text-sm font-semibold px-4 py-2.5 rounded-lg disabled:opacity-60"
-          >
-            {busy === `archive-panel:${panelId}` ? "Archiving…" : "Archive eligible payments for panel"}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={doArchiveSelected}
+              disabled={archiveDisabled}
+              className="fp-btn-primary text-sm font-semibold px-4 py-2.5 rounded-lg disabled:opacity-60"
+            >
+              {busy === "archive-selected" ? "Archiving…" : "Archive selected"}
+            </button>
+            <button
+              onClick={doRestoreSelected}
+              disabled={restoreDisabled}
+              className="text-sm font-semibold px-4 py-2.5 rounded-lg border fp-line-soft disabled:opacity-60"
+            >
+              {busy === "restore-selected" ? "Restoring…" : "Restore selected"}
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
+          <button onClick={() => setView("active")} className={`px-2.5 py-1.5 rounded-lg border ${view === "active" ? "fp-gold-border fp-gold" : "fp-line-soft"}`}>
+            Visible
           </button>
+          <button onClick={() => setView("archived")} className={`px-2.5 py-1.5 rounded-lg border ${view === "archived" ? "fp-gold-border fp-gold" : "fp-line-soft"}`}>
+            Archived
+          </button>
+          <span className="fp-text-dim">{selectedCount} payments selected</span>
         </div>
       </Card>
 
@@ -1058,16 +1266,38 @@ function ArchivedPaymentsTab() {
         </div>
       )}
 
-      <Card title="Active payment history" icon={Wallet}>
-        {activeRows === null ? (
-          <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
-        ) : activeRows.length === 0 ? (
-          <p className="fp-text-faint text-sm py-4 text-center">No active payment history rows.</p>
+      <Card title={view === "active" ? "Active payment history" : "Archived payment history"} icon={view === "active" ? Wallet : EyeOff}>
+        {renderState === "no-panel" ? (
+          <p className="fp-text-faint text-sm py-4 text-center">Select a panel to view payment history.</p>
+        ) : renderState === "loading" ? (
+          <p className="fp-text-faint text-sm py-4 text-center">Loading payment history...</p>
+        ) : renderState === "load-failed" ? (
+          <p className="text-red-400 text-sm py-4 text-center">Could not load payment history. Please try again.</p>
+        ) : renderState === "panel-empty" ? (
+          <p className="fp-text-faint text-sm py-4 text-center">No payment records exist for this panel.</p>
+        ) : renderState === "filter-empty" ? (
+          <p className="fp-text-faint text-sm py-4 text-center">No payment history rows match the current filters.</p>
         ) : (
           <div className="space-y-2">
-            {activeRows.map((r) => (
+            <label className="text-xs flex items-center gap-2">
+              <input
+                ref={selectAllRef}
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={(e) => toggleAllVisible(e.target.checked)}
+              />
+              Select all visible payments
+            </label>
+            {visibleRows.map((r) => (
               <div key={r.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs">
-                <div className="grid gap-2 md:grid-cols-[1.2fr_1fr_1fr_1fr_auto] items-start">
+                <div className="grid gap-2 md:grid-cols-[auto_1.2fr_1fr_1fr_1fr_auto] items-start">
+                  <div className="pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(r.id)}
+                      onChange={(e) => toggleOne(r.id, e.target.checked)}
+                    />
+                  </div>
                   <div>
                     <p className="fp-mono" title={r.id}>{r.maskedPaymentId}</p>
                     <p className="fp-text-faint truncate">{r.panelName}</p>
@@ -1083,60 +1313,15 @@ function ArchivedPaymentsTab() {
                   </div>
                   <div>
                     <p>{new Date(r.createdAt).toLocaleString()}</p>
-                    <p className="fp-text-faint">—</p>
-                  </div>
-                  <button
-                    onClick={() => doArchiveOne(r.id)}
-                    disabled={busy === `archive:${r.id}` || (r.status !== "completed" && r.status !== "rejected")}
-                    className="text-xs px-3 py-1.5 rounded-lg border fp-line-soft hover:fp-gold-border disabled:opacity-50"
-                  >
-                    {busy === `archive:${r.id}` ? "…" : "Archive"}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <Card title="Archived payment history" icon={EyeOff}>
-        {archivedRows === null ? (
-          <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
-        ) : archivedRows.length === 0 ? (
-          <p className="fp-text-faint text-sm py-4 text-center">No archived payment rows.</p>
-        ) : (
-          <div className="space-y-2">
-            {archivedRows.map((r) => (
-              <div key={r.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs">
-                <div className="grid gap-2 md:grid-cols-[1.1fr_1fr_1fr_1fr_1fr_auto] items-start">
-                  <div>
-                    <p className="fp-mono" title={r.id}>{r.maskedPaymentId}</p>
-                    <p className="fp-text-faint truncate">{r.panelName}</p>
-                    <p className="fp-text-faint truncate">{r.customerUsername ?? r.customerEmail ?? r.customerId}</p>
+                    <p className="fp-text-faint">{r.archivedAt ? `Archived: ${new Date(r.archivedAt).toLocaleString()}` : "—"}</p>
                   </div>
                   <div>
-                    <p>{r.gateway ?? "manual"}</p>
-                    <p className="fp-text-faint">{r.method}</p>
+                    {view === "archived" ? (
+                      <p className="fp-text-faint truncate">{r.archivedByEmail ?? r.archivedBy ?? "—"}<br />{r.reason ?? "No reason"}</p>
+                    ) : (
+                      <p className="fp-text-faint">Visible</p>
+                    )}
                   </div>
-                  <div>
-                    <p className="fp-mono">{fmt(r.amount)}</p>
-                    <p className="fp-text-faint">{r.status}</p>
-                  </div>
-                  <div>
-                    <p>{new Date(r.createdAt).toLocaleString()}</p>
-                    <p className="fp-text-faint">Archived: {r.archivedAt ? new Date(r.archivedAt).toLocaleString() : "—"}</p>
-                  </div>
-                  <div>
-                    <p className="truncate">{r.archivedByEmail ?? r.archivedBy ?? "—"}</p>
-                    <p className="fp-text-faint truncate">{r.reason ?? "No reason"}</p>
-                  </div>
-                  <button
-                    onClick={() => doRestoreOne(r.id)}
-                    disabled={busy === `restore:${r.id}`}
-                    className="text-xs px-3 py-1.5 rounded-lg border fp-line-soft hover:fp-gold-border disabled:opacity-50"
-                  >
-                    {busy === `restore:${r.id}` ? "…" : "Restore"}
-                  </button>
                 </div>
               </div>
             ))}
