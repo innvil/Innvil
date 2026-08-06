@@ -181,6 +181,60 @@ test("missing claim RPC signature maps to DATABASE_WRITE_FAILURE", async () => {
   }
 });
 
+test("creditMatch falls back to legacy claim RPC signature", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      calls.push(args);
+      if (calls.length === 1) {
+        return { data: null, error: { code: "PGRST202", message: "new signature missing" } };
+      }
+      return { data: "OK", error: null };
+    },
+  } as any;
+
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[0] ?? {}, "p_order_id"), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[1] ?? {}, "p_order_id"), false);
+});
+
+test("legacy transaction-used maps to already credited when payment is completed", async () => {
+  let rpcCalls = 0;
+  const statusQuery = {
+    maybeSingle: async () => ({ data: { status: "completed" }, error: null }),
+  };
+  const probeQuery = {
+    neq: () => ({
+      limit: () => ({
+        maybeSingle: async () => ({ data: null, error: null }),
+      }),
+    }),
+  };
+  const fakeAdmin = {
+    rpc: async () => {
+      rpcCalls += 1;
+      if (rpcCalls === 1) {
+        return { data: null, error: { code: "PGRST202", message: "new signature missing" } };
+      }
+      return { data: "TRANSACTION_ALREADY_USED", error: null };
+    },
+    from: () => ({
+      select: () => ({
+        eq: (column: string) => {
+          if (column === "id") return statusQuery;
+          return probeQuery;
+        },
+      }),
+    }),
+  } as any;
+
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) assert.equal(out.code, "PAYMENT_ALREADY_CREDITED");
+});
+
 test("credit runtime errors map to PAYMENT_CREDIT_FAILURE", async () => {
   const fakeAdmin = {
     rpc: async () => ({ data: null, error: { code: "57014", message: "statement timeout" } }),

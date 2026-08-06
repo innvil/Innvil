@@ -493,10 +493,15 @@ export async function claimBinancePayment(
   logStage("credit-start", {
     panelId: maskedPanelId,
     paymentId: maskedPaymentId,
+    paymentStatusBefore: "pending",
     elapsedMs: Date.now() - t0,
   });
 
-  const creditRes = await creditMatch(admin, intent, tx, creds.config ?? null);
+  const creditRes = await creditMatch(admin, intent, tx, creds.config ?? null, {
+    maskedPanelId,
+    maskedPaymentId,
+    paymentStatusBefore: "pending",
+  });
   logStage("credit-result", {
     panelId: maskedPanelId,
     paymentId: maskedPaymentId,

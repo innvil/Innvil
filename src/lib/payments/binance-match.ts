@@ -34,19 +34,20 @@ export type BinanceClaimResult =
   | { ok: true; code: "PAYMENT_CONFIRMED"; message: string; credited: number; received: number }
   | { ok: false; code:
       | "PAYMENT_ALREADY_CREDITED"
+      | "TRANSACTION_ALREADY_USED"
       | "AUTH"
       | "NO_ACCOUNT"
       | "ORDER_PENDING_BINANCE_HISTORY"
-  | "ORDER_ID_NOT_IN_CACHE"
+      | "ORDER_ID_NOT_IN_CACHE"
       | "ORDER_ID_NOT_FOUND"
       | "ORDER_ID_ALREADY_USED"
       | "AMOUNT_MISMATCH"
       | "CURRENCY_MISMATCH"
       | "WRONG_RECEIVER"
       | "TRANSACTION_OUTSIDE_WINDOW"
-  | "DATABASE_WRITE_FAILURE"
-  | "DATABASE_LOOKUP_FAILURE"
-  | "PAYMENT_CREDIT_FAILURE"
+      | "DATABASE_WRITE_FAILURE"
+      | "DATABASE_LOOKUP_FAILURE"
+      | "PAYMENT_CREDIT_FAILURE"
       | "BINANCE_AUTH_FAILURE"
       | "BINANCE_REGION_RESTRICTED"
       | "BINANCE_API_FAILURE"
@@ -54,6 +55,30 @@ export type BinanceClaimResult =
       | "INVALID_ORDER_ID"
       | "DEPOSIT_NOT_OPEN"
       | "INTERNAL_ERROR"; message: string; pending?: boolean };
+
+interface CreditLogContext {
+  maskedPanelId?: string | null;
+  maskedPaymentId?: string | null;
+  paymentStatusBefore?: string;
+}
+
+function logCredit(event: string, payload: Record<string, unknown>): void {
+  console.info(`[binance-pay] ${event}`, payload);
+}
+
+function isSchemaCompatibilityError(code: string): boolean {
+  return code === "PGRST202" || code === "PGRST205" || code === "PGRST204" || code === "42703";
+}
+
+function isAlreadyClaimedCode(code: string): boolean {
+  return code === "PAYMENT_ALREADY_CREDITED" || code === "ORDER_ID_ALREADY_USED" || code === "TRANSACTION_ALREADY_USED";
+}
+
+function hasQueryBuilder(client: unknown): client is {
+  from: SupabaseClient["from"];
+} {
+  return Boolean(client && typeof (client as { from?: unknown }).from === "function");
+}
 
 export function normalizeEnteredTransactionId(input: string): string {
   return String(input || "").normalize("NFKC").trim().replace(/\s+/g, "");
@@ -177,13 +202,46 @@ export async function creditMatch(
   admin: SupabaseClient,
   intent: PendingIntent,
   tx: BinanceTx,
-  gwConfig: Record<string, string> | null
+  gwConfig: Record<string, string> | null,
+  logContext?: CreditLogContext
 ): Promise<BinanceClaimResult> {
   const received = round4(decimalToNumber(tx.amount));
   const base = round4(decimalToNumber(intent.amount)); // credit the requested top-up; the unique tail is a tiny margin
   const bonusPct = await resolveGatewayDiscountPct("binance_pay", gwConfig, base);
   const bonus = bonusPct != null ? round4((base * bonusPct) / 100) : 0;
   const credit = round4(base + bonus);
+
+  let txAlreadyClaimed: boolean | null = null;
+  let orderAlreadyClaimed: boolean | null = tx.order_id ? null : false;
+  let precheckDbCode: string | null = null;
+
+  if (hasQueryBuilder(admin)) {
+    const claimedTxProbe = await admin.from("payments").select("id").eq("binance_tx_id", tx.transaction_id).neq("id", intent.id).limit(1).maybeSingle();
+    if (claimedTxProbe.error) {
+      precheckDbCode = claimedTxProbe.error.code ?? null;
+    } else {
+      txAlreadyClaimed = Boolean(claimedTxProbe.data);
+    }
+
+    if (tx.order_id) {
+      const claimedOrderProbe = await admin.from("payments").select("id").eq("binance_order_id", tx.order_id).neq("id", intent.id).limit(1).maybeSingle();
+      if (claimedOrderProbe.error) {
+        precheckDbCode = precheckDbCode ?? claimedOrderProbe.error.code ?? null;
+      } else {
+        orderAlreadyClaimed = Boolean(claimedOrderProbe.data);
+      }
+    }
+  }
+
+  logCredit("credit-db-call", {
+    paymentId: logContext?.maskedPaymentId ?? null,
+    panelId: logContext?.maskedPanelId ?? null,
+    rpc: "claim_binance_payment",
+    paymentStatusBefore: logContext?.paymentStatusBefore ?? "unknown",
+    transactionAlreadyClaimed: txAlreadyClaimed,
+    orderAlreadyClaimed,
+    dbCode: precheckDbCode,
+  });
 
   const { data: claimCode, error: claimErr } = await admin.rpc("claim_binance_payment", {
     p_payment_id: intent.id,
@@ -195,26 +253,116 @@ export async function creditMatch(
     p_reason: `Binance Pay ${tx.order_id ?? tx.transaction_id}`,
   });
 
-  if (claimErr) {
-    const code = String(claimErr.code ?? "").toUpperCase();
-    if (code === "PGRST202" || code === "PGRST205" || code === "42703") {
-      return { ok: false, code: "DATABASE_WRITE_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
-    }
-    return { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
+  logCredit("credit-db-result", {
+    paymentId: logContext?.maskedPaymentId ?? null,
+    panelId: logContext?.maskedPanelId ?? null,
+    rpc: "claim_binance_payment",
+    internalCode: claimCode ?? null,
+    dbCode: claimErr?.code ?? null,
+  });
+
+  let effectiveCode = claimCode as string | null;
+  let effectiveErr = claimErr;
+
+  // Compatibility path: production may still have the pre-0040 function signature.
+  if (effectiveErr && isSchemaCompatibilityError(String(effectiveErr.code ?? "").toUpperCase())) {
+    console.warn("[binance-pay] legacy-credit-rpc-fallback", {
+      paymentId: logContext?.maskedPaymentId ?? null,
+      panelId: logContext?.maskedPanelId ?? null,
+      dbCode: effectiveErr.code ?? null,
+    });
+    const legacy = await admin.rpc("claim_binance_payment", {
+      p_payment_id: intent.id,
+      p_customer_id: intent.customer_id,
+      p_tx_id: tx.transaction_id,
+      p_bonus_amount: bonus,
+      p_credit_amount: credit,
+      p_reason: `Binance Pay ${tx.order_id ?? tx.transaction_id}`,
+    });
+
+    logCredit("credit-db-result", {
+      paymentId: logContext?.maskedPaymentId ?? null,
+      panelId: logContext?.maskedPanelId ?? null,
+      rpc: "claim_binance_payment_legacy_signature",
+      internalCode: legacy.data ?? null,
+      dbCode: legacy.error?.code ?? null,
+    });
+
+    effectiveCode = legacy.data as string | null;
+    effectiveErr = legacy.error;
   }
-  if (claimCode === "PAYMENT_ALREADY_CREDITED") {
+
+  if (effectiveErr) {
+    const code = String(effectiveErr.code ?? "").toUpperCase();
+    const out = isSchemaCompatibilityError(code)
+      ? { ok: false, code: "DATABASE_WRITE_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." } as const
+      : { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." } as const;
+    logCredit("credit-failed", {
+      paymentId: logContext?.maskedPaymentId ?? null,
+      panelId: logContext?.maskedPanelId ?? null,
+      rpc: "claim_binance_payment",
+      internalCode: out.code,
+      dbCode: effectiveErr.code ?? null,
+      dbConstraint: (effectiveErr as { constraint?: string } | null)?.constraint ?? null,
+      paymentStatusBefore: logContext?.paymentStatusBefore ?? "unknown",
+      transactionAlreadyClaimed: txAlreadyClaimed,
+      orderAlreadyClaimed,
+    });
+    return out;
+  }
+  if (effectiveCode === "PAYMENT_ALREADY_CREDITED") {
     return { ok: false, code: "PAYMENT_ALREADY_CREDITED", message: "Payment was already confirmed and credited." };
   }
-  if (claimCode === "ORDER_ID_ALREADY_USED") {
+  if (effectiveCode === "TRANSACTION_ALREADY_USED") {
+    if (hasQueryBuilder(admin)) {
+      const statusProbe = await admin.from("payments").select("status").eq("id", intent.id).maybeSingle();
+      if (!statusProbe.error && statusProbe.data?.status === "completed") {
+        return { ok: false, code: "PAYMENT_ALREADY_CREDITED", message: "Payment was already confirmed and credited." };
+      }
+    }
+    return { ok: false, code: "TRANSACTION_ALREADY_USED", message: "This Binance transaction has already been used." };
+  }
+  if (effectiveCode === "ORDER_ID_ALREADY_USED") {
     return { ok: false, code: "ORDER_ID_ALREADY_USED", message: "This Binance Order ID has already been used." };
   }
-  if (claimCode === "DEPOSIT_NOT_OPEN") {
+  if (effectiveCode === "DEPOSIT_NOT_OPEN") {
+    if (hasQueryBuilder(admin)) {
+      const statusProbe = await admin.from("payments").select("status").eq("id", intent.id).maybeSingle();
+      if (!statusProbe.error && statusProbe.data?.status === "completed") {
+        return { ok: false, code: "PAYMENT_ALREADY_CREDITED", message: "Payment was already confirmed and credited." };
+      }
+    }
     return { ok: false, code: "DEPOSIT_NOT_OPEN", message: "We found the payment, but could not complete the credit. Please try again." };
   }
-  if (claimCode === "CREDIT_FAILED") {
+  if (effectiveCode === "CREDIT_FAILED") {
+    logCredit("credit-failed", {
+      paymentId: logContext?.maskedPaymentId ?? null,
+      panelId: logContext?.maskedPanelId ?? null,
+      rpc: "claim_binance_payment",
+      internalCode: "PAYMENT_CREDIT_FAILURE",
+      dbCode: null,
+      dbConstraint: null,
+      paymentStatusBefore: logContext?.paymentStatusBefore ?? "unknown",
+      transactionAlreadyClaimed: txAlreadyClaimed,
+      orderAlreadyClaimed,
+    });
     return { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
   }
-  if (claimCode !== "OK") {
+  if (effectiveCode !== "OK") {
+    const internalCode = isAlreadyClaimedCode(String(effectiveCode ?? ""))
+      ? String(effectiveCode)
+      : "PAYMENT_CREDIT_FAILURE";
+    logCredit("credit-failed", {
+      paymentId: logContext?.maskedPaymentId ?? null,
+      panelId: logContext?.maskedPanelId ?? null,
+      rpc: "claim_binance_payment",
+      internalCode,
+      dbCode: null,
+      dbConstraint: null,
+      paymentStatusBefore: logContext?.paymentStatusBefore ?? "unknown",
+      transactionAlreadyClaimed: txAlreadyClaimed,
+      orderAlreadyClaimed,
+    });
     return { ok: false, code: "PAYMENT_CREDIT_FAILURE", message: "We found the payment, but could not complete the credit. Please try again." };
   }
 
