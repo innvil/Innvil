@@ -4007,6 +4007,11 @@ function TelegramConnectRow({
         setStatus(next.provisioningStatus);
         setTelegramUsername(next.telegramUsername);
         setLastError(next.lastError);
+        if (CONNECTED_PROVISIONING_STATUSES.has(next.provisioningStatus)) {
+          setRowMsg({ text: next.telegramUsername ? `Telegram connected — @${next.telegramUsername}.` : "Telegram connected." });
+        } else if (next.provisioningStatus !== "telegram_confirmation_pending") {
+          setRowMsg(null); // left the "waiting" state for something other than success — clear the stale hint either way
+        }
         await onChanged();
       }
     }, 3000);
@@ -4042,6 +4047,11 @@ function TelegramConnectRow({
     setStatus(next.provisioningStatus);
     setTelegramUsername(next.telegramUsername);
     setLastError(next.lastError);
+    if (CONNECTED_PROVISIONING_STATUSES.has(next.provisioningStatus)) {
+      setRowMsg({ text: next.telegramUsername ? `Telegram connected — @${next.telegramUsername}.` : "Telegram connected." });
+    } else if (next.provisioningStatus !== "telegram_confirmation_pending") {
+      setRowMsg(null);
+    }
     if (next.provisioningStatus !== "telegram_confirmation_pending") await onChanged();
   };
 
