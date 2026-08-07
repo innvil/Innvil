@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getProviderCredentials, getMultiStatus } from "@/src/lib/providers";
 import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
+import { normalizeOrderLink } from "@/src/lib/orders/normalize-link";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -84,24 +85,6 @@ type DupCandidate = {
 const DUP_ACTIVE: OrderStatus[] = ["pending", "processing", "in_progress"];
 const DUP_MUTABLE: OrderStatus[] = ["pending", "processing"];
 
-function normalizeDupLink(link: string): string {
-  const raw = (link || "").trim();
-  if (!raw) return "";
-  try {
-    const u = new URL(raw);
-    const host = u.host.toLowerCase().replace(/^www\./, "");
-    const path = (u.pathname || "").replace(/\/+$/, "");
-    return `${host}${path}`;
-  } catch {
-    return raw
-      .toLowerCase()
-      .replace(/^https?:\/\//, "")
-      .replace(/^www\./, "")
-      .replace(/[?#].*$/, "")
-      .replace(/\/+$/, "");
-  }
-}
-
 /**
  * Reconcile duplicates with a strict active-order rule:
  * - Only active statuses (`pending`, `processing`, `in_progress`) participate.
@@ -127,7 +110,7 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
   const toDuplicate: string[] = [];
   const seenActive = new Set<string>();
   for (const r of rows) {
-    const normLink = normalizeDupLink(r.link);
+    const normLink = normalizeOrderLink(r.link);
     if (!normLink) continue;
     const key = `${normLink}::${r.service_id}`;
     if (!seenActive.has(key)) {

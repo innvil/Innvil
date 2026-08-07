@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getProviderCredentials, addOrder, getBalance, ProviderError } from "@/src/lib/providers";
 import { round4 } from "@/src/lib/money";
 import { validateOrderLink } from "@/src/lib/order-link";
+import { normalizeOrderLink } from "@/src/lib/orders/normalize-link";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -26,24 +27,6 @@ export interface PlaceOrderInput {
 export type PlaceOrderResult =
   | { ok: true; orderId: string; charge: number; balance: number; status: OrderStatus }
   | { ok: false; error: string };
-
-export function normalizeDupLink(link: string): string {
-  const raw = (link || "").trim();
-  if (!raw) return "";
-  try {
-    const u = new URL(raw);
-    const host = u.host.toLowerCase().replace(/^www\./, "");
-    const path = (u.pathname || "").replace(/\/+$/, "");
-    return `${host}${path}`;
-  } catch {
-    return raw
-      .toLowerCase()
-      .replace(/^https?:\/\//, "")
-      .replace(/^www\./, "")
-      .replace(/[?#].*$/, "")
-      .replace(/\/+$/, "");
-  }
-}
 
 async function addHistory(admin: SupabaseClient, orderId: string, status: OrderStatus, note?: string) {
   await admin.from("order_status_history").insert({ order_id: orderId, status, note: note ?? null });
@@ -96,42 +79,44 @@ export async function placeOrderForAccount(
   if (charge <= 0) return { ok: false, error: "This order amount is invalid." };
   if (Number(acct.balance) < charge) return { ok: false, error: "Insufficient balance. Please add funds and try again." };
 
-  // Duplicate guard BEFORE wallet charge/provider send.
-  const normalizedLink = normalizeDupLink(link);
-  const { data: relatedOrders } = await admin
-    .from("orders")
-    .select("id, service_id, link, status")
-    .eq("panel_id", input.panelId)
-    .eq("customer_id", acct.id)
-    .in("status", ["pending", "processing", "in_progress"])
-    .order("created_at", { ascending: false })
-    .limit(200);
+  // Duplicate guard BEFORE wallet charge/provider send. Identity = normalized
+  // link + service_id (matches uq_orders_active_link_service exactly, see
+  // normalize-link.ts) — category is NOT part of duplicate identity, so a
+  // different service under the same category for the same link is allowed.
+  const normalizedLink = normalizeOrderLink(link);
+  const findDuplicate = async (): Promise<{ id: string } | null> => {
+    const { data: relatedOrders } = await admin
+      .from("orders")
+      .select("id, service_id, link, status")
+      .eq("panel_id", input.panelId)
+      .eq("customer_id", acct.id)
+      .eq("service_id", svc.id)
+      .in("status", ["pending", "processing", "in_progress"])
+      .order("created_at", { ascending: false })
+      .limit(200);
+    const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; link: string; status: OrderStatus }> | null) ?? [];
+    return relatedRows.find((row) => normalizeOrderLink(row.link) === normalizedLink) ?? null;
+  };
 
-  const relatedRows = (relatedOrders as Array<{ id: string; service_id: string; link: string; status: OrderStatus }> | null) ?? [];
-  if (relatedRows.length) {
-    const matchesDuplicate = (row: { service_id: string; link: string }): boolean => {
-      if (normalizeDupLink(row.link) !== normalizedLink) return false;
-      return row.service_id === svc.id;
-    };
+  const insertDuplicateMarkedOrder = async (dupeId: string): Promise<PlaceOrderResult> => {
+    const dripDup = input.runs != null && input.interval != null;
+    const { data: duplicateOrder, error: duplicateErr } = await admin
+      .from("orders")
+      .insert({
+        panel_id: input.panelId, customer_id: acct.id, service_id: svc.id, service_category_id: svc.category_id,
+        provider_id: svc.provider_id, link, quantity: qty, charge, provider_cost: providerCost, profit, status: "duplicate",
+        provider_payload: { service: svc.provider_service_id, quantity: qty, ...(dripDup ? { runs: input.runs, interval: input.interval } : {}), ...(hasComments ? { comments: commentList } : {}) },
+        provider_response: { duplicate: true, reason: "Matched existing active order with same link + service.", duplicate_of: dupeId },
+      })
+      .select("id")
+      .single();
+    if (duplicateErr || !duplicateOrder) return { ok: false, error: "This looks like a duplicate of an order you already have in progress." };
+    await addHistory(admin, duplicateOrder.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
+    return { ok: true, orderId: duplicateOrder.id, charge, balance: Number(acct.balance), status: "duplicate" };
+  };
 
-    const dupe = relatedRows.find((row) => matchesDuplicate(row));
-    if (dupe) {
-      const dripDup = input.runs != null && input.interval != null;
-      const { data: duplicateOrder, error: duplicateErr } = await admin
-        .from("orders")
-        .insert({
-          panel_id: input.panelId, customer_id: acct.id, service_id: svc.id, service_category_id: svc.category_id,
-          provider_id: svc.provider_id, link, quantity: qty, charge, provider_cost: providerCost, profit, status: "duplicate",
-          provider_payload: { service: svc.provider_service_id, quantity: qty, ...(dripDup ? { runs: input.runs, interval: input.interval } : {}), ...(hasComments ? { comments: commentList } : {}) },
-          provider_response: { duplicate: true, reason: "Matched existing active order with same link + service.", duplicate_of: dupe.id },
-        })
-        .select("id")
-        .single();
-      if (duplicateErr || !duplicateOrder) return { ok: false, error: duplicateErr?.message ?? "Could not create duplicate-marked order." };
-      await addHistory(admin, duplicateOrder.id, "duplicate", "Duplicate of an existing order — not sent to the provider.");
-      return { ok: true, orderId: duplicateOrder.id, charge, balance: Number(acct.balance), status: "duplicate" };
-    }
-  }
+  const preCheckDupe = await findDuplicate();
+  if (preCheckDupe) return insertDuplicateMarkedOrder(preCheckDupe.id);
 
   const drip = input.runs != null && input.interval != null;
   const { data: order, error: oErr } = await admin
@@ -143,7 +128,19 @@ export async function placeOrderForAccount(
     })
     .select("id")
     .single();
-  if (oErr || !order) return { ok: false, error: oErr?.message ?? "Could not create the order." };
+  if (oErr || !order) {
+    // 23505 = Postgres unique_violation. A race between the pre-check above and
+    // this insert can still hit uq_orders_active_link_service /
+    // uq_orders_active_link_category_service — treat that as the same graceful
+    // duplicate path instead of leaking the raw constraint error to the customer.
+    if (oErr?.code === "23505") {
+      const raceDupe = await findDuplicate();
+      if (raceDupe) return insertDuplicateMarkedOrder(raceDupe.id);
+      return { ok: false, error: "This looks like a duplicate of an order you already have in progress." };
+    }
+    console.error("[orders/place] insert failed", oErr?.message);
+    return { ok: false, error: "Could not create the order." };
+  }
   const orderId = order.id;
   await addHistory(admin, orderId, "pending");
 
