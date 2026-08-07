@@ -73,14 +73,25 @@ async function submitPendingOrderToProvider(
     service_id: string | null;
     provider_id: string | null;
     provider_order_id: string | null;
+    status: OrderStatus;
     link: string | null;
     quantity: number | null;
     provider_payload: unknown;
   },
   historyNote: string
 ): Promise<Result> {
+  console.info("[dup-debug][resend:start]", {
+    orderId: order.id,
+    status: order.status,
+    providerOrderId: order.provider_order_id,
+    duplicateFlag: (order.provider_payload as Record<string, unknown> | null)?.duplicate ?? null,
+  });
   // Already at the provider → never resend (avoids a duplicate order).
   if (order.provider_order_id) {
+    console.info("[dup-debug][resend:skip-already-provider-bound]", {
+      orderId: order.id,
+      providerOrderId: order.provider_order_id,
+    });
     return { ok: false, error: "This order was already sent to the provider." };
   }
   if (!order.service_id) {
@@ -94,6 +105,13 @@ async function submitPendingOrderToProvider(
     .select("provider_id, provider_service_id")
     .eq("id", order.service_id as string)
     .maybeSingle();
+  console.info("[dup-debug][resend:provider-resolution]", {
+    orderId: order.id,
+    serviceId: order.service_id,
+    orderProviderId: order.provider_id,
+    serviceProviderId: svc?.provider_id ?? null,
+    serviceProviderServiceId: svc?.provider_service_id ?? null,
+  });
   const providerId = order.provider_id ?? svc?.provider_id ?? null;
   if (!providerId || !svc?.provider_service_id) {
     return { ok: false, error: "This service isn't mapped to a provider yet." };
@@ -122,15 +140,57 @@ async function submitPendingOrderToProvider(
     if (!("order" in resp)) {
       return { ok: false, error: resp.error || "Provider rejected the order." };
     }
-    await admin.from("orders").update({
+    const acceptedStatus: OrderStatus = "processing";
+    console.info("[dup-debug][resend:before-update]", {
+      orderId: order.id,
+      acceptedStatus,
+      nextProviderOrderId: String(resp.order),
+      nextDuplicate: false,
+    });
+    const { data: updatedRow, error: updateErr } = await admin.from("orders").update({
       provider_id: providerId,
       provider_order_id: String(resp.order),
-      status: "processing",
-      provider_response: resp as Record<string, unknown>,
-    }).eq("id", order.id);
-    await addHistory(admin, order.id, "processing", historyNote);
+      status: acceptedStatus,
+      // Duplicate is a local block state only. Once accepted by provider, clear it.
+      provider_response: { ...(resp as Record<string, unknown>), duplicate: false },
+    }).eq("id", order.id).select("id, status, provider_order_id, provider_response").maybeSingle();
+    console.info("[dup-debug][resend:after-update]", {
+      orderId: order.id,
+      dbStatus: updatedRow?.status ?? null,
+      dbProviderOrderId: updatedRow?.provider_order_id ?? null,
+      dbDuplicate: (updatedRow?.provider_response as Record<string, unknown> | null)?.duplicate ?? null,
+      error: updateErr?.message ?? null,
+    });
+    if (updateErr || !updatedRow) {
+      return { ok: false, error: updateErr?.message ?? "Order update failed after provider acceptance." };
+    }
+    await addHistory(
+      admin,
+      order.id,
+      acceptedStatus,
+      order.status === "duplicate"
+        ? "Duplicate tag cleared after manual resend — accepted by provider."
+        : historyNote
+    );
+    const { data: reloaded } = await admin
+      .from("orders")
+      .select("id, status, provider_order_id, provider_response")
+      .eq("id", order.id)
+      .maybeSingle();
+    console.info("[dup-debug][resend:after-commit-reload]", {
+      orderId: order.id,
+      status: reloaded?.status ?? null,
+      providerOrderId: reloaded?.provider_order_id ?? null,
+      duplicate: (reloaded?.provider_response as Record<string, unknown> | null)?.duplicate ?? null,
+      duplicateReason: (reloaded?.provider_response as Record<string, unknown> | null)?.reason ?? null,
+      duplicateOf: (reloaded?.provider_response as Record<string, unknown> | null)?.duplicate_of ?? null,
+    });
     return { ok: true };
   } catch (e) {
+    console.info("[dup-debug][resend:error]", {
+      orderId: order.id,
+      message: e instanceof Error ? e.message : String(e),
+    });
     return { ok: false, error: e instanceof ProviderError ? e.message : e instanceof Error ? e.message : "Provider error" };
   }
 }
@@ -337,6 +397,20 @@ export async function listPanelOrdersPage(
 
   const data = pageRes.data;
   const fetched = (data as OrderRow[] | null) ?? [];
+  for (const row of fetched) {
+    const pr = (row.provider_response as Record<string, unknown> | null) ?? null;
+    if (row.status === "duplicate" || row.provider_order_id || pr?.duplicate != null) {
+      console.info("[dup-debug][orders:list-page-row]", {
+        panelId,
+        orderId: row.id,
+        status: row.status,
+        providerOrderId: row.provider_order_id,
+        duplicate: pr?.duplicate ?? null,
+        duplicateReason: pr?.reason ?? null,
+        duplicateOf: pr?.duplicate_of ?? null,
+      });
+    }
+  }
   const hasNext = fetched.length > pageSize;
   const rows = hasNext ? fetched.slice(0, pageSize) : fetched;
   const profiles = await resolveCustomerIdentity(admin, rows.map((r) => one(r.customer_accounts)?.user_id ?? "").filter(Boolean));

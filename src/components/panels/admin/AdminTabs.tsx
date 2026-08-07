@@ -20,11 +20,11 @@ import {
   PANEL_STATUSES, categoriesData, PanelStatus,
 } from "@/src/data/constants";
 import { Panel, CustomerRow } from "@/src/types";
-import type { ProviderRow, MarkupKind, OrderStatus } from "@/src/types/db";
+import type { ProviderRow, ProviderStatus, MarkupKind, OrderStatus } from "@/src/types/db";
 import type { ProviderServiceDTO } from "@/src/lib/providers";
 import {
   listProviders, createProvider, testProviderConnection,
-  fetchProviderBalance, deleteProvider,
+  fetchProviderBalance, deleteProvider, updateProvider,
 } from "@/src/lib/actions/providers";
 import {
   listCatalog, fetchImportableServices, importServices,
@@ -738,6 +738,16 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
   const [form, setForm] = useState({ name: "", apiUrl: "", apiKey: "", currency: "USD" });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    apiUrl: "",
+    apiKey: "",
+    currency: "USD",
+    status: "active" as ProviderStatus,
+  });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
   const [rows, setRows] = useState<Record<string, RowState>>({});
   const [autoSyncing, setAutoSyncing] = useState(false);
   const providersRef = useRef<ProviderRow[] | null>(providers);
@@ -830,6 +840,46 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
     else setRow(id, { msg: res.error, error: true });
   };
 
+  const startEdit = (p: ProviderRow) => {
+    setShowForm(false);
+    setFormError(null);
+    setEditError(null);
+    setEditingId(p.id);
+    setEditForm({
+      name: p.name,
+      apiUrl: p.api_url,
+      apiKey: "",
+      currency: p.currency || "USD",
+      status: p.status,
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+    setEditError(null);
+    if (!editForm.name.trim() || !editForm.apiUrl.trim()) {
+      setEditError("Name and API URL are required.");
+      return;
+    }
+    setUpdating(true);
+    const res = await updateProvider(editingId, {
+      name: editForm.name.trim(),
+      apiUrl: editForm.apiUrl.trim(),
+      apiKey: editForm.apiKey.trim() || undefined,
+      currency: editForm.currency.trim() || "USD",
+      status: editForm.status,
+    });
+    setUpdating(false);
+    if (!res.ok) {
+      setEditError(res.error);
+      return;
+    }
+    setRow(editingId, { msg: "Provider updated." });
+    setEditingId(null);
+    setEditForm({ name: "", apiUrl: "", apiKey: "", currency: "USD", status: "active" });
+    refresh();
+  };
+
   return (
     <div className="space-y-4">
       {!realPanel && (
@@ -893,6 +943,48 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
           </div>
         )}
 
+        {editingId && (
+          <div className="mb-5 p-4 rounded-xl fp-panel-raised border fp-line-soft space-y-3">
+            <p className="text-xs fp-text-dim fp-mono uppercase">Edit provider API info</p>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Name</label>
+                <input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Provider Alpha" name="ll-provider-edit-name" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" className={`${inputCls} mt-1.5`} />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Currency</label>
+                <input value={editForm.currency} onChange={(e) => setEditForm({ ...editForm, currency: e.target.value })} placeholder="USD" name="ll-provider-edit-currency" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" className={`${inputCls} mt-1.5`} />
+              </div>
+            </div>
+            <div>
+              <label className="fp-text-dim text-xs fp-mono uppercase">API URL</label>
+              <input value={editForm.apiUrl} onChange={(e) => setEditForm({ ...editForm, apiUrl: e.target.value })} placeholder="https://provider.com/api/v2" type="url" inputMode="url" name="ll-provider-edit-url" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" className={`${inputCls} mt-1.5 fp-mono`} />
+            </div>
+            <div>
+              <label className="fp-text-dim text-xs fp-mono uppercase">API key</label>
+              <input value={editForm.apiKey} onChange={(e) => setEditForm({ ...editForm, apiKey: e.target.value })} type="password" placeholder="Leave blank to keep existing key" name="ll-provider-edit-key" autoComplete="new-password" data-lpignore="true" data-1p-ignore data-form-type="other" className={`${inputCls} mt-1.5 fp-mono`} />
+            </div>
+            <div>
+              <label className="fp-text-dim text-xs fp-mono uppercase">Status</label>
+              <select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value as ProviderStatus })} className={`${inputCls} mt-1.5`}>
+                <option value="active">active</option>
+                <option value="inactive">inactive</option>
+              </select>
+            </div>
+            {editError && (
+              <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {editError}</p>
+            )}
+            <div className="flex gap-2">
+              <button onClick={saveEdit} disabled={updating} className="fp-btn-primary text-xs font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+                {updating ? "Updating…" : "Update provider"}
+              </button>
+              <button onClick={() => { setEditingId(null); setEditError(null); }} className="fp-panel border fp-line-soft text-xs px-4 py-2 rounded-lg fp-text-dim">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {providers === null ? (
           <p className="fp-text-faint text-sm py-4 text-center">Loading providers…</p>
         ) : providers.length === 0 ? (
@@ -944,6 +1036,7 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
                       </td>
                       <td className="py-3">
                         <div className="flex gap-2 text-xs fp-text-dim flex-wrap items-center">
+                          <button onClick={() => startEdit(p)} disabled={st.busy} className="hover:fp-text disabled:opacity-50">Edit</button>
                           <button onClick={() => test(p.id)} disabled={st.busy} className="hover:fp-text disabled:opacity-50">Test</button>
                           <button onClick={() => fetchBal(p.id)} disabled={st.busy} className="hover:fp-text disabled:opacity-50 flex items-center gap-1">
                             <RefreshCw size={11} /> Balance

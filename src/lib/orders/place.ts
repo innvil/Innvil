@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getProviderCredentials, addOrder, ProviderError } from "@/src/lib/providers";
+import { getProviderCredentials, addOrder, getBalance, ProviderError } from "@/src/lib/providers";
 import { round4 } from "@/src/lib/money";
 import { validateOrderLink } from "@/src/lib/order-link";
 import type { OrderStatus } from "@/src/types/db";
@@ -165,6 +165,26 @@ export async function placeOrderForAccount(
     }
     try {
       const creds = await getProviderCredentials(svc.provider_id, prov.api_url);
+
+      // Best-effort pre-check: if provider balance is clearly below this order's
+      // provider-side cost, hold in Innvil without refunding.
+      try {
+        const bal = await getBalance(creds);
+        if (!("error" in bal)) {
+          const providerBalance = Number(bal.balance);
+          if (Number.isFinite(providerBalance) && providerCost > 0 && providerBalance + 0.000001 < providerCost) {
+            await admin.from("orders").update({
+              status: "pending",
+              provider_response: { held: true, reason: "provider_balance", error: "Provider balance is insufficient right now." },
+            }).eq("id", orderId);
+            await addHistory(admin, orderId, "pending", "On hold — provider balance insufficient; auto-cancels in 24h.");
+            return { ok: true, orderId, charge, balance: balanceAfter, status: "pending" };
+          }
+        }
+      } catch {
+        // Keep existing behavior: if balance pre-check fails, still attempt submit.
+      }
+
       const resp = await addOrder(creds, {
         service: svc.provider_service_id, link, quantity: qty,
         ...(drip ? { runs: input.runs, interval: input.interval } : {}), ...(hasComments ? { comments: commentList.join("\n") } : {}),
@@ -183,7 +203,22 @@ export async function placeOrderForAccount(
       await refundAndFail(admin, orderId, acct.id, charge, resp.error || "Provider rejected the order");
       return { ok: false, error: resp.error || "The provider rejected this order. You were refunded." };
     } catch (e) {
-      const msg = e instanceof ProviderError ? e.message : e instanceof Error ? e.message : "Provider error";
+      if (e instanceof ProviderError && e.category === "provider_low_balance") {
+        await admin.from("orders").update({
+          status: "pending",
+          provider_response: {
+            held: true,
+            reason: "provider_balance",
+            error: e.safeMessage,
+            provider_error_category: e.category,
+            provider_http_status: e.httpStatus ?? null,
+          },
+        }).eq("id", orderId);
+        await addHistory(admin, orderId, "pending", "On hold — provider balance insufficient; auto-cancels in 24h.");
+        return { ok: true, orderId, charge, balance: balanceAfter, status: "pending" };
+      }
+
+      const msg = e instanceof ProviderError ? e.safeMessage : e instanceof Error ? e.message : "Provider error";
       await refundAndFail(admin, orderId, acct.id, charge, msg);
       return { ok: false, error: `Could not reach the provider (${msg}). You were refunded.` };
     }

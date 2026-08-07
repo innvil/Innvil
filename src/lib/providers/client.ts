@@ -9,8 +9,94 @@ import {
   BalanceResponse,
   RefillResponse,
   CancelResponse,
+  ProviderErrorCategory,
   ProviderError,
 } from "./types";
+
+function normalizeProviderMessage(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const msg = input.trim();
+  return msg ? msg.slice(0, 300) : null;
+}
+
+function extractProviderErrorMessage(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  return (
+    normalizeProviderMessage(obj.error) ??
+    normalizeProviderMessage(obj.message) ??
+    normalizeProviderMessage(obj.msg) ??
+    normalizeProviderMessage(obj.detail)
+  );
+}
+
+function extractProviderErrorCode(parsed: unknown): string | undefined {
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const obj = parsed as Record<string, unknown>;
+  const val = obj.code ?? obj.error_code ?? obj.err_code;
+  if (val == null) return undefined;
+  return String(val).slice(0, 80);
+}
+
+function isInsufficientProviderBalance(msg?: string | null): boolean {
+  if (!msg) return false;
+  return /insufficient|not enough (funds|balance|money)|no (funds|balance)|low balance|top ?up|add funds/i.test(msg);
+}
+
+function classifyProviderError(
+  msg: string | null,
+  httpStatus?: number
+): { category: ProviderErrorCategory; retryable: boolean; safeMessage: string } {
+  const m = (msg ?? "").toLowerCase();
+
+  if (isInsufficientProviderBalance(msg)) {
+    return {
+      category: "provider_low_balance",
+      retryable: true,
+      safeMessage: "Provider balance is insufficient right now.",
+    };
+  }
+  if (/invalid api|api key|unauthorized|authori[sz]ed|access denied|permission/i.test(m)) {
+    return {
+      category: "provider_auth_error",
+      retryable: false,
+      safeMessage: "Provider authentication failed.",
+    };
+  }
+  if (/invalid service|service not found|wrong service|unknown service|service id/i.test(m)) {
+    return {
+      category: "provider_invalid_service",
+      retryable: false,
+      safeMessage: "Provider rejected the selected service.",
+    };
+  }
+  if (/invalid|quantity|link|url|post|parameter|min|max|bad request|comments/i.test(m)) {
+    return {
+      category: "provider_invalid_order",
+      retryable: false,
+      safeMessage: "Provider rejected the order details.",
+    };
+  }
+  if (httpStatus === 429 || /too many|rate limit|throttle|flood/i.test(m)) {
+    return {
+      category: "provider_rate_limited",
+      retryable: true,
+      safeMessage: "Provider is rate-limiting requests right now.",
+    };
+  }
+  if ((httpStatus != null && httpStatus >= 500) || /timeout|temporar|unavailable|maintenance|gateway|network/i.test(m)) {
+    return {
+      category: "provider_unavailable",
+      retryable: true,
+      safeMessage: "Provider is temporarily unavailable.",
+    };
+  }
+  return {
+    category: "provider_unknown_error",
+    retryable: false,
+    safeMessage: httpStatus ? `Provider returned HTTP ${httpStatus}.` : "Provider returned an unexpected error.",
+  };
+}
 
 /**
  * Generic SMM Panel API v2 client. Every call POSTs a form-encoded body of
@@ -35,20 +121,47 @@ async function callProvider(
     });
   } catch (e) {
     throw new ProviderError(
-      `Could not reach provider: ${e instanceof Error ? e.message : "network error"}`
+      `Could not reach provider: ${e instanceof Error ? e.message : "network error"}`,
+      {
+        category: "provider_unavailable",
+        retryable: true,
+        safeMessage: "Provider is temporarily unavailable.",
+      }
     );
   }
 
-  if (!res.ok) {
-    throw new ProviderError(`Provider returned HTTP ${res.status}`);
+  const text = await res.text();
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
   }
 
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new ProviderError("Provider returned a non-JSON response");
+  if (!res.ok) {
+    const providerMessage =
+      extractProviderErrorMessage(parsed) ??
+      normalizeProviderMessage(text) ??
+      null;
+    const info = classifyProviderError(providerMessage, res.status);
+    throw new ProviderError(info.safeMessage, {
+      httpStatus: res.status,
+      providerCode: extractProviderErrorCode(parsed),
+      category: info.category,
+      retryable: info.retryable,
+      safeMessage: info.safeMessage,
+    });
   }
+
+  if (parsed === null) {
+    throw new ProviderError("Provider returned a non-JSON response", {
+      category: "provider_unknown_error",
+      retryable: false,
+      safeMessage: "Provider returned an invalid response.",
+    });
+  }
+
+  return parsed;
 }
 
 export async function fetchServices(

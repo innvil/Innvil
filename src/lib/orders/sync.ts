@@ -58,7 +58,8 @@ function chunk<T>(arr: T[], n: number): T[][] {
 
 interface OpenOrder {
   id: string;
-  provider_id: string;
+  provider_id: string | null;
+  service_id: string | null;
   provider_order_id: string;
   status: OrderStatus;
   quantity: number;
@@ -118,6 +119,10 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
     .order("created_at", { ascending: true });
 
   const rows = (data as Array<DupCandidate & { created_at: string }> | null) ?? [];
+  console.info("[dup-debug][sync:reconcile-duplicates:start]", {
+    panelId,
+    scanned: rows.length,
+  });
   if (!rows.length) return 0;
   const toDuplicate: string[] = [];
   const seenActive = new Set<string>();
@@ -133,6 +138,12 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
     // to the provider (manual resend sets provider_order_id + processing).
     if (DUP_MUTABLE.includes(r.status) && !r.provider_order_id) {
       toDuplicate.push(r.id);
+      console.info("[dup-debug][sync:reconcile-duplicates:mark-candidate]", {
+        panelId,
+        orderId: r.id,
+        status: r.status,
+        providerOrderId: r.provider_order_id,
+      });
     }
   }
 
@@ -140,6 +151,12 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
 
   let updated = 0;
   for (const id of toDuplicate) {
+    console.info("[dup-debug][sync:reconcile-duplicates:before-update]", {
+      panelId,
+      orderId: id,
+      nextStatus: "duplicate",
+      nextDuplicate: true,
+    });
     const { data: claimed } = await admin
       .from("orders")
       .update({
@@ -150,6 +167,11 @@ async function reconcileDuplicateOrders(admin: SupabaseClient, panelId: string):
       .in("status", DUP_MUTABLE)
       .select("id")
       .maybeSingle();
+    console.info("[dup-debug][sync:reconcile-duplicates:after-update]", {
+      panelId,
+      orderId: id,
+      updated: !!claimed,
+    });
     if (!claimed) continue;
     await admin.from("order_status_history").insert({
       order_id: id,
@@ -224,6 +246,116 @@ async function reconcileFailedOrders(admin: SupabaseClient, panelId: string): Pr
     updated++;
   }
 
+  return updated;
+}
+
+/**
+ * If an order was manually resent to the provider, it may still carry a legacy
+ * `duplicate` status from before resend. Once a provider_order_id exists, that
+ * order is provider-bound and should behave like an active processing order.
+ * This does NOT resend orders and does NOT touch customer balance.
+ */
+async function reconcileResentDuplicates(admin: SupabaseClient, panelId: string): Promise<number> {
+  const { data } = await admin
+    .from("orders")
+    .select("id")
+    .eq("panel_id", panelId)
+    .eq("status", "duplicate")
+    .not("provider_order_id", "is", null)
+    .limit(1000);
+
+  let updated = 0;
+  for (const r of (data as Array<{ id: string }> | null) ?? []) {
+    console.info("[dup-debug][sync:reconcile-resent:before-update]", {
+      panelId,
+      orderId: r.id,
+      fromStatus: "duplicate",
+      toStatus: "processing",
+    });
+    const { data: claimed } = await admin
+      .from("orders")
+      .update({ status: "processing" })
+      .eq("id", r.id)
+      .eq("status", "duplicate")
+      .not("provider_order_id", "is", null)
+      .select("id")
+      .maybeSingle();
+    console.info("[dup-debug][sync:reconcile-resent:after-update]", {
+      panelId,
+      orderId: r.id,
+      updated: !!claimed,
+    });
+    if (!claimed) continue;
+    await admin.from("order_status_history").insert({
+      order_id: r.id,
+      status: "processing",
+      note: "Duplicate tag cleared — provider order ID exists, order is provider-bound.",
+    });
+    updated++;
+  }
+  return updated;
+}
+
+/**
+ * Repair legacy rows from the resend-write bug window:
+ * - order still says `duplicate`
+ * - no provider_order_id persisted
+ * - but history already contains a resend->processing event
+ *
+ * This clears the stale duplicate status during sync WITHOUT submitting another
+ * provider order and WITHOUT touching customer balance.
+ */
+async function reconcileResendHistoryWithoutProviderId(
+  admin: SupabaseClient,
+  panelId: string
+): Promise<number> {
+  const { data } = await admin
+    .from("orders")
+    .select("id, provider_response")
+    .eq("panel_id", panelId)
+    .eq("status", "duplicate")
+    .is("provider_order_id", null)
+    .limit(1000);
+
+  let updated = 0;
+  for (const r of (data as Array<{ id: string; provider_response: Record<string, unknown> | null }> | null) ?? []) {
+    const { data: hasResend } = await admin
+      .from("order_status_history")
+      .select("id")
+      .eq("order_id", r.id)
+      .eq("status", "processing")
+      .or("note.ilike.%Resent to provider by owner%,note.ilike.%Duplicate tag cleared after manual resend%")
+      .limit(1)
+      .maybeSingle();
+    if (!hasResend) continue;
+
+    const nextResponse: Record<string, unknown> = {
+      ...((r.provider_response as Record<string, unknown> | null) ?? {}),
+      duplicate: false,
+      sync_reconciled: true,
+      sync_note: "Cleared stale duplicate label from resend-write bug window (provider_order_id missing).",
+    };
+
+    const { data: claimed } = await admin
+      .from("orders")
+      .update({
+        status: "processing",
+        provider_response: nextResponse,
+      })
+      .eq("id", r.id)
+      .eq("status", "duplicate")
+      .is("provider_order_id", null)
+      .select("id")
+      .maybeSingle();
+    if (!claimed) continue;
+
+    await admin.from("order_status_history").insert({
+      order_id: r.id,
+      status: "processing",
+      note: "Sync reconciliation: cleared stale duplicate status after prior resend history (no new provider submit).",
+    });
+    updated++;
+  }
   return updated;
 }
 
@@ -461,26 +593,68 @@ export async function syncPanelOrders(
   admin: SupabaseClient,
   panelId: string
 ): Promise<{ checked: number; updated: number }> {
+  console.info("[dup-debug][sync:start]", { panelId });
   // Pre-passes are independent (different order subsets) — run them concurrently.
-  const [expired, reconciledFailed, reconciledDupes] = await Promise.all([
+  const [expired, reconciledFailed, reconciledDupes, reconciledResentDupes, reconciledResendHistoryOnly] = await Promise.all([
     expireHeldOrders(admin, panelId),
     reconcileFailedOrders(admin, panelId),
     reconcileDuplicateOrders(admin, panelId),
+    reconcileResentDuplicates(admin, panelId),
+    reconcileResendHistoryWithoutProviderId(admin, panelId),
   ]);
 
   const { data: orders } = await admin
     .from("orders")
-    .select("id, provider_id, provider_order_id, status, quantity, charge, provider_cost, customer_id, remains")
+    .select("id, service_id, provider_id, provider_order_id, status, quantity, charge, provider_cost, customer_id, remains")
     .eq("panel_id", panelId)
     .not("provider_order_id", "is", null)
-    .not("provider_id", "is", null)
     .in("status", SYNCABLE_STATUSES);
 
-  const list = (orders as OpenOrder[] | null) ?? [];
+  const rawList = (orders as OpenOrder[] | null) ?? [];
+  console.info("[dup-debug][sync:provider-bound-orders]", {
+    panelId,
+    count: rawList.length,
+  });
+  const missingProviderRows = rawList.filter((o) => !o.provider_id && !!o.service_id);
+  let resolvedProviderByService = new Map<string, string>();
+  if (missingProviderRows.length) {
+    const serviceIds = [...new Set(missingProviderRows.map((o) => o.service_id).filter((v): v is string => !!v))];
+    if (serviceIds.length) {
+      const { data: svcRows } = await admin
+        .from("services")
+        .select("id, provider_id")
+        .in("id", serviceIds)
+        .not("provider_id", "is", null);
+      resolvedProviderByService = new Map(
+        ((svcRows as Array<{ id: string; provider_id: string }> | null) ?? []).map((s) => [s.id, s.provider_id])
+      );
+    }
+  }
+
+  const list = rawList
+    .map((o) => ({
+      ...o,
+      provider_id: o.provider_id ?? (o.service_id ? (resolvedProviderByService.get(o.service_id) ?? null) : null),
+    }))
+    .filter((o): o is OpenOrder & { provider_id: string } => !!o.provider_id);
+
+  if (missingProviderRows.length) {
+    const patchByProvider = new Map<string, string[]>();
+    for (const o of rawList) {
+      if (o.provider_id || !o.service_id) continue;
+      const providerId = resolvedProviderByService.get(o.service_id);
+      if (!providerId) continue;
+      patchByProvider.set(providerId, [...(patchByProvider.get(providerId) ?? []), o.id]);
+    }
+    for (const [providerId, orderIds] of patchByProvider.entries()) {
+      await admin.from("orders").update({ provider_id: providerId }).in("id", orderIds);
+    }
+  }
+
   if (!list.length) {
     await settlePanelCommission(admin, panelId);
     await refreshPanelStorefrontSnapshots(admin, panelId);
-    return { checked: 0, updated: expired + reconciledFailed + reconciledDupes };
+    return { checked: 0, updated: expired + reconciledFailed + reconciledDupes + reconciledResentDupes + reconciledResendHistoryOnly };
   }
 
   // Group by provider (each has its own credentials).
@@ -569,6 +743,15 @@ export async function syncPanelOrders(
           .eq("status", o.status)
           .select("id")
           .maybeSingle();
+        console.info("[dup-debug][sync:status-update]", {
+          panelId,
+          orderId: o.id,
+          fromStatus: o.status,
+          toStatus: finalStatus,
+          providerOrderId: o.provider_order_id,
+          duplicateIncoming: ((st as unknown as Record<string, unknown>)?.duplicate ?? null),
+          updated: !!claimed,
+        });
         if (!claimed) continue; // another run handled it
 
         // If the provider reopened a previously canceled/refunded order, put the
@@ -657,7 +840,21 @@ export async function syncPanelOrders(
   await settlePanelCommission(admin, panelId);
   await refreshPanelStorefrontSnapshots(admin, panelId);
 
-  return { checked: list.length, updated: updated + expired + reconciledFailed + reconciledDupes };
+  const totalUpdated = updated + expired + reconciledFailed + reconciledDupes + reconciledResentDupes + reconciledResendHistoryOnly;
+  console.info("[dup-debug][sync:done]", {
+    panelId,
+    checked: list.length,
+    updated: totalUpdated,
+    prepasses: {
+      expired,
+      reconciledFailed,
+      reconciledDupes,
+      reconciledResentDupes,
+      reconciledResendHistoryOnly,
+    },
+  });
+
+  return { checked: list.length, updated: totalUpdated };
 }
 
 /** Sync open orders across every panel that has any. Used by the cron. */

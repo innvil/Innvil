@@ -16,7 +16,7 @@ import { OwnerAssistantTab } from "./OwnerAssistant";
 import {
   OverviewTab, StatusTab, BrandingTab, DomainTab, ProvidersTab, ServicesTab,
   FloorTab, OrdersTab, CustomersTab, PaymentsTab, CustomerApiTab,
-  RiskTab, NotificationsTab, SupportTab, AutomationTab, PromotionsTab,
+  RiskTab, NotificationsTab, SupportTab, ModeratorTab, AutomationTab, PromotionsTab,
 } from "./AdminTabs";
 
 const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
@@ -34,6 +34,7 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
   { k: "risk", label: "Risk & Security", icon: Lock },
   { k: "notifications", label: "Notifications", icon: Bell },
   { k: "support", label: "Support", icon: MessageSquare },
+  { k: "moderator", label: "Virtual Moderator", icon: Bot },
   { k: "assistant", label: "AI Assistant", icon: MessageCircle },
   { k: "automation", label: "Campaign Automation", icon: Bot },
   { k: "promotions", label: "Promotions", icon: Gift },
@@ -200,6 +201,7 @@ export function PanelAdmin({ panel, setWorld, initialTab, onTabChange, onAddFund
         {tab === "risk" && <RiskTab />}
         {tab === "notifications" && <NotificationsTab panelId={panel.id} />}
         {tab === "support" && <SupportTab panelId={panel.id} />}
+        {tab === "moderator" && <ModeratorTab panelId={panel.id} panelName={panel.name} />}
         {tab === "assistant" && <OwnerAssistantTab panelId={panel.id} panelName={panel.name} />}
         {tab === "automation" && <AutomationTab panelId={panel.id} />}
         {tab === "promotions" && <PromotionsTab />}
