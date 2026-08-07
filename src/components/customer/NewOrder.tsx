@@ -151,6 +151,11 @@ export function NewOrder({
     setPickerOpen(false); // collapse the list to a dropdown once chosen
   };
 
+  const clearPlacedState = () => {
+    setPlaced(false);
+    setPlaceError(null);
+  };
+
   // Prefill from Quick Order / Reorder — one click to a ready form
   useEffect(() => {
     if (prefillServiceId != null) {
@@ -454,7 +459,7 @@ export function NewOrder({
               <input
                 disabled={!canOrder}
                 value={link}
-                onChange={(e) => setLink(e.target.value)}
+                onChange={(e) => { setLink(e.target.value); clearPlacedState(); }}
                 placeholder="https://instagram.com/yourprofile"
                 className={inputCls}
               />
@@ -467,7 +472,7 @@ export function NewOrder({
                 <textarea
                   disabled={!canOrder}
                   value={comments}
-                  onChange={(e) => { setComments(e.target.value); setPlaced(false); }}
+                  onChange={(e) => { setComments(e.target.value); clearPlacedState(); }}
                   rows={6}
                   placeholder={"Great post!\nLove this 🔥\nAmazing content"}
                   className={`${inputCls} resize-y`}
@@ -488,7 +493,7 @@ export function NewOrder({
                 min={service.min}
                 max={service.max}
                 value={qty}
-                onChange={(e) => { setQty(e.target.value); setPlaced(false); }}
+                onChange={(e) => { setQty(e.target.value); clearPlacedState(); }}
                 placeholder={`${service.min.toLocaleString()} – ${service.max.toLocaleString()}`}
                 className={`${inputCls} fp-mono`}
               />
@@ -529,7 +534,7 @@ export function NewOrder({
                         inputMode="numeric"
                         min={2}
                         value={dripRuns}
-                        onChange={(e) => setDripRuns(e.target.value)}
+                        onChange={(e) => { setDripRuns(e.target.value); clearPlacedState(); }}
                         className={`${inputCls} fp-mono`}
                       />
                     </div>
@@ -541,7 +546,7 @@ export function NewOrder({
                         inputMode="numeric"
                         min={5}
                         value={dripInterval}
-                        onChange={(e) => setDripInterval(e.target.value)}
+                        onChange={(e) => { setDripInterval(e.target.value); clearPlacedState(); }}
                         className={`${inputCls} fp-mono`}
                       />
                     </div>
