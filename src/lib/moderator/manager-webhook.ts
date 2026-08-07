@@ -37,12 +37,23 @@ export async function handleManagerWebhook(raw: string, headers: Headers): Promi
     return new Response(JSON.stringify({ ok: false, error: "Forbidden" }), { status: 403, headers: { "content-type": "application/json" } });
   }
 
-  let update: ManagedBotUpdatePayload;
+  let update: ManagedBotUpdatePayload & { update_id?: number };
   try {
-    update = JSON.parse(raw) as ManagedBotUpdatePayload;
+    update = JSON.parse(raw) as ManagedBotUpdatePayload & { update_id?: number };
   } catch {
     return ok();
   }
+
+  // TEMPORARY diagnostic logging (no secrets/credentials) — remove once event
+  // delivery is confirmed working end-to-end. Logs every update that reaches
+  // this webhook at all, regardless of shape, so a delivery-shape mismatch is
+  // visible even if the managed_bot filtering below doesn't match.
+  console.log("[telegram/manager] update received", {
+    update_id: update.update_id,
+    topLevelKeys: Object.keys(update),
+    managedBotUsername: update.managed_bot?.bot?.username,
+    managedBotId: update.managed_bot?.bot?.id,
+  });
 
   const bot = update.managed_bot?.bot;
   if (!bot?.id || !bot.username) return ok();

@@ -3966,7 +3966,13 @@ function TelegramConnectRow({
   const [telegramUsername, setTelegramUsername] = React.useState(moderator.telegramUsername);
   const [lastError, setLastError] = React.useState(moderator.lastError);
   const [expanded, setExpanded] = React.useState(false);
-  const [requestedUsername, setRequestedUsername] = React.useState("");
+  // Real editable value, not a placeholder — a placeholder here previously let
+  // people believe a suggested username was already filled in when it wasn't,
+  // silently falling back to a bare "<name>_bot" that could collide with an
+  // unrelated existing bot.
+  const [requestedUsername, setRequestedUsername] = React.useState(
+    () => `${moderator.name.toLowerCase().replace(/[^a-z0-9_]/g, "")}_mod_bot`
+  );
   const [busy, setBusy] = React.useState(false);
   const [rowMsg, setRowMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
 
@@ -3995,7 +4001,7 @@ function TelegramConnectRow({
 
   const startConnect = async () => {
     setBusy(true); setRowMsg(null);
-    const res = await requestTelegramCreation(panelId, moderator.id, requestedUsername || moderator.name);
+    const res = await requestTelegramCreation(panelId, moderator.id, requestedUsername);
     setBusy(false);
     if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
     setStatus("telegram_confirmation_pending");
@@ -4064,7 +4070,7 @@ function TelegramConnectRow({
           <input
             value={requestedUsername}
             onChange={(e) => setRequestedUsername(e.target.value)}
-            placeholder={`${moderator.name.toLowerCase().replace(/[^a-z0-9_]/g, "")}_mod_bot`}
+            placeholder="Telegram username for this bot"
             className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
           />
           <button onClick={startConnect} disabled={busy} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60">
