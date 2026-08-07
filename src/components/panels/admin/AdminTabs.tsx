@@ -4066,19 +4066,25 @@ function TelegramConnectRow({
       {lastError && <p className="text-xs text-red-400 mt-2">{lastError}</p>}
 
       {expanded && (
-        <div className="mt-3 flex items-center gap-2">
-          <input
-            value={requestedUsername}
-            onChange={(e) => setRequestedUsername(e.target.value)}
-            placeholder="Telegram username for this bot"
-            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
-          />
-          <button onClick={startConnect} disabled={busy} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60">
-            {busy ? "Opening&hellip;" : "Create with Telegram"}
-          </button>
-          <button onClick={() => setExpanded(false)} className="text-xs px-2.5 py-2 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
-            Cancel
-          </button>
+        <div className="mt-3">
+          <div className="flex items-center gap-2">
+            <input
+              value={requestedUsername}
+              onChange={(e) => setRequestedUsername(e.target.value)}
+              placeholder="Telegram username for this bot"
+              className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+            />
+            <button onClick={startConnect} disabled={busy} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60">
+              {busy ? "Opening&hellip;" : "Create with Telegram"}
+            </button>
+            <button onClick={() => setExpanded(false)} className="text-xs px-2.5 py-2 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
+              Cancel
+            </button>
+          </div>
+          <p className="text-[11px] fp-text-faint mt-1.5 leading-relaxed">
+            This is a suggestion — Telegram confirms availability and lets you change it during setup. Whatever
+            username Telegram actually creates is what gets connected here.
+          </p>
         </div>
       )}
 

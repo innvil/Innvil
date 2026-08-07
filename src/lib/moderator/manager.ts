@@ -17,9 +17,11 @@ import { telegramApiCall, cleanTelegramHandle, type TelegramResult } from "./tel
  *
  * Telegram Bot API 9.6 (April 2026) "Managed Bots": a bot with bot-management
  * mode enabled (via BotFather) can create/own child bots on a subscriber's
- * behalf. getManagedBotToken's exact parameter list wasn't fully confirmed in
- * the docs excerpt available while building this — see fetchManagedBotToken
- * below, which isolates that one call so it's a single-line fix if wrong.
+ * behalf. `managed_bot` IS an ordinary webhook-deliverable Update field
+ * (confirmed against current docs — not getUpdates-only); the suggested
+ * username in the deep link is onboarding intent only, never authoritative
+ * (see ./correlation.ts, which owns the correlation/identity logic this
+ * module's callers rely on).
  */
 
 function managerBotToken(): string {
@@ -92,13 +94,11 @@ export function buildManagedBotDeepLink(managerUsername: string, suggestedUserna
 }
 
 /**
- * Fetches a managed bot's token. UNVERIFIED EXACT PARAMETER NAME: Telegram's
- * docs confirm the getManagedBotToken METHOD exists and that a ManagedBot
- * update carries the created bot's own numeric id, but the full parameter
- * signature wasn't available at build time. This is deliberately the ONLY
- * place that calls it — if Telegram's actual param name differs (e.g.
- * `bot_id` instead of `user_id`), this is a one-line fix, nothing else in
- * the codebase assumes the parameter shape.
+ * Fetches a managed bot's token. Confirmed against Telegram's current Bot
+ * API 9.6 docs: getManagedBotToken takes `user_id` = the MANAGED bot's own
+ * numeric id (i.e. `managed_bot.bot.id`), NOT the creator/owner's id
+ * (`managed_bot.user.id`) — easy to get backwards since the parameter is
+ * still named `user_id`. This is deliberately the only place that calls it.
  */
 export async function fetchManagedBotToken(managedBotId: number): Promise<TelegramResult<string>> {
   const res = await telegramApiCall<{ token?: string } | string>(managerBotToken(), "getManagedBotToken", {
