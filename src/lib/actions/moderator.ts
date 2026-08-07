@@ -164,7 +164,19 @@ export async function requestTelegramCreation(
 ): Promise<Result<TelegramCreationRequest>> {
   const ctx = await ownedModerator(panelId, moderatorId);
   if (!ctx) return { ok: false, error: "Moderator not found." };
-  if (ctx.moderator.provisioning_status !== "draft" && ctx.moderator.provisioning_status !== "requires_retry") {
+  // Allowed from a fresh draft OR any terminal failure state (retry). NOT from
+  // an in-flight/succeeded status (telegram_confirmation_pending and later) —
+  // cancel first if you want to restart a pending attempt.
+  const RETRIABLE = new Set([
+    "draft",
+    "requires_retry",
+    "cancelled",
+    "username_unavailable",
+    "telegram_creation_failed",
+    "credential_setup_failed",
+    "expired",
+  ]);
+  if (!RETRIABLE.has(ctx.moderator.provisioning_status)) {
     return { ok: false, error: `Cannot request Telegram creation from status "${ctx.moderator.provisioning_status}".` };
   }
 

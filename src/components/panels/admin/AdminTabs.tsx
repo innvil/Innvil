@@ -12,7 +12,11 @@ import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } f
 import { getWelcomeSettings, setWelcomeSettings, type WelcomeInfo } from "@/src/lib/actions/welcome";
 import { sendWelcomeToCustomers } from "@/src/lib/actions/admin-tickets";
 import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-admin";
-import { listVirtualModerators, getModeratorPlanInfo, createVirtualModerator, type VirtualModeratorRow, type ModeratorPlanInfo } from "@/src/lib/actions/moderator";
+import {
+  listVirtualModerators, getModeratorPlanInfo, createVirtualModerator,
+  requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
+  type VirtualModeratorRow, type ModeratorPlanInfo,
+} from "@/src/lib/actions/moderator";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
@@ -3930,18 +3934,149 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
           {moderators.length === 0 ? (
             <p className="text-xs fp-text-faint">No moderators yet.</p>
           ) : moderators.map((mod) => (
-            <div key={mod.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
-              <div>
-                <p className="text-sm font-medium">{mod.name}</p>
-                <p className="text-xs fp-text-faint">
-                  {mod.telegramUsername ? `@${mod.telegramUsername}` : "No Telegram identity yet"} &middot; {mod.provisioningStatus.replaceAll("_", " ")}
-                </p>
-              </div>
-              <span className="text-[11px] px-2 py-1 rounded-full fp-gold-soft-bg fp-gold capitalize">{mod.status}</span>
-            </div>
+            <TelegramConnectRow key={mod.id} panelId={panelId} moderator={mod} onChanged={refresh} />
           ))}
         </div>
       </Card>
+    </div>
+  );
+}
+
+const RETRIABLE_PROVISIONING_STATUSES = new Set([
+  "draft",
+  "requires_retry",
+  "cancelled",
+  "username_unavailable",
+  "telegram_creation_failed",
+  "credential_setup_failed",
+  "expired",
+]);
+const CONNECTED_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
+
+function TelegramConnectRow({
+  panelId,
+  moderator,
+  onChanged,
+}: {
+  panelId: string;
+  moderator: VirtualModeratorRow;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [status, setStatus] = React.useState(moderator.provisioningStatus);
+  const [telegramUsername, setTelegramUsername] = React.useState(moderator.telegramUsername);
+  const [lastError, setLastError] = React.useState(moderator.lastError);
+  const [expanded, setExpanded] = React.useState(false);
+  const [requestedUsername, setRequestedUsername] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [rowMsg, setRowMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  React.useEffect(() => {
+    setStatus(moderator.provisioningStatus);
+    setTelegramUsername(moderator.telegramUsername);
+    setLastError(moderator.lastError);
+  }, [moderator.provisioningStatus, moderator.telegramUsername, moderator.lastError]);
+
+  // Poll while waiting on Telegram — Innvil detects success asynchronously via
+  // the Manager Bot's own webhook, there's no redirect back into this tab.
+  React.useEffect(() => {
+    if (status !== "telegram_confirmation_pending") return;
+    const interval = setInterval(async () => {
+      const next = await getModeratorProvisioning(panelId, moderator.id);
+      if (!next) return;
+      if (next.provisioningStatus !== status) {
+        setStatus(next.provisioningStatus);
+        setTelegramUsername(next.telegramUsername);
+        setLastError(next.lastError);
+        await onChanged();
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [status, panelId, moderator.id, onChanged]);
+
+  const startConnect = async () => {
+    setBusy(true); setRowMsg(null);
+    const res = await requestTelegramCreation(panelId, moderator.id, requestedUsername || moderator.name);
+    setBusy(false);
+    if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
+    setStatus("telegram_confirmation_pending");
+    setExpanded(false);
+    window.open(res.data.deepLink, "_blank", "noopener,noreferrer");
+    setRowMsg({ text: `Opened Telegram for @${res.data.requestedUsername} — confirm creation there, then come back here.` });
+  };
+
+  const cancel = async () => {
+    setBusy(true); setRowMsg(null);
+    const res = await cancelTelegramProvisioning(panelId, moderator.id);
+    setBusy(false);
+    if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
+    setStatus("draft");
+    setLastError(null);
+    await onChanged();
+  };
+
+  const checkNow = async () => {
+    setBusy(true);
+    const next = await getModeratorProvisioning(panelId, moderator.id);
+    setBusy(false);
+    if (!next) return;
+    setStatus(next.provisioningStatus);
+    setTelegramUsername(next.telegramUsername);
+    setLastError(next.lastError);
+    if (next.provisioningStatus !== "telegram_confirmation_pending") await onChanged();
+  };
+
+  return (
+    <div className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-sm font-medium">{moderator.name}</p>
+          <p className="text-xs fp-text-faint">
+            {telegramUsername ? `@${telegramUsername}` : "No Telegram identity yet"} &middot; {status.replaceAll("_", " ")}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {CONNECTED_PROVISIONING_STATUSES.has(status) && (
+            <span className="text-[11px] px-2 py-1 rounded-full fp-gold-soft-bg fp-gold">Telegram connected</span>
+          )}
+          {status === "telegram_confirmation_pending" && (
+            <>
+              <span className="text-[11px] px-2 py-1 rounded-full fp-line-soft fp-panel-raised fp-text-dim">Waiting on Telegram&hellip;</span>
+              <button onClick={checkNow} disabled={busy} className="text-xs px-2.5 py-1.5 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-60">
+                Check now
+              </button>
+              <button onClick={cancel} disabled={busy} className="text-xs px-2.5 py-1.5 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-60">
+                Cancel
+              </button>
+            </>
+          )}
+          {RETRIABLE_PROVISIONING_STATUSES.has(status) && !expanded && (
+            <button onClick={() => setExpanded(true)} className="text-xs px-2.5 py-1.5 rounded-lg fp-btn-primary font-semibold">
+              {status === "draft" ? "Connect Telegram" : "Retry"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {lastError && <p className="text-xs text-red-400 mt-2">{lastError}</p>}
+
+      {expanded && (
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            value={requestedUsername}
+            onChange={(e) => setRequestedUsername(e.target.value)}
+            placeholder={`${moderator.name.toLowerCase().replace(/[^a-z0-9_]/g, "")}_mod_bot`}
+            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+          />
+          <button onClick={startConnect} disabled={busy} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60">
+            {busy ? "Opening&hellip;" : "Create with Telegram"}
+          </button>
+          <button onClick={() => setExpanded(false)} className="text-xs px-2.5 py-2 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {rowMsg && <p className={`text-xs mt-2 ${rowMsg.error ? "text-red-400" : "fp-safe"}`}>{rowMsg.text}</p>}
     </div>
   );
 }
