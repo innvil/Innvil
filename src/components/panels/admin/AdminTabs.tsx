@@ -12,6 +12,7 @@ import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } f
 import { getWelcomeSettings, setWelcomeSettings, type WelcomeInfo } from "@/src/lib/actions/welcome";
 import { sendWelcomeToCustomers } from "@/src/lib/actions/admin-tickets";
 import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-admin";
+import { listVirtualModerators, getModeratorPlanInfo, createVirtualModerator, type VirtualModeratorRow, type ModeratorPlanInfo } from "@/src/lib/actions/moderator";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -3741,5 +3742,93 @@ export function PromotionsTab() {
     <ComingSoon title="Promotions" icon={Tag}>
       Promo codes, referral rewards, and volume discounts are coming soon.
     </ComingSoon>
+  );
+}
+
+export function ModeratorTab({ panelId, panelName }: { panelId: string; panelName: string }) {
+  const [loading, setLoading] = React.useState(true);
+  const [creating, setCreating] = React.useState(false);
+  const [moderators, setModerators] = React.useState<VirtualModeratorRow[]>([]);
+  const [planInfo, setPlanInfo] = React.useState<ModeratorPlanInfo | null>(null);
+  const [name, setName] = React.useState("");
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const refresh = React.useCallback(async () => {
+    const [mods, plan] = await Promise.all([listVirtualModerators(panelId), getModeratorPlanInfo(panelId)]);
+    setModerators(mods);
+    setPlanInfo(plan);
+  }, [panelId]);
+
+  React.useEffect(() => {
+    setLoading(true);
+    refresh().finally(() => setLoading(false));
+  }, [refresh]);
+
+  const create = async () => {
+    setCreating(true); setMsg(null);
+    const res = await createVirtualModerator(panelId, name);
+    setCreating(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setName("");
+    setMsg({ text: `${res.data.name} created.` });
+    await refresh();
+  };
+
+  if (loading) return <Card title="Virtual Moderator" icon={Bot}><p className="fp-text-faint text-sm py-4 text-center">Loading&hellip;</p></Card>;
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <Card title={`Virtual Moderator · ${panelName}`} icon={Bot}>
+        <p className="fp-text-dim text-sm mb-4 leading-relaxed">
+          Foundation build in progress. A Virtual Moderator is a reusable identity you can later deploy to one or more
+          Telegram communities &mdash; creating one here does not yet create a Telegram bot or connect a community; that
+          lands with Telegram Managed Bot provisioning next.
+        </p>
+
+        {planInfo && !planInfo.offered && (
+          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs fp-text-dim mb-4">
+            No Virtual Moderator plan is active on this panel yet. Contact Innvil to enable a tier
+            (Basic/Standard/Premium/Pro) before deploying to a live community.
+          </div>
+        )}
+        {planInfo?.offered && (
+          <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 text-xs fp-text-dim mb-4">
+            Plan: <span className="fp-text capitalize">{planInfo.tier}</span> &middot;{" "}
+            {planInfo.commercialMode === "commission" ? "Innvil-processed commission" : "Owner-rented access"} &middot;{" "}
+            Capacity: {planInfo.maxCommunities} communit{planInfo.maxCommunities === 1 ? "y" : "ies"},{" "}
+            {planInfo.maxActiveSlots} active mod slots.
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Moderator name, e.g. Mika"
+            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+          />
+          <button onClick={create} disabled={creating || !name.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+            {creating ? "Creating&hellip;" : "Create"}
+          </button>
+        </div>
+        {msg && <p className={`text-xs mt-3 flex items-center gap-1.5 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+
+        <div className="mt-4 space-y-2">
+          {moderators.length === 0 ? (
+            <p className="text-xs fp-text-faint">No moderators yet.</p>
+          ) : moderators.map((mod) => (
+            <div key={mod.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-sm font-medium">{mod.name}</p>
+                <p className="text-xs fp-text-faint">
+                  {mod.telegramUsername ? `@${mod.telegramUsername}` : "No Telegram identity yet"} &middot; {mod.provisioningStatus.replaceAll("_", " ")}
+                </p>
+              </div>
+              <span className="text-[11px] px-2 py-1 rounded-full fp-gold-soft-bg fp-gold capitalize">{mod.status}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
   );
 }

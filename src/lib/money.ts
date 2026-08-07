@@ -31,6 +31,33 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
   return INNVIL_PRO_PRICE;
 }
 
+/** Innvil Virtual Moderator — owner-rented-access tier prices (monthly, USD, from the
+ *  panel's Innvil balance). Owner-rented = owner pays this, sets their own customer
+ *  price, keeps the difference. Innvil-processed commission mode uses the same tiers
+ *  for capacity but is billed per completed customer subscription instead (§3A) —
+ *  see moderator/plan.ts. */
+export const MODERATOR_BASIC_PRICE = 29;
+export const MODERATOR_STANDARD_PRICE = 59;
+export const MODERATOR_PREMIUM_PRICE = 99;
+export const MODERATOR_PRO_PRICE = 179;
+export const MODERATOR_PLAN_PERIOD_DAYS = 30;
+/** Owner-rented access costs 20% below the customer-facing selling price (approved model). */
+export const MODERATOR_RENTAL_DISCOUNT = 0.2;
+/** Innvil-processed commission: panel owner's share of Innvil-collected customer revenue. */
+export const MODERATOR_COMMISSION_SHARE = 0.2;
+
+export type ModeratorPlanTier = "basic" | "standard" | "premium" | "pro";
+export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
+  if (tier === "pro") return MODERATOR_PRO_PRICE;
+  if (tier === "premium") return MODERATOR_PREMIUM_PRICE;
+  if (tier === "standard") return MODERATOR_STANDARD_PRICE;
+  return MODERATOR_BASIC_PRICE;
+}
+/** Owner cost under rented access = tier price minus the approved 20% discount. */
+export function moderatorRentedCost(tier: ModeratorPlanTier): number {
+  return round4(moderatorPlanPrice(tier) * (1 - MODERATOR_RENTAL_DISCOUNT));
+}
+
 /** Suggested default for the customer-facing automator subscription. Owners can override
  *  the price + run a promo (see automation/pricing.ts — the Business+ default is $9.99).
  *  The full amount is the OWNER's revenue; Innvil earns only via the owner's tier fee. */
