@@ -3,27 +3,46 @@
  * entitlements. Mirrors src/lib/plans.ts (Campaign Automation): pure
  * readX/hasX functions over panels.settings.addons.moderator, no new
  * billing/entitlement engine. Runtime code must call these capability
- * checks (virtual_mod.*) instead of branching on tier name or commercial
- * mode directly (spec §3/§4 — monetization establishes entitlement; the
- * runtime only reads capability flags).
+ * checks (virtualMod*) instead of branching on tier name, trial state, or
+ * commercial mode directly — monetization/trial establishes entitlement,
+ * the runtime only ever reads capability flags.
  *
- * Two independent axes, both approved (§3):
+ * Three independent axes:
  *   - commercialMode: "commission" (Innvil sells to the end customer, owner
  *     gets MODERATOR_COMMISSION_SHARE) or "rental" (owner buys capacity at
  *     MODERATOR_RENTAL_DISCOUNT below list price and re-sells at their own
- *     price). Purely a billing/revenue-split concern.
- *   - tier: basic/standard/premium/pro — decides ACTIVE MOD SLOT + community
- *     capacity and which capabilities (proactive mode, community memory) are
- *     unlocked. Capacity is unrelated to commercialMode.
+ *     price). Purely a billing/revenue-split concern, paid tiers only.
+ *   - tier: basic/standard/premium/pro — PAID capacity + capability level.
+ *   - trial: a first-class entitlement SOURCE in its own right (not a tier),
+ *     active for 7 days from first deployment activation, broader in feature
+ *     access than Basic but capped at 1 community/1 moderator/1 active slot
+ *     and excludes content generation. A paid tier always supersedes an
+ *     active trial once purchased. Trial ELIGIBILITY is tracked per OWNER
+ *     ACCOUNT (moderator_trial_usage, 0044) — not per panel — so an owner
+ *     can't get a fresh trial by spinning up another panel.
  */
 
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 export type { ModeratorPlanTier };
 export type ModeratorCommercialMode = "commission" | "rental";
+export type ModeratorEntitlementSource = "trial" | ModeratorPlanTier | null;
 
 const TIERS: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro"];
 const MODES: ModeratorCommercialMode[] = ["commission", "rental"];
+
+/** §45/§46: 7-day trial, clock starts when the first ModeratorDeployment goes ACTIVE. */
+export const TRIAL_DURATION_DAYS = 7;
+/** §38/§39: one shared proactive budget/local-community-day, across GM/GN/revival/starters. Not yet enforced (Proactive Mode isn't built) — stored now so later phases don't have to retrofit the schema. */
+export const TRIAL_PROACTIVE_DAILY_LIMIT = 2;
+
+export interface ModeratorTrialState {
+  active: boolean;
+  startedAt: string | null;
+  endsAt: string | null;
+}
+
+const TRIAL_OFF: ModeratorTrialState = { active: false, startedAt: null, endsAt: null };
 
 export interface ModeratorAddonSub {
   tier: ModeratorPlanTier | null;
@@ -33,6 +52,7 @@ export interface ModeratorAddonSub {
   nextChargeAt: string | null;
   /** true when a scheduled charge failed for lack of balance (paused until funded). Only meaningful for rental. */
   lapsed: boolean;
+  trial: ModeratorTrialState;
 }
 
 const OFF: ModeratorAddonSub = {
@@ -42,7 +62,19 @@ const OFF: ModeratorAddonSub = {
   lastChargeAt: null,
   nextChargeAt: null,
   lapsed: false,
+  trial: { ...TRIAL_OFF },
 };
+
+function readTrialState(value: unknown): ModeratorTrialState {
+  if (!value || typeof value !== "object") return { ...TRIAL_OFF };
+  const o = value as Record<string, unknown>;
+  const startedAt = typeof o.startedAt === "string" ? o.startedAt : null;
+  const endsAt = typeof o.endsAt === "string" ? o.endsAt : null;
+  // "active" is derived from endsAt, not trusted from stored state — a stale
+  // `active: true` left over after expiry must never grant entitlements.
+  const active = !!endsAt && new Date(endsAt).getTime() > Date.now();
+  return { active, startedAt, endsAt };
+}
 
 export function readModeratorAddon(settings: unknown): ModeratorAddonSub {
   if (settings && typeof settings === "object") {
@@ -62,6 +94,7 @@ export function readModeratorAddon(settings: unknown): ModeratorAddonSub {
           lastChargeAt: typeof o.lastChargeAt === "string" ? o.lastChargeAt : null,
           nextChargeAt: typeof o.nextChargeAt === "string" ? o.nextChargeAt : null,
           lapsed: o.lapsed === true,
+          trial: readTrialState(o.trial),
         };
       }
     }
@@ -73,9 +106,17 @@ export function moderatorTier(settings: unknown): ModeratorPlanTier | null {
   return readModeratorAddon(settings).tier;
 }
 
-/** True when this panel has ANY active Virtual Moderator tier (offered to its customers/usable by the owner). */
+/** A paid tier always supersedes an active trial (§47 — purchasing ends trial preview access). */
+export function moderatorEntitlementSource(settings: unknown): ModeratorEntitlementSource {
+  const addon = readModeratorAddon(settings);
+  if (addon.tier) return addon.tier;
+  if (addon.trial.active) return "trial";
+  return null;
+}
+
+/** True when this panel currently has ANY active Virtual Moderator entitlement (paid tier or live trial). */
 export function hasVirtualModerator(settings: unknown): boolean {
-  return moderatorTier(settings) !== null;
+  return moderatorEntitlementSource(settings) !== null;
 }
 
 /* ------------------------------------------------------------- capacity ---- */
@@ -92,37 +133,70 @@ const CAPACITY: Record<ModeratorPlanTier, ModeratorCapacity> = {
   pro: { maxCommunities: 5, maxActiveSlots: 20 },
 };
 
-/** Active Mod Slot / community capacity for the panel's current tier (zero if not subscribed). */
+/** §37/§50: trial capacity is fixed and separate from any paid tier's table. */
+export const TRIAL_CAPACITY: ModeratorCapacity = { maxCommunities: 1, maxActiveSlots: 1 };
+/** §44/§50: trial also caps how many VirtualModerator identities may be created at all (not just active ones). */
+export const TRIAL_MAX_SAVED_MODERATORS = 1;
+
+/** Active Mod Slot / community capacity for the panel's current entitlement source (zero if none). */
 export function moderatorCapacity(settings: unknown): ModeratorCapacity {
-  const tier = moderatorTier(settings);
-  return tier ? CAPACITY[tier] : { maxCommunities: 0, maxActiveSlots: 0 };
+  const source = moderatorEntitlementSource(settings);
+  if (source === "trial") return TRIAL_CAPACITY;
+  if (source) return CAPACITY[source];
+  return { maxCommunities: 0, maxActiveSlots: 0 };
+}
+
+/** Max saved VirtualModerator identities (distinct from active deployment slots, §63 of the PDF / §50 here). Trial-only cap; paid tiers aren't limited on saved personas yet. */
+export function moderatorMaxSavedModerators(settings: unknown): number {
+  return moderatorEntitlementSource(settings) === "trial" ? TRIAL_MAX_SAVED_MODERATORS : Number.POSITIVE_INFINITY;
 }
 
 /* ---------------------------------------------------------- capabilities ---- */
-// Runtime code asks these, never `if (tier === "standard")` directly.
+// Runtime code asks these, never `if (tier === "standard")` or `if (trial.active)` directly.
 
-/** Reactive natural chatter — available on any active tier (Basic+, §15). */
+/** Reactive natural chatter — any active entitlement, including trial and Basic (§15/§37). */
 export function virtualModNaturalChatter(settings: unknown): boolean {
   return hasVirtualModerator(settings);
 }
 
-/** Proactive Mode (GM/GN, dead-chat revival, conversation starters) — Standard+ only (§15). */
+/** Proactive Mode (GM/GN, dead-chat revival, conversation starters) — Standard+ OR an active trial (§15/§37). */
 export function virtualModProactiveMode(settings: unknown): boolean {
-  const tier = moderatorTier(settings);
-  return tier === "standard" || tier === "premium" || tier === "pro";
+  const source = moderatorEntitlementSource(settings);
+  return source === "trial" || source === "standard" || source === "premium" || source === "pro";
 }
 
-/** Long-term Community Memory — Standard+ only (§18). */
+/** Long-term Community Memory — Standard+ or trial (§18/§37). */
 export function virtualModCommunityMemory(settings: unknown): boolean {
   return virtualModProactiveMode(settings);
 }
 
-/** Full custom personality (beyond presets) — Standard+ only (§15). */
+/** Full custom personality (beyond presets) — Standard+ or trial (§15/§37). */
 export function virtualModCustomPersonality(settings: unknown): boolean {
   return virtualModProactiveMode(settings);
 }
 
-/** Moderation capability — available on any active tier (basic moderation included, §3/§27 of PDF). */
+/** Business knowledge grounding — any active entitlement, including trial (§37). */
+export function virtualModBusinessKnowledge(settings: unknown): boolean {
+  return hasVirtualModerator(settings);
+}
+
+/** Moderation capability — any active entitlement, including trial and Basic. */
 export function virtualModModeration(settings: unknown): boolean {
   return hasVirtualModerator(settings);
+}
+
+/** Advanced moderation behavior — Standard+ or trial (trial exposes it even though it's a Standard+ paid feature, §37). */
+export function virtualModAdvancedModeration(settings: unknown): boolean {
+  return virtualModProactiveMode(settings);
+}
+
+/** Analytics — any active entitlement, including trial (§37). */
+export function virtualModAnalytics(settings: unknown): boolean {
+  return hasVirtualModerator(settings);
+}
+
+/** Content generation / autoposting / scheduled publishing — NOT built yet on any tier. Defined now so
+ *  the future Content phase reads entitlement from here; trial must stay excluded even once this ships (§37). */
+export function virtualModContentGeneration(_settings: unknown): boolean {
+  return false;
 }
