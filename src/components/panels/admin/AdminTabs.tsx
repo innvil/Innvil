@@ -13,6 +13,7 @@ import { getWelcomeSettings, setWelcomeSettings, type WelcomeInfo } from "@/src/
 import { sendWelcomeToCustomers } from "@/src/lib/actions/admin-tickets";
 import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-admin";
 import { listVirtualModerators, getModeratorPlanInfo, createVirtualModerator, type VirtualModeratorRow, type ModeratorPlanInfo } from "@/src/lib/actions/moderator";
+import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
@@ -3839,6 +3840,25 @@ export function PromotionsTab() {
 }
 
 export function ModeratorTab({ panelId, panelName }: { panelId: string; panelName: string }) {
+  if (!VIRTUAL_MODERATOR_ENABLED) {
+    return (
+      <Card title={`Virtual Moderator · ${panelName}`} icon={Bot}>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[11px] px-2 py-1 rounded-full fp-gold-soft-bg fp-gold">Coming soon</span>
+        </div>
+        <p className="fp-text-dim text-sm leading-relaxed">
+          Innvil Virtual Moderator — an AI community moderator/member for your Telegram groups and channels — is in
+          active development. It&apos;ll bring reactive natural chatter, moderation, proactive engagement, and a
+          7-day free trial when it launches. Nothing to set up yet.
+        </p>
+      </Card>
+    );
+  }
+
+  return <ModeratorTabContent panelId={panelId} panelName={panelName} />;
+}
+
+function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelName: string }) {
   const [loading, setLoading] = React.useState(true);
   const [creating, setCreating] = React.useState(false);
   const [moderators, setModerators] = React.useState<VirtualModeratorRow[]>([]);

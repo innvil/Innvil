@@ -24,6 +24,14 @@
 
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
+/** Master switch — OFF while the foundation (domain model, Manager Bot
+ *  provisioning, adapter, coordinator, runtime) is still being built. The
+ *  owner-app "Virtual Moderator" tab shows a "coming soon" teaser instead of
+ *  the real controls while this is false (mirrors DESIGN_TOOLS_ENABLED in
+ *  src/lib/plans.ts). Flip once Telegram provisioning + reactive natural
+ *  chatter are live end-to-end. */
+export const VIRTUAL_MODERATOR_ENABLED = false;
+
 export type { ModeratorPlanTier };
 export type ModeratorCommercialMode = "commission" | "rental";
 export type ModeratorEntitlementSource = "trial" | ModeratorPlanTier | null;
