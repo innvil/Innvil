@@ -60,7 +60,18 @@ export interface CustomerOrderPage {
   pageSize: number;
   totalCount: number;
   allCount: number;
+  /** True per-status totals for this customer — never derived from `rows`
+   *  (the current page/filter slice). The dashboard's status tabs/badges
+   *  must read from here. */
+  statusCounts: Record<OrderStatus, number>;
 }
+
+const ALL_CUSTOMER_ORDER_STATUSES: OrderStatus[] = [
+  "pending", "processing", "in_progress", "partial", "completed", "canceled", "failed", "refunded", "duplicate",
+];
+const EMPTY_CUSTOMER_STATUS_COUNTS: Record<OrderStatus, number> = {
+  pending: 0, processing: 0, in_progress: 0, partial: 0, completed: 0, canceled: 0, failed: 0, refunded: 0, duplicate: 0,
+};
 
 type CustomerOrderRow = {
   id: string;
@@ -118,6 +129,7 @@ export async function listCustomerOrdersPage(
     pageSize,
     totalCount: 0,
     allCount: 0,
+    statusCounts: { ...EMPTY_CUSTOMER_STATUS_COUNTS },
   };
 
   const supa = await createStorefrontClient();
@@ -148,17 +160,23 @@ export async function listCustomerOrdersPage(
     .eq("customer_id", acct.id);
   const filtered = opts?.status && opts.status !== "all" ? base.eq("status", opts.status) : base;
 
-  const [pageRes, filteredCountRes, allCountRes] = await Promise.all([
+  const [pageRes, filteredCountRes, allCountRes, statusCountsRes] = await Promise.all([
     filtered.order("created_at", { ascending: false }).range(from, to),
     (opts?.status && opts.status !== "all"
       ? admin.from("orders").select("id", { count: "exact", head: true }).eq("customer_id", acct.id).eq("status", opts.status)
       : admin.from("orders").select("id", { count: "exact", head: true }).eq("customer_id", acct.id)),
     admin.from("orders").select("id", { count: "exact", head: true }).eq("customer_id", acct.id),
+    Promise.all(
+      ALL_CUSTOMER_ORDER_STATUSES.map((s) => admin.from("orders").select("id", { count: "exact", head: true }).eq("customer_id", acct.id).eq("status", s))
+    ),
   ]);
 
   const fetched = (pageRes.data as CustomerOrderRow[] | null) ?? [];
   const hasNext = fetched.length > pageSize;
   const rows = hasNext ? fetched.slice(0, pageSize) : fetched;
+
+  const statusCounts = { ...EMPTY_CUSTOMER_STATUS_COUNTS };
+  ALL_CUSTOMER_ORDER_STATUSES.forEach((s, i) => { statusCounts[s] = statusCountsRes[i].count ?? 0; });
 
   return {
     rows: rows.map(mapCustomerOrderRow),
@@ -167,6 +185,7 @@ export async function listCustomerOrdersPage(
     pageSize,
     totalCount: filteredCountRes.count ?? 0,
     allCount: allCountRes.count ?? 0,
+    statusCounts,
   };
 }
 

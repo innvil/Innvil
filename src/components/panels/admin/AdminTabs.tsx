@@ -80,12 +80,31 @@ function getAdminCacheKey(panelId: string, section: string) {
   return `innvil-admin:${panelId}:${section}`;
 }
 
+/** How long a cached "instant paint" value is trusted before it's treated as
+ *  too stale to show at all (falls back to a loading state instead). This
+ *  cache is an instant-paint optimization, NOT a source of truth — every read
+ *  is always followed by a fresh fetch that overwrites it. Without a TTL, a
+ *  localStorage entry from days ago could resurface as if it were current. */
+const ADMIN_CACHE_TTL_MS = 2 * 60_000;
+
+interface AdminCacheEnvelope<T> {
+  v: T;
+  t: number; // Date.now() at write time
+}
+
 function readAdminCache<T>(panelId: string, section: string): T | null {
   if (typeof window === "undefined") return null;
   try {
     const key = getAdminCacheKey(panelId, section);
     const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AdminCacheEnvelope<T> | T;
+    // Back-compat: older writes stored the raw value with no envelope. Treat
+    // those as immediately stale rather than trusting them indefinitely.
+    if (!parsed || typeof parsed !== "object" || !("t" in parsed) || !("v" in parsed)) return null;
+    const envelope = parsed as AdminCacheEnvelope<T>;
+    if (Date.now() - envelope.t > ADMIN_CACHE_TTL_MS) return null;
+    return envelope.v;
   } catch {
     return null;
   }
@@ -95,7 +114,7 @@ function writeAdminCache<T>(panelId: string, section: string, value: T) {
   if (typeof window === "undefined") return;
   try {
     const key = getAdminCacheKey(panelId, section);
-    const payload = JSON.stringify(value);
+    const payload = JSON.stringify({ v: value, t: Date.now() } satisfies AdminCacheEnvelope<T>);
     window.sessionStorage.setItem(key, payload);
     window.localStorage.setItem(key, payload);
   } catch {
@@ -1845,8 +1864,14 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [retryingHeld, setRetryingHeld] = useState(false);
   const [currency, setCurrency] = useState("USD");
   const [hasNextPage, setHasNextPage] = useState(false);
-  const [totalOrders, setTotalOrders] = useState(0);
-  const [allOrders, setAllOrders] = useState(0);
+  // null = not loaded yet (show a neutral placeholder), never coerced to 0 —
+  // a genuine "0 orders" must only ever come from a completed fetch.
+  const [totalOrders, setTotalOrders] = useState<number | null>(null);
+  const [allOrders, setAllOrders] = useState<number | null>(null);
+  // True per-status totals from the server (listPanelOrdersPage), never
+  // derived from `rows` — `rows` is just the current page/filter slice, so
+  // counting it gives wrong numbers for every status except the active one.
+  const [statusCounts, setStatusCounts] = useState<Record<OrderStatus, number> | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [commentsView, setCommentsView] = useState<string[] | null>(null);
   const [refundTarget, setRefundTarget] = useState<AdminOrderVM | null>(null);
@@ -1864,19 +1889,23 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const load = useCallback(async () => {
     if (!realPanel || loadingRef.current) return;
     loadingRef.current = true;
+    // Capture the request's own status/page so a slow response can't clobber
+    // state after the user has since switched to a different filter/page.
+    const requestedStatus = status;
+    const requestedPage = page;
     try {
-      const cached = readAdminCache<AdminOrderVM[]>(panelId, `orders:${status}:${page}`);
-      if (cached) setRows(cached);
       const [list, cur] = await Promise.all([
-        listPanelOrdersPage(panelId, { status, page, pageSize: ORDERS_PAGE_SIZE }),
+        listPanelOrdersPage(panelId, { status: requestedStatus, page: requestedPage, pageSize: ORDERS_PAGE_SIZE }),
         getPanelCurrency(panelId),
       ]);
+      writeAdminCache(panelId, `orders:${requestedStatus}:${requestedPage}`, list.rows);
+      if (requestedStatus !== status || requestedPage !== page) return; // stale response, filter/page has moved on
       setRows(list.rows);
       setHasNextPage(list.hasNext);
       setTotalOrders(list.totalCount);
       setAllOrders(list.allCount);
+      setStatusCounts(list.statusCounts);
       setCurrency(cur);
-      writeAdminCache(panelId, `orders:${status}:${page}`, list.rows);
     } finally {
       loadingRef.current = false;
     }
@@ -1884,16 +1913,17 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
 
   useEffect(() => { void load(); }, [load]);
 
+  // Whenever the filter or page changes: reset selection/expansion, and
+  // IMMEDIATELY swap `rows` to whatever's validly cached for the NEW key (or
+  // null, showing the existing loading state) instead of leaving the OLD
+  // filter's rows on screen until the fresh fetch resolves. Rendering stale
+  // rows against the new `status` is exactly what produced misleading counts
+  // (e.g. "Pending" briefly showing rows that were actually from "All").
   useEffect(() => {
-    setPage(0);
     setExpanded(null);
     setSel(new Set());
-  }, [status]);
-
-  useEffect(() => {
-    setExpanded(null);
-    setSel(new Set());
-  }, [page]);
+    if (realPanel) setRows(readAdminCache<AdminOrderVM[]>(panelId, `orders:${status}:${page}`));
+  }, [status, page, panelId, realPanel]);
 
   useEffect(() => {
     if (!realPanel) return;
@@ -1923,22 +1953,6 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     });
   }, [rows, status, q]);
 
-  const statusCounts = useMemo(() => {
-    const base = rows ?? [];
-    const c: Record<string, number> = {
-      all: allOrders,
-      pending: 0,
-      processing: 0,
-      in_progress: 0,
-      completed: 0,
-      partial: 0,
-      canceled: 0,
-      refunded: 0,
-      failed: 0,
-    };
-    for (const o of base) c[o.status] = (c[o.status] ?? 0) + 1;
-    return c;
-  }, [allOrders, rows]);
 
   const act = async (id: string, fn: () => Promise<{ ok: boolean; error?: string }>, okMsg: string) => {
     setBusyId(id); setMsg(null);
@@ -2118,10 +2132,10 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       {msg && <p className={`text-xs mb-3 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-        <StatCard label="Pending" value={String(statusCounts.pending)} />
-        <StatCard label="Processing" value={String(statusCounts.processing)} tone="gold" />
-        <StatCard label="In progress" value={String(statusCounts.in_progress)} tone="gold" />
-        <StatCard label="Completed" value={String(statusCounts.completed)} tone="safe" />
+        <StatCard label="Pending" value={statusCounts ? String(statusCounts.pending) : "—"} />
+        <StatCard label="Processing" value={statusCounts ? String(statusCounts.processing) : "—"} tone="gold" />
+        <StatCard label="In progress" value={statusCounts ? String(statusCounts.in_progress) : "—"} tone="gold" />
+        <StatCard label="Completed" value={statusCounts ? String(statusCounts.completed) : "—"} tone="safe" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -2129,10 +2143,10 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
           {ORDER_FILTERS.map((f) => (
             <button
               key={f.k}
-              onClick={() => setStatus(f.k)}
+              onClick={() => { setStatus(f.k); setPage(0); }}
               className={`text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap border ${status === f.k ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim"}`}
             >
-              {f.label} ({statusCounts[f.k] ?? 0})
+              {f.label} ({f.k === "all" ? (allOrders ?? "—") : (statusCounts ? statusCounts[f.k] : "—")})
             </button>
           ))}
         </div>
@@ -2326,7 +2340,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
           </div>
           <div className="flex items-center justify-between gap-3 mt-4 pt-3 border-t fp-line-soft">
             <p className="text-xs fp-text-faint">
-              {rows.length}/{status === "all" ? allOrders : totalOrders} orders · Page {page + 1}
+              {rows.length}/{(status === "all" ? allOrders : totalOrders) ?? "—"} orders · Page {page + 1}
             </p>
             <div className="flex items-center gap-2">
               <button

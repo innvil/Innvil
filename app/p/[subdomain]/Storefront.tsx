@@ -179,6 +179,14 @@ export function Storefront({
   const [ordersPageHasNext, setOrdersPageHasNext] = useState(initialOrders.length > STOREFRONT_ORDERS_PAGE_SIZE);
   const [ordersPageTotal, setOrdersPageTotal] = useState(initialOrders.length);
   const [ordersPageAll, setOrdersPageAll] = useState(initialOrders.length);
+  const [ordersPageStatusCounts, setOrdersPageStatusCounts] = useState<Partial<Record<CustomerOrder["status"], number>>>(() => {
+    const c: Partial<Record<CustomerOrder["status"], number>> = {};
+    for (const o of initialOrders) {
+      const label = ORDER_STATUS_LABEL[o.status] ?? "Pending";
+      c[label] = (c[label] ?? 0) + 1;
+    }
+    return c;
+  });
   const [ordersPageBusy, setOrdersPageBusy] = useState(false);
   const [apiEnabled, setApiEnabled] = useState(customerApiEnabled);
   const [apiHasKey, setApiHasKey] = useState(customerApiHasKey);
@@ -290,6 +298,12 @@ export function Storefront({
       setOrdersPageHasNext(res.hasNext);
       setOrdersPageTotal(res.totalCount);
       setOrdersPageAll(res.allCount);
+      const mappedCounts: Partial<Record<CustomerOrder["status"], number>> = {};
+      for (const [dbStatus, count] of Object.entries(res.statusCounts)) {
+        const label = ORDER_STATUS_LABEL[dbStatus] ?? "Pending";
+        mappedCounts[label] = (mappedCounts[label] ?? 0) + count;
+      }
+      setOrdersPageStatusCounts(mappedCounts);
     } finally {
       setOrdersPageBusy(false);
     }
@@ -691,6 +705,7 @@ export function Storefront({
         ordersHasNextPage={ordersPageHasNext}
         ordersTotalCount={ordersPageTotal}
         ordersAllCount={ordersPageAll}
+        ordersStatusCounts={ordersPageStatusCounts}
         ordersPageBusy={ordersPageBusy}
         onOrdersStatusFilterChange={(next) => {
           setOrdersFilter(next);

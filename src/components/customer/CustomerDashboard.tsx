@@ -325,6 +325,7 @@ export function CustomerDashboard({
   ordersHasNextPage = false,
   ordersTotalCount,
   ordersAllCount,
+  ordersStatusCounts,
   ordersPageBusy = false,
   onOrdersStatusFilterChange,
   onOrdersPageChange,
@@ -369,6 +370,9 @@ export function CustomerDashboard({
   ordersHasNextPage?: boolean;
   ordersTotalCount?: number;
   ordersAllCount?: number;
+  /** True per-status totals across ALL of the customer's orders (not just the
+   *  current page/filter) — keyed by the UI status label, same as CustomerOrder["status"]. */
+  ordersStatusCounts?: Partial<Record<CustomerOrder["status"], number>>;
   ordersPageBusy?: boolean;
   onOrdersStatusFilterChange?: (status: CustomerOrder["status"] | "All") => void;
   onOrdersPageChange?: (page: number) => void;
@@ -682,9 +686,20 @@ export function CustomerDashboard({
       Refunded: 0,
       Failed: 0,
     };
+    // Server paging: use the TRUE per-status totals from the server, not the
+    // current page/filter slice (currentOrderRows) — counting just the page
+    // undercounts every status except whichever one is currently active, and
+    // was the source of misleading/stale-looking numbers.
+    if (hasServerOrderPaging && ordersStatusCounts) {
+      for (const key of Object.keys(c)) {
+        if (key === "All") continue;
+        c[key] = ordersStatusCounts[key as CustomerOrder["status"]] ?? 0;
+      }
+      return c;
+    }
     for (const o of currentOrderRows) c[o.status] = (c[o.status] ?? 0) + 1;
     return c;
-  }, [currentOrderRows, hasServerOrderPaging, orders.length, ordersAllCount]);
+  }, [currentOrderRows, hasServerOrderPaging, orders.length, ordersAllCount, ordersStatusCounts]);
 
   const go = (p: CustomerPage) => {
     if (p === "order") setPrefillServiceId(null);

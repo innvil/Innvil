@@ -231,6 +231,27 @@ export interface AdminOrderPage {
   pageSize: number;
   totalCount: number;
   allCount: number;
+  /** True per-status totals across the WHOLE panel — never derived from `rows`
+   *  (which is just the current page/filter slice). StatCards and filter-chip
+   *  badges must read from here, not by counting `rows`. */
+  statusCounts: Record<OrderStatus, number>;
+}
+
+const ALL_ORDER_STATUSES: OrderStatus[] = [
+  "pending", "processing", "in_progress", "partial", "completed", "canceled", "failed", "refunded", "duplicate",
+];
+
+const EMPTY_STATUS_COUNTS: Record<OrderStatus, number> = {
+  pending: 0, processing: 0, in_progress: 0, partial: 0, completed: 0, canceled: 0, failed: 0, refunded: 0, duplicate: 0,
+};
+
+async function fetchStatusCounts(admin: SupabaseClient, panelId: string): Promise<Record<OrderStatus, number>> {
+  const results = await Promise.all(
+    ALL_ORDER_STATUSES.map((s) => admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId).eq("status", s))
+  );
+  const counts = { ...EMPTY_STATUS_COUNTS };
+  ALL_ORDER_STATUSES.forEach((s, i) => { counts[s] = results[i].count ?? 0; });
+  return counts;
 }
 
 interface OrderRow {
@@ -367,6 +388,7 @@ export async function listPanelOrdersPage(
     pageSize: Math.max(1, opts?.pageSize ?? 20),
     totalCount: 0,
     allCount: 0,
+    statusCounts: { ...EMPTY_STATUS_COUNTS },
   };
   const { user, admin } = await getAuthedAdmin();
   if (!user) return empty;
@@ -387,12 +409,13 @@ export async function listPanelOrdersPage(
     .eq("panel_id", panelId);
   const filtered = opts?.status && opts.status !== "all" ? base.eq("status", opts.status) : base;
 
-  const [pageRes, filteredCountRes, allCountRes] = await Promise.all([
+  const [pageRes, filteredCountRes, allCountRes, statusCounts] = await Promise.all([
     filtered.order("created_at", { ascending: false }).range(from, to),
     (opts?.status && opts.status !== "all"
       ? admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId).eq("status", opts.status)
       : admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId)),
     admin.from("orders").select("id", { count: "exact", head: true }).eq("panel_id", panelId),
+    fetchStatusCounts(admin, panelId),
   ]);
 
   const data = pageRes.data;
@@ -422,6 +445,7 @@ export async function listPanelOrdersPage(
     pageSize,
     totalCount: filteredCountRes.count ?? 0,
     allCount: allCountRes.count ?? 0,
+    statusCounts,
   };
 }
 
