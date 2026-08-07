@@ -24,13 +24,19 @@
 
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
-/** Master switch — OFF while the foundation (domain model, Manager Bot
- *  provisioning, adapter, coordinator, runtime) is still being built. The
- *  owner-app "Virtual Moderator" tab shows a "coming soon" teaser instead of
- *  the real controls while this is false (mirrors DESIGN_TOOLS_ENABLED in
- *  src/lib/plans.ts). Flip once Telegram provisioning + reactive natural
- *  chatter are live end-to-end. */
-export const VIRTUAL_MODERATOR_ENABLED = false;
+/** Master switch — OFF (in production) while the foundation (domain model,
+ *  Manager Bot provisioning, adapter, coordinator, runtime) is still being
+ *  built. The owner-app "Virtual Moderator" tab shows a "coming soon" teaser
+ *  instead of the real controls while this is false (mirrors
+ *  DESIGN_TOOLS_ENABLED in src/lib/plans.ts).
+ *
+ *  Env-driven (NEXT_PUBLIC_* so the client component can read it too) rather
+ *  than a hardcoded constant, specifically so it can be turned on for a
+ *  Vercel Preview/dev environment to test the real flow without risking an
+ *  accidental "flip true, forget to revert" commit reaching production.
+ *  Leave NEXT_PUBLIC_VIRTUAL_MODERATOR_ENABLED unset (or "false") in
+ *  Production; set it to "true" only on the environment you're testing in. */
+export const VIRTUAL_MODERATOR_ENABLED = process.env.NEXT_PUBLIC_VIRTUAL_MODERATOR_ENABLED === "true";
 
 export type { ModeratorPlanTier };
 export type ModeratorCommercialMode = "commission" | "rental";
