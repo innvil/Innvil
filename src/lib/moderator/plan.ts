@@ -214,3 +214,17 @@ export function virtualModAnalytics(settings: unknown): boolean {
 export function virtualModContentGeneration(_settings: unknown): boolean {
   return false;
 }
+
+/** Master switch for "Innvil Moderator Acknowledgement" (bot-to-bot ack between
+ *  Innvil moderators in the same community) — OFF in production until Telegram's
+ *  bot-to-bot delivery configuration (§14/§15 of the bot-ack spec) and loop
+ *  safeguards are verified live. Same env-driven pattern as VIRTUAL_MODERATOR_ENABLED. */
+export const BOT_ACKNOWLEDGEMENT_ENABLED = process.env.NEXT_PUBLIC_BOT_ACKNOWLEDGEMENT_ENABLED === "true";
+
+/** Capability gate — any active entitlement (paid tier or trial) may use bot
+ *  acknowledgement once the master switch is on; not tier-gated further for
+ *  v1 since it's a lightweight, deterministic (no-AI) behavior, not a premium
+ *  feature. Revisit if/when product wants to restrict it to specific tiers. */
+export function virtualModBotAcknowledgement(settings: unknown): boolean {
+  return BOT_ACKNOWLEDGEMENT_ENABLED && hasVirtualModerator(settings);
+}
