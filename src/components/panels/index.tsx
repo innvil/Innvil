@@ -563,16 +563,36 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: 
   openPanel: (p: Panel) => void;
   onChanged: () => void | Promise<void>;
 }) {
+  const [summary, setSummary] = useState<OwnerBillingSummary | null>(() =>
+    readOwnerAppCache<OwnerBillingSummary>("dashboard-summary")
+  );
   const [panelStatuses, setPanelStatuses] = useState<Record<string, PanelStatus>>({});
   const [statusError, setStatusError] = useState<Record<string, string>>({});
   const [statusNote, setStatusNote] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<Panel | null>(null);
 
   useEffect(() => {
+    let alive = true;
+    getOwnerBillingSummary()
+      .then((s) => {
+        if (!alive) return;
+        setSummary(s);
+        writeOwnerAppCache("dashboard-summary", s);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setPanelStatuses(
       panels.reduce((acc, p) => ({ ...acc, [p.id]: p.status }), {} as Record<string, PanelStatus>)
     );
   }, [panels]);
+
+  const revByPanel = new Map((summary?.perPanel ?? []).map((row) => [row.panelId, row.revenueToday]));
+  const usd = (n?: number) => `$${(Number.isFinite(n) ? (n as number) : 0).toFixed(2)}`;
 
   const handleStatusChange = async (panelId: string, newStatus: PanelStatus) => {
     const prevStatus = panelStatuses[panelId];
@@ -629,7 +649,7 @@ function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: 
             </p>
             <p className="fp-text-dim text-xs mt-1">Theme: {p.theme}</p>
             <p className="fp-mono text-lg mt-4">
-              ${p.ordersToday.toFixed(2)} <span className="fp-text-faint text-xs">today</span>
+              {usd(revByPanel.get(p.id) ?? p.ordersToday)} <span className="fp-text-faint text-xs">today</span>
             </p>
 
             {(panelStatuses[p.id] ?? p.status) === "inactive" && (
