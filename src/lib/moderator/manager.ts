@@ -57,8 +57,25 @@ function appUrl(): string {
   return url;
 }
 
+/**
+ * Vercel Preview deployments with Deployment Protection enabled reject
+ * unauthenticated requests (including Telegram's webhook POSTs) with a 401
+ * before they ever reach our code — confirmed via getWebhookInfo's
+ * last_error_message: "Wrong response from the webhook: 401 Unauthorized".
+ * Vercel's own fix is "Protection Bypass for Automation": a project-level
+ * secret appended as a query param. This is deliberately OPTIONAL and
+ * infra/testing-scoped, never baked into the Telegram domain logic itself —
+ * unset in real production (no Deployment Protection there), so this is a
+ * no-op. Never logged.
+ */
+function vercelProtectionBypassSecret(): string | null {
+  return process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim() || null;
+}
+
 export function integrationWebhookUrl(integrationId: string): string {
-  return `${appUrl()}/api/webhooks/telegram/bots/${integrationId}`;
+  const base = `${appUrl()}/api/webhooks/telegram/bots/${integrationId}`;
+  const bypass = vercelProtectionBypassSecret();
+  return bypass ? `${base}?x-vercel-protection-bypass=${encodeURIComponent(bypass)}` : base;
 }
 
 export async function getManagerBotUsername(): Promise<string> {
