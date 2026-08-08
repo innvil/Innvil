@@ -1,5 +1,13 @@
 # Project Knowledge + AI Auto-Posting Spec
 
+> **Clarification (same day, applies throughout):** every posting-window time in
+> this document — 05:00–12:00 for Mika, 13:00–17:00 for Kaleb, 18:00–22:00 for
+> Alex, etc. — is an ILLUSTRATIVE EXAMPLE only, never a hardcoded default or a
+> fixed product value. `AutoPostWindow.startLocalTime` / `endLocalTime` must be
+> fully **settable by the subscriber themselves**, per moderator, per community,
+> through the UI in §25 of the update section below. Do not hardcode any specific
+> time range into business logic, defaults, seed data, or validation bounds.
+>
 > Status: **NOTED — not implemented yet.** This is the source-of-truth spec for a
 > new Virtual Moderator capability, captured verbatim as given so no fidelity is
 > lost before implementation. See the pointer in `CLAUDE.md` (Phase 4.N) for where

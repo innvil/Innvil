@@ -2237,9 +2237,11 @@ win over this):**
 > - **⚠️ No generic Innvil publishing bot — each Virtual Moderator IS the publisher**
 >   (same-day correction, appended to the spec file as "AUTO-POSTING UPDATE",
 >   read it before implementing scheduling/publishing). Subscribers configure a
->   **posting window per ModeratorDeployment** (e.g. Mika 05:00–12:00, Kaleb
->   13:00–17:00, Alex 18:00–22:00, all in the community's local timezone); each
->   window publishes **at most one post/local-day**, at a random time that is
+>   **posting window per ModeratorDeployment, fully user-settable per moderator**
+>   (e.g. Mika 05:00–12:00, Kaleb 13:00–17:00, Alex 18:00–22:00 — illustrative
+>   examples only, never hardcoded defaults/bounds — all in the community's local
+>   timezone); each window publishes **at most one post/local-day**, at a random
+>   time that is
 >   **generated once and persisted** (`AutoPostOccurrence`, unique on
 >   `windowId + localDate`) — never re-rolled per cron tick. A missed window is
 >   **skipped**, not caught up. Duplicate-content prevention is **community-wide
