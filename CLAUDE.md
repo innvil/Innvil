@@ -2210,6 +2210,46 @@ win over this):**
 > provider ordering, billing, trial duration, active mod slots, publishing, campaign
 > generation, and any other unrelated moderation feature.
 
+### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (NOTED, not built)
+
+> Extends Phase 4.M. Adds a shared, tenant-scoped **Project Knowledge Base** (project
+> overview, website, whitepaper, docs, FAQs, roadmap, official links, brand voice,
+> custom notes — via text/URL/file/structured-field inputs) that powers BOTH the
+> Virtual Moderator's Q&A answers AND a new **AI Telegram Auto-Posting** capability —
+> one shared retrieval layer, not two disconnected knowledge stores.
+> **Full verbatim 41-section spec (source of truth, implement from it, not this
+> summary):** `docs/moderator/project-knowledge-autoposting-spec.md`. Key invariants:
+> - **Retrieval, not prompt-stuffing** — ingest → parse → chunk → index/embed →
+>   retrieve relevant chunks only; reuse existing vector/search infra if present,
+>   never resend a whole whitepaper per generation.
+> - **Source-grounded, never fabricated** — auto-posts must not invent partnerships,
+>   prices/APYs, listings, dates, audits, or stats unless backed by stored knowledge;
+>   insufficient material → skip the slot, never hallucinate a post. Static docs are
+>   never treated as proof of *current* time-sensitive facts (APY, live campaigns).
+> - **Tenant + community isolation** — Project A knowledge never leaks into Project
+>   B; base project knowledge is reusable across a moderator's communities, but
+>   community-specific memory stays isolated per Community/ModeratorDeployment, and
+>   casual community chatter never silently becomes authoritative Project Knowledge.
+> - **Auto-posting is its own capability** — separate from proactive moderator speech
+>   (GM/GN, dead-chat revival) and from the reactive/proactive quotas in Phase 4.M;
+>   never publishes with `TELEGRAM_MANAGER_BOT_TOKEN` (control-plane only) — always
+>   the subscriber's own managed-bot credential for that community/deployment.
+> - **Generation vs. publishing are separate steps** — scheduler → retrieval → AI
+>   generation → validation (length, no secrets/prompt-leakage, no duplicate
+>   content, correct bot/community) → deterministic publish; idempotent per
+>   schedule occurrence (one successful Telegram post max per slot, even on retry).
+> - **Entitlement: OFF for the trial** — the 7-Day Full AI Mod Trial explicitly
+>   excludes AI content generation/auto-posting; `autoPosting.enabled = false` for
+>   trial via existing entitlement infra, never scattered `if (plan === ...)` checks
+>   inside Telegram code.
+> - **Task-based model routing** — Sonnet 5 at `medium` effort as the default for
+>   blog generation, scheduled content, and substantive Q&A (not one reasoning level
+>   for everything); simple chatter/reactions skip expensive reasoning entirely.
+> Explicitly OUT of scope: Managed Bot provisioning, Manager Bot ownership model,
+> order/provider systems, duplicate-order logic, billing/commission architecture,
+> Natural Chatter's response-selection logic (unless shared retrieval requires it),
+> and link moderation behavior.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
@@ -2289,6 +2329,19 @@ BLOG_AI_MODEL=claude-sonnet-5
 # --- To switch providers later: set AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL to
 #     the new provider, flip NEXT_PUBLIC_AI_STREAMING=true if it streams, redeploy. ---
 ```
+
+> **NOTED, not implemented (2026-08-08):** currently running on the aiprimetech.io
+> proxy only (no real Anthropic key yet) — single-provider, no fallback logic exists
+> in `src/lib/ai/client.ts` today. Once a real `ANTHROPIC_API_KEY` is available, the
+> intended routing is **Anthropic direct as primary, aiprimetech proxy as fallback**
+> (not the reverse) — so a hiccup on the direct API doesn't take down blog/chatter/
+> support generation. This needs actual fallback code (try primary, catch, retry on
+> the secondary base URL/key) — `postJson`'s per-request timeout (v1.1.71) is a
+> prerequisite for this so a hung primary fails fast enough to fall back within the
+> caller's own deadline (e.g. the Telegram webhook's `maxDuration=30`). Also worth
+> setting `effort: "medium"` explicitly once on Sonnet 5 direct — it defaults to
+> `high`, and medium is the recommended cost/quality balance for blog generation,
+> scheduled content, and substantive Q&A per Phase 4.N's model-routing section.
 
 ---
 
