@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -52,8 +52,8 @@ test("no entitlement: zero capacity", () => {
 
 /* Saved-moderator creation cap (max VirtualModerator records, distinct from
  * Active Mod Slots above) — enforced in createVirtualModerator in
- * src/lib/actions/moderator.ts, not here; global ceiling is 5, basic gets
- * fewer (2). */
+ * src/lib/actions/moderator.ts, not here; mirrors each tier's Active Mod
+ * Slot count (2/5/10/20). */
 
 test("basic: max 2 saved moderators", () => {
   assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "basic" } } }), 2);
@@ -63,12 +63,12 @@ test("standard: max 5 saved moderators", () => {
   assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "standard" } } }), 5);
 });
 
-test("premium: max 5 saved moderators", () => {
-  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "premium" } } }), 5);
+test("premium: max 10 saved moderators", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "premium" } } }), 10);
 });
 
-test("pro: max 5 saved moderators (the global ceiling)", () => {
-  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "pro" } } }), 5);
+test("pro: max 20 saved moderators", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "pro" } } }), 20);
 });
 
 test("trial: max 1 saved moderator (unchanged)", () => {
@@ -77,4 +77,13 @@ test("trial: max 1 saved moderator (unchanged)", () => {
 
 test("no entitlement: cannot create any saved moderators", () => {
   assert.equal(moderatorMaxSavedModerators({}), 0);
+});
+
+/* Per-community deployment cap — flat across every tier (even pro's 20 total
+ * Active Mod Slots can't put more than this many Innvil bots in ONE
+ * community), to keep bot-to-bot acknowledgement traffic sane. Enforced in
+ * connectCommunity/setDeploymentEnabled, not here. */
+
+test("MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY is 5, independent of tier", () => {
+  assert.equal(MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, 5);
 });

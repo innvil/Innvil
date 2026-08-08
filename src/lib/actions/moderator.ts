@@ -16,7 +16,7 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib/moderator/domain";
 import {
   hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon,
-  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement,
+  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY,
 } from "@/src/lib/moderator/plan";
 import type { BotAckMode } from "@/src/lib/moderator/coordinator";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -467,6 +467,19 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
     return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
   }
 
+  // Flat cap, independent of tier — keeps bot-to-bot acknowledgement traffic
+  // sane even on plans with plenty of total Active Mod Slots left. Innvil's
+  // own connection only; doesn't touch how many bots the owner adds to the
+  // Telegram group directly.
+  const { count: communityDeploymentCount } = await ctx.admin
+    .from("moderator_deployments")
+    .select("id", { count: "exact", head: true })
+    .eq("community_id", community.id)
+    .eq("enabled", true);
+  if (!existingDeployment && (communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
+    return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
+  }
+
   const checkedAt = new Date().toISOString();
   const health: DeploymentHealthInfo = {
     present: membership.result.present,
@@ -567,6 +580,18 @@ export async function setDeploymentEnabled(panelId: string, moderatorId: string,
       .eq("enabled", true);
     if ((activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
       return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
+    }
+
+    const { data: target } = await ctx.admin.from("moderator_deployments").select("community_id").eq("id", deploymentId).maybeSingle();
+    if (target?.community_id) {
+      const { count: communityDeploymentCount } = await ctx.admin
+        .from("moderator_deployments")
+        .select("id", { count: "exact", head: true })
+        .eq("community_id", target.community_id)
+        .eq("enabled", true);
+      if ((communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
+        return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
+      }
     }
   }
 

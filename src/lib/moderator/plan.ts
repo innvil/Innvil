@@ -152,16 +152,14 @@ export const TRIAL_CAPACITY: ModeratorCapacity = { maxCommunities: 1, maxActiveS
 /** §44/§50: trial also caps how many VirtualModerator identities may be created at all (not just active ones). */
 export const TRIAL_MAX_SAVED_MODERATORS = 1;
 
-/** Global ceiling on saved VirtualModerator identities: 5, regardless of tier —
- *  basic gets fewer (2), standard/premium/pro all get the full 5. Distinct
- *  from Active Mod Slots (CAPACITY above), which governs how many of those
- *  saved personas may be simultaneously deployed. */
-const MAX_SAVED_MODERATORS: Record<ModeratorPlanTier, number> = {
-  basic: 2,
-  standard: 5,
-  premium: 5,
-  pro: 5,
-};
+/** Flat per-community cap on ACTIVE Innvil moderator deployments, independent
+ *  of tier — even a pro panel with 20 total Active Mod Slots may deploy at
+ *  most this many Innvil-connected bots into any ONE community, to keep
+ *  bot-to-bot acknowledgement traffic sane. This governs Innvil's own
+ *  connection only; it has no bearing on how many bots the owner adds to the
+ *  Telegram group directly (outside Innvil). Enforced in connectCommunity/
+ *  setDeploymentEnabled in src/lib/actions/moderator.ts, not here. */
+export const MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY = 5;
 
 /** Active Mod Slot / community capacity for the panel's current entitlement source (zero if none). */
 export function moderatorCapacity(settings: unknown): ModeratorCapacity {
@@ -171,11 +169,14 @@ export function moderatorCapacity(settings: unknown): ModeratorCapacity {
   return { maxCommunities: 0, maxActiveSlots: 0 };
 }
 
-/** Max saved VirtualModerator identities (distinct from active deployment slots, §63 of the PDF / §50 here). */
+/** Max saved VirtualModerator identities (distinct from active deployment
+ *  slots, §63 of the PDF / §50 here) — mirrors the tier's Active Mod Slot
+ *  count (2/5/10/20), since a persona a subscriber can't ever deploy isn't
+ *  worth letting them save either. */
 export function moderatorMaxSavedModerators(settings: unknown): number {
   const source = moderatorEntitlementSource(settings);
   if (source === "trial") return TRIAL_MAX_SAVED_MODERATORS;
-  if (source) return MAX_SAVED_MODERATORS[source];
+  if (source) return CAPACITY[source].maxActiveSlots;
   return 0;
 }
 
