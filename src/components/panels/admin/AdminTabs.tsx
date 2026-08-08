@@ -5,7 +5,7 @@ import {
   Circle, CheckCircle2, Clock, X, FileText, Lock, AlertTriangle, Wrench, History,
   Image as ImageIcon, Type, Globe, RefreshCw, Wifi, Gauge, Sliders, Tag,
   ChevronDown, ShieldCheck, ListOrdered, Users, CreditCard, KeyRound, Bell,
-  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, Wallet, Mail, LucideIcon,
+  MessageSquare, Bot, Plus, Trash2, Search, Download, ExternalLink, Wallet, Mail, Menu, LucideIcon,
 } from "lucide-react";
 import { getPlan, setPlan, type PlanInfo } from "@/src/lib/actions/plan";
 import { getAutomatorPricing, setAutomatorPricing, type AutomatorPricingInfo } from "@/src/lib/actions/automator-pricing";
@@ -1900,12 +1900,14 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [confirmAction, setConfirmAction] = useState<
     | null
     | {
-        kind: "bulkResend" | "bulkCancel";
+        kind: "bulkResend" | "bulkComplete" | "bulkCancel";
         ids: string[];
       }
   >(null);
+  const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const loadingRef = useRef(false);
+  const bulkMenuRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     if (!realPanel || loadingRef.current) return;
@@ -2075,6 +2077,32 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     await load();
   };
 
+  const runBulkComplete = async (ids: string[]) => {
+    if (!ids.length) return;
+    setSyncing(true); setMsg(null);
+    const results = await Promise.all(ids.map(async (id) => {
+      try {
+        const out = await markOrderCompleted(id);
+        return { id, ok: out.ok, error: out.ok ? null : (out.error ?? "Action failed") };
+      } catch {
+        return { id, ok: false, error: "Unexpected error" };
+      }
+    }));
+    setSyncing(false);
+    const completed = results.filter((r) => r.ok).length;
+    const failed = results.length - completed;
+    const details = results
+      .filter((r) => !r.ok && r.error)
+      .slice(0, 3)
+      .map((r) => `#${r.id.slice(0, 8)}: ${r.error}`);
+    setMsg({
+      text: `Marked completed ${completed} order(s)${failed ? `, ${failed} failed` : ""}.${details.length ? ` ${details.join(" | ")}` : ""}`,
+      error: failed > 0,
+    });
+    setSel(new Set());
+    await load();
+  };
+
   const requestBulkCancel = () => {
     const ids = [...sel];
     if (!ids.length) return;
@@ -2087,16 +2115,40 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     setConfirmAction({ kind: "bulkResend", ids });
   };
 
+  const requestBulkComplete = () => {
+    const ids = [...sel];
+    if (!ids.length) return;
+    setConfirmAction({ kind: "bulkComplete", ids });
+  };
+
   const confirmBulkAction = async () => {
     if (!confirmAction) return;
     const action = confirmAction;
     setConfirmAction(null);
+    if (action.kind === "bulkResend") {
+      await runBulkResend(action.ids);
+      return;
+    }
+    if (action.kind === "bulkComplete") {
+      await runBulkComplete(action.ids);
+      return;
+    }
     if (action.kind === "bulkCancel") {
       await runBulkCancel(action.ids);
       return;
     }
-    await runBulkResend(action.ids);
   };
+
+  useEffect(() => {
+    if (!bulkMenuOpen) return;
+    const onPointerDown = (evt: MouseEvent) => {
+      const node = bulkMenuRef.current;
+      if (!node) return;
+      if (!node.contains(evt.target as Node)) setBulkMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [bulkMenuOpen]);
 
   const previousPage = () => setPage((p) => Math.max(0, p - 1));
   const nextPage = () => setPage((p) => p + 1);
@@ -2124,11 +2176,21 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     )}
     {confirmAction && (
       <ConfirmActionModal
-        title={confirmAction.kind === "bulkResend" ? "Resend Selected Orders" : "Cancel & Refund Selected Orders"}
+        title={confirmAction.kind === "bulkResend"
+          ? "Resend Selected Orders"
+          : confirmAction.kind === "bulkComplete"
+            ? "Mark Selected Orders Completed"
+            : "Cancel & Refund Selected Orders"}
         message={confirmAction.kind === "bulkResend"
           ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Only pending/duplicate orders can be resent.`
-          : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}
-        confirmLabel={confirmAction.kind === "bulkResend" ? "Resend now" : "Cancel & refund"}
+          : confirmAction.kind === "bulkComplete"
+            ? `Mark ${confirmAction.ids.length} selected order(s) as completed?`
+            : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}
+        confirmLabel={confirmAction.kind === "bulkResend"
+          ? "Resend now"
+          : confirmAction.kind === "bulkComplete"
+            ? "Mark completed"
+            : "Cancel & refund"}
         danger={confirmAction.kind === "bulkCancel"}
         busy={syncing}
         onCancel={() => setConfirmAction(null)}
@@ -2185,14 +2247,53 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       {sel.size > 0 && (
         <div className="flex items-center justify-between gap-3 mb-3 px-3 py-2.5 rounded-lg fp-gold-soft-bg border fp-gold-border">
           <span className="text-xs fp-gold">{sel.size} selected</span>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setSel(new Set())} className="text-xs fp-text-dim hover:fp-text">Clear</button>
-            <button onClick={requestBulkResend} disabled={syncing || retryingHeld || busyId !== null} className="text-xs font-semibold px-3 py-1.5 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-50">
-              Resend selected to provider
+          <div className="flex items-center gap-2" ref={bulkMenuRef}>
+            <button
+              onClick={() => {
+                setSel(new Set());
+                setBulkMenuOpen(false);
+              }}
+              className="text-xs fp-text-dim hover:fp-text"
+            >
+              Clear
             </button>
-            <button onClick={requestBulkCancel} disabled={syncing} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 disabled:opacity-50">
-              Cancel &amp; refund selected
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="Selected actions"
+                aria-expanded={bulkMenuOpen}
+                onClick={() => setBulkMenuOpen((v) => !v)}
+                disabled={syncing || retryingHeld || busyId !== null}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-50"
+              >
+                <Menu size={15} />
+              </button>
+              {bulkMenuOpen && (
+                <div className="absolute right-0 mt-2 w-60 rounded-lg border fp-line-soft fp-panel-raised shadow-lg p-1 z-20">
+                  <button
+                    type="button"
+                    onClick={() => { setBulkMenuOpen(false); requestBulkResend(); }}
+                    className="w-full text-left text-xs px-2.5 py-2 rounded fp-text-dim hover:fp-text hover:fp-gold-soft-bg"
+                  >
+                    Resend selected to provider
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setBulkMenuOpen(false); requestBulkComplete(); }}
+                    className="w-full text-left text-xs px-2.5 py-2 rounded fp-text-dim hover:fp-text hover:fp-gold-soft-bg"
+                  >
+                    Mark selected completed
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setBulkMenuOpen(false); requestBulkCancel(); }}
+                    className="w-full text-left text-xs px-2.5 py-2 rounded text-red-400 hover:bg-red-500/10"
+                  >
+                    Cancel &amp; refund selected
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
