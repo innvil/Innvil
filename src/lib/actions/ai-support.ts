@@ -208,7 +208,7 @@ export async function customerSupportReply(panelId: string, history: AiMessage[]
   const prep = await prepareCustomerSupport(panelId, history);
   if (!prep.ok) return prep;
   try {
-    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 500, temperature: 0.4 });
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 500 });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error — please tap “Talk to a human”." };

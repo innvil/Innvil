@@ -75,7 +75,6 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
       system: buildSystemPrompt(input),
       messages: [{ role: "user", content: userContent }],
       maxTokens: 80,
-      temperature: 0.8,
     });
     const text = raw.trim();
     if (!text || text.toUpperCase() === NO_REPLY_SENTINEL || text.toUpperCase().startsWith(NO_REPLY_SENTINEL)) {
