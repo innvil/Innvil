@@ -2264,6 +2264,27 @@ win over this):**
 > order/provider systems, duplicate-order logic, billing/commission architecture,
 > Natural Chatter's response-selection logic (unless shared retrieval requires it),
 > and link moderation behavior.
+> - **NOTED addition:** a second, community-scoped knowledge layer ("COMMUNITY-
+>   SPECIFIC KNOWLEDGE" appended to the spec file) — facts belonging to one
+>   specific `Community` (local rules/admins/FAQs), auto-available to every
+>   moderator deployed there via the deployment→community link, isolated from
+>   other communities and from the tenant-wide Project Knowledge above (though a
+>   community-specific fact wins over a conflicting project-wide one). Depends on
+>   the base Project Knowledge retrieval pipeline existing first — build the
+>   shared retrieval layer with an explicit `PROJECT`/`COMMUNITY` scope field
+>   from day one rather than retrofitting scoping later.
+
+### Phase 4.N.1: Virtual Moderator entitlement correction — Active Mod Slots (v1.1.77)
+- **Fixed the paid-tier capacity table** in `src/lib/moderator/plan.ts` — `standard` was
+  `{maxCommunities:2, maxActiveSlots:6}`, now `{2, 5}`; `premium` was `{3, 12}`, now
+  `{3, 10}`. `basic` `{1,2}` and `pro` `{5,20}` unchanged. Trial stays `{1,1}`.
+- **Confirmed (not changed — already correct):** `connectCommunity`/`setDeploymentEnabled`
+  in `src/lib/actions/moderator.ts` already count ACTIVE `moderator_deployments` rows for
+  slot enforcement, never unique `VirtualModerator` rows — so reusing the same moderator
+  persona across two communities already correctly consumes 2 Active Mod Slots (not 1),
+  pausing a deployment already frees a slot, and reactivating one already re-checks
+  current capacity. The entitlement *unit* was already right; only the table's numbers
+  needed correcting. New tests in `plan.test.ts` pin the corrected per-tier values.
 
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7

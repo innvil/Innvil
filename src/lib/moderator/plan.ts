@@ -142,8 +142,8 @@ export interface ModeratorCapacity {
 
 const CAPACITY: Record<ModeratorPlanTier, ModeratorCapacity> = {
   basic: { maxCommunities: 1, maxActiveSlots: 2 },
-  standard: { maxCommunities: 2, maxActiveSlots: 6 },
-  premium: { maxCommunities: 3, maxActiveSlots: 12 },
+  standard: { maxCommunities: 2, maxActiveSlots: 5 },
+  premium: { maxCommunities: 3, maxActiveSlots: 10 },
   pro: { maxCommunities: 5, maxActiveSlots: 20 },
 };
 

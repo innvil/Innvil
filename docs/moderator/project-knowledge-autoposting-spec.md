@@ -36,6 +36,17 @@
 > available, with direct Anthropic as primary — see `innvil-ai-provider-fallback`
 > in memory / the env-var note in `CLAUDE.md`. That is an AI-client routing
 > change, independent of this feature, and should not be conflated with it.
+>
+> **SCOPE ADDITION (appended below as "COMMUNITY-SPECIFIC KNOWLEDGE"):** a second
+> knowledge scope, in ADDITION to the tenant/project-wide knowledge above — facts
+> that belong to one specific `Community` (local rules, local admins/contacts,
+> local FAQs), auto-available to every active moderator deployed there via the
+> deployment→community link, with no per-bot manual linking and no leakage
+> between communities. This depends on the Project Knowledge ingestion/retrieval
+> pipeline (§5 above) actually existing — it does not yet (Phase 4.N is fully
+> unbuilt as of this note). Build the shared retrieval layer with an explicit
+> scope field (`PROJECT` vs `COMMUNITY`) from the start rather than retrofitting
+> scoping onto a project-only design later.
 
 Implement a new shared Project Knowledge + AI Auto-Posting capability for Innvil Virtual Moderator.
 
@@ -1968,3 +1979,784 @@ Each post:
 Do not turn this into a generic central publishing account.
 
 The AI moderators themselves are the publishers.
+
+---
+
+# COMMUNITY-SPECIFIC KNOWLEDGE (same day, additional scope alongside the base spec)
+
+> **Status: NOTED — not implemented yet, and blocked on the base Project
+> Knowledge pipeline above (§1–§5) actually being built first.** This section
+> defines a SECOND knowledge scope (community-specific, in addition to the
+> tenant/project-wide scope already specified) that must share one retrieval
+> architecture with an explicit scope field — not two separate systems.
+
+NEW FEATURE: COMMUNITY-SPECIFIC KNOWLEDGE
+
+Add a Community Knowledge system.
+
+The customer must be able to define knowledge that belongs to a SPECIFIC Community.
+
+Example:
+
+Community 1
+→ Community Knowledge = Knowledge 1
+
+Community 2
+→ Community Knowledge = Knowledge 2
+
+This knowledge must remain isolated by community.
+
+==================================================
+1. COMMUNITY KNOWLEDGE BELONGS TO COMMUNITY
+==================================================
+
+Do NOT store this knowledge primarily on:
+
+VirtualModerator
+Telegram bot
+Moderator persona
+
+Instead, attach it to:
+
+Community
+
+or to the repository's equivalent community-scoped knowledge entity.
+
+Conceptually:
+
+Community
+    ↓
+CommunityKnowledge
+
+Any active ModeratorDeployment in that Community automatically has access to that CommunityKnowledge.
+
+==================================================
+2. AUTO-LINK KNOWLEDGE THROUGH DEPLOYMENT
+==================================================
+
+The user should NOT have to manually link the same community knowledge to every moderator.
+
+The relationship should be automatic.
+
+Conceptually:
+
+VirtualModerator
+        ↓
+ModeratorDeployment
+        ↓
+Community
+        ↓
+CommunityKnowledge
+
+If Mika is deployed into Community 1:
+
+Mika automatically gains access to Community 1 Knowledge.
+
+If Mika is also deployed into Community 2:
+
+Mika automatically gains access to Community 2 Knowledge while operating there.
+
+If Kaleb is deployed into Community 1:
+
+Kaleb automatically gains access to Community 1 Knowledge.
+
+No separate manual knowledge assignment should be required per bot.
+
+==================================================
+3. EXAMPLE
+==================================================
+
+Community 1:
+
+Knowledge:
+"Community 1 is focused on Project Alpha."
+
+Community 2:
+
+Knowledge:
+"Community 2 is focused on Project Beta."
+
+Mika is deployed to BOTH communities.
+
+Question in Community 1:
+
+"What is this community about?"
+
+Mika should answer based on:
+
+Community 1 Knowledge
+
+Example answer:
+
+"This community is focused on Project Alpha."
+
+Question in Community 2:
+
+"What is this community about?"
+
+Same Mika persona should answer based on:
+
+Community 2 Knowledge
+
+Example:
+
+"This community is focused on Project Beta."
+
+Mika must NOT answer Community 2 using Community 1 Knowledge.
+
+==================================================
+4. DIFFERENT MODERATOR, SAME COMMUNITY
+==================================================
+
+Example:
+
+Community 1 has:
+
+Mika
+Kaleb
+Alex
+
+All three are active Innvil moderators in Community 1.
+
+All three should automatically have access to:
+
+Community 1 Knowledge
+
+Do NOT require:
+
+CommunityKnowledge → Mika
+CommunityKnowledge → Kaleb
+CommunityKnowledge → Alex
+
+manual links.
+
+The deployment/community relationship is enough.
+
+==================================================
+5. PERSONA VS KNOWLEDGE
+==================================================
+
+Keep these layers separate.
+
+VIRTUAL MODERATOR PERSONA
+may include:
+
+- personality
+- tone
+- speaking style
+- role
+- base behavior
+- reusable identity
+
+COMMUNITY KNOWLEDGE
+may include:
+
+- community-specific facts
+- local rules
+- local FAQs
+- community purpose
+- local links
+- local admin/contact details
+- local project information
+- local announcements
+- local policies
+
+A reused moderator shares persona.
+
+It does NOT share Community Knowledge across deployments.
+
+==================================================
+6. PROJECT / GLOBAL KNOWLEDGE VS COMMUNITY KNOWLEDGE
+==================================================
+
+Preserve the previously defined shared Project Knowledge architecture.
+
+There should now be at least two intentional knowledge scopes:
+
+A. PROJECT / TENANT KNOWLEDGE
+Shared across eligible communities.
+
+Examples:
+- project whitepaper
+- official docs
+- official website
+- product facts
+- token utility
+- roadmap
+- global FAQs
+
+B. COMMUNITY KNOWLEDGE
+Specific to one Community only.
+
+Examples:
+- Community 1 rules
+- Community 1 admins
+- Community 1 campaign
+- Community 1 custom FAQ
+- Community 1 local links
+- Community 1 specific announcements
+
+Do not merge them into one unscoped retrieval index.
+
+==================================================
+7. RETRIEVAL PRIORITY
+==================================================
+
+When a moderator answers inside a community, retrieval should know the current deployment/community context.
+
+Conceptually retrieve from:
+
+1. Community Knowledge for current Community
+2. approved shared Project Knowledge
+3. relevant short-term Community context/memory
+
+The exact ranking may depend on query type.
+
+Community-specific facts should override generic/shared assumptions where applicable.
+
+Example:
+
+Shared Project Knowledge:
+"Default support contact is @global_support"
+
+Community 2 Knowledge:
+"For Community 2, support contact is @comm2_admin"
+
+Question asked inside Community 2:
+
+"Who should I message?"
+
+Expected:
+@comm2_admin
+
+Do not answer with the global fallback when a more specific Community Knowledge value exists.
+
+==================================================
+8. STRICT ISOLATION
+==================================================
+
+Critical:
+
+Community 1 Knowledge must never be retrieved inside Community 2 unless explicitly marked as shared Project Knowledge.
+
+Use communityId / deploymentId filters in retrieval.
+
+Do NOT rely only on prompting such as:
+
+"Only use this community's data."
+
+Enforce isolation in data queries/index retrieval.
+
+==================================================
+9. AUTO-LINK WHEN TELEGRAM COMMUNITY IS CONNECTED
+==================================================
+
+When a Telegram community is linked to an Innvil Community record and a moderator deployment becomes ACTIVE:
+
+no extra knowledge-linking operation should be required.
+
+The deployment should automatically resolve:
+
+deployment.communityId
+→ CommunityKnowledge for that community
+
+Example:
+
+Mika added/deployed to Telegram Group A
+Group A mapped to Innvil Community 1
+
+→ Mika immediately uses Community 1 Knowledge
+
+Same Mika also deployed to Group B
+Group B mapped to Community 2
+
+→ same persona
+→ automatically uses Community 2 Knowledge there
+
+==================================================
+10. COMMUNITY KNOWLEDGE UI
+==================================================
+
+Add a Community Knowledge section in Innvil.
+
+Preferred UX:
+
+Community
+[ Community 1 ▼ ]
+
+Community Knowledge
+
+Overview
+[ ... ]
+
+FAQs
+[ ... ]
+
+Rules
+[ ... ]
+
+Links
+[ ... ]
+
+Admins / Contacts
+[ ... ]
+
+Custom Notes
+[ ... ]
+
+Documents / URLs
+[ ... ]
+
+Then switching to:
+
+Community 2
+
+shows Community 2's separate knowledge.
+
+Do not make users configure knowledge from inside each moderator individually.
+
+==================================================
+11. USER-FACING EXPLANATION
+==================================================
+
+Use helper copy similar to:
+
+"Community Knowledge is automatically available to every active Innvil moderator in this community."
+
+And:
+
+"Knowledge added here stays isolated to this community."
+
+For reusable moderators:
+
+"Reusing a moderator shares its persona, not another community's knowledge or memory."
+
+==================================================
+12. COMMUNITY KNOWLEDGE INPUT TYPES
+==================================================
+
+Reuse the existing Project Knowledge ingestion architecture where possible.
+
+Support or prepare for:
+
+- text
+- FAQs
+- URLs
+- documents
+- PDFs
+- rules
+- links
+- admin/contact info
+- notes
+
+Do not create a completely separate parser/indexer if the Project Knowledge pipeline can support a scope field.
+
+==================================================
+13. KNOWLEDGE SCOPE FIELD
+==================================================
+
+Prefer one extensible knowledge architecture with explicit scope.
+
+Conceptually:
+
+KnowledgeSource {
+    tenantId
+    scopeType
+    communityId?
+    ...
+}
+
+Possible scopes:
+
+PROJECT
+COMMUNITY
+
+Example:
+
+scopeType = PROJECT
+communityId = null
+
+scopeType = COMMUNITY
+communityId = <community>
+
+Use existing repository conventions rather than these exact names if better abstractions already exist.
+
+==================================================
+14. INDEX / RETRIEVAL METADATA
+==================================================
+
+Every Community Knowledge chunk/index record must preserve enough metadata to enforce isolation.
+
+Conceptually:
+
+tenantId
+communityId
+knowledgeSourceId
+scopeType
+
+Queries inside a deployment must filter using:
+
+tenantId
++
+current communityId
+
+Do not perform broad tenant retrieval and ask the model to ignore unrelated community chunks.
+
+==================================================
+15. COMMUNITY-SPECIFIC ADMIN CONTACT
+==================================================
+
+Integrate this with the previously requested:
+
+AMA / partnership / collaboration contact routing.
+
+If Community 1 config says:
+
+collaborationContact = @alice
+
+and Community 2 says:
+
+collaborationContact = @bob
+
+then Mika must route differently depending on where the message happened.
+
+Community 1:
+
+"For partnerships, message @alice."
+
+Community 2:
+
+"For partnerships, message @bob."
+
+This configuration should naturally come from current Community Knowledge/settings context.
+
+==================================================
+16. AUTO-POSTING MUST USE COMMUNITY KNOWLEDGE
+==================================================
+
+The AI Moderator auto-posting feature must also use the Community Knowledge for the TARGET community.
+
+Example:
+
+Mika deployed to Community 1
+scheduled Auto-Post window fires
+
+Generation context may use:
+
+- shared Project Knowledge
+- Community 1 Knowledge
+- Mika persona
+- recent Community 1 auto-post history
+
+Do NOT use Community 2 Knowledge.
+
+==================================================
+17. SAME MODERATOR, DIFFERENT AUTO-POST CONTENT
+==================================================
+
+Example:
+
+Mika persona:
+friendly educator
+
+Community 1 Knowledge:
+Project Alpha
+
+Community 2 Knowledge:
+Project Beta
+
+Mika auto-posting in Community 1:
+→ generates Project Alpha content
+
+Mika auto-posting in Community 2:
+→ generates Project Beta content
+
+Same persona.
+
+Different knowledge context.
+
+==================================================
+18. KNOWLEDGE UPDATES APPLY AUTOMATICALLY
+==================================================
+
+If customer updates Community 1 Knowledge:
+
+all active moderators deployed to Community 1 should use the updated information automatically.
+
+Do not require:
+
+- moderator recreation
+- Telegram bot recreation
+- deployment recreation
+- manual re-linking
+
+Reindex/retrieve the updated Community Knowledge through the shared knowledge pipeline.
+
+==================================================
+19. ADDING A NEW MODERATOR
+==================================================
+
+Example:
+
+Community 1 already has Knowledge 1.
+
+Customer later deploys Kaleb to Community 1.
+
+Kaleb should immediately gain access to Knowledge 1 through the deployment relationship.
+
+Do not copy knowledge into Kaleb.
+
+Do not duplicate source rows.
+
+==================================================
+20. REMOVING A MODERATOR
+==================================================
+
+If Mika is removed/paused from Community 1:
+
+Mika should no longer be able to use Community 1 Knowledge through that inactive deployment.
+
+Community 1 Knowledge itself remains.
+
+Other active moderators in Community 1 continue using it.
+
+==================================================
+21. MOVING / REASSIGNING DEPLOYMENT
+==================================================
+
+If a moderator deployment is moved or recreated for another community:
+
+the runtime knowledge scope must follow the actual active Community relationship.
+
+Do not retain stale Community Knowledge references from the previous community.
+
+==================================================
+22. COMMUNITY DELETION
+==================================================
+
+If a Community is deleted/deactivated:
+
+its Community Knowledge should stop being eligible for retrieval.
+
+Handle retention/deletion according to existing policy.
+
+Do not leak orphaned knowledge into another Community.
+
+==================================================
+23. MEMORY REMAINS SEPARATE
+==================================================
+
+Community Knowledge is authoritative customer-controlled content.
+
+Community Memory is learned runtime context.
+
+Do not merge them.
+
+Example:
+
+Community Knowledge:
+"Admins are @alice and @john."
+
+Community Memory:
+"Members discussed a launch yesterday."
+
+They have different trust/provenance.
+
+==================================================
+24. SOURCE PRECEDENCE
+==================================================
+
+For factual answers, prefer:
+
+explicit Community Knowledge
+over
+shared generic Project Knowledge
+
+when they conflict on a community-specific fact.
+
+Do not silently overwrite stored Project Knowledge.
+
+Resolve at retrieval/answer time based on specificity.
+
+==================================================
+25. MODERATOR SLOTS REMAIN DEPLOYMENT-BASED
+==================================================
+
+This feature does not change Active Mod Slot accounting.
+
+Example:
+
+Mika in Community 1
+→ 1 slot
+
+Same Mika in Community 2
+→ another slot
+
+Community Knowledge auto-linking does not create or consume additional slots.
+
+Knowledge is attached to Community.
+
+Slots are attached to ACTIVE ModeratorDeployments.
+
+==================================================
+26. REQUIRED TESTS
+==================================================
+
+TEST 1
+
+Community 1:
+Knowledge = "Alpha"
+
+Community 2:
+Knowledge = "Beta"
+
+Mika deployed to both.
+
+Question in Community 1
+→ answer uses Alpha
+
+Question in Community 2
+→ answer uses Beta
+
+==================================================
+TEST 2
+
+Mika + Kaleb both deployed to Community 1.
+
+Expected:
+both can retrieve Community 1 Knowledge.
+
+==================================================
+TEST 3
+
+Community 1 Knowledge updated.
+
+Expected:
+Mika and Kaleb both use updated knowledge without re-link.
+
+==================================================
+TEST 4
+
+Community 1 Knowledge must not appear in Community 2 retrieval.
+
+==================================================
+TEST 5
+
+Shared Project Knowledge exists.
+
+Community Knowledge also exists.
+
+Expected:
+both can be used,
+but Community-specific value wins for Community-specific facts.
+
+==================================================
+TEST 6
+
+Moderator deployed after Community Knowledge already exists.
+
+Expected:
+automatic access through deployment.
+
+==================================================
+TEST 7
+
+Moderator removed from Community.
+
+Expected:
+that deployment no longer has Community Knowledge access.
+
+==================================================
+TEST 8
+
+Auto-posting in Community 1.
+
+Expected:
+uses Community 1 Knowledge,
+never Community 2 Knowledge.
+
+==================================================
+TEST 9
+
+Same Mika auto-posting into Community 1 and Community 2.
+
+Expected:
+same persona,
+different community-grounded content.
+
+==================================================
+TEST 10
+
+Community-specific collaboration contact:
+
+Community 1 = @alice
+Community 2 = @bob
+
+Expected:
+routing follows current Community context.
+
+==================================================
+TEST 11
+
+Cross-tenant attempt.
+
+Expected:
+no Community Knowledge leakage.
+
+==================================================
+TEST 12
+
+Community Knowledge exists but deployment is inactive.
+
+Expected:
+inactive moderator cannot use it through that deployment.
+
+==================================================
+27. IMPLEMENTATION AUDIT
+==================================================
+
+Before editing:
+
+1. inspect current Project Knowledge architecture
+2. inspect KnowledgeSource / chunks / embeddings if already implemented
+3. inspect Community schema
+4. inspect ModeratorDeployment schema
+5. inspect retrieval filters
+6. inspect current Community memory implementation
+7. inspect collaboration-contact settings
+8. inspect Auto-Posting retrieval/generation
+9. inspect tenant isolation/RLS
+10. inspect knowledge UI patterns
+
+Reuse the existing knowledge ingestion/indexing pipeline.
+
+Prefer adding an explicit knowledge scope rather than building a second full knowledge system.
+
+==================================================
+28. FINAL PRODUCT INVARIANT
+==================================================
+
+Community Knowledge belongs to the Community.
+
+Every active Innvil moderator in that Community automatically receives it through ModeratorDeployment.
+
+No per-bot manual linking.
+
+Same moderator reused elsewhere:
+
+shares persona
+
+but gets the knowledge of the CURRENT Community only.
+
+Example:
+
+Mika + Community 1
+→ Persona Mika + Knowledge 1
+
+Mika + Community 2
+→ Persona Mika + Knowledge 2
+
+Kaleb + Community 1
+→ Persona Kaleb + Knowledge 1
+
+This must happen automatically based on active deployment/community linkage.
