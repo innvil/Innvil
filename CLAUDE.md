@@ -2364,6 +2364,29 @@ win over this):**
 > - Only `INNVIL_MODERATOR`-classified senders (numeric bot ID + active deployment in
 >   the same community) participate — `EXTERNAL_BOT` never gets this treatment.
 
+### Phase 4.Q: `innvil_bot_manager` — Innvil's official product bot (NOTED, not built)
+
+> **Explicit instruction: "Take note only, will implement this once the ai mods are
+> fully intact."** A new Innvil-owned, platform-wide (not per-panel/tenant) Telegram
+> bot with two separated modes: **proactive marketing** (approved-campaign broadcasts
+> to stored, authorized destinations — never an unsupervised "cron asks LLM to invent
+> a message and auto-sends") and **reactive Innvil product support** (answers human
+> questions about Innvil/Moderator/plans/setup grounded in its OWN
+> `INNVIL_PRODUCT_KNOWLEDGE` base, stays silent on everything else via a hard
+> Coordinator-level scope classifier + confidence threshold — not just prompt text).
+> **Full spec (source of truth):** `docs/moderator/innvil-bot-manager-spec.md`.
+> **⚠️ Naming collision flagged in the spec:** this is a **different bot** from the
+> existing control-plane-only Manager Bot (`TELEGRAM_MANAGER_BOT_TOKEN` in
+> `src/lib/moderator/manager.ts`) — that one's whole-codebase invariant is that it
+> NEVER posts customer/community-facing content. `innvil_bot_manager` must be its own
+> separate credential; pick a non-colliding internal name (e.g. `INNVIL_OFFICIAL_BOT`)
+> when implementing. Other key points: gets **priority over customer moderators** for
+> Innvil-related questions in a shared group (they suppress/stay silent rather than
+> all answering); its marketing broadcasts carry `origin = INNVIL_MARKETING`, which
+> customer moderators must NOT `BOT_ACK` or `COMMUNITY_HANDOFF` on by default (avoids
+> Mika/Kaleb/Alex piling reactions onto an official announcement); a human replying to
+> a marketing post is a normal new HUMAN event the manager answers reactively.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
