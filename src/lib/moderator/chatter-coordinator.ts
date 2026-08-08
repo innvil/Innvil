@@ -98,23 +98,27 @@ function scoreCandidate(input: {
   trivial: boolean;
 }): CandidateScore {
   const directed = input.isDirectedAtBot;
-  const overParticipating = input.pacing.consecutiveMessages >= MAX_CONSECUTIVE_BOT_MESSAGES;
-  const cooldownActive = !!input.pacing.lastSpokeAt && input.now.getTime() - new Date(input.pacing.lastSpokeAt).getTime() < MIN_REPLY_GAP_MS;
-
-  // Pacing safety valves — a directed question still deserves an answer, so
-  // these only hard-block AMBIENT chatter, matching how a present, attentive
-  // human moderator behaves: still responsive when addressed directly, but
-  // not flooding the room with unprompted messages.
-  if (overParticipating && !directed) return { eligible: false, priority: "LOW", hardBlockReason: "AVOID_DOMINATING_CONVERSATION" };
-  if (cooldownActive && !directed) return { eligible: false, priority: "LOW", hardBlockReason: "COOLDOWN" };
 
   let score = 0;
   if (directed) score += DIRECTED_WEIGHT;
   if (input.likelyQuestion) score += QUESTION_WEIGHT;
   score += input.trivial ? TRIVIAL_PENALTY : SUBSTANTIVE_WEIGHT;
   if (input.recentlyAnsweredByModerator) score += RECENTLY_ANSWERED_PENALTY;
-
   const priority = priorityBand(score);
+
+  const overParticipating = input.pacing.consecutiveMessages >= MAX_CONSECUTIVE_BOT_MESSAGES;
+  const cooldownActive = !!input.pacing.lastSpokeAt && input.now.getTime() - new Date(input.pacing.lastSpokeAt).getTime() < MIN_REPLY_GAP_MS;
+
+  // Pacing safety valves exist to stop the bot from flooding the room with
+  // low-value ambient chatter — they don't apply to a directed message (still
+  // responsive when addressed directly), nor to a genuinely HIGH/VERY_HIGH
+  // ambient one (a real question, something substantive): a present,
+  // attentive human moderator still answers a real question even seconds
+  // after they last spoke, they just don't keep chiming in on filler.
+  const bypassPacing = directed || priority === "HIGH" || priority === "VERY_HIGH";
+  if (overParticipating && !bypassPacing) return { eligible: false, priority: "LOW", hardBlockReason: "AVOID_DOMINATING_CONVERSATION" };
+  if (cooldownActive && !bypassPacing) return { eligible: false, priority: "LOW", hardBlockReason: "COOLDOWN" };
+
   return { eligible: priority !== "LOW", priority, hardBlockReason: null };
 }
 

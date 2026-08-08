@@ -181,12 +181,35 @@ test("zero candidates (no chatter-eligible deployment in the community) -> NO_EL
   assert.deepEqual(result, { proceed: false, deploymentId: null, reasonCode: "NO_ELIGIBLE_CANDIDATE", priority: "LOW" });
 });
 
-test("one candidate hard-blocked (dominating) and one still eligible -> the eligible one may still respond", () => {
+test("an ambient HIGH-priority question bypasses the cooldown window, even though only a DIRECTED message used to", () => {
+  const now = new Date();
+  const pacing: ChatterPacingState = { lastSpokeAt: new Date(now.getTime() - 5_000).toISOString(), consecutiveMessages: 0 }; // 5s ago, within cooldown
+  const result = single({ text: "does anyone know why the site is down?", isDirectedAtBot: false, pacing, now, random: FAVORABLE });
+  assert.equal(result.priority, "HIGH");
+  assert.equal(result.proceed, true);
+});
+
+test("an ambient MEDIUM-priority message (not HIGH/VERY_HIGH) still respects the cooldown window", () => {
+  const now = new Date();
+  const pacing: ChatterPacingState = { lastSpokeAt: new Date(now.getTime() - 5_000).toISOString(), consecutiveMessages: 0 };
+  const result = single({ text: "hows it going", isDirectedAtBot: false, pacing, now, random: FAVORABLE });
+  assert.equal(result.proceed, false);
+  assert.equal(result.reasonCode, "NO_ELIGIBLE_CANDIDATE");
+});
+
+test("an ambient HIGH-priority question also bypasses the dominating-conversation cap", () => {
+  const pacing: ChatterPacingState = { lastSpokeAt: null, consecutiveMessages: 2 };
+  const result = single({ text: "does anyone know why the site is down?", isDirectedAtBot: false, pacing, random: FAVORABLE });
+  assert.equal(result.proceed, true);
+});
+
+test("one candidate hard-blocked (dominating, MEDIUM-priority message) and one still eligible -> the eligible one may still respond", () => {
   const candidates: ChatterCandidate[] = [
     { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, pacing: { lastSpokeAt: null, consecutiveMessages: 2 } }, // over-participating
     { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, pacing: freshPacing },
   ];
-  const result = selectChatterResponder({ text: "does anyone know the answer to this?", candidates, now: new Date(), random: FAVORABLE });
+  // Non-question, substantive -> MEDIUM, so it does NOT bypass the dominating-conversation cap (only HIGH/VERY_HIGH do).
+  const result = selectChatterResponder({ text: "that's a good point", candidates, now: new Date(), random: FAVORABLE });
   assert.equal(result.proceed, true);
   assert.equal(result.deploymentId, DEPLOYMENT_B);
 });
