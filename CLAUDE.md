@@ -2165,6 +2165,51 @@ win over this):**
 >   panel burns supply); keep adding SaaS sinks to drive utility + holders.
 > - Branding: platform currency is *anvil* now → *ANVIL* the coin later (logo = the mark).
 
+### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement (NOTED, not built)
+
+> Telegram-based AI community moderator add-on. Foundation already built and live in
+> this branch: Managed Bot provisioning (BotFather-token fallback + Telegram Managed
+> Bots deep-link flow), the free 7-day trial entitlement system, Connect Community +
+> `ModeratorDeployment`, Innvil Moderator Acknowledgement (bounded bot-to-bot ack
+> between Innvil moderators sharing a community, loop-proofed via `origin`/
+> `interactionDepth`), and Reactive Natural Chatter v1 (replies to human chat via a
+> deterministic pre-filter + `src/lib/ai/client.ts` generation) — confirmed working
+> live end-to-end. Architecture: Telegram adapter → `CommunityEvent` → Community
+> Coordinator (`src/lib/moderator/coordinator.ts` / `chatter-coordinator.ts`) →
+> `CommunityAction` → Telegram adapter, orchestrated in `community-runtime.ts`.
+> **The next iteration is fully specified but NOT implemented** —
+> `docs/moderator/natural-chatter-refinement-spec.md` is the verbatim source-of-truth
+> spec (57 sections); implement FROM that file, not from this summary. Scope is
+> tightly bounded to 6 things:
+> - **(A) Reactive response selection/pacing** — replace the current 15%(ambient)/
+>   75%(mentioned) random-roll model in `chatter-coordinator.ts` with contextual
+>   priority scoring (mention/reply is a signal, not a requirement or a guarantee;
+>   randomness only breaks ties in the ambiguous middle band, never overrides a
+>   clearly high- or low-value message).
+> - **(B) Trial reactive quota = 20/day** (successful sends only, per community per
+>   local community day, checked before AI generation) — separate from the existing
+>   2/day proactive quota; moderation enforcement never consumes or is blocked by it.
+> - **(C) Intelligent external-link moderation** — links classified by intent, not
+>   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
+>   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /
+>   `PHISHING_OR_SCAM` / `EXPLICIT_CONTENT` / `UNKNOWN_OR_AMBIGUOUS`); works with no
+>   mention needed.
+> - **(D) Spam vs. legitimate-follow-up distinction** — a ~30-minute window governs
+>   only the RAPID-FLOOD interpretation, never a moderation-history reset; a
+>   legitimate AMA/collab follow-up after 30 min is a fresh evaluation, but a
+>   repeated ad after 30 min still escalates the same warning count.
+> - **(E) Natural (non-robotic) warning escalation** — persona-voiced warnings, 3
+>   strikes → kick/ban for ordinary unsolicited promotion, immediate ban for
+>   high-confidence explicit content, scoped per tenant+community+Telegram user.
+> - **(F) Configurable collab/AMA contact routing** — new community-level setting
+>   (same UX pattern as the existing bot-ack toggle) letting the owner name who
+>   partnership/AMA/collab inquiries get routed to; never hardcode a username, never
+>   invent one if unset, and this routing is conversational only — never an
+>   authorization grant.
+> Explicitly OUT of scope for this patch: bot provisioning, managed-bot credentials,
+> provider ordering, billing, trial duration, active mod slots, publishing, campaign
+> generation, and any other unrelated moderation feature.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
