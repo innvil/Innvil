@@ -228,3 +228,15 @@ export const BOT_ACKNOWLEDGEMENT_ENABLED = process.env.NEXT_PUBLIC_BOT_ACKNOWLED
 export function virtualModBotAcknowledgement(settings: unknown): boolean {
   return BOT_ACKNOWLEDGEMENT_ENABLED && hasVirtualModerator(settings);
 }
+
+/** Master switch for Reactive Natural Chatter (real AI-generated replies to
+ *  human community messages) — OFF in production until live-tested. This is
+ *  the flagship "bot behaves like a community member" behavior, available on
+ *  any active entitlement including trial (virtualModNaturalChatter already
+ *  covers the entitlement side); this flag is purely a rollout/kill-switch,
+ *  same env-driven pattern as VIRTUAL_MODERATOR_ENABLED/BOT_ACKNOWLEDGEMENT_ENABLED. */
+export const NATURAL_CHATTER_ENABLED = process.env.NEXT_PUBLIC_NATURAL_CHATTER_ENABLED === "true";
+
+export function virtualModNaturalChatterActive(settings: unknown): boolean {
+  return NATURAL_CHATTER_ENABLED && virtualModNaturalChatter(settings);
+}
