@@ -152,6 +152,17 @@ export const TRIAL_CAPACITY: ModeratorCapacity = { maxCommunities: 1, maxActiveS
 /** §44/§50: trial also caps how many VirtualModerator identities may be created at all (not just active ones). */
 export const TRIAL_MAX_SAVED_MODERATORS = 1;
 
+/** Global ceiling on saved VirtualModerator identities: 5, regardless of tier —
+ *  basic gets fewer (2), standard/premium/pro all get the full 5. Distinct
+ *  from Active Mod Slots (CAPACITY above), which governs how many of those
+ *  saved personas may be simultaneously deployed. */
+const MAX_SAVED_MODERATORS: Record<ModeratorPlanTier, number> = {
+  basic: 2,
+  standard: 5,
+  premium: 5,
+  pro: 5,
+};
+
 /** Active Mod Slot / community capacity for the panel's current entitlement source (zero if none). */
 export function moderatorCapacity(settings: unknown): ModeratorCapacity {
   const source = moderatorEntitlementSource(settings);
@@ -160,9 +171,12 @@ export function moderatorCapacity(settings: unknown): ModeratorCapacity {
   return { maxCommunities: 0, maxActiveSlots: 0 };
 }
 
-/** Max saved VirtualModerator identities (distinct from active deployment slots, §63 of the PDF / §50 here). Trial-only cap; paid tiers aren't limited on saved personas yet. */
+/** Max saved VirtualModerator identities (distinct from active deployment slots, §63 of the PDF / §50 here). */
 export function moderatorMaxSavedModerators(settings: unknown): number {
-  return moderatorEntitlementSource(settings) === "trial" ? TRIAL_MAX_SAVED_MODERATORS : Number.POSITIVE_INFINITY;
+  const source = moderatorEntitlementSource(settings);
+  if (source === "trial") return TRIAL_MAX_SAVED_MODERATORS;
+  if (source) return MAX_SAVED_MODERATORS[source];
+  return 0;
 }
 
 /* ---------------------------------------------------------- capabilities ---- */

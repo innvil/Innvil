@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, TRIAL_CAPACITY } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -48,4 +48,33 @@ test("trial: 1 community, 1 active mod slot (unaffected by the paid-tier table c
 
 test("no entitlement: zero capacity", () => {
   assert.deepEqual(moderatorCapacity({}), { maxCommunities: 0, maxActiveSlots: 0 });
+});
+
+/* Saved-moderator creation cap (max VirtualModerator records, distinct from
+ * Active Mod Slots above) — enforced in createVirtualModerator in
+ * src/lib/actions/moderator.ts, not here; global ceiling is 5, basic gets
+ * fewer (2). */
+
+test("basic: max 2 saved moderators", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "basic" } } }), 2);
+});
+
+test("standard: max 5 saved moderators", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "standard" } } }), 5);
+});
+
+test("premium: max 5 saved moderators", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "premium" } } }), 5);
+});
+
+test("pro: max 5 saved moderators (the global ceiling)", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "pro" } } }), 5);
+});
+
+test("trial: max 1 saved moderator (unchanged)", () => {
+  assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { trial: { startedAt: new Date().toISOString(), endsAt: new Date(Date.now() + 86400_000).toISOString() } } } }), TRIAL_MAX_SAVED_MODERATORS);
+});
+
+test("no entitlement: cannot create any saved moderators", () => {
+  assert.equal(moderatorMaxSavedModerators({}), 0);
 });

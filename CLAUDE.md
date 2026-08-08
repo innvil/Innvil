@@ -2320,6 +2320,50 @@ win over this):**
 > touchpoint — never counted as chatter, never trusting Telegram username as identity,
 > never disclosing tenant data to an unrelated user who sends `/start`.
 
+### Phase 4.O.1: Virtual Moderator saved-moderator creation cap (v1.1.81)
+- **Global ceiling on saved `VirtualModerator` records is now 5, tier-scaled below
+  that** — `basic` 2, `standard`/`premium`/`pro` all 5 (was: only trial capped at 1,
+  every paid tier was `Number.POSITIVE_INFINITY`/unlimited). Distinct from Active
+  Mod Slots (Phase 4.N.1) — this caps how many personas can exist at all, not how
+  many are simultaneously deployed. Enforcement (`createVirtualModerator` in
+  `src/lib/actions/moderator.ts`) was already correct — counts `virtual_moderators`
+  rows for the panel — only `moderatorMaxSavedModerators`'s per-tier table needed
+  the real numbers. No-entitlement now correctly returns 0 (was silently unlimited).
+
+### Phase 4.P: Bot-ack social behavior — Community Handoff + real Telegram Reactions (NOTED, not built)
+
+> Refines the already-built, loop-fixed (v1.1.80) bot-ack feature. Two problems with
+> today's hard "a BOT_ACK may never trigger anything else" rule: (1) it can cut a
+> natural-feeling bot-to-bot exchange off abruptly instead of letting it resolve
+> gracefully, and (2) `REACT` needs to mean an actual Telegram message reaction
+> (`setMessageReaction`), never a standalone emoji text message.
+> **Full verbatim spec:** `docs/moderator/bot-ack-social-behavior-spec.md`. Key points:
+> - **New bounded action: `COMMUNITY_HANDOFF`** — depth 0 (root event) → depth 1
+>   (optional `BOT_ACK`) → depth 2 (optional `COMMUNITY_HANDOFF`, community-facing
+>   only, addressed to "anyone"/humans, never to the other bot by name) → hard STOP.
+>   A `COMMUNITY_HANDOFF` must never itself trigger another bot's acknowledgement;
+>   only a human reply restarts normal Coordinator logic. Silence is still a valid
+>   outcome at every step — never force a handoff just because an exchange happened.
+> - **`REACT` = real Telegram reaction, not a message.** Reactions are optional,
+>   context-dependent (one moderator's answer may get 0 or 1 reaction from another
+>   eligible moderator, never a stack of reactions from every deployed moderator),
+>   must use only reactions Telegram's `available_reactions` actually allows for
+>   that chat (never fall back to an emoji text message), target an explicit
+>   message ID (never "the latest message"), and must never themselves start a new
+>   bot-chain event. `SILENCE` is not a fallback state for "can't react" — it's
+>   frequently the correct answer on its own (e.g. "ok"/"lol" from a human usually
+>   gets nothing, bot or human).
+> - **Separate quota** — bot-to-bot social usage (BOT_ACK + COMMUNITY_HANDOFF) and
+>   reactions must not consume the Phase 4.M reactive (20/day) or proactive (2/day)
+>   quotas; prefer a small dedicated bot-interaction allowance instead.
+> - **3+ moderator clarification** (given informally, appended to the spec file): the
+>   ack-then-redirect shape generalizes to N moderators — either several may take a
+>   bounded turn before one redirects, or a later moderator may redirect directly
+>   without first producing its own `BOT_ACK`. Don't hardcode new fixed-depth
+>   arithmetic beyond what's in the spec; implement from the stated intent.
+> - Only `INNVIL_MODERATOR`-classified senders (numeric bot ID + active deployment in
+>   the same community) participate — `EXTERNAL_BOT` never gets this treatment.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
