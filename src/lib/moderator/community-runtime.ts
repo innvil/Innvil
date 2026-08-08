@@ -7,6 +7,7 @@ import { virtualModBotAcknowledgement, virtualModNaturalChatterActive } from "./
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import { evaluateChatterGate, type ChatterPacingState } from "./chatter-coordinator";
 import { generateChatterReply, type ChatterContextMessage } from "./chatter-generate";
+import { aiConfigured } from "@/src/lib/ai/client";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 
@@ -357,6 +358,14 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
 
 async function handleHumanMessage(admin: SupabaseClient, panelId: string, community: { id: string }, message: TelegramMessage, event: CommunityEvent) {
   const deployment = await findChatterDeployment(admin, community.id);
+  // TEMPORARY diagnostic logging — remove once chatter is confirmed working
+  // end-to-end. No secrets; text is truncated defensively.
+  console.log("[telegram/community] human message", {
+    communityId: community.id,
+    hasChatterDeployment: !!deployment,
+    aiConfigured: aiConfigured(),
+    text: event.text.slice(0, 120),
+  });
   if (!deployment) return; // no chatter-eligible deployment in this community
 
   const repliedToDeploymentId = await resolveRepliedToDeployment(admin, community.id, event.replyToMessageId);
@@ -366,6 +375,8 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
 
   const pacing = await loadChatterPacing(admin, deployment.deploymentId);
   const gate = evaluateChatterGate({ text: event.text, isDirectedAtBot: directed, pacing, now: new Date() });
+
+  console.log("[telegram/community] chatter gate", { directed, pacing, proceed: gate.proceed, reasonCode: gate.reasonCode });
 
   if (!gate.proceed) {
     await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", gate.reasonCode);
@@ -379,6 +390,12 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
     recentContext,
     triggerMessage: { senderName: event.sender.displayName, text: event.text },
     isDirectedAtBot: directed,
+  });
+
+  console.log("[telegram/community] chatter generation", {
+    ok: generation.ok,
+    noReply: generation.ok && "noReply" in generation,
+    error: !generation.ok ? generation.error : null,
   });
 
   if (!generation.ok) {
@@ -463,6 +480,15 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // Bounded recent-context log — recorded regardless of which capability (if
   // any) is active; both bot-ack correlation and chatter context need it.
   await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
+
+  // TEMPORARY diagnostic logging — remove once chatter + bot-ack are both
+  // confirmed working end-to-end. No secrets/tokens logged.
+  console.log("[telegram/community] update classified", {
+    senderType: sender.senderType,
+    hasDeploymentId: !!sender.deploymentId,
+    botAckEnabled: virtualModBotAcknowledgement(settings),
+    naturalChatterEnabled: virtualModNaturalChatterActive(settings),
+  });
 
   if (sender.senderType === "INNVIL_MODERATOR" && sender.deploymentId) {
     if (!virtualModBotAcknowledgement(settings)) return;
