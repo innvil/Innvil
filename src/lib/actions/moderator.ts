@@ -14,7 +14,11 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib/moderator/domain";
-import { hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon, TRIAL_DURATION_DAYS } from "@/src/lib/moderator/plan";
+import {
+  hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon,
+  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement,
+} from "@/src/lib/moderator/plan";
+import type { BotAckMode } from "@/src/lib/moderator/coordinator";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildManagedBotDeepLink,
@@ -24,6 +28,8 @@ import {
   validateRequestedUsername,
   verifyBotToken,
 } from "@/src/lib/moderator/manager";
+
+const BOT_ACK_MODES: BotAckMode[] = ["off", "reactions_only", "acknowledgements", "role_handoffs"];
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -89,6 +95,7 @@ export interface ModeratorPlanInfo {
   maxCommunities: number;
   maxActiveSlots: number;
   maxSavedModerators: number;
+  botAckEnabled: boolean;
 }
 
 export async function getModeratorPlanInfo(panelId: string): Promise<ModeratorPlanInfo | null> {
@@ -104,6 +111,7 @@ export async function getModeratorPlanInfo(panelId: string): Promise<ModeratorPl
     maxCommunities: capacity.maxCommunities,
     maxActiveSlots: capacity.maxActiveSlots,
     maxSavedModerators: moderatorMaxSavedModerators(ctx.panel.settings),
+    botAckEnabled: virtualModBotAcknowledgement(ctx.panel.settings),
   };
 }
 
@@ -333,6 +341,7 @@ export interface CommunityDeploymentRow {
   chatType: string | null;
   enabled: boolean;
   health: DeploymentHealthInfo;
+  botAckMode: BotAckMode;
 }
 
 /**
@@ -439,7 +448,7 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
       },
       { onConflict: "panel_id,platform,chat_id" }
     )
-    .select("id, chat_id, handle, title, chat_type")
+    .select("id, chat_id, handle, title, chat_type, bot_ack_mode")
     .single();
   if (communityError || !community) return { ok: false, error: communityError?.message ?? "Could not save the community." };
 
@@ -490,6 +499,7 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
       chatType: community.chat_type,
       enabled: true,
       health,
+      botAckMode: (community.bot_ack_mode as BotAckMode) ?? "off",
     },
   };
 }
@@ -499,12 +509,12 @@ export async function listModeratorCommunities(panelId: string, moderatorId: str
   if (!ctx) return [];
   const { data } = await ctx.admin
     .from("moderator_deployments")
-    .select("id, enabled, health, communities(id, chat_id, handle, title, chat_type)")
+    .select("id, enabled, health, communities(id, chat_id, handle, title, chat_type, bot_ack_mode)")
     .eq("moderator_id", moderatorId)
     .order("created_at", { ascending: true });
   return ((data as Array<Record<string, unknown>>) ?? []).map((row) => {
     const community = (Array.isArray(row.communities) ? row.communities[0] : row.communities) as
-      | { id: string; chat_id: string; handle: string | null; title: string | null; chat_type: string | null }
+      | { id: string; chat_id: string; handle: string | null; title: string | null; chat_type: string | null; bot_ack_mode: string | null }
       | null;
     const health = (row.health as Partial<DeploymentHealthInfo>) ?? {};
     return {
@@ -522,8 +532,25 @@ export async function listModeratorCommunities(panelId: string, moderatorId: str
         canRestrict: health.canRestrict ?? false,
         checkedAt: health.checkedAt ?? null,
       },
+      botAckMode: (BOT_ACK_MODES.includes(community?.bot_ack_mode as BotAckMode) ? community?.bot_ack_mode : "off") as BotAckMode,
     };
   });
+}
+
+/** Owner-facing control for spec §25's community setting ("Allow Innvil moderators to
+ *  acknowledge each other"). Scoped to the community (shared across any moderators
+ *  deployed there), verified via panel ownership rather than a specific moderator. */
+export async function setCommunityBotAckMode(panelId: string, communityId: string, mode: BotAckMode): Promise<Result<null>> {
+  if (!BOT_ACK_MODES.includes(mode)) return { ok: false, error: "Invalid mode." };
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return { ok: false, error: "Panel not found." };
+  const { error } = await ctx.admin
+    .from("communities")
+    .update({ bot_ack_mode: mode })
+    .eq("id", communityId)
+    .eq("panel_id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
 }
 
 /** Pause a deployment (spec §51) — stops it consuming an Active Mod Slot without deleting config/memory. */

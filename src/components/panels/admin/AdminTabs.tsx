@@ -15,7 +15,7 @@ import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-
 import {
   listVirtualModerators, getModeratorPlanInfo, createVirtualModerator,
   requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
-  connectCommunity, listModeratorCommunities, setDeploymentEnabled,
+  connectCommunity, listModeratorCommunities, setDeploymentEnabled, setCommunityBotAckMode,
   type VirtualModeratorRow, type ModeratorPlanInfo, type CommunityDeploymentRow,
 } from "@/src/lib/actions/moderator";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
@@ -3949,7 +3949,7 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
           {moderators.length === 0 ? (
             <p className="text-xs fp-text-faint">No moderators yet.</p>
           ) : moderators.map((mod) => (
-            <TelegramConnectRow key={mod.id} panelId={panelId} moderator={mod} onChanged={refresh} />
+            <TelegramConnectRow key={mod.id} panelId={panelId} moderator={mod} botAckEnabled={planInfo?.botAckEnabled ?? false} onChanged={refresh} />
           ))}
         </div>
       </Card>
@@ -3971,10 +3971,12 @@ const CONNECTED_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_r
 function TelegramConnectRow({
   panelId,
   moderator,
+  botAckEnabled,
   onChanged,
 }: {
   panelId: string;
   moderator: VirtualModeratorRow;
+  botAckEnabled: boolean;
   onChanged: () => void | Promise<void>;
 }) {
   const [status, setStatus] = React.useState(moderator.provisioningStatus);
@@ -4116,13 +4118,20 @@ function TelegramConnectRow({
       {rowMsg && <p className={`text-xs mt-2 ${rowMsg.error ? "text-red-400" : "fp-safe"}`}>{rowMsg.text}</p>}
 
       {CONNECTED_PROVISIONING_STATUSES.has(status) && (
-        <ModeratorCommunities panelId={panelId} moderatorId={moderator.id} />
+        <ModeratorCommunities panelId={panelId} moderatorId={moderator.id} botAckEnabled={botAckEnabled} />
       )}
     </div>
   );
 }
 
-function ModeratorCommunities({ panelId, moderatorId }: { panelId: string; moderatorId: string }) {
+const BOT_ACK_MODE_OPTIONS: Array<{ value: "off" | "reactions_only" | "acknowledgements" | "role_handoffs"; label: string }> = [
+  { value: "off", label: "Bot acknowledgement: off" },
+  { value: "reactions_only", label: "Reactions only" },
+  { value: "acknowledgements", label: "Acknowledgements" },
+  { value: "role_handoffs", label: "Role handoffs" },
+];
+
+function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId: string; moderatorId: string; botAckEnabled: boolean }) {
   const [communities, setCommunities] = React.useState<CommunityDeploymentRow[] | null>(null);
   const [chatInput, setChatInput] = React.useState("");
   const [expanded, setExpanded] = React.useState(false);
@@ -4149,6 +4158,14 @@ function ModeratorCommunities({ panelId, moderatorId }: { panelId: string; moder
   const toggle = async (deploymentId: string, enabled: boolean) => {
     setBusy(true); setMsg(null);
     const res = await setDeploymentEnabled(panelId, moderatorId, deploymentId, enabled);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    await refresh();
+  };
+
+  const changeBotAckMode = async (communityId: string, mode: "off" | "reactions_only" | "acknowledgements" | "role_handoffs") => {
+    setBusy(true); setMsg(null);
+    const res = await setCommunityBotAckMode(panelId, communityId, mode);
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
     await refresh();
@@ -4203,6 +4220,19 @@ function ModeratorCommunities({ panelId, moderatorId }: { panelId: string; moder
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {botAckEnabled && (
+                <select
+                  value={c.botAckMode}
+                  onChange={(e) => changeBotAckMode(c.communityId, e.target.value as "off" | "reactions_only" | "acknowledgements" | "role_handoffs")}
+                  disabled={busy}
+                  className="text-[11px] fp-panel-raised border fp-line-soft rounded-lg px-2 py-1 fp-text-dim outline-none focus:fp-gold-border disabled:opacity-60"
+                  title="Allow Innvil moderators in this community to acknowledge each other"
+                >
+                  {BOT_ACK_MODE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              )}
               <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.enabled ? "fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-faint"}`}>
                 {c.enabled ? "Active" : "Paused"}
               </span>
