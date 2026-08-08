@@ -14,6 +14,15 @@
 > commission architecture, Natural Chatter response-selection logic (unless
 > needed for shared retrieval), or link moderation behavior.
 >
+> **IMPORTANT UPDATE (same day, appended below as "AUTO-POSTING UPDATE"):** the
+> publishing model in §13–15/§24 above is superseded/clarified — there is NO
+> generic Innvil publishing bot. Each Virtual Moderator/ModeratorDeployment is
+> itself the visible publisher, with its own configured posting window
+> (e.g. Mika 05:00–12:00, Kaleb 13:00–17:00, Alex 18:00–22:00), publishing at
+> most one auto-generated post per window per local community day, at a
+> RANDOM time that must be generated once and PERSISTED (never re-rolled per
+> cron tick). Read that section before implementing scheduling/publishing.
+>
 > Related, separate note: the user also asked (same conversation) to make the
 > `aiprimetech.io` proxy the AI **fallback** once a real Anthropic key is
 > available, with direct Anthropic as primary — see `innvil-ai-provider-fallback`
@@ -1077,3 +1086,877 @@ In the final report include:
 - grounding safeguards
 - tests added
 - typecheck/test/build results
+
+---
+
+# AUTO-POSTING UPDATE — Per-Moderator Posting Windows (same day, supersedes §13–15/§24 above)
+
+> **Status: NOTED — not implemented yet.** This is a critical correction to the
+> base spec above, given verbatim. The core rule: **the AI Virtual Moderators
+> themselves are the visible Telegram publishers — there is no separate generic
+> Innvil publishing bot.** Read this section in full before implementing any
+> scheduling/publishing code from the base spec's §13–15/§24.
+
+IMPORTANT AUTO-POSTING UPDATE
+
+The AI Virtual Moderators themselves are the visible Telegram publishers.
+
+Do NOT create a separate generic Innvil publishing bot.
+
+Each scheduled content window belongs to a specific Virtual Moderator / ModeratorDeployment, and the content must be published using that moderator's subscriber-owned managed Telegram bot credential.
+
+Example configuration:
+
+Moderator 1 — Mika
+Posting window:
+05:00 → 12:00
+
+Moderator 2 — Kaleb
+Posting window:
+13:00 → 17:00
+
+Moderator 3 — Alex
+Posting window:
+18:00 → 22:00
+
+Each moderator may publish AT MOST ONE auto-generated post inside its assigned window for that local community day.
+
+Innvil chooses the actual publish time randomly within the configured window.
+
+==================================================
+1. VISIBLE PUBLISHER
+==================================================
+
+Auto-generated Telegram content must be published by the selected AI Moderator.
+
+Example:
+
+Mika's scheduled slot
+→ generate content using shared Project Knowledge
+→ publish through Mika's managed-bot token
+→ Telegram visibly shows Mika as sender
+
+Kaleb's slot
+→ publish through Kaleb's managed-bot token
+
+Do NOT use:
+
+TELEGRAM_MANAGER_BOT_TOKEN
+
+for community publishing.
+
+Manager Bot remains provisioning/control-plane infrastructure only.
+
+==================================================
+2. SCHEDULE MODEL
+==================================================
+
+Allow subscriber to configure one or more moderator posting windows.
+
+Conceptually:
+
+AutoPostWindow {
+    communityId
+    moderatorDeploymentId
+    startLocalTime
+    endLocalTime
+    enabled
+}
+    
+Example:
+
+Mika:
+05:00 - 12:00
+
+Kaleb:
+13:00 - 17:00
+
+Alex:
+18:00 - 22:00
+
+Use actual repository naming conventions.
+
+==================================================
+3. ONE POST MAXIMUM PER WINDOW
+==================================================
+
+Each configured window represents:
+
+AT MOST ONE successful scheduled publication
+per local community day.
+
+Do NOT interpret:
+
+05:00 - 12:00
+
+as permission to repeatedly post throughout those seven hours.
+
+It means:
+
+choose one eligible time somewhere inside that window
+→ generate/publish one post
+→ window is complete for the day
+
+==================================================
+4. RANDOM TIME WITHIN WINDOW
+==================================================
+
+For each local community day, select a random scheduled time inside the configured window.
+
+Example:
+
+configured:
+05:00 - 12:00
+
+possible generated schedule:
+
+today:
+08:17
+
+tomorrow:
+10:42
+
+next day:
+06:28
+
+The exact time should vary naturally.
+
+Do not always publish at:
+05:00
+08:00
+12:00
+
+unless explicitly configured as a fixed-time schedule later.
+
+==================================================
+5. RANDOM TIME MUST BE PERSISTED
+==================================================
+
+CRITICAL:
+
+Do NOT calculate a new random time every time the scheduler runs.
+
+Bad implementation:
+
+cron runs every 5 minutes
+→ random() says "publish now?"
+→ eventually publishes
+
+This makes behavior unpredictable and can produce duplicates.
+
+Instead:
+
+generate one target timestamp for that window/day
+→ persist it
+→ scheduler checks against that persisted timestamp
+
+Conceptually:
+
+AutoPostOccurrence {
+    autoPostWindowId
+    localDate
+    scheduledFor
+    status
+    generatedContentId?
+    publishedAt?
+}
+
+Unique:
+
+autoPostWindowId + localDate
+
+This guarantees one occurrence per window/day.
+
+==================================================
+6. IDEMPOTENCY
+==================================================
+
+The scheduler may run repeatedly.
+
+Example:
+
+cron every 5 minutes.
+
+At 08:15:
+scheduledFor = 08:17
+→ do nothing
+
+At 08:20:
+scheduledFor <= now
+→ execute occurrence
+
+If cron retries again:
+
+status = published
+→ do nothing
+
+A window/day must never publish twice because of:
+
+- cron retries
+- Vercel retries
+- database retries
+- duplicate jobs
+- Telegram timeout ambiguity
+
+Use database-level/idempotent protection where appropriate.
+
+==================================================
+7. COMMUNITY LOCAL TIMEZONE
+==================================================
+
+Posting windows use the COMMUNITY'S LOCAL TIMEZONE.
+
+Example:
+
+Community timezone:
+Asia/Manila
+
+Mika:
+05:00 - 12:00
+
+means:
+
+05:00-12:00 Asia/Manila
+
+not UTC.
+
+Reuse the same timezone semantics used for:
+
+- proactive moderator quota
+- reactive trial quota
+- local community day
+
+==================================================
+8. WINDOWS CROSSING MIDNIGHT
+==================================================
+
+Support or explicitly validate overnight windows.
+
+Example:
+
+22:00 → 02:00
+
+If supported:
+
+treat it as one logical posting window crossing midnight.
+
+If the existing scheduler cannot safely support this yet:
+
+reject such configuration with a clear validation message rather than implementing ambiguous behavior.
+
+Do NOT accidentally treat:
+
+22:00 → 02:00
+
+as invalid negative duration and schedule incorrectly.
+
+==================================================
+9. WINDOW OVERLAP
+==================================================
+
+Allow multiple moderators to have different windows.
+
+If windows overlap:
+
+Mika:
+08:00 - 12:00
+
+Kaleb:
+10:00 - 14:00
+
+both can technically have one occurrence.
+
+However, Community Coordinator / posting scheduler should avoid unnatural near-simultaneous publications.
+
+Add a configurable or reasonable minimum spacing between automated content posts in the same community.
+
+Example:
+
+Mika scheduled 10:51
+Kaleb scheduled 10:58
+
+Do not publish both seven minutes apart if the configured pacing policy says they should be spaced.
+
+Resolve collision safely, preferably when occurrences are generated.
+
+==================================================
+10. DO NOT RANDOMIZE MODERATOR IDENTITY
+==================================================
+
+If the subscriber assigns:
+
+05:00-12:00 → Mika
+
+then Mika publishes that occurrence.
+
+Do not randomly choose another moderator.
+
+The user is explicitly assigning:
+
+moderator
++
+time window
+
+==================================================
+11. SHARED PROJECT KNOWLEDGE
+==================================================
+
+Each moderator's auto-post generation uses the same authoritative tenant Project Knowledge system defined previously.
+
+Knowledge may include:
+
+- overview
+- website
+- whitepaper
+- docs
+- FAQs
+- roadmap
+- products
+- official links
+- project facts
+- approved announcements
+
+Auto-post content should be grounded in that knowledge.
+
+The moderator's PERSONALITY affects how the post is written.
+
+Conceptually:
+
+Shared Project Knowledge
+        +
+Mika's Persona
+        ↓
+Mika's Telegram post
+
+Shared Project Knowledge
+        +
+Kaleb's Persona
+        ↓
+Kaleb's Telegram post
+
+Therefore different moderators may naturally have different voices while remaining factually consistent.
+
+==================================================
+12. MODERATOR ROLE MAY INFLUENCE TOPIC
+==================================================
+
+Where moderator roles/personas exist, use them intelligently.
+
+Example:
+
+Mika:
+community host
+
+May publish:
+- onboarding
+- community reminders
+- friendly project explanations
+
+Kaleb:
+technical specialist
+
+May publish:
+- technical features
+- whitepaper explanations
+- protocol concepts
+
+Alex:
+news/community specialist
+
+May publish:
+- approved ecosystem information
+- project resources
+
+Do NOT fabricate role-specific facts.
+
+All factual claims still come from Project Knowledge.
+
+==================================================
+13. CONTENT SHOULD NOT BE PRE-GENERATED TOO EARLY
+==================================================
+
+Be careful about generating content days in advance.
+
+Knowledge may change before publication.
+
+Preferred behavior:
+
+schedule/persist the occurrence time in advance
+
+but generate the actual content reasonably close to execution time.
+
+Conceptually:
+
+Day begins
+→ create today's occurrence
+→ scheduledFor = 08:17
+
+08:17 arrives
+→ retrieve CURRENT Project Knowledge
+→ generate content
+→ validate
+→ publish
+
+This helps prevent stale content.
+
+==================================================
+14. GENERATION FAILURE
+==================================================
+
+If generation fails at the scheduled time:
+
+do NOT immediately mark the occurrence as published.
+
+Use state such as:
+
+scheduled
+generating
+generated
+publishing
+published
+failed
+
+or repository-equivalent states.
+
+Allow bounded retry.
+
+Do not produce multiple different Telegram posts because generation was retried.
+
+==================================================
+15. PUBLISH FAILURE
+==================================================
+
+If content was generated successfully but Telegram publishing fails:
+
+retain the generated content.
+
+Retry publishing that SAME content when appropriate.
+
+Do not regenerate another post on every publish retry.
+
+This avoids:
+
+attempt 1 → Post A
+attempt 2 → Post B
+attempt 3 → Post C
+
+for one scheduled occurrence.
+
+==================================================
+16. MISSED WINDOW
+==================================================
+
+Define explicit behavior if the system is unavailable until after the window ends.
+
+Example:
+
+Mika:
+05:00 - 12:00
+
+scheduledFor:
+09:37
+
+system recovers:
+14:00
+
+Preferred initial behavior:
+
+SKIP the missed occurrence
+
+rather than posting outside the subscriber's configured window.
+
+Record:
+
+status = missed
+
+Do not suddenly publish all missed automated posts at once.
+
+Allow product configuration later if catch-up publishing is desired.
+
+==================================================
+17. SCHEDULE EDITS
+==================================================
+
+If subscriber changes a future window:
+
+05:00-12:00
+→
+07:00-10:00
+
+future occurrences should follow the updated schedule.
+
+For today's already-created occurrence:
+
+define predictable behavior.
+
+Preferred:
+
+if occurrence has NOT published and its scheduled time has not passed:
+→ recalculate once according to updated window
+
+if already published:
+→ leave history unchanged
+
+Avoid creating a second occurrence for the same window/day.
+
+==================================================
+18. DISABLING AUTO-POST
+==================================================
+
+If subscriber disables:
+
+Auto-Posting
+
+or disables that specific window before execution:
+
+pending occurrence should not publish.
+
+Mark/cancel it appropriately.
+
+Do not delete historical publication records.
+
+==================================================
+19. MODERATOR DEPLOYMENT MUST BE ACTIVE
+==================================================
+
+Before publishing verify:
+
+- VirtualModerator still exists
+- ModeratorDeployment is ACTIVE
+- Telegram integration is valid
+- community still matches deployment
+- managed-bot credential is available
+- Auto-Posting entitlement still permits execution
+- window remains enabled
+
+If any prerequisite fails:
+
+do not publish.
+
+==================================================
+20. PUBLISH AS THE ASSIGNED MODERATOR
+==================================================
+
+The outbound action must use:
+
+assigned ModeratorDeployment
+        ↓
+its TelegramBotIntegration
+        ↓
+encrypted subscriber managed-bot credential
+        ↓
+Telegram sendMessage/sendPhoto/etc.
+
+Never infer bot identity from username.
+
+Use stored Telegram bot ID / integration relationship.
+
+==================================================
+21. CONTENT HISTORY ACROSS MODERATORS
+==================================================
+
+Duplicate-content prevention should be COMMUNITY-wide, not only per moderator.
+
+Example:
+
+Mika posted yesterday:
+
+"Here's what our staking feature does..."
+
+Kaleb should not publish effectively the same explanation today just because Kaleb is a different bot.
+
+Check recent community Auto-Post history across all Innvil moderators deployed there.
+
+==================================================
+22. NATURAL MULTI-MODERATOR FEEL
+==================================================
+
+The system should feel like several human moderators taking different shifts.
+
+Example:
+
+08:37 — Mika:
+friendly educational post
+
+15:12 — Kaleb:
+technical explanation
+
+20:41 — Alex:
+community/resource post
+
+Not:
+
+08:00 Mika
+08:01 Kaleb
+08:02 Alex
+
+Use scheduling windows and collision spacing to preserve natural pacing.
+
+==================================================
+23. DO NOT COUNT AUTO-POST AS CHATTER
+==================================================
+
+Scheduled Auto-Posting is separate from:
+
+reactiveResponseDailyLimit = 20
+
+and separate from:
+
+proactiveDailyLimit = 2
+
+A successfully scheduled Auto-Post consumes its own Auto-Posting entitlement/usage only.
+
+Do NOT subtract it from:
+
+reactive chatter quota
+or
+proactive engagement quota
+
+==================================================
+24. TRIAL REMAINS EXCLUDED
+==================================================
+
+Keep the previously approved trial policy:
+
+7-Day Full AI Mod Trial
+
+does NOT include:
+
+- AI Auto-Posting
+- scheduled content generation
+- automatic content publishing
+
+Do not enable these schedule windows for trial merely because the trial moderator exists.
+
+Use entitlement architecture.
+
+==================================================
+25. UI
+==================================================
+
+Provide a natural schedule editor following existing Innvil UX.
+
+Conceptually:
+
+AUTO-POSTING
+
+Moderator
+[Mika ▼]
+
+Posting Window
+From [05:00]
+To   [12:00]
+
+[X] Enabled
+
++ Add posting window
+
+Then:
+
+Moderator
+[Kaleb ▼]
+
+From [13:00]
+To   [17:00]
+
+Moderator
+[Alex ▼]
+
+From [18:00]
+To   [22:00]
+
+Helper text:
+
+"Each moderator will publish once at a random time within its assigned window."
+
+Do not imply the bot posts continuously during that range.
+
+==================================================
+26. OPTIONAL PREVIEW
+==================================================
+
+If easy within current architecture, show:
+
+Mika
+05:00-12:00
+1 post/day
+
+Kaleb
+13:00-17:00
+1 post/day
+
+Alex
+18:00-22:00
+1 post/day
+
+Do NOT expose the exact random scheduled minute far in advance unless product UX intentionally wants that.
+
+The point is for posting to feel natural rather than mechanically scheduled.
+
+==================================================
+27. VALIDATION
+==================================================
+
+Validate:
+
+- start/end values
+- valid timezone
+- moderator is actually deployed in selected community
+- user has permission to configure it
+- entitlement permits Auto-Posting
+
+Do not allow assigning a Virtual Moderator that is not deployed in that community.
+
+==================================================
+28. REQUIRED TESTS
+==================================================
+
+TEST 1
+
+Mika window:
+05:00-12:00
+
+Generate daily occurrence.
+
+Expected:
+scheduledFor lies inside that local-time window.
+
+TEST 2
+
+Scheduler runs repeatedly during window.
+
+Expected:
+one successful publication maximum.
+
+TEST 3
+
+Mika:
+05:00-12:00
+
+Kaleb:
+13:00-17:00
+
+Expected:
+each gets its own one-per-window occurrence.
+
+TEST 4
+
+Three moderators / three windows.
+
+Expected:
+maximum three scheduled posts that day,
+one from each assigned moderator.
+
+TEST 5
+
+Cron retries after successful publish.
+
+Expected:
+no duplicate Telegram message.
+
+TEST 6
+
+Generation succeeds, publish fails.
+
+Expected:
+retry same generated content,
+not generate endless replacements.
+
+TEST 7
+
+Window expires before service recovers.
+
+Expected:
+mark missed / skip,
+do not dump late posts.
+
+TEST 8
+
+Subscriber disables window before publish.
+
+Expected:
+no publication.
+
+TEST 9
+
+ModeratorDeployment becomes inactive.
+
+Expected:
+no publication.
+
+TEST 10
+
+Telegram username changes but integration bot ID remains same.
+
+Expected:
+correct moderator still publishes.
+
+TEST 11
+
+Two windows randomly schedule posts very close together.
+
+Expected:
+community-level spacing/collision policy prevents unnatural cluster.
+
+TEST 12
+
+Recent Mika post and candidate Kaleb post are semantically duplicated.
+
+Expected:
+regenerate/select another topic or skip according to policy.
+
+TEST 13
+
+Project knowledge changes before scheduledFor.
+
+Expected:
+content generation uses current knowledge at execution time.
+
+TEST 14
+
+Trial tenant attempts Auto-Posting.
+
+Expected:
+entitlement rejects it.
+
+TEST 15
+
+Reactive response quota = 20/20.
+
+Expected:
+paid Auto-Posting remains unaffected.
+
+==================================================
+29. PRODUCT INVARIANT
+==================================================
+
+The subscriber experience should be:
+
+"I have three AI moderators taking different content shifts."
+
+Example:
+
+Mika
+→ sometime between 5 AM and 12 PM
+→ exactly one post
+
+Kaleb
+→ sometime between 1 PM and 5 PM
+→ exactly one post
+
+Alex
+→ sometime between 6 PM and 10 PM
+→ exactly one post
+
+Each post:
+
+- comes visibly from that AI moderator
+- reflects that moderator's personality
+- uses the same authoritative Project Knowledge
+- uses the subscriber-owned managed bot
+- occurs once within the configured window
+- does not duplicate another moderator's recent content
+
+Do not turn this into a generic central publishing account.
+
+The AI moderators themselves are the publishers.
