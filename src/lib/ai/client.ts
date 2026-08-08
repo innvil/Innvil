@@ -57,14 +57,34 @@ export function aiConfigured(): boolean {
   return Boolean(apiKey());
 }
 
+/**
+ * Callers on a hard platform deadline (e.g. the Telegram webhook route's
+ * `maxDuration = 30`) need the AI call to fail well before that deadline, not
+ * hang until the whole function gets killed — a killed function never runs
+ * its own catch/fallback logic, so a hung fetch here silently drops the
+ * request with no error logged anywhere but Vercel's own runtime dashboard.
+ */
+const AI_REQUEST_TIMEOUT_MS = 20_000;
+
 /** POST JSON for AI providers. */
 async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
-  console.log("AI URL:", url);
-  return await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`AI provider request timed out after ${AI_REQUEST_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function anthropicComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
