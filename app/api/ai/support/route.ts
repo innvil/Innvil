@@ -27,7 +27,7 @@ export async function POST(req: Request) {
     const prep = await prepareCustomerSupport(panelId, messages);
     if (!prep.ok) return NextResponse.json({ error: prep.error }, { status: 400 });
 
-    const stream = await aiStream({ system: prep.system, messages: prep.messages, maxTokens: 500 });
+    const stream = await aiStream({ system: prep.system, messages: prep.messages, maxTokens: 500, effort: "low", disableThinking: true });
     return new Response(stream, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Unexpected error." }, { status: 500 });

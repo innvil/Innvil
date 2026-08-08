@@ -74,7 +74,15 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
     const raw = await aiComplete({
       system: buildSystemPrompt(input),
       messages: [{ role: "user", content: userContent }],
-      maxTokens: 80,
+      // Claude 5's adaptive thinking spends part of maxTokens on invisible
+      // reasoning before any reply text -- a short casual chat message needs
+      // none of that, so thinking is disabled and effort kept low (both the
+      // budget AND the visible reply are latency-sensitive here), with a
+      // maxTokens well above the ~20-word target so the reply is never cut
+      // off mid-sentence (MAX_REPLY_CHARS still caps the final display length).
+      maxTokens: 200,
+      effort: "low",
+      disableThinking: true,
     });
     const text = raw.trim();
     if (!text || text.toUpperCase() === NO_REPLY_SENTINEL || text.toUpperCase().startsWith(NO_REPLY_SENTINEL)) {

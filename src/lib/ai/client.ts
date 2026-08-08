@@ -44,6 +44,16 @@ export interface AiCompleteOptions {
   maxTokens?: number;
   model?: string;
   temperature?: number;
+  /** Claude 5 models default to adaptive thinking at "high" effort — the
+   *  thinking tokens come out of the SAME max_tokens budget as the visible
+   *  reply, so a small max_tokens meant for a short chat reply can get
+   *  silently consumed by invisible reasoning before any answer text is
+   *  emitted. For latency-sensitive, low-complexity replies (chat/support),
+   *  pass "low" so the model doesn't reason more than the task warrants. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** Skips adaptive thinking entirely — for replies with no real reasoning
+   *  need, so the whole max_tokens budget goes to the visible answer. */
+  disableThinking?: boolean;
 }
 
 function apiKey(): string | undefined {
@@ -122,6 +132,8 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
     model,
     max_tokens: opts.maxTokens ?? 1024,
     ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
+    ...(opts.effort ? { effort: opts.effort } : {}),
+    ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
     system: opts.system,
     messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
   });
@@ -207,7 +219,16 @@ export async function aiStream(opts: AiCompleteOptions): Promise<ReadableStream<
     : { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", ...(isCustom ? { authorization: `Bearer ${key}` } : {}) };
   const body = isOpenai
     ? { model, max_tokens: opts.maxTokens ?? 1024, stream: true, ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}), messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))] }
-    : { model, max_tokens: opts.maxTokens ?? 1024, stream: true, ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}), system: opts.system, messages: opts.messages.map((m) => ({ role: m.role, content: m.content })) };
+    : {
+        model,
+        max_tokens: opts.maxTokens ?? 1024,
+        stream: true,
+        ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
+        ...(opts.effort ? { effort: opts.effort } : {}),
+        ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
+        system: opts.system,
+        messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
+      };
 
   const res = await fetch(url, {
     method: "POST",

@@ -228,7 +228,7 @@ export async function ownerAssistantReply(panelId: string, history: AiMessage[])
   const prep = await prepareOwnerAssistant(panelId, history);
   if (!prep.ok) return { ok: false, error: prep.error };
   try {
-    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600 });
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600, effort: "low", disableThinking: true });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error. Try again in a moment." };
@@ -274,7 +274,7 @@ export async function globalAssistantReply(history: AiMessage[]): Promise<Assist
   const prep = await prepareGlobalAssistant(history);
   if (!prep.ok) return { ok: false, error: prep.error };
   try {
-    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600 });
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600, effort: "low", disableThinking: true });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error. Try again in a moment." };
