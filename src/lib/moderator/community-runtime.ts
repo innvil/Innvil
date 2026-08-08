@@ -118,14 +118,27 @@ async function classifySender(admin: SupabaseClient, panelId: string, communityI
   };
 }
 
+/**
+ * Records the inbound message AND doubles as the cross-bot claim for it —
+ * platform_message_id is assigned per-chat by Telegram (not per-bot), so
+ * when several Innvil-managed bots are deployed in the same community with
+ * Group Privacy Mode off, every one of them receives the SAME real message
+ * on their OWN webhook independently. Without a claim, each webhook call
+ * would go on to independently run bot-ack/chatter and could each execute
+ * an action — confirmed live as a double-send (the same bot posting its own
+ * reply twice back-to-back). The unique index on (community_id,
+ * platform_message_id) (migration 0049) makes whichever webhook call reaches
+ * this insert first the sole owner of processing this message; every other
+ * one gets a conflict and must stop before touching bot-ack/chatter.
+ */
 async function recordCommunityMessage(
   admin: SupabaseClient,
   panelId: string,
   communityId: string,
   message: TelegramMessage,
   sender: CommunityEvent["sender"]
-) {
-  await admin.from("community_messages").insert({
+): Promise<{ claimed: boolean }> {
+  const { error } = await admin.from("community_messages").insert({
     panel_id: panelId,
     community_id: communityId,
     platform_message_id: String(message.message_id),
@@ -136,6 +149,9 @@ async function recordCommunityMessage(
     text: message.text ?? message.caption ?? "",
     reply_to_platform_message_id: message.reply_to_message ? String(message.reply_to_message.message_id) : null,
   });
+  if (!error) return { claimed: true };
+  if (error.code === "23505") return { claimed: false }; // another bot's webhook already claimed this message
+  throw new Error(`recordCommunityMessage failed: ${error.message}`);
 }
 
 /**
@@ -544,7 +560,12 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
 
   // Bounded recent-context log — recorded regardless of which capability (if
   // any) is active; both bot-ack correlation and chatter context need it.
-  await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
+  // Also the cross-bot claim (see recordCommunityMessage's doc comment): if
+  // another deployed bot's webhook already recorded this exact message,
+  // this call is a redundant observation of the same real Telegram message —
+  // stop here so bot-ack/chatter never runs (and never sends) twice for it.
+  const { claimed } = await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
+  if (!claimed) return;
 
   if (sender.senderType === "INNVIL_MODERATOR" && sender.deploymentId) {
     if (!virtualModBotAcknowledgement(settings)) return;
