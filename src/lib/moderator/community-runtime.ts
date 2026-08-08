@@ -138,6 +138,62 @@ async function recordCommunityMessage(
   });
 }
 
+/**
+ * Resolves the TRUE origin/interactionDepth of the message currently being
+ * classified, instead of assuming every inbound event is a fresh HUMAN-
+ * equivalent one. A bot-ack SEND_TEXT reply is delivered to every OTHER
+ * bot's webhook as an ordinary new message — Telegram gives no signal that
+ * it was itself an acknowledgement — so without this lookup the coordinator's
+ * hard loop-prevention gates (`origin === "BOT_ACK"`, `interactionDepth >=
+ * MAX_BOT_INTERACTION_DEPTH`) are unreachable: they'd always see origin
+ * HUMAN/depth 0. `recordBotAckReply` (below) is what populates the row this
+ * reads — only for SEND_TEXT acks, keyed by the outbound message's own
+ * platform_message_id (shared across every bot in the chat, since Telegram
+ * message IDs are per-chat, not per-recipient). Ordinary messages (human,
+ * natural-chatter replies, proactive posts) never get an `origin` row, so
+ * this safely defaults to HUMAN/0 for everything else.
+ */
+export async function resolveEventOrigin(admin: SupabaseClient, communityId: string, platformMessageId: string): Promise<{ origin: CommunityEvent["origin"]; interactionDepth: number }> {
+  const { data } = await admin
+    .from("community_messages")
+    .select("origin, interaction_depth")
+    .eq("community_id", communityId)
+    .eq("platform_message_id", platformMessageId)
+    .not("origin", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!data?.origin) return { origin: "HUMAN", interactionDepth: 0 };
+  return { origin: data.origin as CommunityEvent["origin"], interactionDepth: data.interaction_depth ?? 0 };
+}
+
+/** Persists the provenance of a bot-ack SEND_TEXT reply so resolveEventOrigin
+ *  can recognize it when another bot's webhook re-classifies this same
+ *  message. REACT actions never call this — a reaction isn't delivered as a
+ *  new "message" update, so there's nothing for another webhook to
+ *  re-classify and no loop risk to guard against. */
+async function recordBotAckReply(
+  admin: SupabaseClient,
+  panelId: string,
+  communityId: string,
+  sentMessageId: string,
+  action: Extract<CommunityAction, { kind: "SEND_TEXT" }>
+) {
+  await admin.from("community_messages").insert({
+    panel_id: panelId,
+    community_id: communityId,
+    platform_message_id: sentMessageId,
+    sender_type: "INNVIL_MODERATOR",
+    sender_platform_id: null,
+    sender_display_name: null,
+    deployment_id: action.targetDeploymentId,
+    text: action.text,
+    reply_to_platform_message_id: action.replyToMessageId ?? null,
+    origin: action.origin,
+    interaction_depth: action.interactionDepth,
+  });
+}
+
 /* ------------------------------------------------------- bot acknowledgement ---- */
 
 interface DeploymentStateRow {
@@ -441,6 +497,12 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
 
   const sender = await classifySender(admin, integration.panel_id, community.id, message.from);
 
+  // Resolves whether THIS message is itself a bot-ack reply another
+  // deployment sent — Telegram gives no such signal on the update itself,
+  // so without this lookup every inbound event defaulted to HUMAN/depth 0,
+  // making the coordinator's loop-prevention gates unreachable in practice.
+  const { origin, interactionDepth } = await resolveEventOrigin(admin, community.id, String(message.message_id));
+
   const event: CommunityEvent = {
     panelId: integration.panel_id,
     communityId: community.id,
@@ -450,13 +512,8 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     timestamp: new Date().toISOString(),
     text: message.text ?? message.caption ?? "",
     replyToMessageId: message.reply_to_message ? String(message.reply_to_message.message_id) : null,
-    // Neither Proactive Mode nor a way to mark a moderator's own message as
-    // BOT_ACK-originated exists on the INBOUND side yet — inbound events are
-    // always treated as origin HUMAN-equivalent. BOT_ACK is only ever set on
-    // the OUTBOUND action this runtime produces (coordinator.ts), which is
-    // what actually prevents the loop (spec §8/§9).
-    origin: "HUMAN",
-    interactionDepth: 0,
+    origin,
+    interactionDepth,
     causationMessageId: null,
   };
 
@@ -464,24 +521,17 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // any) is active; both bot-ack correlation and chatter context need it.
   await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
 
-  // TEMPORARY diagnostic logging — natural chatter is confirmed working
-  // end-to-end; keep this one until bot-ack is also live-tested (currently
-  // blocked on trial capacity — needs 2 communities). No secrets/tokens logged.
-  console.log("[telegram/community] update classified", {
-    senderType: sender.senderType,
-    hasDeploymentId: !!sender.deploymentId,
-    botAckEnabled: virtualModBotAcknowledgement(settings),
-    naturalChatterEnabled: virtualModNaturalChatterActive(settings),
-  });
-
   if (sender.senderType === "INNVIL_MODERATOR" && sender.deploymentId) {
     if (!virtualModBotAcknowledgement(settings)) return;
     const eligibleTargets = await loadEligibleTargets(admin, community.id, sender.deploymentId);
     const action = decideBotAcknowledgement({ event, botAckMode: community.bot_ack_mode, eligibleTargets, now: new Date() });
     await logBotAckDecision(admin, integration.panel_id, community.id, event, action);
     if (action.kind === "IGNORE") return;
-    await executeAction(admin, String(message.chat.id), action);
+    const sent = await executeAction(admin, String(message.chat.id), action);
     await recordBotAck(admin, action.targetDeploymentId, new Date());
+    if (action.kind === "SEND_TEXT" && sent.sentMessageId) {
+      await recordBotAckReply(admin, integration.panel_id, community.id, sent.sentMessageId, action);
+    }
     return;
   }
 
