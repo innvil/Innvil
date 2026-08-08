@@ -2286,6 +2286,40 @@ win over this):**
   current capacity. The entitlement *unit* was already right; only the table's numbers
   needed correcting. New tests in `plan.test.ts` pin the corrected per-tier values.
 
+### Phase 4.O: Bot-to-Bot delivery correction + Telegram AI Moderator onboarding automation (NOTED, not built)
+
+> **Live bot-ack delivery test (2026-08-08) failed** — a message sent directly through
+> Kwan's bot token to the shared test community never reached Test's webhook (not in
+> `community_messages`, no fresh delivery attempt in `getWebhookInfo`), despite both
+> bots being confirmed admins in that chat. **Corrected diagnosis:** this is NOT a
+> platform-level "bots can't see other bots' messages" block — Telegram officially
+> supports **Bot-to-Bot Communication Mode**, a per-bot BotFather setting, independent
+> of admin status and independent of Group Privacy Mode. The supported configuration
+> for Innvil's bot-ack feature needs all three, set per participating bot: (1)
+> Bot-to-Bot Communication Mode ON in @BotFather, (2) Group Privacy Mode OFF, (3) admin
+> in the target chat. Changing Group Privacy Mode may require removing/re-adding the
+> bot to the group for Telegram to apply it. **Do not modify bot-ack Coordinator/
+> classification code until delivery is re-verified live with these Telegram-side
+> settings actually configured** — the existing loop-prevention/classification
+> architecture (`MAX_BOT_INTERACTION_DEPTH=1`, numeric-bot-ID classification, origin
+> metadata) is believed correct; the blocker was Telegram-side configuration.
+> **Full verbatim spec (source of truth):** `docs/moderator/telegram-bot-to-bot-onboarding-spec.md`.
+>
+> **Second, larger, NOTED-not-built piece in the same file:** automate the Telegram-side
+> setup for deploying an AI Moderator, to the extent Telegram's official API actually
+> allows — an official add-to-group deep link with suggested (least-privilege,
+> feature-driven) admin rights the user confirms in Telegram itself; guided @BotFather
+> steps for Bot-to-Bot Communication Mode + Group Privacy Mode when bot-ack is enabled
+> (never faked/auto-configured — Telegram exposes no supported API for a manager bot to
+> flip these on a managed bot, so this stays user-guided unless that changes); and
+> **delivery-based verification** (`NOT_TESTED` → `READY_FOR_TEST` → `VERIFIED_BY_DELIVERY`
+> / `FAILED` — never show "verified" just because the user clicked "done"). Bot-ack setup
+> must never block the rest of a deployment (chatter/moderation/Q&A/auto-posting all work
+> without it) and must never be forced on subscribers who don't want moderator-to-moderator
+> interaction. `/start` (private + `startgroup` deep-link) is in scope as a setup/status
+> touchpoint — never counted as chatter, never trusting Telegram username as identity,
+> never disclosing tenant data to an unrelated user who sends `/start`.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
