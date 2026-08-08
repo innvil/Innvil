@@ -114,6 +114,18 @@ test("a NEW substantive directed question is still engaged even right after the 
   assert.equal(result.proceed, true);
 });
 
+test("a genuinely new, substantive AMBIENT question right after the bot replied is dampened to MEDIUM, not blanket-silenced -- it isn't the same message as whatever was just answered", () => {
+  const result = single({ text: "does anyone know why this happened?", isDirectedAtBot: false, recentlyAnsweredByModerator: true, random: FAVORABLE });
+  assert.equal(result.priority, "MEDIUM");
+  assert.equal(result.proceed, true);
+});
+
+test("a trivial AMBIENT follow-up right after the bot replied still stays hard-silenced -- that one really is just redundant chatter", () => {
+  const result = single({ text: "ok", isDirectedAtBot: false, recentlyAnsweredByModerator: true, random: FAVORABLE });
+  assert.equal(result.proceed, false);
+  assert.equal(result.reasonCode, "NO_ELIGIBLE_CANDIDATE");
+});
+
 test('ambient greeting ("good morning everyone") -> MEDIUM, may or may not respond depending on pacing/RNG, per spec §14', () => {
   const favorable = single({ text: "good morning everyone", isDirectedAtBot: false, random: FAVORABLE });
   const unfavorable = single({ text: "good morning everyone", isDirectedAtBot: false, random: UNFAVORABLE });

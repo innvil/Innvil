@@ -48,7 +48,15 @@ const DIRECTED_WEIGHT = 5;
 const QUESTION_WEIGHT = 3;
 const SUBSTANTIVE_WEIGHT = 1;
 const TRIVIAL_PENALTY = -3;
-const RECENTLY_ANSWERED_PENALTY = -4;
+// "Recently answered" only means "the message right before this one, in this
+// same thread, came from a moderator" — it does NOT mean "this new message is
+// about the same thing." A trivial follow-up right then ("ok", "lol",
+// "thanks") really is redundant chatter and should stay hard-silenced. A
+// genuinely new, substantive question right then is NOT redundant just
+// because a moderator happens to have spoken a moment ago — it should be
+// dampened (a beat of hesitation is natural), not blanket-silenced.
+const RECENTLY_ANSWERED_PENALTY_TRIVIAL = -3;
+const RECENTLY_ANSWERED_PENALTY_SUBSTANTIVE = -2;
 
 /** Only MEDIUM is a real coin flip. LOW never engages (score alone decided
  *  it); VERY_HIGH always engages; HIGH is near-certain — a small amount of
@@ -103,7 +111,9 @@ function scoreCandidate(input: {
   if (directed) score += DIRECTED_WEIGHT;
   if (input.likelyQuestion) score += QUESTION_WEIGHT;
   score += input.trivial ? TRIVIAL_PENALTY : SUBSTANTIVE_WEIGHT;
-  if (input.recentlyAnsweredByModerator) score += RECENTLY_ANSWERED_PENALTY;
+  if (input.recentlyAnsweredByModerator) {
+    score += input.trivial ? RECENTLY_ANSWERED_PENALTY_TRIVIAL : RECENTLY_ANSWERED_PENALTY_SUBSTANTIVE;
+  }
   const priority = priorityBand(score);
 
   const overParticipating = input.pacing.consecutiveMessages >= MAX_CONSECUTIVE_BOT_MESSAGES;
