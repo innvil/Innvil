@@ -122,3 +122,60 @@ export async function setIntegrationWebhook(botToken: string, integrationId: str
 export async function verifyBotToken(botToken: string): Promise<TelegramResult<{ id: number; username?: string; is_bot?: boolean }>> {
   return telegramApiCall(botToken, "getMe");
 }
+
+/* -------------------------------------------------------- community connect ---- */
+
+export interface TelegramChatInfo {
+  id: number;
+  title?: string;
+  username?: string;
+  type?: string;
+}
+
+export interface ChatMembershipResult {
+  chat: TelegramChatInfo;
+  present: boolean;
+  canSend: boolean;
+  canDelete: boolean;
+  canRestrict: boolean;
+}
+
+/** Accepts a numeric chat id ("-1001234567890") or a handle ("@name"/"name") and normalizes for the Telegram API. */
+export function normalizeChatIdInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (/^-?\d+$/.test(trimmed)) return trimmed;
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
+/**
+ * Verifies the given bot (by its OWN token) can see the target chat and
+ * reports its membership/admin capabilities there — used by "Connect
+ * Community" (spec: permissions are per-community, never inferred from
+ * token validity alone; least-privilege — don't require admin rights the
+ * deployment isn't configured to use).
+ */
+export async function checkChatMembership(botToken: string, chatIdOrHandle: string): Promise<TelegramResult<ChatMembershipResult>> {
+  const chatId = normalizeChatIdInput(chatIdOrHandle);
+  const chatRes = await telegramApiCall<TelegramChatInfo>(botToken, "getChat", { chat_id: chatId });
+  if (!chatRes.ok) return chatRes;
+
+  const meRes = await telegramApiCall<{ id: number }>(botToken, "getMe");
+  if (!meRes.ok) return meRes;
+
+  const memberRes = await telegramApiCall<{
+    status: string;
+    can_delete_messages?: boolean;
+    can_restrict_members?: boolean;
+    can_send_messages?: boolean;
+  }>(botToken, "getChatMember", { chat_id: chatId, user_id: meRes.result.id });
+  if (!memberRes.ok) return memberRes;
+
+  const status = memberRes.result.status;
+  const present = status !== "left" && status !== "kicked";
+  const isAdmin = status === "administrator" || status === "creator";
+  const canSend = present && (isAdmin || status === "member" || memberRes.result.can_send_messages === true);
+  const canDelete = isAdmin && memberRes.result.can_delete_messages === true;
+  const canRestrict = isAdmin && memberRes.result.can_restrict_members === true;
+
+  return { ok: true, result: { chat: chatRes.result, present, canSend, canDelete, canRestrict } };
+}

@@ -17,6 +17,7 @@ import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib
 import { hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon } from "@/src/lib/moderator/plan";
 import {
   buildManagedBotDeepLink,
+  checkChatMembership,
   getManagerBotUsername,
   setIntegrationWebhook,
   validateRequestedUsername,
@@ -307,5 +308,199 @@ export async function connectExistingBotToken(panelId: string, moderatorId: stri
     })
     .eq("id", moderatorId);
 
+  return { ok: true, data: null };
+}
+
+/* --------------------------------------------------------- Communities ---- */
+
+const DEPLOYABLE_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
+
+export interface DeploymentHealthInfo {
+  present: boolean;
+  canSend: boolean;
+  canDelete: boolean;
+  canRestrict: boolean;
+  checkedAt: string | null;
+}
+
+export interface CommunityDeploymentRow {
+  deploymentId: string;
+  communityId: string;
+  chatId: string;
+  handle: string | null;
+  title: string | null;
+  chatType: string | null;
+  enabled: boolean;
+  health: DeploymentHealthInfo;
+}
+
+/** Connect a bot-ready moderator to a Telegram community: verify presence/permissions with the
+ *  moderator's OWN bot token, then create (or attach to) the community + deployment. */
+export async function connectCommunity(panelId: string, moderatorId: string, chatIdOrHandle: string): Promise<Result<CommunityDeploymentRow>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+  if (!DEPLOYABLE_PROVISIONING_STATUSES.has(ctx.moderator.provisioning_status)) {
+    return { ok: false, error: "Connect this moderator's Telegram bot before adding a community." };
+  }
+  const trimmed = chatIdOrHandle.trim();
+  if (!trimmed) return { ok: false, error: "Enter a Telegram chat ID or @handle." };
+
+  const { data: integration } = await ctx.admin
+    .from("telegram_bot_integrations")
+    .select("id")
+    .eq("virtual_moderator_id", moderatorId)
+    .maybeSingle();
+  if (!integration) return { ok: false, error: "No Telegram bot connected for this moderator yet." };
+
+  const { data: tokenData, error: keyError } = await ctx.admin.rpc("get_telegram_bot_key", {
+    p_row: integration.id,
+    p_secret: providerKeySecret(),
+  });
+  const token = tokenData as string | null;
+  if (keyError || !token) return { ok: false, error: "Could not read this moderator's Telegram credential." };
+
+  const membership = await checkChatMembership(token, trimmed);
+  if (!membership.ok) return { ok: false, error: `Telegram couldn't verify that chat: ${membership.error}` };
+  if (!membership.result.present) return { ok: false, error: "This bot isn't a member of that chat yet — add it in Telegram first, then try again." };
+
+  const capacity = moderatorCapacity(ctx.panel.settings);
+  const { count: existingCommunityCount } = await ctx.admin
+    .from("communities")
+    .select("id", { count: "exact", head: true })
+    .eq("panel_id", panelId);
+  const { data: existingCommunity } = await ctx.admin
+    .from("communities")
+    .select("id")
+    .eq("panel_id", panelId)
+    .eq("platform", "telegram")
+    .eq("chat_id", String(membership.result.chat.id))
+    .maybeSingle();
+  if (!existingCommunity && (existingCommunityCount ?? 0) >= capacity.maxCommunities) {
+    return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
+  }
+
+  const { data: community, error: communityError } = await ctx.admin
+    .from("communities")
+    .upsert(
+      {
+        panel_id: panelId,
+        platform: "telegram",
+        chat_id: String(membership.result.chat.id),
+        handle: membership.result.chat.username ?? null,
+        title: membership.result.chat.title ?? null,
+        chat_type: membership.result.chat.type ?? null,
+      },
+      { onConflict: "panel_id,platform,chat_id" }
+    )
+    .select("id, chat_id, handle, title, chat_type")
+    .single();
+  if (communityError || !community) return { ok: false, error: communityError?.message ?? "Could not save the community." };
+
+  const { count: activeSlotCount } = await ctx.admin
+    .from("moderator_deployments")
+    .select("id", { count: "exact", head: true })
+    .eq("panel_id", panelId)
+    .eq("enabled", true);
+  const { data: existingDeployment } = await ctx.admin
+    .from("moderator_deployments")
+    .select("id, enabled")
+    .eq("moderator_id", moderatorId)
+    .eq("community_id", community.id)
+    .maybeSingle();
+  if (!existingDeployment && (activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
+    return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
+  }
+
+  const checkedAt = new Date().toISOString();
+  const health: DeploymentHealthInfo = {
+    present: membership.result.present,
+    canSend: membership.result.canSend,
+    canDelete: membership.result.canDelete,
+    canRestrict: membership.result.canRestrict,
+    checkedAt,
+  };
+
+  const { data: deployment, error: deploymentError } = await ctx.admin
+    .from("moderator_deployments")
+    .upsert(
+      { panel_id: panelId, moderator_id: moderatorId, community_id: community.id, enabled: true, health },
+      { onConflict: "moderator_id,community_id" }
+    )
+    .select("id")
+    .single();
+  if (deploymentError || !deployment) return { ok: false, error: deploymentError?.message ?? "Could not create the deployment." };
+
+  await ctx.admin.from("virtual_moderators").update({ provisioning_status: "active" }).eq("id", moderatorId);
+
+  return {
+    ok: true,
+    data: {
+      deploymentId: deployment.id,
+      communityId: community.id,
+      chatId: community.chat_id,
+      handle: community.handle,
+      title: community.title,
+      chatType: community.chat_type,
+      enabled: true,
+      health,
+    },
+  };
+}
+
+export async function listModeratorCommunities(panelId: string, moderatorId: string): Promise<CommunityDeploymentRow[]> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return [];
+  const { data } = await ctx.admin
+    .from("moderator_deployments")
+    .select("id, enabled, health, communities(id, chat_id, handle, title, chat_type)")
+    .eq("moderator_id", moderatorId)
+    .order("created_at", { ascending: true });
+  return ((data as Array<Record<string, unknown>>) ?? []).map((row) => {
+    const community = (Array.isArray(row.communities) ? row.communities[0] : row.communities) as
+      | { id: string; chat_id: string; handle: string | null; title: string | null; chat_type: string | null }
+      | null;
+    const health = (row.health as Partial<DeploymentHealthInfo>) ?? {};
+    return {
+      deploymentId: String(row.id),
+      communityId: community?.id ?? "",
+      chatId: community?.chat_id ?? "",
+      handle: community?.handle ?? null,
+      title: community?.title ?? null,
+      chatType: community?.chat_type ?? null,
+      enabled: row.enabled === true,
+      health: {
+        present: health.present ?? false,
+        canSend: health.canSend ?? false,
+        canDelete: health.canDelete ?? false,
+        canRestrict: health.canRestrict ?? false,
+        checkedAt: health.checkedAt ?? null,
+      },
+    };
+  });
+}
+
+/** Pause a deployment (spec §51) — stops it consuming an Active Mod Slot without deleting config/memory. */
+export async function setDeploymentEnabled(panelId: string, moderatorId: string, deploymentId: string, enabled: boolean): Promise<Result<null>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+
+  if (enabled) {
+    const capacity = moderatorCapacity(ctx.panel.settings);
+    const { count: activeSlotCount } = await ctx.admin
+      .from("moderator_deployments")
+      .select("id", { count: "exact", head: true })
+      .eq("panel_id", panelId)
+      .eq("enabled", true);
+    if ((activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
+      return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
+    }
+  }
+
+  const { error } = await ctx.admin
+    .from("moderator_deployments")
+    .update({ enabled })
+    .eq("id", deploymentId)
+    .eq("moderator_id", moderatorId);
+  if (error) return { ok: false, error: error.message };
   return { ok: true, data: null };
 }

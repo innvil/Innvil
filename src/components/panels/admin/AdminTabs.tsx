@@ -15,7 +15,8 @@ import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-
 import {
   listVirtualModerators, getModeratorPlanInfo, createVirtualModerator,
   requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
-  type VirtualModeratorRow, type ModeratorPlanInfo,
+  connectCommunity, listModeratorCommunities, setDeploymentEnabled,
+  type VirtualModeratorRow, type ModeratorPlanInfo, type CommunityDeploymentRow,
 } from "@/src/lib/actions/moderator";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
@@ -4113,6 +4114,109 @@ function TelegramConnectRow({
       )}
 
       {rowMsg && <p className={`text-xs mt-2 ${rowMsg.error ? "text-red-400" : "fp-safe"}`}>{rowMsg.text}</p>}
+
+      {CONNECTED_PROVISIONING_STATUSES.has(status) && (
+        <ModeratorCommunities panelId={panelId} moderatorId={moderator.id} />
+      )}
+    </div>
+  );
+}
+
+function ModeratorCommunities({ panelId, moderatorId }: { panelId: string; moderatorId: string }) {
+  const [communities, setCommunities] = React.useState<CommunityDeploymentRow[] | null>(null);
+  const [chatInput, setChatInput] = React.useState("");
+  const [expanded, setExpanded] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const refresh = React.useCallback(async () => {
+    setCommunities(await listModeratorCommunities(panelId, moderatorId));
+  }, [panelId, moderatorId]);
+
+  React.useEffect(() => { void refresh(); }, [refresh]);
+
+  const connect = async () => {
+    setBusy(true); setMsg(null);
+    const res = await connectCommunity(panelId, moderatorId, chatInput);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setChatInput("");
+    setExpanded(false);
+    setMsg({ text: `Connected to ${res.data.title ?? res.data.handle ?? res.data.chatId}.` });
+    await refresh();
+  };
+
+  const toggle = async (deploymentId: string, enabled: boolean) => {
+    setBusy(true); setMsg(null);
+    const res = await setDeploymentEnabled(panelId, moderatorId, deploymentId, enabled);
+    setBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    await refresh();
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t fp-line-soft">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] fp-mono uppercase fp-text-faint">Communities</p>
+        {!expanded && (
+          <button onClick={() => setExpanded(true)} className="text-xs px-2.5 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
+            Connect community
+          </button>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="mt-2">
+          <div className="flex items-center gap-2">
+            <input
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder="@channel or -1001234567890"
+              className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+            />
+            <button onClick={connect} disabled={busy || !chatInput.trim()} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60">
+              {busy ? "Connecting&hellip;" : "Connect"}
+            </button>
+            <button onClick={() => setExpanded(false)} className="text-xs px-2.5 py-2 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
+              Cancel
+            </button>
+          </div>
+          <p className="text-[11px] fp-text-faint mt-1.5 leading-relaxed">
+            The bot must already be added to that Telegram group/channel — Innvil only verifies membership, it can&apos;t add itself.
+          </p>
+        </div>
+      )}
+
+      {msg && <p className={`text-xs mt-2 ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+
+      <div className="mt-2 space-y-1.5">
+        {communities === null ? (
+          <p className="text-xs fp-text-faint">Loading&hellip;</p>
+        ) : communities.length === 0 ? (
+          <p className="text-xs fp-text-faint">Not connected to any community yet.</p>
+        ) : communities.map((c) => (
+          <div key={c.deploymentId} className="flex items-center justify-between gap-2 fp-panel-raised border fp-line-soft rounded-lg px-2.5 py-1.5">
+            <div>
+              <p className="text-xs fp-text">{c.title ?? c.handle ?? c.chatId}</p>
+              <p className="text-[11px] fp-text-faint">
+                {c.handle ? `@${c.handle}` : c.chatId} &middot; {c.health.present ? (c.health.canDelete ? "admin" : "member") : "not present"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.enabled ? "fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-faint"}`}>
+                {c.enabled ? "Active" : "Paused"}
+              </span>
+              <button
+                onClick={() => toggle(c.deploymentId, !c.enabled)}
+                disabled={busy}
+                className="text-[11px] px-2 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-60"
+              >
+                {c.enabled ? "Pause" : "Resume"}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
