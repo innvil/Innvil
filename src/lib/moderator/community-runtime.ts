@@ -421,14 +421,19 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   await resetChatterStreak(admin, deployment.deploymentId); // a human just spoke — the bot's own streak (if any) is broken
 
   const pacing = await loadChatterPacing(admin, deployment.deploymentId);
-  const gate = evaluateChatterGate({ text: event.text, isDirectedAtBot: directed, pacing, now: new Date() });
+  // Loaded before the gate — this message was already recorded (recordCommunityMessage,
+  // called by the caller before branching here), so it's recentContext's LAST entry;
+  // the one before it (index length-2) is what "recentlyAnsweredByModerator" checks.
+  const recentContext = await loadRecentContext(admin, community.id, 10);
+  const recentlyAnsweredByModerator = recentContext.length >= 2 && recentContext[recentContext.length - 2].senderType === "INNVIL_MODERATOR";
+
+  const gate = evaluateChatterGate({ text: event.text, isDirectedAtBot: directed, pacing, now: new Date(), recentlyAnsweredByModerator });
 
   if (!gate.proceed) {
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", gate.reasonCode);
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", gate.reasonCode, { priority: gate.priority });
     return;
   }
 
-  const recentContext = await loadRecentContext(admin, community.id, 10);
   const generation = await generateChatterReply({
     moderatorName: deployment.moderatorName,
     persona: deployment.persona,
@@ -439,11 +444,11 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
 
   if (!generation.ok) {
     console.error("[telegram/community] chatter generation failed", generation.error);
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", "GENERATION_FAILED");
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", "GENERATION_FAILED", { priority: gate.priority });
     return;
   }
   if ("noReply" in generation) {
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", "MODEL_DECLINED");
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", "MODEL_DECLINED", { priority: gate.priority });
     return;
   }
 
@@ -458,7 +463,7 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   };
   const sent = await executeAction(admin, String(message.chat.id), action);
   await recordBotSpoke(admin, deployment.deploymentId, new Date());
-  await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "CHAT_REPLY", gate.reasonCode);
+  await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "CHAT_REPLY", gate.reasonCode, { priority: gate.priority });
 
   if (sent.sentMessageId) {
     await admin.from("community_messages").insert({

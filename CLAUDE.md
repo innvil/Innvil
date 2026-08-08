@@ -2165,27 +2165,41 @@ win over this):**
 >   panel burns supply); keep adding SaaS sinks to drive utility + holders.
 > - Branding: platform currency is *anvil* now → *ANVIL* the coin later (logo = the mark).
 
-### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement (NOTED, not built)
+### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement ((A) DONE v1.1.84, (B)–(F) NOTED)
 
 > Telegram-based AI community moderator add-on. Foundation already built and live in
 > this branch: Managed Bot provisioning (BotFather-token fallback + Telegram Managed
 > Bots deep-link flow), the free 7-day trial entitlement system, Connect Community +
 > `ModeratorDeployment`, Innvil Moderator Acknowledgement (bounded bot-to-bot ack
 > between Innvil moderators sharing a community, loop-proofed via `origin`/
-> `interactionDepth`), and Reactive Natural Chatter v1 (replies to human chat via a
-> deterministic pre-filter + `src/lib/ai/client.ts` generation) — confirmed working
-> live end-to-end. Architecture: Telegram adapter → `CommunityEvent` → Community
+> `interactionDepth`, verified live end-to-end incl. the loop-safety fix, v1.1.80),
+> and Reactive Natural Chatter (replies to human chat) — confirmed working live
+> end-to-end. Architecture: Telegram adapter → `CommunityEvent` → Community
 > Coordinator (`src/lib/moderator/coordinator.ts` / `chatter-coordinator.ts`) →
 > `CommunityAction` → Telegram adapter, orchestrated in `community-runtime.ts`.
-> **The next iteration is fully specified but NOT implemented** —
 > `docs/moderator/natural-chatter-refinement-spec.md` is the verbatim source-of-truth
-> spec (57 sections); implement FROM that file, not from this summary. Scope is
-> tightly bounded to 6 things:
-> - **(A) Reactive response selection/pacing** — replace the current 15%(ambient)/
->   75%(mentioned) random-roll model in `chatter-coordinator.ts` with contextual
->   priority scoring (mention/reply is a signal, not a requirement or a guarantee;
->   randomness only breaks ties in the ambiguous middle band, never overrides a
->   clearly high- or low-value message).
+> spec (57 sections); implement (B)–(F) FROM that file, not from this summary. Scope
+> is tightly bounded to 6 things:
+> - **(A) Reactive response selection/pacing — DONE (v1.1.84).** Replaced the flat
+>   15%(ambient)/75%(mentioned) random-roll model with **contextual social-action
+>   selection**, per explicit user correction: *"Do not model natural chatter
+>   primarily as 'response probability.' Model it as contextual social-action
+>   selection, where SILENCE is a first-class action... Randomness should only add
+>   variation between already-plausible actions; it should not decide whether an
+>   otherwise inappropriate response happens."* `chatter-coordinator.ts` now scores
+>   signals (directed/mention, question-shaped, substantive vs. trivial,
+>   recently-answered-by-moderator) into a priority band — LOW is a hard
+>   deterministic SILENCE (no RNG call at all), VERY_HIGH is a hard deterministic
+>   ENGAGE, and randomness only applies within MEDIUM/HIGH. Mention/reply is a
+>   strong signal (+5), never alone decisive — a trivial mention ("@bot lol") lands
+>   in the ambiguous MEDIUM band, not an automatic ~85%. **Not yet covered by (A):**
+>   multi-moderator response selection across >1 chatter-eligible deployment in one
+>   community (§15 of the spec — `findChatterDeployment` still resolves a single
+>   deployment regardless of how many are active); reactions/jokes/handoffs as
+>   distinct action types (stylistic variety is currently the LLM's own judgment;
+>   REACT-for-human-messages is Phase 4.P territory, not duplicated here); the
+>   quota-aware/business-knowledge-aware signals from §11 that depend on (B) or
+>   Phase 4.N.
 > - **(B) Trial reactive quota = 20/day** (successful sends only, per community per
 >   local community day, checked before AI generation) — separate from the existing
 >   2/day proactive quota; moderation enforcement never consumes or is blocked by it.

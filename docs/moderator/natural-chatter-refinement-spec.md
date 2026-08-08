@@ -1,10 +1,10 @@
 # Natural Chatter + Community Moderation Refinement Spec
 
-> Status: **NOTED — not implemented yet.** This is the source-of-truth spec for the
-> next Virtual Moderator iteration, captured verbatim as given so no fidelity is lost
-> before implementation. See the pointer in `CLAUDE.md` (Phase 4.M) for where this
-> sits in the roadmap. Do not implement from memory/paraphrase — implement from this
-> file.
+> Status: **(A) IMPLEMENTED (v1.1.84) — (B)–(F) still NOTED, not built.** This is
+> the source-of-truth spec for the next Virtual Moderator iteration, captured
+> verbatim as given so no fidelity is lost before implementation. See the pointer
+> in `CLAUDE.md` (Phase 4.M) for where this sits in the roadmap. Do not implement
+> (B)–(F) from memory/paraphrase — implement from this file.
 >
 > Scope boundary (§55 below): this patch is ONLY (A) reactive Natural Chatter
 > selection/pacing, (B) the 20/day trial reactive response entitlement, (C)
@@ -13,6 +13,25 @@
 > NOT touch bot provisioning, managed-bot credentials, provider ordering, billing,
 > trial duration, active mod slots, publishing, campaign generation, or unrelated
 > moderation features.
+>
+> **(A) implementation note (v1.1.84):** `chatter-coordinator.ts` was rewritten from
+> the flat 15%/75% probability gate into a contextual scoring model — signals
+> (directed, question-shaped, substantive vs. trivial, recently-answered-by-
+> moderator) combine into a priority band (LOW/MEDIUM/HIGH/VERY_HIGH); LOW is a
+> hard deterministic SILENCE (no RNG call), VERY_HIGH is a hard deterministic
+> ENGAGE, and randomness is confined to MEDIUM/HIGH only — per an explicit user
+> correction: "Do not model natural chatter primarily as 'response probability.'
+> Model it as contextual social-action selection, where SILENCE is a first-class
+> action... Randomness should only add variation between already-plausible
+> actions; it should not decide whether an otherwise inappropriate response
+> happens." Not yet built as part of (A): the full N-signal list from §11 (business/
+> persona relevance, community activity level, remaining quota — the last needing
+> (B)); multi-moderator selection across >1 chatter-eligible deployment per
+> community (§15) — `findChatterDeployment` still picks a single deployment
+> regardless of how many are active in a community; reactions/jokes/handoffs as
+> distinct action *types* (currently the LLM's own text-generation judgment
+> covers stylistic variety, and REACT-for-human-messages is Phase 4.P territory,
+> not duplicated here).
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 
