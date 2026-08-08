@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { getProviderCredentials, getMultiStatus } from "@/src/lib/providers";
+import { getProviderCredentials, getMultiStatus, getStatus } from "@/src/lib/providers";
 import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
 import { normalizeOrderLink } from "@/src/lib/orders/normalize-link";
 import type { OrderStatus } from "@/src/types/db";
@@ -14,19 +14,8 @@ import type { OrderStatus } from "@/src/types/db";
    Server-only; runs under the service role (cron or owner-triggered).
    ========================================================= */
 
-// Provider-bound orders we still poll. We now reconcile every order with a
-// provider order id so provider status changes can flow both ways.
-const SYNCABLE_STATUSES: OrderStatus[] = [
-  "pending",
-  "processing",
-  "in_progress",
-  "partial",
-  "completed",
-  "canceled",
-  "failed",
-  "refunded",
-  "duplicate",
-];
+// Pending-only reconciliation candidates for this patch.
+const PENDING_RECONCILE_STATUS: OrderStatus = "pending";
 
 const ACTIVE_STATUSES: OrderStatus[] = ["pending", "processing", "in_progress", "partial", "completed"];
 const TERMINAL_STATUSES: OrderStatus[] = ["canceled", "failed", "refunded"];
@@ -68,6 +57,45 @@ interface OpenOrder {
   provider_cost: number | null;
   customer_id: string;
   remains: number | null;
+}
+
+type SyncCandidateOrder = OpenOrder & {
+  provider_response: { held?: boolean } | null;
+};
+
+type ProviderStatusResult =
+  | { status: string; remains?: string; start_count?: string }
+  | { error: string }
+  | null
+  | undefined;
+
+export function isOrderEligibleForProviderStatusSync(order: {
+  status: OrderStatus;
+  provider_order_id: string | null | undefined;
+  provider_response?: { held?: boolean } | null;
+}): boolean {
+  if (order.status !== PENDING_RECONCILE_STATUS) return false;
+  const providerOrderId = String(order.provider_order_id ?? "").trim();
+  if (!providerOrderId) return false;
+  return true;
+}
+
+export function classifyProviderStatusReconciliation(
+  localStatus: OrderStatus,
+  providerResult: ProviderStatusResult
+): { kind: "unchanged" | "update"; nextStatus?: OrderStatus } {
+  if (!providerResult) return { kind: "unchanged" };
+  if ("error" in providerResult) return { kind: "unchanged" };
+
+  const next = mapProviderStatus(providerResult.status);
+  if (!next || next === localStatus) return { kind: "unchanged" };
+
+  // Safety: avoid regressing terminal local states to active statuses.
+  const localIsTerminal = TERMINAL_STATUSES.includes(localStatus) || localStatus === "completed";
+  const nextIsActive = ACTIVE_STATUSES.includes(next);
+  if (localIsTerminal && nextIsActive) return { kind: "unchanged" };
+
+  return { kind: "update", nextStatus: next };
 }
 
 // Orders held because the provider's own balance was too low auto-cancel + refund
@@ -588,12 +616,13 @@ export async function syncPanelOrders(
 
   const { data: orders } = await admin
     .from("orders")
-    .select("id, service_id, provider_id, provider_order_id, status, quantity, charge, provider_cost, customer_id, remains")
+    .select("id, service_id, provider_id, provider_order_id, status, quantity, charge, provider_cost, customer_id, remains, provider_response")
     .eq("panel_id", panelId)
-    .not("provider_order_id", "is", null)
-    .in("status", SYNCABLE_STATUSES);
+    .eq("status", PENDING_RECONCILE_STATUS)
+    .not("provider_order_id", "is", null);
 
-  const rawList = (orders as OpenOrder[] | null) ?? [];
+  const rawList = ((orders as SyncCandidateOrder[] | null) ?? [])
+    .filter((o) => isOrderEligibleForProviderStatusSync(o));
   console.info("[dup-debug][sync:provider-bound-orders]", {
     panelId,
     count: rawList.length,
@@ -614,12 +643,12 @@ export async function syncPanelOrders(
     }
   }
 
-  const list = rawList
+  const list: Array<SyncCandidateOrder & { provider_id: string }> = rawList
     .map((o) => ({
       ...o,
       provider_id: o.provider_id ?? (o.service_id ? (resolvedProviderByService.get(o.service_id) ?? null) : null),
     }))
-    .filter((o): o is OpenOrder & { provider_id: string } => !!o.provider_id);
+    .filter((o): o is SyncCandidateOrder & { provider_id: string } => !!o.provider_id);
 
   if (missingProviderRows.length) {
     const patchByProvider = new Map<string, string[]>();
@@ -664,46 +693,55 @@ export async function syncPanelOrders(
     const byProviderOrderId = new Map(group.map((o) => [String(o.provider_order_id), o]));
     let providerUpdated = 0;
     for (const ids of chunk([...byProviderOrderId.keys()], 100)) {
-      let resp;
+      let resp: Record<string, ProviderStatusResult> | null = null;
       try {
-        resp = await getMultiStatus(creds, ids);
+        const multi = await getMultiStatus(creds, ids);
+        const topLevelError =
+          multi && typeof multi === "object" && "error" in (multi as Record<string, unknown>);
+        if (topLevelError) {
+          // Some providers return a single top-level error for batch lookup.
+          // Fall back to per-order checks so other eligible orders can still reconcile.
+          resp = {};
+          for (const batch of chunk(ids, 10)) {
+            await Promise.all(batch.map(async (id) => {
+              try {
+                const single = await getStatus(creds, id);
+                resp![id] = single as ProviderStatusResult;
+              } catch {
+                resp![id] = null;
+              }
+            }));
+          }
+        } else {
+          resp = multi as Record<string, ProviderStatusResult>;
+        }
       } catch {
-        continue; // provider unreachable — try again next run
+        // Provider chunk request failed. Fall back to bounded single checks.
+        resp = {};
+        for (const batch of chunk(ids, 10)) {
+          await Promise.all(batch.map(async (id) => {
+            try {
+              const single = await getStatus(creds, id);
+              resp![id] = single as ProviderStatusResult;
+            } catch {
+              resp![id] = null;
+            }
+          }));
+        }
       }
 
-      for (const [pid, st] of Object.entries(resp)) {
+      for (const [pid, st] of Object.entries(resp ?? {})) {
         const o = byProviderOrderId.get(pid);
         if (!o || !st) continue;
 
         if ("error" in st) {
-          const reason = String(st.error || "Provider returned a status error");
-          if (isInsufficientProviderBalance(reason)) continue;
-          const { data: claimed } = await admin
-            .from("orders")
-            .update({
-              status: "refunded",
-              provider_response: { error: reason, synced: true },
-            })
-            .eq("id", o.id)
-            .eq("status", o.status)
-            .select("id")
-            .maybeSingle();
-          if (!claimed) continue;
-          await admin.rpc("apply_balance_change", {
-            p_customer: o.customer_id,
-            p_amount: Number(o.charge),
-            p_type: "refund",
-            p_reason: `Order ${o.id} provider status error`,
-          });
-          await admin
-            .from("order_status_history")
-            .insert({ order_id: o.id, status: "refunded", note: `Provider status error — auto-refunded. (${reason})` });
-          providerUpdated++;
+          // Status polling errors are not order failures. Keep local state unchanged.
           continue;
         }
 
-        const next = mapProviderStatus(st.status);
-        if (!next || next === o.status) continue;
+        const decision = classifyProviderStatusReconciliation(o.status, st);
+        if (decision.kind !== "update" || !decision.nextStatus) continue;
+        const next = decision.nextStatus;
 
         const finalStatus: OrderStatus = next === "failed" ? "refunded" : next;
   const fromTerminal = TERMINAL_STATUSES.includes(o.status);
