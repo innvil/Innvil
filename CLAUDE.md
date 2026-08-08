@@ -2192,14 +2192,23 @@ win over this):**
 >   deterministic SILENCE (no RNG call at all), VERY_HIGH is a hard deterministic
 >   ENGAGE, and randomness only applies within MEDIUM/HIGH. Mention/reply is a
 >   strong signal (+5), never alone decisive — a trivial mention ("@bot lol") lands
->   in the ambiguous MEDIUM band, not an automatic ~85%. **Not yet covered by (A):**
->   multi-moderator response selection across >1 chatter-eligible deployment in one
->   community (§15 of the spec — `findChatterDeployment` still resolves a single
->   deployment regardless of how many are active); reactions/jokes/handoffs as
->   distinct action types (stylistic variety is currently the LLM's own judgment;
->   REACT-for-human-messages is Phase 4.P territory, not duplicated here); the
->   quota-aware/business-knowledge-aware signals from §11 that depend on (B) or
->   Phase 4.N.
+>   in the ambiguous MEDIUM band, not an automatic ~85%. **Multi-moderator selection
+>   (§15) — DONE (v1.1.85).** `community-runtime.ts`'s `findChatterDeployment`
+>   (singular, `.limit(1)`) was replaced with `findChatterDeployments` (plural, no
+>   limit) — every active deployment in the community is now a candidate.
+>   `chatter-coordinator.ts` exports `selectChatterResponder`, which scores each
+>   candidate independently (pure, no RNG), picks AT MOST ONE winner (highest
+>   priority band, ties broken toward whoever's been quietest longest), and rolls
+>   the probability dice exactly once for that winner — never once per candidate
+>   (which would let several moderators all "coincidentally" reply to the same
+>   message). Also fixed a real pre-existing bug found during this work: pacing was
+>   read AFTER streaks were reset, making the dominating-conversation safeguard
+>   permanently unreachable — `handleHumanMessage` now loads every deployment's
+>   pacing before resetting any of them. **Still not covered by (A):**
+>   reactions/jokes/handoffs as distinct action types (stylistic variety is
+>   currently the LLM's own judgment; REACT-for-human-messages is Phase 4.P
+>   territory, not duplicated here); the quota-aware/business-knowledge-aware
+>   signals from §11 that depend on (B) or Phase 4.N.
 > - **(B) Trial reactive quota = 20/day** (successful sends only, per community per
 >   local community day, checked before AI generation) — separate from the existing
 >   2/day proactive quota; moderation enforcement never consumes or is blocked by it.

@@ -24,14 +24,25 @@
 > Model it as contextual social-action selection, where SILENCE is a first-class
 > action... Randomness should only add variation between already-plausible
 > actions; it should not decide whether an otherwise inappropriate response
-> happens." Not yet built as part of (A): the full N-signal list from §11 (business/
-> persona relevance, community activity level, remaining quota — the last needing
-> (B)); multi-moderator selection across >1 chatter-eligible deployment per
-> community (§15) — `findChatterDeployment` still picks a single deployment
-> regardless of how many are active in a community; reactions/jokes/handoffs as
-> distinct action *types* (currently the LLM's own text-generation judgment
-> covers stylistic variety, and REACT-for-human-messages is Phase 4.P territory,
-> not duplicated here).
+> happens."
+>
+> **Multi-moderator selection (§15) — IMPLEMENTED (v1.1.85).** `chatter-coordinator.ts`
+> exports `selectChatterResponder`, which scores every chatter-eligible deployment in
+> the community independently (pure `scoreCandidate`, no RNG), then picks AT MOST ONE
+> winner (highest priority band, ties broken toward whichever deployment has been
+> quietest longest) and rolls the probability dice exactly once for that winner —
+> never once per candidate. `community-runtime.ts`'s `findChatterDeployment` (singular,
+> `.limit(1)`) was replaced with `findChatterDeployments` (plural, no limit), and
+> `handleHumanMessage` now loads pacing for every active deployment (fixing a real
+> pre-existing bug where streaks were reset before pacing was read, making the
+> dominating-conversation safeguard unreachable), builds one `ChatterCandidate` per
+> deployment, and calls `selectChatterResponder` once per human message.
+>
+> Not yet built as part of (A): the full N-signal list from §11 (business/persona
+> relevance, community activity level, remaining quota — the last needing (B));
+> reactions/jokes/handoffs as distinct action *types* (currently the LLM's own
+> text-generation judgment covers stylistic variety, and REACT-for-human-messages is
+> Phase 4.P territory, not duplicated here).
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 
