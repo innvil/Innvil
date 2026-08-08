@@ -10,7 +10,7 @@ import "server-only";
    gateway (OpenRouter, Vercel AI Gateway, an Anthropic-style proxy, …) so you can
    plug in a third-party Claude key without touching feature code.
 
-   Env:
+   Env (primary):
      AI_API_KEY        the key (falls back to ANTHROPIC_API_KEY for back-compat)
      AI_PROVIDER       "anthropic" (default) | "openai"   (request protocol)
      AI_BASE_URL       endpoint origin override:
@@ -20,6 +20,13 @@ import "server-only";
                           NOTE: id format is provider-specific. Anthropic direct:
                           "claude-sonnet-5". OpenRouter: "anthropic/claude-sonnet-5".
                           Vercel AI Gateway: "anthropic/claude-sonnet-5".
+
+   Env (fallback, all optional): AI_FALLBACK_API_KEY / AI_FALLBACK_PROVIDER /
+   AI_FALLBACK_BASE_URL / AI_FALLBACK_MODEL — same shape as above. When the
+   primary call throws (including the per-request timeout below) AND a
+   fallback key is set, aiComplete retries once against the fallback
+   provider before giving up. No fallback key configured = no fallback
+   attempt, exactly today's single-provider behavior.
    ========================================================= */
 
 export const DEFAULT_AI_MODEL = process.env.AI_MODEL?.trim() || "claude-fable-5";
@@ -52,6 +59,17 @@ function providerConfig(): { provider: AiProvider; baseUrl: string } {
   return { provider, baseUrl };
 }
 
+function fallbackApiKey(): string | undefined {
+  return process.env.AI_FALLBACK_API_KEY?.trim().replace(/^['"]|['"]$/g, "") || undefined;
+}
+
+function fallbackProviderConfig(): { provider: AiProvider; baseUrl: string; model?: string } {
+  const provider: AiProvider = process.env.AI_FALLBACK_PROVIDER?.trim().toLowerCase() === "openai" ? "openai" : "anthropic";
+  const fallbackBase = provider === "openai" ? "https://openrouter.ai/api/v1" : "https://api.anthropic.com";
+  const baseUrl = (process.env.AI_FALLBACK_BASE_URL?.trim().replace(/\/+$/, "")) || fallbackBase;
+  return { provider, baseUrl, model: process.env.AI_FALLBACK_MODEL?.trim() || undefined };
+}
+
 /** Whether generation is wired up (a key is present). */
 export function aiConfigured(): boolean {
   return Boolean(apiKey());
@@ -63,8 +81,11 @@ export function aiConfigured(): boolean {
  * hang until the whole function gets killed — a killed function never runs
  * its own catch/fallback logic, so a hung fetch here silently drops the
  * request with no error logged anywhere but Vercel's own runtime dashboard.
+ * Sized so a primary timeout PLUS one fallback attempt (see aiComplete) still
+ * fits under a 30s caller deadline, with headroom for DB reads/writes and the
+ * outbound Telegram call around it.
  */
-const AI_REQUEST_TIMEOUT_MS = 20_000;
+const AI_REQUEST_TIMEOUT_MS = 12_000;
 
 /** POST JSON for AI providers. */
 async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
@@ -133,19 +154,37 @@ async function openaiComplete(baseUrl: string, key: string, model: string, opts:
   return (data.choices?.[0]?.message?.content ?? "").trim();
 }
 
-/** Single non-streaming completion. Returns the text, or throws. */
+async function completeOnce(provider: AiProvider, baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
+  const text = provider === "openai" ? await openaiComplete(baseUrl, key, model, opts) : await anthropicComplete(baseUrl, key, model, opts);
+  if (!text) throw new Error("Empty response from model.");
+  return text;
+}
+
+/** Single non-streaming completion. Tries the primary provider; on failure,
+ *  retries once against the fallback provider if one is configured. Returns
+ *  the text, or throws the primary's error (fallback failures are logged but
+ *  don't replace it, since the primary is almost always the more actionable
+ *  signal — a misconfigured key vs. a transient timeout look the same otherwise). */
 export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
   const key = apiKey();
   if (!key) throw new Error("No AI API key set (AI_API_KEY or ANTHROPIC_API_KEY).");
   const { provider, baseUrl } = providerConfig();
   const model = opts.model || DEFAULT_AI_MODEL;
 
-  const text = provider === "openai"
-    ? await openaiComplete(baseUrl, key, model, opts)
-    : await anthropicComplete(baseUrl, key, model, opts);
-
-  if (!text) throw new Error("Empty response from model.");
-  return text;
+  try {
+    return await completeOnce(provider, baseUrl, key, model, opts);
+  } catch (primaryErr) {
+    const fbKey = fallbackApiKey();
+    if (!fbKey) throw primaryErr;
+    const fb = fallbackProviderConfig();
+    console.error("[ai] primary provider failed, retrying via fallback:", primaryErr instanceof Error ? primaryErr.message : primaryErr);
+    try {
+      return await completeOnce(fb.provider, fb.baseUrl, fbKey, fb.model || model, opts);
+    } catch (fallbackErr) {
+      console.error("[ai] fallback provider also failed:", fallbackErr instanceof Error ? fallbackErr.message : fallbackErr);
+      throw primaryErr;
+    }
+  }
 }
 
 /**

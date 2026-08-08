@@ -2364,20 +2364,19 @@ BLOG_AI_MODEL=claude-sonnet-5
 #
 # --- To switch providers later: set AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL to
 #     the new provider, flip NEXT_PUBLIC_AI_STREAMING=true if it streams, redeploy. ---
+#
+# Fallback provider (optional). If the primary call fails or times out (12s
+# per-request cap — see AI_REQUEST_TIMEOUT_MS in client.ts), aiComplete retries
+# once against this provider before giving up. Same shape as the primary vars,
+# with an AI_FALLBACK_ prefix; a bare model override falls back to the
+# primary's model if unset. Current setup (2026-08-08): Anthropic direct is
+# PRIMARY (ANTHROPIC_API_KEY, AI_PROVIDER/AI_BASE_URL unset), aiprimetech.io is
+# the FALLBACK:
+AI_FALLBACK_API_KEY=your_aiprimetech_key
+AI_FALLBACK_BASE_URL=https://aiprimetech.io
+# AI_FALLBACK_PROVIDER=anthropic   # default; aiprimetech speaks Anthropic-style /v1/messages
+# AI_FALLBACK_MODEL=claude-sonnet-5
 ```
-
-> **NOTED, not implemented (2026-08-08):** currently running on the aiprimetech.io
-> proxy only (no real Anthropic key yet) — single-provider, no fallback logic exists
-> in `src/lib/ai/client.ts` today. Once a real `ANTHROPIC_API_KEY` is available, the
-> intended routing is **Anthropic direct as primary, aiprimetech proxy as fallback**
-> (not the reverse) — so a hiccup on the direct API doesn't take down blog/chatter/
-> support generation. This needs actual fallback code (try primary, catch, retry on
-> the secondary base URL/key) — `postJson`'s per-request timeout (v1.1.71) is a
-> prerequisite for this so a hung primary fails fast enough to fall back within the
-> caller's own deadline (e.g. the Telegram webhook's `maxDuration=30`). Also worth
-> setting `effort: "medium"` explicitly once on Sonnet 5 direct — it defaults to
-> `high`, and medium is the recommended cost/quality balance for blog generation,
-> scheduled content, and substantive Q&A per Phase 4.N's model-routing section.
 
 ---
 
