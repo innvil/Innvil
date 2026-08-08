@@ -26,7 +26,7 @@ import { runScheduledGeneration } from "@/src/lib/blog/generate";
    ========================================================= */
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 function isAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;

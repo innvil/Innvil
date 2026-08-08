@@ -9,6 +9,7 @@ import {
   fetchServices,
   ProviderError,
 } from "@/src/lib/providers";
+import { validateProviderApiBaseUrl } from "@/src/lib/providers/url-validation";
 import type { ProviderRow, ProviderStatus } from "@/src/types/db";
 import { round4 } from "@/src/lib/money";
 
@@ -109,12 +110,17 @@ export async function createProvider(input: ProviderInput): Promise<Result<{ id:
   if (!(await ownsPanel(admin, user.id, input.panelId)))
     return { ok: false, error: "Not authorized for this panel" };
 
+  const apiUrlCheck = validateProviderApiBaseUrl(input.apiUrl, {
+    requireHttps: process.env.NODE_ENV === "production",
+  });
+  if (!apiUrlCheck.ok) return { ok: false, error: apiUrlCheck.error };
+
   const { data, error } = await admin
     .from("providers")
     .insert({
       panel_id: input.panelId,
       name: input.name,
-      api_url: input.apiUrl,
+      api_url: apiUrlCheck.value,
       status: input.status ?? "active",
       currency: input.currency ?? "USD",
       notes: input.notes ?? null,
@@ -142,11 +148,20 @@ export async function updateProvider(
   const existing = await loadAuthorizedProvider(admin, user.id, providerId);
   if (!existing) return { ok: false, error: "Provider not found" };
 
+  let nextApiUrl: string | undefined;
+  if (patch.apiUrl !== undefined) {
+    const apiUrlCheck = validateProviderApiBaseUrl(patch.apiUrl, {
+      requireHttps: process.env.NODE_ENV === "production",
+    });
+    if (!apiUrlCheck.ok) return { ok: false, error: apiUrlCheck.error };
+    nextApiUrl = apiUrlCheck.value;
+  }
+
   const { error } = await admin
     .from("providers")
     .update({
       ...(patch.name !== undefined && { name: patch.name }),
-      ...(patch.apiUrl !== undefined && { api_url: patch.apiUrl }),
+      ...(nextApiUrl !== undefined && { api_url: nextApiUrl }),
       ...(patch.status !== undefined && { status: patch.status }),
       ...(patch.currency !== undefined && { currency: patch.currency }),
       ...(patch.notes !== undefined && { notes: patch.notes }),

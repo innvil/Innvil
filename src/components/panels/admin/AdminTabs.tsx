@@ -33,6 +33,10 @@ import {
   fetchProviderBalance, deleteProvider, updateProvider,
 } from "@/src/lib/actions/providers";
 import {
+  validateProviderApiBaseUrl,
+  PROVIDER_BASE_URL_HELPER_TEXT,
+} from "@/src/lib/providers/url-validation";
+import {
   listCatalog, fetchImportableServices, importServices,
   syncProviderServices, setServiceStatus, updateService, deleteService,
   recategorizeServices, bulkSetServiceStatus, bulkDeleteServices, bulkSetMarkup,
@@ -823,11 +827,18 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
       setFormError("Name and API URL are required.");
       return;
     }
+    const urlCheck = validateProviderApiBaseUrl(form.apiUrl, {
+      requireHttps: process.env.NODE_ENV === "production",
+    });
+    if (!urlCheck.ok) {
+      setFormError(urlCheck.error);
+      return;
+    }
     setSaving(true);
     const res = await createProvider({
       panelId,
       name: form.name.trim(),
-      apiUrl: form.apiUrl.trim(),
+      apiUrl: urlCheck.value,
       apiKey: form.apiKey.trim() || undefined,
       currency: form.currency.trim() || "USD",
     });
@@ -886,10 +897,17 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
       setEditError("Name and API URL are required.");
       return;
     }
+    const urlCheck = validateProviderApiBaseUrl(editForm.apiUrl, {
+      requireHttps: process.env.NODE_ENV === "production",
+    });
+    if (!urlCheck.ok) {
+      setEditError(urlCheck.error);
+      return;
+    }
     setUpdating(true);
     const res = await updateProvider(editingId, {
       name: editForm.name.trim(),
-      apiUrl: editForm.apiUrl.trim(),
+      apiUrl: urlCheck.value,
       apiKey: editForm.apiKey.trim() || undefined,
       currency: editForm.currency.trim() || "USD",
       status: editForm.status,
@@ -949,6 +967,7 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
             <div>
               <label className="fp-text-dim text-xs fp-mono uppercase">API URL</label>
               <input value={form.apiUrl} onChange={(e) => setForm({ ...form, apiUrl: e.target.value })} placeholder="https://provider.com/api/v2" type="url" inputMode="url" name="ll-provider-url" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" className={`${inputCls} mt-1.5 fp-mono`} />
+              <p className="fp-text-faint text-[11px] mt-1">{PROVIDER_BASE_URL_HELPER_TEXT}</p>
             </div>
             <div>
               <label className="fp-text-dim text-xs fp-mono uppercase">API key</label>
@@ -984,6 +1003,7 @@ export function ProvidersTab({ panelId }: { panelId: string }) {
             <div>
               <label className="fp-text-dim text-xs fp-mono uppercase">API URL</label>
               <input value={editForm.apiUrl} onChange={(e) => setEditForm({ ...editForm, apiUrl: e.target.value })} placeholder="https://provider.com/api/v2" type="url" inputMode="url" name="ll-provider-edit-url" autoComplete="off" data-lpignore="true" data-1p-ignore data-form-type="other" className={`${inputCls} mt-1.5 fp-mono`} />
+              <p className="fp-text-faint text-[11px] mt-1">{PROVIDER_BASE_URL_HELPER_TEXT}</p>
             </div>
             <div>
               <label className="fp-text-dim text-xs fp-mono uppercase">API key</label>
