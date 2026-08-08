@@ -14,7 +14,8 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib/moderator/domain";
-import { hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon } from "@/src/lib/moderator/plan";
+import { hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon, TRIAL_DURATION_DAYS } from "@/src/lib/moderator/plan";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildManagedBotDeepLink,
   checkChatMembership,
@@ -334,6 +335,43 @@ export interface CommunityDeploymentRow {
   health: DeploymentHealthInfo;
 }
 
+/**
+ * Starts the 7-day free trial (spec §45) the moment a panel's first
+ * ModeratorDeployment is about to go live, IF this owner account has never
+ * had one before. Idempotent/race-safe: moderator_trial_usage.owner_id is a
+ * primary key, so the insert either wins exactly once (grant it) or fails
+ * with a unique violation (already used, on this panel or another — no-op).
+ * Silently does nothing if the panel already has a paid tier or an active
+ * trial; capacity for that case is already correct.
+ */
+async function startModeratorTrialIfEligible(admin: SupabaseClient, ownerId: string, panelId: string, moderatorId: string): Promise<void> {
+  const { data: panel } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  const settings = (panel?.settings as Record<string, unknown>) ?? {};
+  if (hasVirtualModerator(settings)) return; // already entitled (paid tier or active trial) — nothing to grant
+
+  const now = new Date();
+  const endsAt = new Date(now.getTime() + TRIAL_DURATION_DAYS * 24 * 60 * 60_000);
+  const { error } = await admin.from("moderator_trial_usage").insert({
+    owner_id: ownerId,
+    panel_id: panelId,
+    virtual_moderator_id: moderatorId,
+    started_at: now.toISOString(),
+    ends_at: endsAt.toISOString(),
+  });
+  if (error) return; // this owner already has a trial on record (or a genuine DB error) — don't grant/modify anything
+
+  const addons = (settings.addons as Record<string, unknown>) ?? {};
+  const moderatorAddon = (addons.moderator as Record<string, unknown>) ?? {};
+  const nextSettings = {
+    ...settings,
+    addons: {
+      ...addons,
+      moderator: { ...moderatorAddon, trial: { startedAt: now.toISOString(), endsAt: endsAt.toISOString() } },
+    },
+  };
+  await admin.from("panels").update({ settings: nextSettings }).eq("id", panelId);
+}
+
 /** Connect a bot-ready moderator to a Telegram community: verify presence/permissions with the
  *  moderator's OWN bot token, then create (or attach to) the community + deployment. */
 export async function connectCommunity(panelId: string, moderatorId: string, chatIdOrHandle: string): Promise<Result<CommunityDeploymentRow>> {
@@ -363,7 +401,16 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
   if (!membership.ok) return { ok: false, error: `Telegram couldn't verify that chat: ${membership.error}` };
   if (!membership.result.present) return { ok: false, error: "This bot isn't a member of that chat yet — add it in Telegram first, then try again." };
 
-  const capacity = moderatorCapacity(ctx.panel.settings);
+  // Past all Telegram verification — this connection attempt is real, so this
+  // is the right moment to start the trial if this owner has never had one
+  // (spec §45: trial starts on the first deployment actually going live, not
+  // merely on moderator/draft creation). Re-fetch settings afterward so the
+  // capacity check below sees trial capacity on this very first call.
+  await startModeratorTrialIfEligible(ctx.admin, ctx.user.id, panelId, moderatorId);
+  const { data: freshPanel } = await ctx.admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  const currentSettings = freshPanel?.settings ?? ctx.panel.settings;
+
+  const capacity = moderatorCapacity(currentSettings);
   const { count: existingCommunityCount } = await ctx.admin
     .from("communities")
     .select("id", { count: "exact", head: true })
