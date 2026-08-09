@@ -89,6 +89,25 @@ function isCommunityOpener(text: string): boolean {
 const RESOLVED_ACK_RE = /\b(fixed|solved|working now|got it working|nvm|figured it out)\b/i;
 const LAUGH_RE = /\b(lol|lmao|haha+|lel|rofl)\b/i;
 const THANKS_RE = /\b(thanks|thank\s*you|thx|ty)\b/i;
+// A closing acknowledgement ("I see, okay.", "got it", "alright", "fair
+// enough") ends an exchange -- it deserves the same treatment as trivial
+// filler regardless of word count. Without this, "I see, okay." (3 words)
+// falls outside the <=2-word trivial heuristic and gets treated as a real
+// message worth continuing, producing exactly the support-chat habit of
+// tacking on "anything else on your mind?" after the human has already
+// signaled the conversation is done.
+const CLOSING_ACK_RE = /^(i\s+see,?\s*)?(ok(ay)?|alright|got\s*it|makes\s*sense|fair\s*enough|understood|noted|cool|sounds\s*good)[.!]*$/i;
+
+/** A human explicitly asking whether a DIFFERENT moderator is around
+ *  ("any other moderator who can respond here?", "anyone else?", "other
+ *  mod?") is a strong routing signal, not an ordinary question the
+ *  currently-active moderator should keep answering itself. Distinct from
+ *  an explicit @mention of a SPECIFIC other bot (handled by isDirectedAtBot
+ *  already) — this covers the generic "is anyone else here" case. */
+const OTHER_MODERATOR_RE = /\bother\s*mod(?:erator)?s?\b|\banother\s*mod(?:erator)?\b|\bany\s*(?:one|body)?\s*else\b|\bsomeone\s*else\b/i;
+function invitesOtherModerator(text: string): boolean {
+  return OTHER_MODERATOR_RE.test(text);
+}
 
 /** Deterministic reaction pick for a trivial acknowledgement — no LLM. */
 function reactionFor(text: string): string {
@@ -103,7 +122,7 @@ function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (isCommunityOpener(trimmed)) return "COMMUNITY_OPENER";
-  if (isTrivial(trimmed)) return "TRIVIAL";
+  if (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed)) return "TRIVIAL";
   if (isLikelyQuestion(trimmed)) return "QUESTION";
   return "SUBSTANTIVE";
 }
@@ -194,6 +213,22 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     candidateEligible(c.pacing, input.now, bypassesPacing(kind, c.isDirectedAtBot, c.wasLastSpeaker))
   );
 
+  // A human explicitly asking whether a DIFFERENT moderator is around takes
+  // priority over every other classification, including an active
+  // continuity thread — that's the exact opposite of what continuity should
+  // mean here. Excludes whoever's been carrying the conversation so far
+  // from the candidate pool (not merely deprioritizes them), so the
+  // currently-active moderator can't keep answering on a rival's behalf.
+  // Falls back to the full eligible pool only when no one else exists (a
+  // single-moderator community truthfully has no one else to hand off to).
+  if (invitesOtherModerator(trimmed) && input.candidates.length > 1) {
+    const others = eligible.filter((c) => !c.wasLastSpeaker);
+    const pool = others.length ? others : eligible;
+    const picked = pickCandidate(pool);
+    if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
+    return { type: "CASUAL_CHAT", deploymentId: picked.deploymentId, reasons: ["moderator_handoff_request"] };
+  }
+
   if (kind === "TRIVIAL") {
     if (RESOLVED_ACK_RE.test(trimmed)) {
       const picked = pickCandidate(eligible);
@@ -221,15 +256,30 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   }
 
   if (kind === "QUESTION") {
+    // Directed (an explicit @mention of THIS candidate) wins over mere
+    // continuity — a deliberate signal from the human beats "who was
+    // already talking." pickCandidate already orders directed > continuity
+    // > quietest-longest.
     const picked = pickCandidate(eligible);
     if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
     return { type: "ANSWER", deploymentId: picked.deploymentId, reasons: ["substantive_question", "requires_information"] };
   }
 
-  // SUBSTANTIVE — a non-question, non-trivial, non-opener statement.
-  const continuity = eligible.find((c) => c.wasLastSpeaker);
-  if (continuity) return { type: "CASUAL_CHAT", deploymentId: continuity.deploymentId, reasons: ["active_conversation_continuity"] };
-  const directed = eligible.find((c) => c.isDirectedAtBot);
-  if (directed) return { type: "CASUAL_CHAT", deploymentId: directed.deploymentId, reasons: ["directed_casual"] };
-  return { type: "SILENCE", reasons: ["low_social_priority"] };
+  // SUBSTANTIVE — a non-question, non-trivial, non-opener statement. Only
+  // engage when it's directed at a specific candidate or continues an
+  // active exchange with one — a plain ambient statement with neither
+  // signal is weak on its own and stays silent, same as before. When a
+  // signal DOES exist, pickCandidate's directed > continuity ordering
+  // decides who: an explicit mention of a specific other moderator must
+  // win over whoever merely spoke last.
+  if (!eligible.some((c) => c.isDirectedAtBot || c.wasLastSpeaker)) {
+    return { type: "SILENCE", reasons: ["low_social_priority"] };
+  }
+  const picked = pickCandidate(eligible);
+  if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
+  return {
+    type: "CASUAL_CHAT",
+    deploymentId: picked.deploymentId,
+    reasons: [picked.isDirectedAtBot ? "directed_casual" : "active_conversation_continuity"],
+  };
 }

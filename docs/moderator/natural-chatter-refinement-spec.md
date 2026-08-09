@@ -46,23 +46,49 @@
 > moderator acts, and never *who*: moderator selection is fully deterministic
 > (explicit mention → active-exchange continuity → quietest longest).
 >
-> **Multi-moderator selection (§15) — IMPLEMENTED (v1.1.85).** `chatter-coordinator.ts`
-> exports `selectChatterResponder`, which scores every chatter-eligible deployment in
-> the community independently (pure `scoreCandidate`, no RNG), then picks AT MOST ONE
-> winner (highest priority band, ties broken toward whichever deployment has been
-> quietest longest) and rolls the probability dice exactly once for that winner —
-> never once per candidate. `community-runtime.ts`'s `findChatterDeployment` (singular,
-> `.limit(1)`) was replaced with `findChatterDeployments` (plural, no limit), and
-> `handleHumanMessage` now loads pacing for every active deployment (fixing a real
-> pre-existing bug where streaks were reset before pacing was read, making the
-> dominating-conversation safeguard unreachable), builds one `ChatterCandidate` per
-> deployment, and calls `selectChatterResponder` once per human message.
+> **Multi-moderator selection (§15) — SUPERSEDED by v1.1.97's action model, still
+> correct.** `pickCandidate()` in `chatter-coordinator.ts` picks AT MOST ONE
+> deployment per human message, deterministically: an explicit @mention of one
+> specific moderator wins first, then whoever's actually mid an active exchange
+> (`wasLastSpeaker`), then whoever's been quietest longest. `findChatterDeployments`
+> (plural, no `.limit(1)`) loads every enabled deployment; `handleHumanMessage` loads
+> pacing for all of them before resetting any streak.
 >
-> Not yet built as part of (A): the full N-signal list from §11 (business/persona
-> relevance, community activity level, remaining quota — the last needing (B));
-> reactions/jokes/handoffs as distinct action *types* (currently the LLM's own
-> text-generation judgment covers stylistic variety, and REACT-for-human-messages is
-> Phase 4.P territory, not duplicated here).
+> **Moderator handoff + conversation-closing refinement — IMPLEMENTED (v1.1.98).**
+> Live-caught: one moderator (Kwan) answered six human messages in a row, including
+> fabricating "it's just me around" when a second moderator (Test) was genuinely
+> deployed and eligible, answering on Test's behalf even after an explicit
+> `@test1_mod_bot` mention, and tacking "anything else on your mind?" onto a plain
+> "I see, okay." — a support-chat habit, not natural closure.
+> - `invitesOtherModerator()` detects generic handoff requests ("any other
+>   moderator who can respond here?", "anyone else?", "someone else?") — when
+>   matched with 2+ deployed candidates, the candidate that's been carrying the
+>   conversation (`wasLastSpeaker`) is EXCLUDED (not merely deprioritized) from
+>   selection, forcing an alternate moderator to answer. Falls through to ordinary
+>   handling when only one moderator is deployed (nothing to hand off to).
+> - Fixed a real ordering bug found while building this: the `SUBSTANTIVE` branch
+>   checked `wasLastSpeaker` before `isDirectedAtBot`, so an explicit `@mention` of
+>   a *different*, non-speaking moderator still lost to whoever spoke last for any
+>   non-question statement. Now routes through the same `pickCandidate` (directed >
+>   continuity > quietest) used everywhere else.
+> - `CLOSING_ACK_RE` folds closing phrases ("I see, okay.", "got it", "alright",
+>   "fair enough", "makes sense") into the `TRIVIAL` classification regardless of
+>   word count (the existing `isTrivial` word-count heuristic missed these at 3+
+>   words) — right after a moderator reply, they resolve to `SILENCE`
+>   (`already_handled_recent_reply`) instead of prompting another reply.
+> - `chatter-generate.ts`'s prompts now carry `otherActiveModeratorNames` (the
+>   real, current deployment list) so a moderator can only reference another
+>   moderator's presence/absence grounded in that fact, never invented — plus an
+>   explicit "you are ONE SPECIFIC person, not a shared collective" identity line,
+>   and a rule against generic support-chat closers ("anything else on your
+>   mind?", "how can I help?") and manufacturing follow-up questions just to keep
+>   a closed exchange going.
+>
+> Not yet built: the full N-signal list from §11 (business/persona relevance,
+> community activity level, remaining quota — the last needing (B)); durable
+> per-moderator memory (§12-17 of the newest instruction) — there is currently no
+> durable moderator-memory system at all (Phase 4.N is still NOTED/not built), so
+> there is nothing to isolate yet; that becomes relevant once Phase 4.N exists.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 

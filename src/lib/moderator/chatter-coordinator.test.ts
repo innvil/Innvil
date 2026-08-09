@@ -266,6 +266,61 @@ test("selection spreads across moderators: the quietest eligible one is chosen w
   assert.equal(result.type === "CASUAL_CHAT" && result.deploymentId, DEPLOYMENT_B);
 });
 
+/* ------------------------------------------------- moderator handoff requests ---- */
+// Reproduces the exact live sequence that prompted this: Kwan answered six
+// messages in a row, including fabricating "it's just me around" when Test
+// was actually deployed and eligible, and answering on Test's behalf even
+// after an explicit @test1_mod_bot mention.
+
+test('REQUIRED: "any other moderator who can respond here?" excludes whoever has been carrying the conversation, even with no eligible-candidate-blocking pacing issue', () => {
+  const now = new Date();
+  const kwan = candidate("kwan", { wasLastSpeaker: true, pacing: { lastSpokeAt: new Date(now.getTime() - 15_000).toISOString(), consecutiveMessages: 1 } });
+  const test1 = candidate("test1", { pacing: { lastSpokeAt: new Date(now.getTime() - 3_600_000).toISOString(), consecutiveMessages: 0 } });
+  const result = selectChatterAction({ text: "any other moderator who can respond here?", candidates: [kwan, test1], now });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.equal(result.type === "CASUAL_CHAT" && result.deploymentId, "test1");
+  assert.ok(result.type === "CASUAL_CHAT" && result.reasons.includes("moderator_handoff_request"));
+});
+
+test('"anyone else?" also triggers moderator handoff, not just the literal phrase "other moderator"', () => {
+  const kwan = candidate("kwan", { wasLastSpeaker: true });
+  const test1 = candidate("test1");
+  const result = selectChatterAction({ text: "anyone else around?", candidates: [kwan, test1], now: new Date() });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.equal(result.type === "CASUAL_CHAT" && result.deploymentId, "test1");
+});
+
+test("a moderator-handoff request with only ONE moderator deployed has no one to exclude, so it's just an ordinary question that moderator answers -- not silenced, and not forced to fabricate that no one else exists", () => {
+  const result = single({ text: "is any other moderator around?", wasLastSpeaker: true });
+  assert.equal(result.type, "ANSWER");
+  assert.equal(result.type === "ANSWER" && result.deploymentId, DEPLOYMENT_A);
+});
+
+test('REQUIRED: an explicit @mention of a SPECIFIC different moderator wins over continuity even for a plain SUBSTANTIVE statement (not just a question) -- reproduces Kwan answering on test1_mod_bot\'s behalf after "@test1_mod_bot is here too"', () => {
+  const kwan = candidate("kwan", { wasLastSpeaker: true });
+  const test1 = candidate("test1", { isDirectedAtBot: true });
+  const result = selectChatterAction({ text: "nothing, just thought @test1_mod_bot is here too", candidates: [kwan, test1], now: new Date() });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.equal(result.type === "CASUAL_CHAT" && result.deploymentId, "test1");
+  assert.ok(result.type === "CASUAL_CHAT" && result.reasons.includes("directed_casual"));
+});
+
+/* --------------------------------------------------------- conversation closing ---- */
+
+test('REQUIRED: a closing acknowledgement ("I see, okay.") right after a moderator reply -> SILENCE, not a forced follow-up', () => {
+  const result = single({ text: "I see, okay.", recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["already_handled_recent_reply"]);
+});
+
+test('closing phrases like "got it" / "alright" / "fair enough" are treated as trivial regardless of word count', () => {
+  for (const text of ["got it", "alright", "fair enough", "makes sense", "sounds good"]) {
+    const result = single({ text });
+    assert.notEqual(result.type, "ANSWER");
+    assert.notEqual(result.type, "CASUAL_CHAT");
+  }
+});
+
 /* --------------------------------------------------- no legacy probability path ---- */
 
 test("REQUIRED: every action carries contextual reasons, and none of them is a probability/roll reason", () => {

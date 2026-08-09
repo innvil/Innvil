@@ -2208,9 +2208,29 @@ win over this):**
 >   pre-existing bug where pacing was read AFTER streaks were reset, making the
 >   dominating-conversation safeguard unreachable. **Conversational continuity
 >   (v1.1.95):** `wasLastSpeaker` keeps whoever's mid-exchange answering, instead of
->   a different moderator jumping in as if it were the subject. **Still not covered
->   by (A):** the quota-aware/business-knowledge-aware signals from §11 that depend
->   on (B) or Phase 4.N.
+>   a different moderator jumping in as if it were the subject. **Moderator
+>   handoff + closing tone (v1.1.98):** live-caught a second bug in the same
+>   family — one moderator (Kwan) answered six messages straight, fabricating
+>   "it's just me around" while a second deployed moderator (Test) sat idle, even
+>   answering FOR Test after an explicit `@test1_mod_bot` mention, then tacked
+>   "anything else on your mind?" onto a plain "I see, okay." `invitesOtherModerator()`
+>   detects generic handoff requests ("any other moderator who can respond here?",
+>   "anyone else?") and EXCLUDES the currently-speaking candidate from selection
+>   (not merely deprioritizes it) when 2+ moderators are deployed. Fixed the same
+>   directed-vs-continuity ordering bug in the `SUBSTANTIVE` branch specifically
+>   (it checked `wasLastSpeaker` before `isDirectedAtBot`) so an explicit mention of
+>   a different, non-speaking moderator now correctly wins for plain statements too,
+>   not just questions. `CLOSING_ACK_RE` folds "I see, okay." / "got it" / "alright"
+>   / "fair enough" into `TRIVIAL` regardless of word count (they were 3+ words,
+>   missing the existing `isTrivial` heuristic entirely) — right after a moderator
+>   reply these now resolve to `SILENCE`, not another reply. Generation prompts gained
+>   `otherActiveModeratorNames` (the real, current deployment list — a moderator can
+>   only reference another's presence/absence grounded in this fact, never invented)
+>   plus an explicit single-identity rule and a ban on generic support-chat closers.
+>   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
+>   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
+>   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not
+>   built — so there's nothing to isolate until that exists).
 > - **(B) Trial reactive quota = 20/day** (successful sends only, per community per
 >   local community day, checked before AI generation) — separate from the existing
 >   2/day proactive quota; moderation enforcement never consumes or is blocked by it.

@@ -496,6 +496,9 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
       recentContext,
       triggerMessage: { senderName: event.sender.displayName, text: event.text },
       isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
+      // Grounds the "don't fabricate another moderator's presence" prompt
+      // rule in actual deployment state, not the model's guess.
+      otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
     });
 
     if (!generation.ok) {
