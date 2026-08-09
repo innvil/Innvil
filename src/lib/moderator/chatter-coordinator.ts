@@ -48,6 +48,14 @@ const DIRECTED_WEIGHT = 5;
 const QUESTION_WEIGHT = 3;
 const SUBSTANTIVE_WEIGHT = 1;
 const TRIVIAL_PENALTY = -3;
+// A human continuing an active 1:1 exchange with THIS specific deployment
+// (no @mention needed — it's the natural next line in a thread this
+// candidate itself is part of) is a strong signal THIS candidate should
+// answer, not whichever OTHER deployment has simply been quietest. Without
+// this, the tie-break ("quietest longest") actively works against whoever's
+// actually mid-conversation, producing a visible bug: a different moderator
+// jumps in and answers as if IT were the one being addressed.
+const CONTINUITY_WEIGHT = 4;
 // "Recently answered" only means "the message right before this one, in this
 // same thread, came from a moderator" — it does NOT mean "this new message is
 // about the same thing," and it's especially NOT evidence that an ACTIVE,
@@ -94,6 +102,11 @@ function priorityBand(score: number): ChatterPriority {
 interface CandidateScore {
   eligible: boolean;
   priority: ChatterPriority;
+  /** Raw signal total, before banding — bands are coarse (e.g. both a
+   *  directed message and a continuity-boosted one can land in VERY_HIGH),
+   *  so this breaks ties WITHIN a band before falling back to "quietest
+   *  longest," instead of discarding a real scoring difference. */
+  score: number;
   hardBlockReason: "AVOID_DOMINATING_CONVERSATION" | "COOLDOWN" | null;
 }
 
@@ -101,6 +114,7 @@ interface CandidateScore {
  *  probability roll happens once, later, only for the overall winner. */
 function scoreCandidate(input: {
   isDirectedAtBot: boolean;
+  wasLastSpeaker: boolean;
   pacing: ChatterPacingState;
   now: Date;
   recentlyAnsweredByModerator?: boolean;
@@ -111,6 +125,7 @@ function scoreCandidate(input: {
 
   let score = 0;
   if (directed) score += DIRECTED_WEIGHT;
+  if (input.wasLastSpeaker) score += CONTINUITY_WEIGHT;
   if (input.likelyQuestion) score += QUESTION_WEIGHT;
   score += input.trivial ? TRIVIAL_PENALTY : SUBSTANTIVE_WEIGHT;
   if (input.recentlyAnsweredByModerator && input.trivial) {
@@ -128,16 +143,22 @@ function scoreCandidate(input: {
   // attentive human moderator still answers a real question even seconds
   // after they last spoke, they just don't keep chiming in on filler.
   const bypassPacing = directed || priority === "HIGH" || priority === "VERY_HIGH";
-  if (overParticipating && !bypassPacing) return { eligible: false, priority: "LOW", hardBlockReason: "AVOID_DOMINATING_CONVERSATION" };
-  if (cooldownActive && !bypassPacing) return { eligible: false, priority: "LOW", hardBlockReason: "COOLDOWN" };
+  if (overParticipating && !bypassPacing) return { eligible: false, priority: "LOW", score, hardBlockReason: "AVOID_DOMINATING_CONVERSATION" };
+  if (cooldownActive && !bypassPacing) return { eligible: false, priority: "LOW", score, hardBlockReason: "COOLDOWN" };
 
-  return { eligible: priority !== "LOW", priority, hardBlockReason: null };
+  return { eligible: priority !== "LOW", priority, score, hardBlockReason: null };
 }
 
 export interface ChatterCandidate {
   deploymentId: string;
   /** True if this message replies to THIS deployment's own previous message, or @mentions it. */
   isDirectedAtBot: boolean;
+  /** True if the message immediately before this one, in the community's
+   *  recent context, was sent by THIS deployment specifically — i.e. this
+   *  candidate is mid an active 1:1 exchange with the human. Without this,
+   *  ties break toward whoever's been quietest, which actively favors a
+   *  DIFFERENT moderator jumping into a conversation it wasn't part of. */
+  wasLastSpeaker: boolean;
   pacing: ChatterPacingState;
 }
 
@@ -184,6 +205,7 @@ export function selectChatterResponder(input: ChatterSelectionInput): ChatterSel
       candidate,
       score: scoreCandidate({
         isDirectedAtBot: candidate.isDirectedAtBot,
+        wasLastSpeaker: candidate.wasLastSpeaker,
         pacing: candidate.pacing,
         now: input.now,
         recentlyAnsweredByModerator: input.recentlyAnsweredByModerator,
@@ -195,17 +217,23 @@ export function selectChatterResponder(input: ChatterSelectionInput): ChatterSel
 
   if (scored.length === 0) return { proceed: false, deploymentId: null, reasonCode: "NO_ELIGIBLE_CANDIDATE", priority: "LOW" };
 
-  // Highest priority band wins. A direct mention of one specific moderator
-  // dominates via its score (+5), not a hardcoded "only the mentioned bot
-  // may answer" rule — an ambient VERY_HIGH-scoring candidate could still
-  // theoretically outrank a barely-directed one, which is the intended
-  // "signal, not requirement" behavior. Ties broken by whoever has been
-  // quietest longest, so engagement naturally spreads across moderators
-  // instead of always landing on the same one.
+  // Highest priority band wins first. A direct mention of one specific
+  // moderator dominates via its score (+5), not a hardcoded "only the
+  // mentioned bot may answer" rule — an ambient VERY_HIGH-scoring candidate
+  // could still theoretically outrank a barely-directed one, which is the
+  // intended "signal, not requirement" behavior. Bands are coarse though
+  // (e.g. both a directed message and a continuity-boosted one can land in
+  // VERY_HIGH) — within the same band, the higher RAW score wins next, so a
+  // real scoring difference isn't discarded just because both cleared the
+  // same threshold. Only a genuine tie in both band and raw score falls back
+  // to whoever has been quietest longest, so engagement naturally spreads
+  // across moderators instead of always landing on the same one.
   const priorityRank: Record<ChatterPriority, number> = { VERY_HIGH: 3, HIGH: 2, MEDIUM: 1, LOW: 0 };
   scored.sort((a, b) => {
     const byPriority = priorityRank[b.score.priority] - priorityRank[a.score.priority];
     if (byPriority !== 0) return byPriority;
+    const byScore = b.score.score - a.score.score;
+    if (byScore !== 0) return byScore;
     const aSpoke = a.candidate.pacing.lastSpokeAt ? new Date(a.candidate.pacing.lastSpokeAt).getTime() : 0;
     const bSpoke = b.candidate.pacing.lastSpokeAt ? new Date(b.candidate.pacing.lastSpokeAt).getTime() : 0;
     return aSpoke - bSpoke;

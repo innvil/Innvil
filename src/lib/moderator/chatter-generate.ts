@@ -16,6 +16,8 @@ export interface ChatterContextMessage {
   senderType: "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT";
   senderName: string | null;
   text: string;
+  /** Set only when senderType is INNVIL_MODERATOR — which deployment sent it. */
+  deploymentId?: string | null;
 }
 
 export interface GenerateChatterReplyInput {

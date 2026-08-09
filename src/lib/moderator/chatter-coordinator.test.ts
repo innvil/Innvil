@@ -15,6 +15,7 @@ const DEPLOYMENT_B = "deployment-b";
 function single(opts: {
   text: string;
   isDirectedAtBot: boolean;
+  wasLastSpeaker?: boolean;
   pacing?: ChatterPacingState;
   now?: Date;
   recentlyAnsweredByModerator?: boolean;
@@ -22,7 +23,7 @@ function single(opts: {
 }) {
   return selectChatterResponder({
     text: opts.text,
-    candidates: [{ deploymentId: DEPLOYMENT_A, isDirectedAtBot: opts.isDirectedAtBot, pacing: opts.pacing ?? freshPacing }],
+    candidates: [{ deploymentId: DEPLOYMENT_A, isDirectedAtBot: opts.isDirectedAtBot, wasLastSpeaker: opts.wasLastSpeaker ?? false, pacing: opts.pacing ?? freshPacing }],
     now: opts.now ?? new Date(),
     recentlyAnsweredByModerator: opts.recentlyAnsweredByModerator,
     random: opts.random,
@@ -138,8 +139,8 @@ test('ambient greeting ("good morning everyone") -> MEDIUM, may or may not respo
 
 test("Spec §15: with multiple eligible moderators, the Coordinator picks AT MOST ONE responder, never runs a roll per moderator", () => {
   const candidates: ChatterCandidate[] = [
-    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, pacing: freshPacing },
-    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, pacing: freshPacing },
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing },
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing },
   ];
   const result = selectChatterResponder({
     text: "does anyone know why my order is stuck?",
@@ -154,8 +155,8 @@ test("Spec §15: with multiple eligible moderators, the Coordinator picks AT MOS
 
 test("Spec §15: a direct mention of one specific moderator makes that deployment win over an ambient-only rival", () => {
   const candidates: ChatterCandidate[] = [
-    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: true, pacing: freshPacing }, // @mentioned
-    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, pacing: freshPacing }, // not mentioned
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: true, wasLastSpeaker: false, pacing: freshPacing }, // @mentioned
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing }, // not mentioned
   ];
   const result = selectChatterResponder({ text: "@mika_mod_bot lol", candidates, now: new Date(), random: FAVORABLE });
   assert.equal(result.proceed, true);
@@ -164,8 +165,8 @@ test("Spec §15: a direct mention of one specific moderator makes that deploymen
 
 test("Spec §15: if another moderator already answered, others normally stay silent for a low-value follow-up", () => {
   const candidates: ChatterCandidate[] = [
-    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, pacing: freshPacing },
-    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, pacing: freshPacing },
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing },
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing },
   ];
   const result = selectChatterResponder({
     text: "nice",
@@ -180,10 +181,39 @@ test("Spec §15: if another moderator already answered, others normally stay sil
 test("ties are broken toward whichever moderator has been quietest longest, spreading engagement rather than always picking the same one", () => {
   const now = new Date();
   const candidates: ChatterCandidate[] = [
-    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, pacing: { lastSpokeAt: new Date(now.getTime() - 60_000).toISOString(), consecutiveMessages: 0 } },
-    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, pacing: { lastSpokeAt: new Date(now.getTime() - 600_000).toISOString(), consecutiveMessages: 0 } }, // spoke longer ago
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, wasLastSpeaker: false, pacing: { lastSpokeAt: new Date(now.getTime() - 60_000).toISOString(), consecutiveMessages: 0 } },
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, wasLastSpeaker: false, pacing: { lastSpokeAt: new Date(now.getTime() - 600_000).toISOString(), consecutiveMessages: 0 } }, // spoke longer ago
   ];
   const result = selectChatterResponder({ text: "what does everyone think about this?", candidates, now, random: FAVORABLE });
+  assert.equal(result.proceed, true);
+  assert.equal(result.deploymentId, DEPLOYMENT_B);
+});
+
+test("a human continuing an active exchange with a SPECIFIC moderator gets answered by that SAME moderator, not whichever one has simply been quietest -- reproduces a live bug where a different bot jumped into someone else's conversation as if it were the subject", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = [
+    // DEPLOYMENT_A just replied to the human moments ago -- it's the one actually mid-conversation.
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, wasLastSpeaker: true, pacing: { lastSpokeAt: new Date(now.getTime() - 40_000).toISOString(), consecutiveMessages: 1 } },
+    // DEPLOYMENT_B hasn't spoken in a long time -- "quietest", but wasn't part of this exchange.
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, wasLastSpeaker: false, pacing: { lastSpokeAt: new Date(now.getTime() - 600_000).toISOString(), consecutiveMessages: 0 } },
+  ];
+  const result = selectChatterResponder({
+    text: "I am doing an autobot - a moderator for telegram, and you are literally it. lol",
+    candidates,
+    now,
+    random: FAVORABLE,
+  });
+  assert.equal(result.proceed, true);
+  assert.equal(result.deploymentId, DEPLOYMENT_A);
+});
+
+test("continuity does not override an explicit mention of a DIFFERENT moderator -- a deliberate mention still wins", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = [
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, wasLastSpeaker: true, pacing: freshPacing },
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: true, wasLastSpeaker: false, pacing: freshPacing }, // explicitly @mentioned instead
+  ];
+  const result = selectChatterResponder({ text: "@test1_mod_bot what do you think?", candidates, now, random: FAVORABLE });
   assert.equal(result.proceed, true);
   assert.equal(result.deploymentId, DEPLOYMENT_B);
 });
@@ -217,8 +247,8 @@ test("an ambient HIGH-priority question also bypasses the dominating-conversatio
 
 test("one candidate hard-blocked (dominating, MEDIUM-priority message) and one still eligible -> the eligible one may still respond", () => {
   const candidates: ChatterCandidate[] = [
-    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, pacing: { lastSpokeAt: null, consecutiveMessages: 2 } }, // over-participating
-    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, pacing: freshPacing },
+    { deploymentId: DEPLOYMENT_A, isDirectedAtBot: false, wasLastSpeaker: false, pacing: { lastSpokeAt: null, consecutiveMessages: 2 } }, // over-participating
+    { deploymentId: DEPLOYMENT_B, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing },
   ];
   // Non-question, substantive -> MEDIUM, so it does NOT bypass the dominating-conversation cap (only HIGH/VERY_HIGH do).
   const result = selectChatterResponder({ text: "that's a good point", candidates, now: new Date(), random: FAVORABLE });

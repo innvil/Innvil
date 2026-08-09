@@ -421,13 +421,13 @@ async function recordBotSpoke(admin: SupabaseClient, deploymentId: string, now: 
 async function loadRecentContext(admin: SupabaseClient, communityId: string, limit = 10): Promise<ChatterContextMessage[]> {
   const { data } = await admin
     .from("community_messages")
-    .select("sender_type, sender_display_name, text")
+    .select("sender_type, sender_display_name, text, deployment_id")
     .eq("community_id", communityId)
     .order("created_at", { ascending: false })
     .limit(limit);
-  return ((data ?? []) as Array<{ sender_type: string; sender_display_name: string | null; text: string }>)
+  return ((data ?? []) as Array<{ sender_type: string; sender_display_name: string | null; text: string; deployment_id: string | null }>)
     .reverse()
-    .map((r) => ({ senderType: r.sender_type as ChatterContextMessage["senderType"], senderName: r.sender_display_name, text: r.text }));
+    .map((r) => ({ senderType: r.sender_type as ChatterContextMessage["senderType"], senderName: r.sender_display_name, text: r.text, deploymentId: r.deployment_id }));
 }
 
 async function handleHumanMessage(admin: SupabaseClient, panelId: string, community: { id: string }, message: TelegramMessage, event: CommunityEvent) {
@@ -448,13 +448,15 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   // Loaded before selection — this message was already recorded
   // (recordCommunityMessage, called by the caller before branching here), so
   // it's recentContext's LAST entry; the one before it (index length-2) is
-  // what "recentlyAnsweredByModerator" checks.
+  // what "recentlyAnsweredByModerator"/"wasLastSpeaker" check.
   const recentContext = await loadRecentContext(admin, community.id, 10);
-  const recentlyAnsweredByModerator = recentContext.length >= 2 && recentContext[recentContext.length - 2].senderType === "INNVIL_MODERATOR";
+  const priorMessage = recentContext.length >= 2 ? recentContext[recentContext.length - 2] : null;
+  const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR";
 
   const candidates: ChatterCandidate[] = deployments.map((d, i) => ({
     deploymentId: d.deploymentId,
     isDirectedAtBot: messageIsDirectedAtBot(event.text, repliedToDeploymentId === d.deploymentId, d.botUsername),
+    wasLastSpeaker: priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessage.deploymentId === d.deploymentId,
     pacing: pacings[i],
   }));
 
