@@ -199,7 +199,9 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
     model,
     max_tokens: opts.maxTokens ?? 1024,
     ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
-    ...(opts.effort ? { effort: opts.effort } : {}),
+    // effort lives under output_config, NOT as a top-level field — sending it
+    // top-level 400s with "effort: Extra inputs are not permitted".
+    ...(opts.effort ? { output_config: { effort: opts.effort } } : {}),
     ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
     system: opts.system,
     messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
@@ -292,7 +294,7 @@ export async function aiStream(opts: AiCompleteOptions): Promise<ReadableStream<
         max_tokens: opts.maxTokens ?? 1024,
         stream: true,
         ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
-        ...(opts.effort ? { effort: opts.effort } : {}),
+        ...(opts.effort ? { output_config: { effort: opts.effort } } : {}),
         ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
         system: opts.system,
         messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
