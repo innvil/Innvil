@@ -127,12 +127,41 @@ test("a trivial AMBIENT follow-up right after the bot replied still stays hard-s
   assert.equal(result.reasonCode, "NO_ELIGIBLE_CANDIDATE");
 });
 
-test('ambient greeting ("good morning everyone") -> MEDIUM, may or may not respond depending on pacing/RNG, per spec §14', () => {
-  const favorable = single({ text: "good morning everyone", isDirectedAtBot: false, random: FAVORABLE });
-  const unfavorable = single({ text: "good morning everyone", isDirectedAtBot: false, random: UNFAVORABLE });
-  assert.equal(favorable.priority, "MEDIUM");
-  assert.equal(favorable.proceed, true);
-  assert.equal(unfavorable.proceed, false);
+test('a greeting that addresses the room ("good morning everyone") is a COMMUNITY_OPENER -> HIGH, not left to a coin flip like plain ambient chatter', () => {
+  const result = single({ text: "good morning everyone", isDirectedAtBot: false, random: FAVORABLE });
+  assert.equal(result.priority, "HIGH");
+  assert.equal(result.proceed, true);
+});
+
+/* ---------------------------------------------------- community opener detection ---- */
+
+test("Spec: an unanswered community opener into a quiet room engages deterministically (VERY_HIGH), not lost to an 85% roll -- reproduces the exact live case that prompted this", () => {
+  const result = single({ text: "good evening everyone, how's everyone doing?", isDirectedAtBot: false, random: UNFAVORABLE });
+  assert.equal(result.priority, "VERY_HIGH");
+  assert.equal(result.proceed, true); // even the worst roll can't stop VERY_HIGH
+});
+
+test('Spec §4: a short greeting that explicitly addresses the room ("gm guys") is an opener, not trivial filler', () => {
+  const result = single({ text: "gm guys", isDirectedAtBot: false, random: FAVORABLE });
+  assert.equal(result.priority, "HIGH");
+  assert.equal(result.proceed, true);
+});
+
+test('Spec §22: "what\'s everyone up to?" is a community opener, not merely a factual question', () => {
+  const result = single({ text: "what's everyone up to?", isDirectedAtBot: false, random: FAVORABLE });
+  assert.equal(result.priority, "VERY_HIGH");
+});
+
+test("Spec §7: a bare greeting with no room-address term (\"gm\" alone) is still ordinary trivial chatter, not an opener", () => {
+  const result = single({ text: "gm", isDirectedAtBot: false, random: FAVORABLE });
+  assert.equal(result.proceed, false);
+  assert.equal(result.reasonCode, "NO_ELIGIBLE_CANDIDATE");
+});
+
+test("Spec: a genuine factual/support question is NOT reclassified as a community opener just because it contains \"anyone\"", () => {
+  const result = single({ text: "does anyone know why orders are delayed?", isDirectedAtBot: false, random: FAVORABLE });
+  assert.equal(result.priority, "HIGH"); // question + substantive, same as before -- not boosted to VERY_HIGH by the opener weight
+  assert.equal(result.proceed, true);
 });
 
 /* ------------------------------------------------------- multi-moderator selection ---- */

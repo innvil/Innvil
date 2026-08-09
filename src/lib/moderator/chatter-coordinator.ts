@@ -56,6 +56,13 @@ const TRIVIAL_PENALTY = -3;
 // actually mid-conversation, producing a visible bug: a different moderator
 // jumps in and answers as if IT were the one being addressed.
 const CONTINUITY_WEIGHT = 4;
+// A genuine room-directed social opener ("good evening everyone, how's
+// everyone doing?") is a DIFFERENT kind of value than a factual/support
+// question, not a lesser one — a human moderator naturally engages with it.
+// It must not be lost to a probability roll just because it isn't a
+// "substantive question" in the factual sense, and it must not be treated
+// as trivial filler just because it's short ("gm guys").
+const COMMUNITY_OPENER_WEIGHT = 5;
 // "Recently answered" only means "the message right before this one, in this
 // same thread, came from a moderator" — it does NOT mean "this new message is
 // about the same thing," and it's especially NOT evidence that an ACTIVE,
@@ -92,6 +99,28 @@ function isTrivial(text: string): boolean {
   return words.length <= 2 && text.trim().replace(/[!?.]+$/, "").length <= 12;
 }
 
+const COMMUNITY_ADDRESS_RE = /\b(everyone|anyone|guys|all|folks)\b/i;
+// Deliberately requires an explicit room-address term ("everyone"/
+// "everything") after "how's/how is" — a bare "how's it going" with no
+// room-address word is a normal ambient question, not a room-wide opener.
+const COMMUNITY_CHECK_IN_RE =
+  /\bhow(?:'s|s|\s+is)\s+(?:everyone|everything)\b|\bwhat(?:'s|s|\s+is)\s+everyone\s+(?:up\s+to|doing)\b|\banyone\s+(?:doing\s+anything|around|here)\b|\bquiet\s+(?:in\s+here|today)\b/i;
+const GREETING_RE = /\b(gm|good\s*morning|good\s*evening|good\s*afternoon|morning|evening|hey|hi|hello)\b/i;
+
+/** A COMMUNITY_OPENER addresses the room generally and invites anyone to
+ *  respond — "good evening everyone, how's everyone doing?", "gm guys",
+ *  "what's everyone up to?" — a distinct social category from both trivial
+ *  filler ("lol") and a factual/support question ("does anyone know why
+ *  orders are delayed?"). Explicit check-in phrasing ("how's everyone
+ *  doing") is always an opener on its own; a bare greeting only counts when
+ *  it also addresses the room ("gm guys", not just "gm") — a plain greeting
+ *  with no room-address term stays ordinary trivial chatter. */
+function isCommunityOpener(text: string): boolean {
+  const t = text.trim();
+  if (COMMUNITY_CHECK_IN_RE.test(t)) return true;
+  return GREETING_RE.test(t) && COMMUNITY_ADDRESS_RE.test(t);
+}
+
 function priorityBand(score: number): ChatterPriority {
   if (score >= 8) return "VERY_HIGH";
   if (score >= 4) return "HIGH";
@@ -120,6 +149,7 @@ function scoreCandidate(input: {
   recentlyAnsweredByModerator?: boolean;
   likelyQuestion: boolean;
   trivial: boolean;
+  communityOpener: boolean;
 }): CandidateScore {
   const directed = input.isDirectedAtBot;
 
@@ -127,8 +157,15 @@ function scoreCandidate(input: {
   if (directed) score += DIRECTED_WEIGHT;
   if (input.wasLastSpeaker) score += CONTINUITY_WEIGHT;
   if (input.likelyQuestion) score += QUESTION_WEIGHT;
-  score += input.trivial ? TRIVIAL_PENALTY : SUBSTANTIVE_WEIGHT;
-  if (input.recentlyAnsweredByModerator && input.trivial) {
+  if (input.communityOpener) {
+    // A room-directed social opener is never "filler" just because it's
+    // short ("gm guys") — it gets the substantive weight regardless of the
+    // trivial-length heuristic, plus its own opener weight on top.
+    score += SUBSTANTIVE_WEIGHT + COMMUNITY_OPENER_WEIGHT;
+  } else {
+    score += input.trivial ? TRIVIAL_PENALTY : SUBSTANTIVE_WEIGHT;
+  }
+  if (input.recentlyAnsweredByModerator && input.trivial && !input.communityOpener) {
     score += RECENTLY_ANSWERED_PENALTY_TRIVIAL;
   }
   const priority = priorityBand(score);
@@ -199,6 +236,7 @@ export function selectChatterResponder(input: ChatterSelectionInput): ChatterSel
 
   const likelyQuestion = isLikelyQuestion(trimmed);
   const trivial = isTrivial(trimmed);
+  const communityOpener = isCommunityOpener(trimmed);
 
   const scored = input.candidates
     .map((candidate) => ({
@@ -211,6 +249,7 @@ export function selectChatterResponder(input: ChatterSelectionInput): ChatterSel
         recentlyAnsweredByModerator: input.recentlyAnsweredByModerator,
         likelyQuestion,
         trivial,
+        communityOpener,
       }),
     }))
     .filter((c) => c.score.eligible);
