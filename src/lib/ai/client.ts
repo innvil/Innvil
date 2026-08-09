@@ -29,7 +29,42 @@ import "server-only";
    attempt, exactly today's single-provider behavior.
    ========================================================= */
 
-export const DEFAULT_AI_MODEL = process.env.AI_MODEL?.trim() || "claude-fable-5";
+/**
+ * Non-negotiable model invariant: every Innvil-authored AI automation
+ * (Natural Chatter, moderator replies, community moderation, bot-to-bot
+ * conversations, owner/customer assistant chat, and any future add-on) must
+ * run on Sonnet 5 — never a silently-substituted cheaper/older model. This
+ * does NOT gate a feature's own explicit, deliberate override (e.g. the
+ * blog writer's BLOG_AI_MODEL) — those are intentional config knobs a human
+ * set, not a silent fallback. It only guards the DEFAULT resolution path, so
+ * a missing/misconfigured AI_MODEL fails loudly instead of quietly
+ * downgrading to whatever DEFAULT_AI_MODEL used to fall back to.
+ */
+export const INNVIL_REQUIRED_MODEL = "claude-sonnet-5" as const;
+
+export const DEFAULT_AI_MODEL = process.env.AI_MODEL?.trim() || INNVIL_REQUIRED_MODEL;
+
+/** Throws if `model` isn't exactly the required Sonnet 5 id — call this
+ *  before any Innvil-automation AI request (not blog, which owns its own
+ *  override). See getInnvilModelConfig() for the usual call site. */
+export function assertInnvilModel(model: string): void {
+  if (model !== INNVIL_REQUIRED_MODEL) {
+    throw new Error(
+      `Innvil AI automation requires ${INNVIL_REQUIRED_MODEL}, but resolved to "${model}". ` +
+        `Set AI_MODEL=${INNVIL_REQUIRED_MODEL} — do not substitute another model to reduce cost.`
+    );
+  }
+}
+
+/** Canonical model/effort for Innvil-authored AI automation. Re-reads
+ *  AI_MODEL fresh (rather than the frozen DEFAULT_AI_MODEL constant) so a
+ *  misconfiguration is caught at call time. Throws (via assertInnvilModel)
+ *  rather than silently running on the wrong model. */
+export function getInnvilModelConfig(): { model: typeof INNVIL_REQUIRED_MODEL; effort: "medium" } {
+  const resolved = process.env.AI_MODEL?.trim() || INNVIL_REQUIRED_MODEL;
+  assertInnvilModel(resolved);
+  return { model: INNVIL_REQUIRED_MODEL, effort: "medium" };
+}
 
 type AiProvider = "anthropic" | "openai";
 
@@ -54,6 +89,38 @@ export interface AiCompleteOptions {
   /** Skips adaptive thinking entirely — for replies with no real reasoning
    *  need, so the whole max_tokens budget goes to the visible answer. */
   disableThinking?: boolean;
+  /** Tag for the usage/cost log line below (e.g. "NATURAL_CHATTER") — purely
+   *  observability, no effect on the request itself. */
+  automation?: string;
+}
+
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  output_tokens_details?: { thinking_tokens?: number };
+}
+
+/** Logs actual per-call token usage from Anthropic's own response (source of
+ *  truth — never estimated from the visible reply text) so cost is auditable
+ *  from Vercel's function logs without a separate telemetry pipeline. */
+function logAiUsage(opts: AiCompleteOptions, model: string, usage: AnthropicUsage | undefined): void {
+  if (!usage) return;
+  const thinkingTokens = usage.output_tokens_details?.thinking_tokens ?? 0;
+  console.log("[ai-usage]", JSON.stringify({
+    automation: opts.automation ?? null,
+    model,
+    effort: opts.effort ?? null,
+    disableThinking: opts.disableThinking ?? false,
+    maxTokens: opts.maxTokens ?? 1024,
+    inputTokens: usage.input_tokens ?? 0,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens ?? 0,
+    cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+    thinkingTokens,
+    visibleOutputTokens: Math.max(0, (usage.output_tokens ?? 0) - thinkingTokens),
+  }));
 }
 
 function apiKey(): string | undefined {
@@ -141,7 +208,8 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
     const body = await res.text().catch(() => "");
     throw new Error(`AI provider (anthropic) ${res.status}: ${body.slice(0, 300)}`);
   }
-  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }>; usage?: AnthropicUsage };
+  logAiUsage(opts, model, data.usage);
   return (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
 }
 

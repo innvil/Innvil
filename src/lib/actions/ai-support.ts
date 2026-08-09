@@ -2,7 +2,7 @@
 
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { aiComplete, aiConfigured, type AiMessage } from "@/src/lib/ai/client";
+import { aiComplete, aiConfigured, getInnvilModelConfig, type AiMessage } from "@/src/lib/ai/client";
 import { customerSupportActive } from "@/src/lib/ai/addon";
 import { getStorefrontServices, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { createTicket } from "@/src/lib/actions/tickets";
@@ -208,7 +208,8 @@ export async function customerSupportReply(panelId: string, history: AiMessage[]
   const prep = await prepareCustomerSupport(panelId, history);
   if (!prep.ok) return prep;
   try {
-    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 500, effort: "low", disableThinking: true });
+    const { model, effort } = getInnvilModelConfig();
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 1024, model, effort, automation: "CUSTOMER_SUPPORT" });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error — please tap “Talk to a human”." };

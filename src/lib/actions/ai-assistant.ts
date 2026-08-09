@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getAuthedAdmin } from "@/src/lib/auth";
-import { aiComplete, aiConfigured, type AiMessage } from "@/src/lib/ai/client";
+import { aiComplete, aiConfigured, getInnvilModelConfig, type AiMessage } from "@/src/lib/ai/client";
 import { readSupportSub } from "@/src/lib/ai/addon";
 import { AI_ADDON_PRICE, AI_ADDON_PERIOD_DAYS, round4 } from "@/src/lib/money";
 
@@ -228,7 +228,8 @@ export async function ownerAssistantReply(panelId: string, history: AiMessage[])
   const prep = await prepareOwnerAssistant(panelId, history);
   if (!prep.ok) return { ok: false, error: prep.error };
   try {
-    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600, effort: "low", disableThinking: true });
+    const { model, effort } = getInnvilModelConfig();
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 1024, model, effort, automation: "OWNER_ASSISTANT" });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error. Try again in a moment." };
@@ -274,7 +275,8 @@ export async function globalAssistantReply(history: AiMessage[]): Promise<Assist
   const prep = await prepareGlobalAssistant(history);
   if (!prep.ok) return { ok: false, error: prep.error };
   try {
-    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 600, effort: "low", disableThinking: true });
+    const { model, effort } = getInnvilModelConfig();
+    const reply = await aiComplete({ system: prep.system, messages: prep.messages, maxTokens: 1024, model, effort, automation: "GLOBAL_ASSISTANT" });
     return { ok: true, reply };
   } catch {
     return { ok: false, error: "The assistant hit an error. Try again in a moment." };

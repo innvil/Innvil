@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prepareCustomerSupport } from "@/src/lib/actions/ai-support";
-import { aiStream, type AiMessage } from "@/src/lib/ai/client";
+import { aiStream, getInnvilModelConfig, type AiMessage } from "@/src/lib/ai/client";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 
 /* Streaming endpoint for the storefront customer AI support chat. Auth + add-on gate
@@ -27,7 +27,8 @@ export async function POST(req: Request) {
     const prep = await prepareCustomerSupport(panelId, messages);
     if (!prep.ok) return NextResponse.json({ error: prep.error }, { status: 400 });
 
-    const stream = await aiStream({ system: prep.system, messages: prep.messages, maxTokens: 500, effort: "low", disableThinking: true });
+    const { model, effort } = getInnvilModelConfig();
+    const stream = await aiStream({ system: prep.system, messages: prep.messages, maxTokens: 1024, model, effort, automation: "CUSTOMER_SUPPORT_STREAM" });
     return new Response(stream, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "Unexpected error." }, { status: 500 });

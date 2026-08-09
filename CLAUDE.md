@@ -2465,6 +2465,16 @@ CRON_SECRET=your_long_random_secret
 # default, or an OpenAI-compatible one (OpenRouter, Vercel AI Gateway, …) so you can
 # use a third-party Claude key. REQUIRED for any AI generation: a key.
 #
+# INVARIANT: every Innvil-authored AI automation (Natural Chatter, moderator
+# replies, community moderation, bot-to-bot conversations, owner/customer
+# assistant chat, and any future add-on) MUST run on Claude Sonnet 5, at
+# effort "medium" by default — never silently substituted for Fable/Haiku/
+# Opus/an older Sonnet/a "cheaper" model. If Sonnet 5 can't be used, the
+# operation must fail explicitly (src/lib/ai/client.ts `getInnvilModelConfig()`
+# / `assertInnvilModel()`), never silently downgrade. This does NOT gate the
+# blog writer's own BLOG_AI_MODEL override below — that's a deliberate,
+# human-set per-feature knob, not a silent fallback.
+#
 # Simplest (Anthropic direct):
 ANTHROPIC_API_KEY=your_anthropic_api_key   # (AI_API_KEY also accepted)
 #
