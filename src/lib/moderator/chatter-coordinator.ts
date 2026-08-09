@@ -50,13 +50,15 @@ const SUBSTANTIVE_WEIGHT = 1;
 const TRIVIAL_PENALTY = -3;
 // "Recently answered" only means "the message right before this one, in this
 // same thread, came from a moderator" — it does NOT mean "this new message is
-// about the same thing." A trivial follow-up right then ("ok", "lol",
-// "thanks") really is redundant chatter and should stay hard-silenced. A
-// genuinely new, substantive question right then is NOT redundant just
-// because a moderator happens to have spoken a moment ago — it should be
-// dampened (a beat of hesitation is natural), not blanket-silenced.
+// about the same thing," and it's especially NOT evidence that an ACTIVE,
+// ongoing conversation has been resolved. A trivial follow-up right then
+// ("ok", "lol", "thanks") really is redundant chatter and should stay
+// hard-silenced. A genuinely new, substantive question right then competes
+// on its own normal signals with NO penalty — a live back-and-forth
+// ("what's up" -> "just here thinking about X, any update on your side?")
+// is the single clearest case of a message actually meant for the room, not
+// a moment to hesitate on.
 const RECENTLY_ANSWERED_PENALTY_TRIVIAL = -3;
-const RECENTLY_ANSWERED_PENALTY_SUBSTANTIVE = -2;
 
 /** Only MEDIUM is a real coin flip. LOW never engages (score alone decided
  *  it); VERY_HIGH always engages; HIGH is near-certain — a small amount of
@@ -111,8 +113,8 @@ function scoreCandidate(input: {
   if (directed) score += DIRECTED_WEIGHT;
   if (input.likelyQuestion) score += QUESTION_WEIGHT;
   score += input.trivial ? TRIVIAL_PENALTY : SUBSTANTIVE_WEIGHT;
-  if (input.recentlyAnsweredByModerator) {
-    score += input.trivial ? RECENTLY_ANSWERED_PENALTY_TRIVIAL : RECENTLY_ANSWERED_PENALTY_SUBSTANTIVE;
+  if (input.recentlyAnsweredByModerator && input.trivial) {
+    score += RECENTLY_ANSWERED_PENALTY_TRIVIAL;
   }
   const priority = priorityBand(score);
 

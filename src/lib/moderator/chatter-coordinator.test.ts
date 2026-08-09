@@ -114,9 +114,9 @@ test("a NEW substantive directed question is still engaged even right after the 
   assert.equal(result.proceed, true);
 });
 
-test("a genuinely new, substantive AMBIENT question right after the bot replied is dampened to MEDIUM, not blanket-silenced -- it isn't the same message as whatever was just answered", () => {
+test("a genuinely new, substantive AMBIENT question right after the bot replied competes on its own merits, no penalty -- it isn't the same message as whatever was just answered, and a live back-and-forth is the clearest case of a message actually meant for the room", () => {
   const result = single({ text: "does anyone know why this happened?", isDirectedAtBot: false, recentlyAnsweredByModerator: true, random: FAVORABLE });
-  assert.equal(result.priority, "MEDIUM");
+  assert.equal(result.priority, "HIGH");
   assert.equal(result.proceed, true);
 });
 
