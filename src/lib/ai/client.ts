@@ -92,6 +92,12 @@ export interface AiCompleteOptions {
   /** Tag for the usage/cost log line below (e.g. "NATURAL_CHATTER") — purely
    *  observability, no effect on the request itself. */
   automation?: string;
+  /** Explicit provider/credentials for this call, bypassing the normal
+   *  AI_API_KEY-primary / AI_FALLBACK_*-emergency-fallback resolution
+   *  entirely — for pinning a specific automation to a dedicated
+   *  provider/key/spend (e.g. aiprimetechProvider() for the blog writer).
+   *  No further fallback is attempted if this fails. */
+  providerOverride?: { provider: AiProvider; apiKey: string; baseUrl: string };
 }
 
 interface AnthropicUsage {
@@ -145,6 +151,18 @@ function fallbackProviderConfig(): { provider: AiProvider; baseUrl: string; mode
   const fallbackBase = provider === "openai" ? "https://openrouter.ai/api/v1" : "https://api.anthropic.com";
   const baseUrl = (process.env.AI_FALLBACK_BASE_URL?.trim().replace(/\/+$/, "")) || fallbackBase;
   return { provider, baseUrl, model: process.env.AI_FALLBACK_MODEL?.trim() || undefined };
+}
+
+/** Credentials for the configured fallback/aiprimetech provider (AI_FALLBACK_*),
+ *  exposed for automations that should route through it directly rather than
+ *  treating it as Innvil chat automation's emergency-only fallback — e.g. the
+ *  blog writer, kept on a separate key/spend from Natural Chatter/assistant.
+ *  Returns null when no fallback key is configured. */
+export function aiprimetechProvider(): { provider: AiProvider; apiKey: string; baseUrl: string } | null {
+  const key = fallbackApiKey();
+  if (!key) return null;
+  const { provider, baseUrl } = fallbackProviderConfig();
+  return { provider, apiKey: key, baseUrl };
 }
 
 /** Whether generation is wired up (a key is present). */
@@ -248,6 +266,11 @@ async function completeOnce(provider: AiProvider, baseUrl: string, key: string, 
  *  don't replace it, since the primary is almost always the more actionable
  *  signal — a misconfigured key vs. a transient timeout look the same otherwise). */
 export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
+  if (opts.providerOverride) {
+    const { provider, apiKey: overrideKey, baseUrl } = opts.providerOverride;
+    return completeOnce(provider, baseUrl, overrideKey, opts.model || DEFAULT_AI_MODEL, opts);
+  }
+
   const key = apiKey();
   if (!key) throw new Error("No AI API key set (AI_API_KEY or ANTHROPIC_API_KEY).");
   const { provider, baseUrl } = providerConfig();

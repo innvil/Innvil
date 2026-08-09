@@ -1,6 +1,6 @@
 import "server-only";
 import type { BlogBlock, BlogSection } from "@/src/data/blog-posts";
-import { aiComplete } from "@/src/lib/ai/client";
+import { aiComplete, aiprimetechProvider } from "@/src/lib/ai/client";
 
 /* =========================================================
    AI blog writer.
@@ -180,9 +180,16 @@ Return ONLY a single JSON object (no prose, no markdown fences) with exactly thi
 }
 Use at least 4 sections. Use ul/ol where it genuinely helps. Do not include any keys beyond those shown.`;
 
+  // Pinned to the aiprimetech key (AI_FALLBACK_*) so blog generation's spend
+  // is separate from Innvil chat automation's primary Anthropic key — not
+  // treated as an emergency-only fallback here. Falls through to the normal
+  // primary/fallback resolution if no aiprimetech key is configured.
+  const providerOverride = aiprimetechProvider();
   const text = await aiComplete({
     model: BLOG_MODEL,
     maxTokens: 4096,
+    automation: "BLOG_WRITER",
+    ...(providerOverride ? { providerOverride } : {}),
     system: `You are Innvil's content writer. ${STYLE_RULES}\n\nVERIFIED PRODUCT FACTS (do not contradict or go beyond these):\n${PRODUCT_FACTS}`,
     messages: [{ role: "user", content: userPrompt }],
   });
