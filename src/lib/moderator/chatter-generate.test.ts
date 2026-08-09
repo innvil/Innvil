@@ -47,7 +47,7 @@ function baseInput(over: Partial<GenerateChatterReplyInput> = {}): GenerateChatt
 
 test("REQUIRED: the selected moderator's OWN persona is present and authoritative in its prompt", () => {
   const prompt = buildSystemPrompt(baseInput({ moderatorName: "Alex", persona: FORMAL_MODERATOR_A }));
-  assert.match(prompt, /proper formality/i);
+  assert.match(prompt, /always capitalize the start/i);
   assert.match(prompt, /Avoid slang/i);
 });
 
@@ -57,7 +57,7 @@ test("REQUIRED: a different moderator's persona traits are NOT injected as the c
   // instructions for A, who is formal/low-slang/low-teasing.
   assert.doesNotMatch(promptForA, /Slang and internet-speak are welcome/i);
   assert.doesNotMatch(promptForA, /playful teasing\/ribbing is fine/i);
-  assert.doesNotMatch(promptForA, /write very casually/i);
+  assert.doesNotMatch(promptForA, /always write in lowercase/i);
 });
 
 test("REQUIRED: prompt contains an explicit anti-imitation / persona-isolation rule", () => {
@@ -86,8 +86,8 @@ test("reversed: generating for Bella (casual persona) does not copy Alex's forma
   const promptForB = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-b", moderatorName: "Bella", persona: CASUAL_MODERATOR_B, recentContext: context }));
   const lines = buildContextLines(baseInput({ selfDeploymentId: "dep-b", recentContext: context }));
   // B's own prompt still reflects B's configured casual voice, not A's formal one.
-  assert.match(promptForB, /write very casually/i);
-  assert.doesNotMatch(promptForB, /proper formality/i);
+  assert.match(promptForB, /always write in lowercase/i);
+  assert.doesNotMatch(promptForB, /always capitalize the start/i);
   // Both of A's lines are labeled as a different moderator, never "(you)" for B.
   assert.match(lines, /Alex \(a different moderator, not you\): Good afternoon, everyone\./);
   assert.match(lines, /Alex \(a different moderator, not you\): How may I be of assistance\?/);
@@ -95,10 +95,20 @@ test("reversed: generating for Bella (casual persona) does not copy Alex's forma
 });
 
 test("personaStyle: formality/slang/teasing are actually read from the persona (previously silently ignored)", () => {
-  assert.ok(personaStyle(FORMAL_MODERATOR_A).some((s) => /proper formality/i.test(s)));
-  assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /write very casually/i.test(s)));
+  assert.ok(personaStyle(FORMAL_MODERATOR_A).some((s) => /always capitalize the start/i.test(s)));
+  assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /always write in lowercase/i.test(s)));
   assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /Slang and internet-speak are welcome/i.test(s)));
   assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /playful teasing\/ribbing is fine/i.test(s)));
+});
+
+test("REQUIRED: prompt forbids drifting writing style over a conversation or in response to being asked about tone", () => {
+  // Live bug: Kwan's capitalization flipped from initial-caps to all-lowercase
+  // right after a human asked "why are you so formal though, kwan?" -- the
+  // model was treating the question as an instruction to change its style.
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /is FIXED by your configuration above and must stay consistent/i);
+  assert.match(prompt, /does not change just because a human comments on it or asks about it/i);
+  assert.match(prompt, /do not actually shift your tone\/casing in response to being asked about it/i);
 });
 
 /* ------------------------------------------------------- history grounding ---- */

@@ -132,6 +132,40 @@
 > per-moderator memory (§12-17 of the newest instruction) — there is currently no
 > durable moderator-memory system at all (Phase 4.N is still NOTED/not built), so
 > there is nothing to isolate yet; that becomes relevant once Phase 4.N exists.
+>
+> **Upbeat closings react instead of replying + style-drift-under-questioning —
+> IMPLEMENTED (v1.2.0).** Two more live-caught bugs from the same conversation
+> that produced v1.1.99.
+> - **"okay, perfect!" got a text reply, not a reaction.** It's 2 words / 14
+>   chars, one character over the old 12-char `isTrivial` cap, so it classified
+>   `SUBSTANTIVE` and continuity (`wasLastSpeaker`) picked it up as a real message
+>   worth continuing with a full `CASUAL_CHAT` reply — a human moderator would
+>   smile/react, not write a new sentence back. Widened the cap to 16 chars and
+>   added `POSITIVE_WORD_RE` (perfect/awesome/amazing/excellent/fantastic/sweet/
+>   "love it"/"nice one"/great), checked inside the `TRIVIAL` branch of
+>   `selectChatterAction` before the directed/ambient split — any upbeat short
+>   closing now always resolves to `REACT` via `positiveReactionFor()` (❤️ when
+>   the message mentions "love", 😄 otherwise), regardless of whether it's
+>   directed or mid a continuity thread. A plain neutral closing with no positive
+>   word ("got it") still resolves to `SILENCE` exactly as before — the fix only
+>   changes outcomes for genuinely upbeat closings.
+> - **Style drift triggered by being asked about style.** Kwan's writing flipped
+>   from initial-caps to all-lowercase immediately after a human asked "why are
+>   you so formal though, kwan?" — the model treated a question about its tone as
+>   an instruction to change it. `personaStyle()`'s formality lines in
+>   `chatter-generate.ts` are now mechanical/imperative ("Always capitalize the
+>   start of your sentences... this is a fixed habit of how you write, not
+>   something you adjust message to message" / "Always write in lowercase...
+>   fixed habit...") instead of soft guidance ("write with proper formality"),
+>   and a new `SHARED_RULES` entry states explicitly that writing style
+>   (capitalization/punctuation/formality/slang) is FIXED by configuration and
+>   does not change over a conversation or in response to being asked about it —
+>   the moderator can still answer the question honestly, it just keeps writing
+>   in its own configured voice while doing so.
+> - New regression tests: `chatter-coordinator.test.ts` (upbeat closing →
+>   REACT with the right emoji, neutral closing → still SILENCE, ambient upbeat
+>   closing with no directed/continuity signal still reacts) and
+>   `chatter-generate.test.ts` (prompt contains the fixed-style rule verbatim).
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 

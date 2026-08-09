@@ -2253,6 +2253,32 @@ win over this):**
 >   you)`, plus an explicit anti-imitation rule ("do not imitate their voice...").
 >   New `chatter-generate.test.ts` asserts all of this against the actual
 >   assembled prompt strings, not live model output.
+>   **Upbeat closings react instead of replying + style-drift-under-questioning fix
+>   (v1.2.0):** two more live-caught bugs from the same conversation. (1) "okay,
+>   perfect!" (2 words, 14 chars) got a full `CASUAL_CHAT` text reply instead of a
+>   reaction — it exceeded the old 12-char `isTrivial` cap so it fell through to
+>   `SUBSTANTIVE`, where continuity picked it up as a real message worth
+>   continuing. Widened the cap to 16 chars and added `POSITIVE_WORD_RE`
+>   (perfect/awesome/amazing/excellent/fantastic/sweet/"love it"/"nice one"/great)
+>   checked inside the `TRIVIAL` branch, before the directed/ambient split — an
+>   upbeat short closing now always resolves to `REACT` (❤️ for "love", 😄
+>   otherwise via `positiveReactionFor()`), never a new sentence back, matching how
+>   a human moderator would actually react to "perfect!". A plain neutral closing
+>   with no positive word ("got it") still resolves to `SILENCE` as before — only
+>   genuinely upbeat closings get a reaction. (2) Kwan's writing flipped from
+>   initial-caps to all-lowercase immediately after a human asked "why are you so
+>   formal though, kwan?" — the model was treating the question about its tone as
+>   an instruction to change it. `personaStyle()`'s formality lines are now more
+>   mechanical/imperative ("Always capitalize the start of your sentences... this
+>   is a fixed habit of how you write, not something you adjust message to
+>   message" / "Always write in lowercase... fixed habit..."), and a new
+>   `SHARED_RULES` entry explicitly states writing style is FIXED by configuration
+>   and does not change in response to being asked about it — the moderator can
+>   still answer the question honestly, it just keeps writing in its own normal
+>   style while doing so. New regression tests in both `chatter-coordinator.test.ts`
+>   (upbeat-closing → REACT, neutral-closing → SILENCE, ambient upbeat still
+>   reacts) and `chatter-generate.test.ts` (prompt asserts the fixed-style rule is
+>   present).
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

@@ -418,3 +418,37 @@ test("when no moderator is named, continuity still governs normally (Kwan keeps 
   assert.equal(result.type, "CASUAL_CHAT");
   assert.equal(result.type === "CASUAL_CHAT" && result.deploymentId, "dep-kwan");
 });
+
+/* ------------------------------------------------ upbeat closing -> REACT ---- */
+// Live example: "okay, perfect!" (replying to a moderator mid-conversation)
+// got a full CASUAL_CHAT text reply instead of a reaction. Root cause: it's
+// 14 chars / 2 words, which used to exceed the old 12-char trivial cap, so it
+// fell through to SUBSTANTIVE and continuity picked it up as a real message
+// worth continuing.
+
+test('REQUIRED: "okay, perfect!" right after a moderator reply -> REACT, not a text reply', () => {
+  const kwan = candidate("dep-kwan", { wasLastSpeaker: true, pacing: { lastSpokeAt: new Date().toISOString(), consecutiveMessages: 1 } });
+  const result = selectChatterAction({ text: "okay, perfect!", candidates: [kwan], now: new Date() });
+  assert.equal(result.type, "REACT");
+  assert.equal(result.type === "REACT" && result.deploymentId, "dep-kwan");
+  assert.equal(result.type === "REACT" && result.emoji, "😄");
+});
+
+test('an upbeat closing mentioning "love" reacts with a heart, not the default grin', () => {
+  // Must stay <= 2 words to land in the TRIVIAL classification at all (that's
+  // where POSITIVE_WORD_RE is checked) -- "love it!" not "love it, thanks!".
+  const result = single({ text: "love it!", wasLastSpeaker: true });
+  assert.equal(result.type, "REACT");
+  assert.equal(result.type === "REACT" && result.emoji, "❤️");
+});
+
+test("a plain neutral closing (no positive word) still stays SILENCE, not REACT -- only genuinely upbeat closings react", () => {
+  const result = single({ text: "got it", recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["already_handled_recent_reply"]);
+});
+
+test("an upbeat closing reacts even when NOT directed and NOT mid a continuity thread, as long as a candidate is eligible", () => {
+  const result = single({ text: "awesome, thanks!" });
+  assert.equal(result.type, "REACT");
+});

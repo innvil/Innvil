@@ -59,10 +59,13 @@ function isLikelyQuestion(text: string): boolean {
 
 /** Trivial = low-content chatter ("lol", "nice", "ok", "thanks") — it can
  *  still earn a REACT or SHORT_ACK given the right context (e.g. directed at
- *  the bot), but it never earns CASUAL_CHAT/ANSWER purely on its own. */
+ *  the bot), but it never earns CASUAL_CHAT/ANSWER purely on its own. The
+ *  16-char cap (up from 12) is enough to cover a short compound closing like
+ *  "okay, perfect!" (14 chars, still only 2 words) without opening the door
+ *  to genuinely longer sentences that just happen to use short words. */
 function isTrivial(text: string): boolean {
   const words = text.trim().split(/\s+/).filter(Boolean);
-  return words.length <= 2 && text.trim().replace(/[!?.]+$/, "").length <= 12;
+  return words.length <= 2 && text.trim().replace(/[!?.]+$/, "").length <= 16;
 }
 
 const COMMUNITY_ADDRESS_RE = /\b(everyone|anyone|guys|all|folks)\b/i;
@@ -89,6 +92,14 @@ function isCommunityOpener(text: string): boolean {
 const RESOLVED_ACK_RE = /\b(fixed|solved|working now|got it working|nvm|figured it out)\b/i;
 const LAUGH_RE = /\b(lol|lmao|haha+|lel|rofl)\b/i;
 const THANKS_RE = /\b(thanks|thank\s*you|thx|ty)\b/i;
+// A short, upbeat closing ("okay, perfect!", "great, thanks!", "awesome!")
+// warrants a REACT, not a text reply — a human moderator smiles/reacts to
+// "perfect!", they don't write a whole new sentence back. Distinct from a
+// neutral closing (CLOSING_ACK_RE alone, e.g. "I see, okay.") which stays
+// SILENCE — this one specifically carries positive sentiment worth
+// acknowledging with an emoji.
+const POSITIVE_WORD_RE = /\b(perfect|awesome|amazing|excellent|fantastic|sweet|love\s*it|nice\s*one|great)\b/i;
+const LOVE_RE = /\blove(?:d|s)?\b/i;
 // A closing acknowledgement ("I see, okay.", "got it", "alright", "fair
 // enough") ends an exchange -- it deserves the same treatment as trivial
 // filler regardless of word count. Without this, "I see, okay." (3 words)
@@ -114,6 +125,12 @@ function reactionFor(text: string): string {
   if (LAUGH_RE.test(text)) return "😂";
   if (THANKS_RE.test(text)) return "🙏";
   return "👍";
+}
+
+/** Deterministic reaction pick for an upbeat closing — no LLM. */
+function positiveReactionFor(text: string): string {
+  if (LOVE_RE.test(text)) return "❤️";
+  return "😄"; // grin/smile
 }
 
 /* -------------------------------------------------- directed-address resolution ---- */
@@ -313,6 +330,15 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
       const picked = pickCandidate(eligible);
       if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
       return { type: "REACT", deploymentId: picked.deploymentId, emoji: "👍", reasons: ["resolution_acknowledged"] };
+    }
+    // An upbeat short closing ("okay, perfect!", "great, thanks!") gets a
+    // reaction regardless of whether it's directed — a human moderator
+    // smiles/reacts to "perfect!", they don't write a new sentence back.
+    // Checked before the directed/ambient split below on purpose.
+    if (POSITIVE_WORD_RE.test(trimmed)) {
+      const picked = pickCandidate(eligible);
+      if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
+      return { type: "REACT", deploymentId: picked.deploymentId, emoji: positiveReactionFor(trimmed), reasons: ["positive_closing_acknowledged"] };
     }
     const directed = eligible.find((c) => c.isDirectedAtBot);
     if (!directed) {

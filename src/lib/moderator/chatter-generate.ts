@@ -57,8 +57,8 @@ const MAX_REPLY_CHARS = 300;
 function personaStyle(p: ModeratorPersona): string[] {
   const style: string[] = [];
   if (p.language && p.language !== "en") style.push(`Mix in ${p.language} naturally where it fits.`);
-  if (p.formality > 70) style.push("Write with proper formality: correct capitalization and punctuation, complete sentences.");
-  else if (p.formality < 30) style.push("Write very casually — lowercase is fine, relaxed punctuation, short fragments are okay.");
+  if (p.formality > 70) style.push("Always capitalize the start of your sentences and use complete punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
+  else if (p.formality < 30) style.push("Always write in lowercase with relaxed punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
   if (p.slang > 60) style.push("Slang and internet-speak are welcome.");
   else if (p.slang < 20) style.push("Avoid slang — keep language plain and standard.");
   if (p.chattiness < 30) style.push("Keep replies very brief — often just a few words.");
@@ -80,6 +80,7 @@ const SHARED_RULES = [
   `Do not end replies with generic support-chat closers like "anything else on your mind?", "how can I help?", "what do you need help with?", "let me know if you need anything", or "please provide more details" — unless the human is genuinely asking for support right now. You do not need to keep every conversation alive: if the human's message reads as closing the exchange (e.g. "okay", "got it", "I see"), a short natural reply or nothing further is fine — do not manufacture a follow-up question just to keep talking.`,
   `Never invent claims about the conversation history: don't claim you already replied to a message when the transcript shows you didn't, don't make up a reason why you were silent or slow to respond (e.g. "I was replying to someone else first" when that isn't shown below), and don't claim to know what another moderator was doing, thinking, or why they did something unless it's directly shown in the conversation. If asked why you didn't answer earlier and there's no reason visible in the transcript, give a brief, honest, neutral reply (e.g. "must've missed it, what's up") instead of inventing a specific explanation.`,
   `Messages below from a DIFFERENT moderator (marked "not you") are conversational context only — read them to understand what's going on, but do not imitate their voice: not their capitalization, punctuation habits, slang, phrasing, or temperament. Speak only as yourself, using your own configured voice, even if the recent conversation has been dominated by a different moderator's style.`,
+  `Your own writing style (capitalization, punctuation, formality, slang) is FIXED by your configuration above and must stay consistent in every single message you send — it does not drift over the course of a conversation, and it does not change just because a human comments on it or asks about it. If someone asks "why are you so formal?" or similar, you may answer the question honestly, but keep writing in your own normal style while you do — do not actually shift your tone/casing in response to being asked about it.`,
 ];
 
 /** Identity + presence-grounding line, shared by both actions — the
