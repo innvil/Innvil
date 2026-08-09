@@ -5,7 +5,7 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
 import { virtualModBotAcknowledgement, virtualModNaturalChatterActive } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
-import { selectChatterAction, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
+import { selectChatterAction, resolveDirectedModerator, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
@@ -389,12 +389,6 @@ async function resolveRepliedToDeployment(admin: SupabaseClient, communityId: st
   return data?.deployment_id ?? null;
 }
 
-function messageIsDirectedAtBot(text: string, isReplyToThisDeployment: boolean, botUsername: string | null): boolean {
-  if (isReplyToThisDeployment) return true;
-  if (botUsername && text.toLowerCase().includes(`@${botUsername.toLowerCase()}`)) return true;
-  return false;
-}
-
 async function loadChatterPacing(admin: SupabaseClient, deploymentId: string): Promise<ChatterPacingState> {
   const { data } = await admin.from("deployment_state").select("last_spoke_at, consecutive_messages").eq("deployment_id", deploymentId).maybeSingle();
   return { lastSpokeAt: data?.last_spoke_at ?? null, consecutiveMessages: data?.consecutive_messages ?? 0 };
@@ -455,9 +449,18 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR";
   const recentlyRespondedByHuman = priorMessage?.senderType === "HUMAN";
 
+  // Resolved ONCE per event (not per-candidate): @username, reply-to, the
+  // moderator's own configured name, or a typo-tolerant near-spelling of it
+  // ("what persona are you kwan?", "how are you knaw?"). Ambiguous matches
+  // resolve to no directed target rather than guessing.
+  const directedMatch = resolveDirectedModerator(
+    event.text,
+    deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername }))
+  );
+
   const candidates: ChatterCandidate[] = deployments.map((d, i) => ({
     deploymentId: d.deploymentId,
-    isDirectedAtBot: messageIsDirectedAtBot(event.text, repliedToDeploymentId === d.deploymentId, d.botUsername),
+    isDirectedAtBot: repliedToDeploymentId === d.deploymentId || directedMatch?.deploymentId === d.deploymentId,
     wasLastSpeaker: priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessage.deploymentId === d.deploymentId,
     pacing: pacings[i],
   }));
@@ -491,11 +494,16 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   } else {
     const generation = await generateChatterReply({
       action: action.type,
+      selfDeploymentId: deployment.deploymentId,
       moderatorName: deployment.moderatorName,
       persona: deployment.persona,
       recentContext,
       triggerMessage: { senderName: event.sender.displayName, text: event.text },
       isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
+      // Only true when THIS is the moderator the typo-tolerant match
+      // resolved to — lets it optionally play along with the misspelling
+      // without forcing every reply to comment on it.
+      addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
       // Grounds the "don't fabricate another moderator's presence" prompt
       // rule in actual deployment state, not the model's guess.
       otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),

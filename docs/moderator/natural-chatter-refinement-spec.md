@@ -84,6 +84,49 @@
 >   mind?", "how can I help?") and manufacturing follow-up questions just to keep
 >   a closed exchange going.
 >
+> **Plain-name targeting, history grounding, persona isolation — IMPLEMENTED
+> (v1.1.99).** Three more live-caught bugs on top of the above.
+> - **Plain-name addressing.** "what persona are you kwan?" (no @mention) went
+>   unanswered until the human typed `@kwan_mod_bot`. New pure
+>   `resolveDirectedModerator(text, moderators)` in `chatter-coordinator.ts`
+>   resolves, in order: @username (unambiguous by construction) → exact
+>   configured name as a whole word/token → a typo-tolerant near-spelling of the
+>   name. Tokenized (never substring), so a moderator named "Ann" is never
+>   triggered by "announcement". Ambiguous matches (2+ moderators plausibly
+>   addressed at the same confidence tier) resolve to no match rather than
+>   guessing. `community-runtime.ts` calls it once per event and feeds the result
+>   into the exact same `ChatterCandidate.isDirectedAtBot` field the rest of the
+>   selection pipeline already uses — no change to `pickCandidate`,
+>   `invitesOtherModerator`, or the continuity logic.
+> - **Typo tolerance without false positives.** Raw Levenshtein distance is
+>   unsafe for short names: "Test" is distance-1 from the ordinary English words
+>   "rest"/"best"/"west", which would otherwise fire on completely unrelated
+>   messages. Fuzzy matching instead requires an exact letter-for-letter anagram
+>   (same length, same character multiset — a transposition typo like
+>   "kwan"→"knaw"/"kwna") for short names, with a little more room (distance ≤ 1)
+>   only for names 5+ characters, where real-word collisions are rarer. An
+>   anagram match is flagged `isTypo: true` and threaded through to generation as
+>   an optional (never forced) hook to acknowledge/joke about the misspelling.
+> - **History grounding.** Kwan invented "was just responding to Test's message
+>   first" to explain a message it simply wasn't selected for. New rule in
+>   `SHARED_RULES`: never invent reasons for your own silence, never claim you
+>   replied when the transcript shows you didn't, never claim to know what
+>   another moderator was doing/thinking beyond what's shown — give a neutral
+>   answer instead of a fabricated one.
+> - **Persona isolation.** Two compounding gaps: `personaStyle()` never read the
+>   `formality`/`slang`/`teasing` persona fields at all (present in
+>   `ModeratorPersona` since `domain.ts`, just unused) — now it does, giving the
+>   model concrete grounding for the CURRENT moderator's own configured voice.
+>   And the transcript labeled every message by display name only, with no
+>   signal for "this is your own past message" vs. "a different moderator's" —
+>   now explicit: `NAME (you)` vs `NAME (a different moderator, not you)`, plus
+>   an anti-imitation rule ("do not imitate their voice... not their
+>   capitalization, punctuation habits, slang, phrasing, or temperament").
+> - `chatter-generate.test.ts` (NEW) asserts all three fixes against the actual
+>   assembled prompt/context strings — persona-isolation and history-grounding
+>   are prompt-construction properties, testable without a live model call, per
+>   explicit instruction not to rely on probabilistic output where avoidable.
+>
 > Not yet built: the full N-signal list from §11 (business/persona relevance,
 > community activity level, remaining quota — the last needing (B)); durable
 > per-moderator memory (§12-17 of the newest instruction) — there is currently no

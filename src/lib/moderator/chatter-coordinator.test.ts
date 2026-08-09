@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectChatterAction, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
+import { selectChatterAction, resolveDirectedModerator, type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity } from "./chatter-coordinator";
 
 /**
  * Natural Chatter is contextual SOCIAL ACTION SELECTION, not response
@@ -337,4 +337,84 @@ test("REQUIRED: every action carries contextual reasons, and none of them is a p
       assert.ok(!/roll|probability|chance|random/i.test(reason), `reason "${reason}" must not be probability-based`);
     }
   }
+});
+
+/* ================================================= resolveDirectedModerator ==== */
+// Reproduces the exact live bug: "what persona are you kwan?" (no @mention)
+// went unanswered until the human typed "@kwan_mod_bot" explicitly.
+
+const KWAN: ModeratorIdentity = { deploymentId: "dep-kwan", name: "Kwan", botUsername: "kwan_mod_bot" };
+const TEST_MOD: ModeratorIdentity = { deploymentId: "dep-test", name: "Test", botUsername: "test1_mod_bot" };
+
+test("REQUIRED: plain configured name (no @) resolves to that moderator -- \"what persona are you kwan?\"", () => {
+  const match = resolveDirectedModerator("what persona are you kwan?", [KWAN, TEST_MOD]);
+  assert.deepEqual(match, { deploymentId: "dep-kwan", isTypo: false });
+});
+
+test('REQUIRED: "test what do you think?" resolves to Test by plain name', () => {
+  const match = resolveDirectedModerator("test what do you think?", [KWAN, TEST_MOD]);
+  assert.deepEqual(match, { deploymentId: "dep-test", isTypo: false });
+});
+
+test("REQUIRED: @username still resolves, unambiguously, even with another moderator's plain name nowhere nearby", () => {
+  const match = resolveDirectedModerator("@kwan_mod_bot what do you think?", [KWAN, TEST_MOD]);
+  assert.deepEqual(match, { deploymentId: "dep-kwan", isTypo: false });
+});
+
+test('typo-tolerant: "how are you knaw?" resolves to Kwan via transposition match, flagged as a typo', () => {
+  const match = resolveDirectedModerator("how are you knaw?", [KWAN, TEST_MOD]);
+  assert.deepEqual(match, { deploymentId: "dep-kwan", isTypo: true });
+});
+
+test('typo-tolerant: "kwna" (letters swapped) also resolves to Kwan', () => {
+  const match = resolveDirectedModerator("kwna, you there?", [KWAN, TEST_MOD]);
+  assert.deepEqual(match, { deploymentId: "dep-kwan", isTypo: true });
+});
+
+test("REQUIRED word-boundary safety: a moderator named Ann is NOT triggered by \"announcement\"", () => {
+  const ann: ModeratorIdentity = { deploymentId: "dep-ann", name: "Ann", botUsername: "ann_mod_bot" };
+  const match = resolveDirectedModerator("did everyone see the announcement?", [ann]);
+  assert.equal(match, null);
+});
+
+test("REQUIRED word-boundary safety: Test is not falsely fuzzy-matched by ordinary real words distance-1 away (rest/best/west)", () => {
+  for (const word of ["let's rest for a bit", "that's the best one", "heading west now"]) {
+    const match = resolveDirectedModerator(word, [KWAN, TEST_MOD]);
+    assert.equal(match, null, `"${word}" must not falsely address Test`);
+  }
+});
+
+test("ambiguous plain-name match across two moderators with overlapping tokens resolves to no match, not a guess", () => {
+  const kwan2: ModeratorIdentity = { deploymentId: "dep-kwan2", name: "Kwan", botUsername: "kwan2_mod_bot" };
+  const match = resolveDirectedModerator("hey kwan, you around?", [KWAN, kwan2]);
+  assert.equal(match, null);
+});
+
+test("no match at all when the message doesn't reference any moderator", () => {
+  const match = resolveDirectedModerator("just chatting about my day", [KWAN, TEST_MOD]);
+  assert.equal(match, null);
+});
+
+test("works for arbitrary configured names, not hardcoded to Kwan/Test", () => {
+  const mika: ModeratorIdentity = { deploymentId: "dep-mika", name: "Mika", botUsername: "mika_bot" };
+  const match = resolveDirectedModerator("mika, what do you think?", [mika]);
+  assert.deepEqual(match, { deploymentId: "dep-mika", isTypo: false });
+});
+
+/* ---- continuity priority when combined with the real selection pipeline ---- */
+
+test("REQUIRED: an explicit plain-name mention of a DIFFERENT moderator wins over wasLastSpeaker continuity", () => {
+  const kwan = candidate("dep-kwan", { wasLastSpeaker: true });
+  const test1 = candidate("dep-test", { isDirectedAtBot: true }); // as resolved by resolveDirectedModerator for "test"
+  const result = selectChatterAction({ text: "test what do you think about that?", candidates: [kwan, test1], now: new Date() });
+  assert.notEqual(result.type, "SILENCE");
+  assert.equal(result.type !== "SILENCE" && result.deploymentId, "dep-test");
+});
+
+test("when no moderator is named, continuity still governs normally (Kwan keeps answering its own thread)", () => {
+  const kwan = candidate("dep-kwan", { wasLastSpeaker: true });
+  const test1 = candidate("dep-test");
+  const result = selectChatterAction({ text: "oh nice, tell me more about that", candidates: [kwan, test1], now: new Date() });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.equal(result.type === "CASUAL_CHAT" && result.deploymentId, "dep-kwan");
 });

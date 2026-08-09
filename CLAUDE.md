@@ -2227,6 +2227,32 @@ win over this):**
 >   `otherActiveModeratorNames` (the real, current deployment list — a moderator can
 >   only reference another's presence/absence grounded in this fact, never invented)
 >   plus an explicit single-identity rule and a ban on generic support-chat closers.
+>   **Plain-name targeting, history grounding, persona isolation (v1.1.99):** three
+>   more live-caught bugs. (1) A moderator addressed by its plain configured name
+>   ("what persona are you kwan?", no @mention) went unanswered until the human
+>   typed `@kwan_mod_bot` explicitly — `messageIsDirectedAtBot` only checked
+>   @username and Telegram reply-to, never the moderator's own name. New pure
+>   `resolveDirectedModerator()` (`chatter-coordinator.ts`) resolves @username,
+>   reply-to, exact plain name, or a typo-tolerant near-spelling ("knaw"/"kwna" for
+>   "Kwan") — word-boundary-safe (tokenized, so "Ann" is never triggered by
+>   "announcement") and ambiguity-safe (2+ equally-plausible name matches resolve
+>   to no directed target, never a guess). Typo tolerance uses an anagram/
+>   transposition check rather than raw edit distance — short names like "Test"
+>   are distance-1 from real words ("rest"/"best"/"west"), which would otherwise
+>   false-positive; an exact letter-for-letter anagram of a specific configured
+>   name is a much safer signal. (2) Kwan invented "was just responding to Test's
+>   message first" to explain a message it simply wasn't selected for — added an
+>   explicit grounding rule: never invent reasons for your own silence or claims
+>   about another moderator's actions; give a neutral answer instead. (3) Moderator
+>   voices were bleeding into each other (one picked up the other's lowercase/
+>   terse style over a long conversation) — root cause was two-fold:
+>   `personaStyle()` never read the `formality`/`slang`/`teasing` persona fields
+>   at all (now it does), and the transcript labeled messages by name only, with
+>   no signal distinguishing "your own past messages" from "a different
+>   moderator's" — now explicitly labeled `(you)` vs `(a different moderator, not
+>   you)`, plus an explicit anti-imitation rule ("do not imitate their voice...").
+>   New `chatter-generate.test.ts` asserts all of this against the actual
+>   assembled prompt strings, not live model output.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

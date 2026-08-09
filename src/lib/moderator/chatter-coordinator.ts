@@ -116,6 +116,85 @@ function reactionFor(text: string): string {
   return "👍";
 }
 
+/* -------------------------------------------------- directed-address resolution ---- */
+
+export interface ModeratorIdentity {
+  deploymentId: string;
+  /** The moderator's own configured display name (e.g. "Kwan"). */
+  name: string;
+  botUsername: string | null;
+}
+
+export interface DirectedMatch {
+  deploymentId: string;
+  /** True when matched by a close-but-not-exact spelling of the configured
+   *  name ("knaw"/"kwna" for "Kwan") rather than an exact word or @mention —
+   *  lets generation optionally acknowledge the typo without forcing it. */
+  isTypo: boolean;
+}
+
+function tokenize(text: string): string[] {
+  return text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+}
+
+function levenshtein(a: string, b: string): number {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+function sortedChars(s: string): string {
+  return s.split("").sort().join("");
+}
+
+/** A word/token counts as a typo of `name` only via a SAFE signal: same
+ *  length + an exact letter-for-letter anagram (a transposition typo like
+ *  "kwan"->"knaw"/"kwna") — an unrelated real word being an exact anagram of
+ *  a specific configured name is vanishingly unlikely, regardless of raw
+ *  edit distance. Raw Levenshtein distance alone is NOT safe for short
+ *  names: "Test" is distance-1 from the ordinary English words "rest",
+ *  "best", and "west", which would otherwise falsely trigger on completely
+ *  unrelated messages. Longer names (5+ chars) get a little more room
+ *  (distance <= 1) since real-word collisions get rarer as names get longer. */
+function isFuzzyNameToken(token: string, name: string): boolean {
+  if (name.length < 3 || token.length < 3 || token === name) return false;
+  if (token.length === name.length && sortedChars(token) === sortedChars(name)) return true;
+  if (name.length >= 5) return levenshtein(token, name) <= 1;
+  return false;
+}
+
+/** Resolves which (if any) deployment a message explicitly addresses — by
+ *  @username, by its own configured display name, or by a typo-tolerant
+ *  near-spelling of that name. Word-boundary-safe (tokenized, never
+ *  substring) so a moderator named "Ann" is never triggered by
+ *  "announcement", and case-insensitive. Ambiguous matches (2+ moderators
+ *  plausibly addressed at the same confidence level) resolve to NO match
+ *  rather than guessing which one was meant. Works for any configured name —
+ *  nothing here is specific to any particular moderator. */
+export function resolveDirectedModerator(text: string, moderators: ModeratorIdentity[]): DirectedMatch | null {
+  const lower = text.toLowerCase();
+
+  // @username is unambiguous by construction — Telegram usernames are unique.
+  const usernameHit = moderators.find((m) => m.botUsername && lower.includes(`@${m.botUsername.toLowerCase()}`));
+  if (usernameHit) return { deploymentId: usernameHit.deploymentId, isTypo: false };
+
+  const tokens = tokenize(text);
+  if (!tokens.length) return null;
+
+  const exact = moderators.filter((m) => tokenize(m.name).some((nt) => tokens.includes(nt)));
+  if (exact.length === 1) return { deploymentId: exact[0].deploymentId, isTypo: false };
+  if (exact.length > 1) return null; // ambiguous -- don't guess
+
+  const fuzzy = moderators.filter((m) => tokenize(m.name).some((nt) => tokens.some((t) => isFuzzyNameToken(t, nt))));
+  if (fuzzy.length === 1) return { deploymentId: fuzzy[0].deploymentId, isTypo: true };
+  return null; // no match, or an ambiguous fuzzy match across multiple moderators
+}
+
 type MessageKind = "EMPTY" | "TOO_SHORT" | "COMMUNITY_OPENER" | "TRIVIAL" | "QUESTION" | "SUBSTANTIVE";
 
 function classifyMessageKind(trimmed: string): MessageKind {
