@@ -14,17 +14,37 @@
 > trial duration, active mod slots, publishing, campaign generation, or unrelated
 > moderation features.
 >
-> **(A) implementation note (v1.1.84):** `chatter-coordinator.ts` was rewritten from
-> the flat 15%/75% probability gate into a contextual scoring model — signals
-> (directed, question-shaped, substantive vs. trivial, recently-answered-by-
-> moderator) combine into a priority band (LOW/MEDIUM/HIGH/VERY_HIGH); LOW is a
-> hard deterministic SILENCE (no RNG call), VERY_HIGH is a hard deterministic
-> ENGAGE, and randomness is confined to MEDIUM/HIGH only — per an explicit user
-> correction: "Do not model natural chatter primarily as 'response probability.'
-> Model it as contextual social-action selection, where SILENCE is a first-class
-> action... Randomness should only add variation between already-plausible
-> actions; it should not decide whether an otherwise inappropriate response
-> happens."
+> **(A) FINAL implementation (v1.1.97) — full action selection, no percentages.**
+> Natural Chatter uses **contextual social action selection**. It does **not** use
+> response percentages at any layer. The earlier intermediate versions (v1.1.84's
+> priority bands mapping to 0%/35%/85%/100%, and v1.1.96's added opener signal that
+> still fed those bands) are **removed** — `selectChatterAction()` in
+> `chatter-coordinator.ts` takes no RNG parameter at all and contains no
+> `Math.random()`. Repo-wide greps for `selectChatterResponder`,
+> `ENGAGE_PROBABILITY`, `PROBABILITY_GATE`, `ChatterPriority`, and `priorityBand`
+> return nothing.
+>
+> The Coordinator classifies the message (EMPTY / TOO_SHORT / COMMUNITY_OPENER /
+> TRIVIAL / QUESTION / SUBSTANTIVE) plus room state, then returns exactly one
+> first-class action:
+> `SILENCE` · `REACT` · `SHORT_ACK` · `CASUAL_CHAT` · `ANSWER`
+> (`COMMUNITY_HANDOFF` remains a bot-to-bot concept owned by `coordinator.ts`'s
+> acknowledgement flow — a HUMAN message never routes to it.)
+>
+> **Silence is a contextual action, never a lost roll** — every SILENCE carries
+> reasons (`already_handled`, `trivial_low_value`, `no_eligible_moderator`,
+> `low_social_priority`, `already_handled_recent_reply`, `empty_message`,
+> `too_short`). **CASUAL_CHAT is first-class**: a genuine unanswered community
+> opener in a quiet room deterministically selects it. **Cost**: `SILENCE` and
+> `REACT` and `SHORT_ACK` make **zero** AI calls (SHORT_ACK is a deterministic
+> phrase; REACT is a real Telegram reaction); only `CASUAL_CHAT`/`ANSWER` reach
+> Sonnet 5, and the action union structurally carries exactly one `deploymentId`,
+> so N moderators can never produce N generations.
+>
+> **Randomness** now exists in exactly one place — `shortAckText()` varying which
+> canned acknowledgement phrase is used. It varies *wording*, never *whether* a
+> moderator acts, and never *who*: moderator selection is fully deterministic
+> (explicit mention → active-exchange continuity → quietest longest).
 >
 > **Multi-moderator selection (§15) — IMPLEMENTED (v1.1.85).** `chatter-coordinator.ts`
 > exports `selectChatterResponder`, which scores every chatter-eligible deployment in

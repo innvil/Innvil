@@ -5,8 +5,8 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
 import { virtualModBotAcknowledgement, virtualModNaturalChatterActive } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
-import { selectChatterResponder, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
-import { generateChatterReply, type ChatterContextMessage } from "./chatter-generate";
+import { selectChatterAction, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
+import { generateChatterReply, shortAckText, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 
@@ -345,9 +345,9 @@ interface ChatterDeployment {
 
 /** All chatter-eligible deployments in this community — every ENABLED
  *  ModeratorDeployment, not just one. Selection among them happens in
- *  selectChatterResponder (chatter-coordinator.ts): the Coordinator picks
- *  AT MOST ONE responder per human message, never runs a separate
- *  probability roll per deployment. */
+ *  selectChatterAction (chatter-coordinator.ts): the Coordinator picks one
+ *  social action and AT MOST ONE responder per human message, never runs a
+ *  separate decision per deployment. */
 async function findChatterDeployments(admin: SupabaseClient, communityId: string): Promise<ChatterDeployment[]> {
   const { data: deployments } = await admin
     .from("moderator_deployments")
@@ -448,10 +448,12 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   // Loaded before selection — this message was already recorded
   // (recordCommunityMessage, called by the caller before branching here), so
   // it's recentContext's LAST entry; the one before it (index length-2) is
-  // what "recentlyAnsweredByModerator"/"wasLastSpeaker" check.
+  // what "recentlyAnsweredByModerator"/"recentlyRespondedByHuman"/
+  // "wasLastSpeaker" check.
   const recentContext = await loadRecentContext(admin, community.id, 10);
   const priorMessage = recentContext.length >= 2 ? recentContext[recentContext.length - 2] : null;
   const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR";
+  const recentlyRespondedByHuman = priorMessage?.senderType === "HUMAN";
 
   const candidates: ChatterCandidate[] = deployments.map((d, i) => ({
     deploymentId: d.deploymentId,
@@ -460,48 +462,66 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
     pacing: pacings[i],
   }));
 
-  // Picks AT MOST ONE responder across every eligible deployment, with a
-  // single probability roll for the winner — never one roll per moderator.
-  const selection = selectChatterResponder({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator });
+  // Picks the socially appropriate ACTION (SILENCE/REACT/SHORT_ACK/
+  // CASUAL_CHAT/ANSWER) and AT MOST ONE responder across every eligible
+  // deployment — deterministic, no probability roll anywhere.
+  const action = selectChatterAction({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman });
 
-  if (!selection.proceed) {
-    await logActivity(admin, panelId, community.id, selection.deploymentId, "human_message", "IGNORE", selection.reasonCode, { priority: selection.priority });
+  if (action.type === "SILENCE") {
+    await logActivity(admin, panelId, community.id, null, "human_message", "SILENCE", action.reasons.join(","), { reasons: action.reasons });
     return;
   }
 
-  const deployment = deployments.find((d) => d.deploymentId === selection.deploymentId);
+  const deployment = deployments.find((d) => d.deploymentId === action.deploymentId);
   if (!deployment) return; // selection only ever returns an ID drawn from `candidates`/`deployments`
 
-  const generation = await generateChatterReply({
-    moderatorName: deployment.moderatorName,
-    persona: deployment.persona,
-    recentContext,
-    triggerMessage: { senderName: event.sender.displayName, text: event.text },
-    isDirectedAtBot: selection.reasonCode === "DIRECTED",
-  });
-
-  if (!generation.ok) {
-    console.error("[telegram/community] chatter generation failed", generation.error);
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", "GENERATION_FAILED", { priority: selection.priority });
-    return;
-  }
-  if ("noReply" in generation) {
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "IGNORE", "MODEL_DECLINED", { priority: selection.priority });
+  if (action.type === "REACT") {
+    // Deterministic, zero Sonnet calls — a real Telegram reaction, never a
+    // standalone emoji text message, and never starts another bot-chain event.
+    const reactAction: CommunityAction = { kind: "REACT", emoji: action.emoji, targetDeploymentId: deployment.deploymentId, targetMessageId: event.messageId };
+    await executeAction(admin, String(message.chat.id), reactAction);
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "REACT", action.reasons.join(","), { reasons: action.reasons, emoji: action.emoji });
     return;
   }
 
-  const action: CommunityAction = {
+  let replyText: string;
+  if (action.type === "SHORT_ACK") {
+    // Deterministic, zero Sonnet calls.
+    replyText = shortAckText(deployment.persona);
+  } else {
+    const generation = await generateChatterReply({
+      action: action.type,
+      moderatorName: deployment.moderatorName,
+      persona: deployment.persona,
+      recentContext,
+      triggerMessage: { senderName: event.sender.displayName, text: event.text },
+      isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
+    });
+
+    if (!generation.ok) {
+      console.error("[telegram/community] chatter generation failed", generation.error);
+      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "GENERATION_FAILED", action.reasons.join(","), { reasons: action.reasons });
+      return;
+    }
+    if ("noReply" in generation) {
+      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "MODEL_DECLINED", action.reasons.join(","), { reasons: action.reasons });
+      return;
+    }
+    replyText = generation.reply;
+  }
+
+  const sendAction: CommunityAction = {
     kind: "SEND_TEXT",
-    text: generation.reply,
+    text: replyText,
     targetDeploymentId: deployment.deploymentId,
     replyToMessageId: event.messageId,
     origin: "HUMAN",
     interactionDepth: 0,
     causationMessageId: event.messageId,
   };
-  const sent = await executeAction(admin, String(message.chat.id), action);
+  const sent = await executeAction(admin, String(message.chat.id), sendAction);
   await recordBotSpoke(admin, deployment.deploymentId, new Date());
-  await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "CHAT_REPLY", selection.reasonCode, { priority: selection.priority });
+  await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", action.type, action.reasons.join(","), { reasons: action.reasons });
 
   if (sent.sentMessageId) {
     await admin.from("community_messages").insert({
@@ -512,7 +532,7 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
       sender_platform_id: null,
       sender_display_name: deployment.moderatorName,
       deployment_id: deployment.deploymentId,
-      text: generation.reply,
+      text: replyText,
       reply_to_platform_message_id: event.messageId,
     });
   }

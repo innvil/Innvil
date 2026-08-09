@@ -2180,35 +2180,37 @@ win over this):**
 > `docs/moderator/natural-chatter-refinement-spec.md` is the verbatim source-of-truth
 > spec (57 sections); implement (B)–(F) FROM that file, not from this summary. Scope
 > is tightly bounded to 6 things:
-> - **(A) Reactive response selection/pacing — DONE (v1.1.84).** Replaced the flat
->   15%(ambient)/75%(mentioned) random-roll model with **contextual social-action
->   selection**, per explicit user correction: *"Do not model natural chatter
->   primarily as 'response probability.' Model it as contextual social-action
->   selection, where SILENCE is a first-class action... Randomness should only add
->   variation between already-plausible actions; it should not decide whether an
->   otherwise inappropriate response happens."* `chatter-coordinator.ts` now scores
->   signals (directed/mention, question-shaped, substantive vs. trivial,
->   recently-answered-by-moderator) into a priority band — LOW is a hard
->   deterministic SILENCE (no RNG call at all), VERY_HIGH is a hard deterministic
->   ENGAGE, and randomness only applies within MEDIUM/HIGH. Mention/reply is a
->   strong signal (+5), never alone decisive — a trivial mention ("@bot lol") lands
->   in the ambiguous MEDIUM band, not an automatic ~85%. **Multi-moderator selection
->   (§15) — DONE (v1.1.85).** `community-runtime.ts`'s `findChatterDeployment`
->   (singular, `.limit(1)`) was replaced with `findChatterDeployments` (plural, no
->   limit) — every active deployment in the community is now a candidate.
->   `chatter-coordinator.ts` exports `selectChatterResponder`, which scores each
->   candidate independently (pure, no RNG), picks AT MOST ONE winner (highest
->   priority band, ties broken toward whoever's been quietest longest), and rolls
->   the probability dice exactly once for that winner — never once per candidate
->   (which would let several moderators all "coincidentally" reply to the same
->   message). Also fixed a real pre-existing bug found during this work: pacing was
->   read AFTER streaks were reset, making the dominating-conversation safeguard
->   permanently unreachable — `handleHumanMessage` now loads every deployment's
->   pacing before resetting any of them. **Still not covered by (A):**
->   reactions/jokes/handoffs as distinct action types (stylistic variety is
->   currently the LLM's own judgment; REACT-for-human-messages is Phase 4.P
->   territory, not duplicated here); the quota-aware/business-knowledge-aware
->   signals from §11 that depend on (B) or Phase 4.N.
+> - **(A) Reactive response selection/pacing — DONE (final form: v1.1.97).**
+>   **Natural Chatter uses contextual social action selection. It does NOT use flat
+>   response percentages anywhere.** `selectChatterAction()` (`chatter-coordinator.ts`)
+>   takes no RNG parameter and contains no `Math.random()`; the earlier
+>   probability models (v1.1.84's LOW/MEDIUM/HIGH/VERY_HIGH → 0%/35%/85%/100% bands,
+>   and v1.1.96's opener signal that still fed them) were **removed outright** —
+>   repo-wide greps for `selectChatterResponder`/`ENGAGE_PROBABILITY`/
+>   `PROBABILITY_GATE`/`ChatterPriority`/`priorityBand` return nothing.
+>   The Coordinator classifies the message (EMPTY / TOO_SHORT / COMMUNITY_OPENER /
+>   TRIVIAL / QUESTION / SUBSTANTIVE) + room state and returns exactly one
+>   first-class action: **`SILENCE` · `REACT` · `SHORT_ACK` · `CASUAL_CHAT` ·
+>   `ANSWER`** (`COMMUNITY_HANDOFF` stays a bot-to-bot concept in `coordinator.ts`;
+>   a HUMAN message never routes to it). **Silence is contextual, never a lost
+>   roll** — every SILENCE carries reasons (`already_handled`, `trivial_low_value`,
+>   `no_eligible_moderator`, `low_social_priority`, `already_handled_recent_reply`,
+>   …). **Cost:** SILENCE/REACT/SHORT_ACK make **zero** AI calls (REACT is a real
+>   Telegram reaction; SHORT_ACK is a deterministic phrase from `shortAckText()`);
+>   only CASUAL_CHAT/ANSWER reach Sonnet 5, each with its own action-specific
+>   prompt. The action union structurally carries exactly ONE `deploymentId`, so N
+>   moderators can never produce N generations. **Randomness now exists in exactly
+>   one place** — `shortAckText()` picking which canned phrase to use: it varies
+>   *wording*, never *whether* a moderator acts and never *who* (selection is
+>   deterministic: explicit mention → active-exchange continuity → quietest
+>   longest). **Multi-moderator (§15) — DONE (v1.1.85).** `findChatterDeployment`
+>   (singular, `.limit(1)`) → `findChatterDeployments` (plural); also fixed a real
+>   pre-existing bug where pacing was read AFTER streaks were reset, making the
+>   dominating-conversation safeguard unreachable. **Conversational continuity
+>   (v1.1.95):** `wasLastSpeaker` keeps whoever's mid-exchange answering, instead of
+>   a different moderator jumping in as if it were the subject. **Still not covered
+>   by (A):** the quota-aware/business-knowledge-aware signals from §11 that depend
+>   on (B) or Phase 4.N.
 > - **(B) Trial reactive quota = 20/day** (successful sends only, per community per
 >   local community day, checked before AI generation) — separate from the existing
 >   2/day proactive quota; moderation enforcement never consumes or is blocked by it.
