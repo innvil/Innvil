@@ -125,10 +125,68 @@ test('REQUIRED: custom override -- a manual edit after applying a preset is neve
 
 test("REQUIRED: preset overrides never touch fields outside style (no moderation/authority/identity fields exist on ModeratorPersona at all)", () => {
   const preset = resolvePersonaPreset("strict_moderator")!;
-  const allowedKeys = new Set(["description", "customInstructions", "formality", "humor", "slang", "emojiFrequency", "teasing", "chattiness", "profanityTolerance"]);
+  const allowedKeys = new Set(["description", "customInstructions", "formal", "formality", "humor", "slang", "emojiFrequency", "teasing", "chattiness", "profanityTolerance"]);
   for (const key of Object.keys(preset.overrides)) {
     assert.ok(allowedKeys.has(key), `preset override touches unexpected field "${key}"`);
   }
+});
+
+/* ------------------------------------------------- formal: binary, not a threshold ---- */
+// REQUIRED: formality/capitalization for a PRESET is an explicit semantic
+// YES/NO decision on the preset itself, never re-derived from the numeric
+// `formality` dial. Every preset below has a `formal` value asserted
+// directly against ITS OWN catalog entry, not a computed range check --
+// proving the mapping is a stored product decision, not a formula.
+
+test("REQUIRED: every preset explicitly sets `formal` -- true or false, never left unset", () => {
+  for (const preset of MODERATOR_PERSONA_PRESETS) {
+    assert.equal(typeof preset.overrides.formal, "boolean", `${preset.id} must explicitly set formal`);
+  }
+});
+
+test("REQUIRED: formal mapping matches the explicit product decision per preset (semantic, not numeric)", () => {
+  const expected: Record<string, boolean> = {
+    calm_professional: true,
+    friendly_community_mod: false,
+    chill_casual: false,
+    witty_mod: false,
+    direct_no_nonsense: true,
+    hype_energetic: false,
+    supportive_guide: false,
+    technical_expert: true,
+    strict_moderator: true,
+    diplomatic_mediator: true,
+    polite_minimalist: true,
+    playful_meme_mod: false,
+    community_veteran: false,
+    dry_humor: false,
+    big_sibling_mod: false,
+    founder_like: false,
+    web3_native: false,
+    gaming_community_mod: false,
+  };
+  assert.equal(Object.keys(expected).length, MODERATOR_PERSONA_PRESETS.length, "expected mapping must cover every preset");
+  for (const preset of MODERATOR_PERSONA_PRESETS) {
+    assert.equal(preset.overrides.formal, expected[preset.id], `${preset.id}: expected formal=${expected[preset.id]}`);
+  }
+});
+
+test("REQUIRED (exact live bug): Witty Mod is formal=false, NOT derived from formality=30 landing near a threshold", () => {
+  const witty = resolvePersonaPreset("witty_mod")!;
+  assert.equal(witty.overrides.formal, false);
+  const persona = personaFromPreset(witty);
+  assert.equal(persona.formal, false);
+});
+
+test("REQUIRED: Calm Professional / Chill & Casual / Polite Minimalist / Playful Meme Mod materialize the exact expected formal value onto the persona", () => {
+  assert.equal(personaFromPreset(resolvePersonaPreset("calm_professional")!).formal, true);
+  assert.equal(personaFromPreset(resolvePersonaPreset("chill_casual")!).formal, false);
+  assert.equal(personaFromPreset(resolvePersonaPreset("polite_minimalist")!).formal, true);
+  assert.equal(personaFromPreset(resolvePersonaPreset("playful_meme_mod")!).formal, false);
+});
+
+test("a custom (non-preset) persona defaults formal to null -- no explicit decision, falls back to the numeric dial elsewhere", () => {
+  assert.equal(DEFAULT_MODERATOR_PERSONA.formal, null);
 });
 
 test('a "Founder-Like" preset explicitly disclaims actually being the founder', () => {

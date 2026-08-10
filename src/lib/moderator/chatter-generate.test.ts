@@ -499,16 +499,56 @@ test("REQUIRED (exact live bug): the Witty Mod preset's dials (formality=30, sla
   assert.match(style, /light humor is welcome/i);
 });
 
-test("REQUIRED (exact live bug, follow-up): Witty Mod's formality=30 resolves to the LOWERCASE band specifically, not the neutral semi-formal one -- live repro was Kwan still capitalizing sentence starts", () => {
+test("REQUIRED (exact live bug, follow-up): Witty Mod resolves to the LOWERCASE contract via its explicit formal:false, not a numeric threshold -- live repro was Kwan still capitalizing sentence starts", () => {
   const witty = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  assert.equal(witty.formal, false); // the actual source of truth, not formality=30
   const style = personaStyle(witty).join(" ");
   assert.match(style, /always write in lowercase/i);
   assert.doesNotMatch(style, /semi-formal/i);
   assert.doesNotMatch(style, /always capitalize the start/i);
 });
 
-test("formality/slang/chattiness instructions escalate across the range, not just a binary", () => {
-  const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, ...over }).join(" ");
+/* --------------------------------------- formal: binary, never a probability band ---- */
+// REQUIRED: architecture correction -- formality/capitalization for a
+// PRESET persona is decided by the explicit `formal` boolean, never
+// re-derived from the numeric `formality` dial. These tests prove the
+// boolean is authoritative even when it CONTRADICTS what the numeric dial
+// would otherwise imply -- the strongest possible guard against silently
+// regressing back to threshold logic.
+
+test("REQUIRED: persona.formal is authoritative even when it contradicts the numeric formality dial", () => {
+  // formality=90 would normally mean strict caps -- formal:false must still win.
+  const contradictoryCasual = { ...DEFAULT_MODERATOR_PERSONA, formal: false as boolean | null, formality: 90 };
+  assert.match(personaStyle(contradictoryCasual).join(" "), /always write in lowercase/i);
+
+  // formality=5 would normally mean lowercase -- formal:true must still win.
+  const contradictoryFormal = { ...DEFAULT_MODERATOR_PERSONA, formal: true as boolean | null, formality: 5 };
+  assert.match(personaStyle(contradictoryFormal).join(" "), /always capitalize the start/i);
+});
+
+test("REQUIRED: formal=true/false never produces the neutral semi-formal instruction -- that only exists as a numeric-fallback band for formal=null", () => {
+  const formalYes = { ...DEFAULT_MODERATOR_PERSONA, formal: true as boolean | null, formality: 50 };
+  const formalNo = { ...DEFAULT_MODERATOR_PERSONA, formal: false as boolean | null, formality: 50 };
+  assert.doesNotMatch(personaStyle(formalYes).join(" "), /semi-formal/i);
+  assert.doesNotMatch(personaStyle(formalNo).join(" "), /semi-formal/i);
+});
+
+test("REQUIRED: no probability/tendency language leaks into the binary contract -- exact deterministic phrasing only", () => {
+  const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formal: false }).join(" ");
+  for (const word of ["skew", "usually", "may capitalize", "lowercase-leaning", "sometimes"]) {
+    assert.doesNotMatch(style, new RegExp(word, "i"), `found probability language "${word}"`);
+  }
+});
+
+test("REQUIRED: formal=null (no explicit decision -- custom/legacy persona) falls back to the numeric dial, preserving prior custom-persona behavior", () => {
+  const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formal: null, ...over }).join(" ");
+  assert.match(at({ formality: 90 }), /always capitalize the start/i);
+  assert.match(at({ formality: 50 }), /semi-formal/i);
+  assert.match(at({ formality: 10 }), /always write in lowercase/i);
+});
+
+test("formality/slang/chattiness instructions escalate across the range, not just a binary (formal=null numeric-fallback path)", () => {
+  const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formal: null, ...over }).join(" ");
   assert.match(at({ formality: 90 }), /always capitalize the start/i);
   assert.match(at({ formality: 50 }), /semi-formal/i);
   assert.match(at({ formality: 10 }), /always write in lowercase/i);

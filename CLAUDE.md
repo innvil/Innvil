@@ -2970,6 +2970,49 @@ win over this):**
 >     `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_CHATTER_MODEL` env vars —
 >     same credential, now used for two purposes: CASUAL_CHAT generation and this
 >     narrow classification fallback).
+>   **Tenth architecture correction, same session (v1.9.11): formality/capitalization
+>   for a PRESET is now a binary semantic decision, never a numeric threshold.**
+>   v1.9.9 raised the lowercase cutoff to `<40`, but that was still fundamentally
+>   the wrong abstraction per explicit feedback — a probability BAND (30 means
+>   maybe lowercase, 40 means neutral, 60 means capitalized) is not how a fixed
+>   identity trait like "is this moderator formal" should work; it's why Witty
+>   Mod's `formality:30` had already drifted across two different thresholds
+>   (v1.9.8's `<30`, then v1.9.9's `<40`) without ever being a real product
+>   decision about Witty Mod specifically.
+>   - New `ModeratorPersona.formal: boolean | null` (`domain.ts`) — `true`/`false`
+>     is a deterministic capitalization CONTRACT (conventional caps vs. casual
+>     lowercase), never a tendency. `null` = no explicit decision was ever made (a
+>     fully custom persona, or one saved before this field existed) — ONLY then
+>     does `personaStyle()` fall back to the pre-existing numeric-`formality`
+>     threshold logic (unchanged, still `>70`/`<40`/else), preserving custom-
+>     persona behavior exactly as before.
+>   - **Every one of the 18 presets in `presets.ts` now sets `formal` explicitly**,
+>     read from each preset's own `description`/`customInstructions`/example
+>     voice — an actual per-preset product decision, not a formula: `formal:true`
+>     — Calm Professional, Direct & No-Nonsense, Technical Expert, Strict
+>     Moderator, Diplomatic Mediator, Polite Minimalist (6). `formal:false` — the
+>     remaining 12 (Friendly Community Mod, Chill & Casual, Witty Mod, Hype &
+>     Energetic, Supportive Guide, Playful Meme Mod, Community Veteran, Dry
+>     Humor, Big-Sibling Mod, Founder-Like, Web3 Native, Gaming Community Mod).
+>     `ModeratorPersonaPreset.overrides` type widened to include `formal`.
+>   - `personaStyle()` (`chatter-generate.ts`): `formal===true` → strict-caps
+>     contract; `formal===false` → lowercase contract; `formal===null` → the
+>     numeric-dial fallback band (only reachable for custom/legacy personas,
+>     never for a preset-created one). No probability language anywhere in the
+>     contract text ("skew", "usually", "may capitalize", "lowercase-leaning" —
+>     all explicitly tested absent).
+>   - New tests: `presets.test.ts` (+5 — every preset sets `formal` explicitly,
+>     the full 18-preset semantic mapping asserted against the catalog directly
+>     (not a computed range), Witty Mod's `formal:false` traced through
+>     materialization, four named presets spot-checked, custom-persona default is
+>     `null`) and `chatter-generate.test.ts` (+4 — `persona.formal` wins even when
+>     it CONTRADICTS the numeric dial in both directions, `formal:true/false`
+>     never produces the neutral fallback text, no probability language leaks
+>     into the contract, `formal:null` still exercises the preserved numeric
+>     fallback). 442 tests pass, `tsc --noEmit` clean, production build clean.
+>     **Run no migration** (new persona field defaults to `null` via
+>     `normalizeModeratorPersona`, so existing stored personas read back
+>     unaffected until re-materialized from a preset).
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

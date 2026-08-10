@@ -27,6 +27,16 @@ export interface ModeratorPersona {
    *  (which govern HOW the moderator writes, not WHO it says it is). Empty
    *  string = genuinely unconfigured; never fabricate one when blank. */
   description: string;
+  /** Binary semantic capitalization/formality contract -- NOT a probability
+   *  or a threshold read off `formality` below. `true` = conventional
+   *  sentence capitalization; `false` = casual lowercase. A preset ALWAYS
+   *  materializes this explicitly (see presets.ts) -- every preset made an
+   *  actual product decision, never "whatever the numeric dial implies."
+   *  `null` = no explicit decision was ever made (a fully custom persona, or
+   *  one saved before this field existed) -- ONLY in that case does
+   *  generation fall back to deriving a tendency from the numeric
+   *  `formality` dial below. Presets never read as `null`. */
+  formal: boolean | null;
   formality: number;         // 0-100
   humor: number;             // 0-100
   slang: number;             // 0-100
@@ -48,6 +58,7 @@ export interface ModeratorPersona {
 export const DEFAULT_MODERATOR_PERSONA: ModeratorPersona = {
   language: "en",
   description: "",
+  formal: null,
   formality: 30,
   humor: 50,
   slang: 40,
@@ -68,6 +79,7 @@ export function normalizeModeratorPersona(value: unknown): ModeratorPersona {
   return {
     language: typeof raw.language === "string" && raw.language ? raw.language : DEFAULT_MODERATOR_PERSONA.language,
     description: typeof raw.description === "string" ? raw.description.trim().slice(0, 300) : "",
+    formal: typeof raw.formal === "boolean" ? raw.formal : null,
     formality: pct(raw.formality, DEFAULT_MODERATOR_PERSONA.formality),
     humor: pct(raw.humor, DEFAULT_MODERATOR_PERSONA.humor),
     slang: pct(raw.slang, DEFAULT_MODERATOR_PERSONA.slang),
