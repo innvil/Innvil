@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { __testables, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
+import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
 const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine } = __testables;
 
@@ -221,5 +222,59 @@ test("REQUIRED: missing/unconfigured persona -- does not fabricate one, answers 
 
 test("REQUIRED: missing persona is grounded in the prompt too (not silently dropped)", () => {
   const prompt = buildSystemPrompt(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  assert.match(prompt, /No specific persona description has been configured/i);
+});
+
+/* ------------------------------------------------------ persona presets ---- */
+// Requirements from the preset-picker feature: a moderator created with a
+// preset receives that preset's persona in generation, two moderators with
+// different presets stay isolated, and an existing moderator with no preset
+// (persona.presetId === null) keeps working exactly as before.
+
+test("REQUIRED: a moderator with a preset applied receives that preset's persona in generation (description + style + behavior notes)", () => {
+  const preset = resolvePersonaPreset("technical_expert")!;
+  const persona = personaFromPreset(preset);
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona }));
+  assert.match(prompt, /precise, analytical, and detail-oriented/i); // description
+  assert.match(prompt, /be precise and analytical/i); // customInstructions
+  assert.match(prompt, /avoid slang — keep language plain and standard/i); // slang: 5 -> style mechanics
+});
+
+test("REQUIRED: two-moderator isolation with presets -- Kwan (Calm Professional) and Test (Chill & Casual) never receive each other's persona as authoritative style", () => {
+  const kwanPersona = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+  const testPersona = personaFromPreset(resolvePersonaPreset("chill_casual")!);
+
+  const kwanPrompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona: kwanPersona }));
+  const testPrompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: testPersona }));
+
+  assert.match(kwanPrompt, /composed, clear, and respectful/i);
+  assert.doesNotMatch(kwanPrompt, /relaxed and informal/i);
+  assert.match(testPrompt, /relaxed and informal/i);
+  assert.doesNotMatch(testPrompt, /composed, clear, and respectful/i);
+
+  // Style mechanics also stay isolated: Calm Professional is high-formality
+  // (capitalized), Chill & Casual is low-formality (lowercase).
+  assert.match(kwanPrompt, /always capitalize the start/i);
+  assert.doesNotMatch(kwanPrompt, /always write in lowercase/i);
+  assert.match(testPrompt, /always write in lowercase/i);
+  assert.doesNotMatch(testPrompt, /always capitalize the start/i);
+});
+
+test("REQUIRED: shared conversation transcript never overrides the selected moderator's own preset persona (Kwan speaking after a transcript full of Test's casual messages still uses Kwan's formal preset)", () => {
+  const kwanPersona = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+  const context: ChatterContextMessage[] = [
+    { senderType: "INNVIL_MODERATOR", senderName: "Test", text: "yeah lol nah that's fine", deploymentId: "dep-test" },
+    { senderType: "INNVIL_MODERATOR", senderName: "Test", text: "np, all good haha", deploymentId: "dep-test" },
+  ];
+  const prompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: kwanPersona, recentContext: context }));
+  assert.match(prompt, /always capitalize the start/i); // Kwan's own preset, not Test's casual style
+  assert.doesNotMatch(prompt, /always write in lowercase/i);
+});
+
+test("REQUIRED: an existing moderator with no preset (presetId null) keeps working exactly as before", () => {
+  assert.equal(DEFAULT_MODERATOR_PERSONA.presetId, null);
+  const prompt = buildSystemPrompt(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  // Falls back to the same neutral "nothing configured" persona line as
+  // before presets existed -- unaffected by the new preset catalog.
   assert.match(prompt, /No specific persona description has been configured/i);
 });

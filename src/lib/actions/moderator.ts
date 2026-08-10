@@ -14,6 +14,7 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT, normalizeModeratorPersona } from "@/src/lib/moderator/domain";
+import { resolvePersonaPreset, applyPersonaPreset } from "@/src/lib/moderator/presets";
 import {
   hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon,
   TRIAL_DURATION_DAYS, virtualModBotAcknowledgement, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY,
@@ -67,6 +68,12 @@ export interface VirtualModeratorRow {
    *  authoritative answer when a member asks the moderator what its persona
    *  is. Empty when never configured. */
   personaDescription: string;
+  /** Free-form behavioral guidance, either typed directly or materialized
+   *  from a preset — already wired into generation via personaStyle(). */
+  personaCustomInstructions: string;
+  /** Which preset (see presets.ts) this persona was last applied from, for
+   *  UI display only ("based on: Calm Professional"). Null = custom. */
+  personaPresetId: string | null;
 }
 
 export async function listVirtualModerators(panelId: string): Promise<VirtualModeratorRow[]> {
@@ -80,6 +87,7 @@ export async function listVirtualModerators(panelId: string): Promise<VirtualMod
   return ((data as Array<Record<string, unknown>>) ?? []).map((row) => {
     const integration = row.telegram_bot_integrations as { username?: string | null } | Array<{ username?: string | null }> | null;
     const username = Array.isArray(integration) ? integration[0]?.username ?? null : integration?.username ?? null;
+    const persona = normalizeModeratorPersona(row.persona);
     return {
       id: String(row.id),
       name: String(row.name),
@@ -87,9 +95,64 @@ export async function listVirtualModerators(panelId: string): Promise<VirtualMod
       provisioningStatus: String(row.provisioning_status),
       telegramUsername: username ?? null,
       lastError: (row.last_error as string | null) ?? null,
-      personaDescription: normalizeModeratorPersona(row.persona).description,
+      personaDescription: persona.description,
+      personaCustomInstructions: persona.customInstructions,
+      personaPresetId: persona.presetId,
     };
   });
+}
+
+/** Owner applies a persona preset (see presets.ts) — a ONE-TIME
+ *  materialization onto the moderator's persona fields, not a live binding.
+ *  Overwrites description/customInstructions/style dials with the preset's
+ *  values; leaves language/topicsToAvoid untouched. Subsequent manual edits
+ *  are never overwritten by re-applying this preset later — the owner would
+ *  have to explicitly pick it again. */
+export async function applyModeratorPersonaPreset(panelId: string, moderatorId: string, presetId: string): Promise<Result<null>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+  const preset = resolvePersonaPreset(presetId);
+  if (!preset) return { ok: false, error: "Unknown persona preset." };
+
+  const { data: current } = await ctx.admin.from("virtual_moderators").select("persona").eq("id", moderatorId).maybeSingle();
+  const persona = applyPersonaPreset(normalizeModeratorPersona(current?.persona), preset);
+
+  const { error } = await ctx.admin.from("virtual_moderators").update({ persona }).eq("id", moderatorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
+/** Owner clears the preset link so the picker shows "Custom" — does NOT
+ *  reset any persona field, only the provenance tag. */
+export async function clearModeratorPersonaPreset(panelId: string, moderatorId: string): Promise<Result<null>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+
+  const { data: current } = await ctx.admin.from("virtual_moderators").select("persona").eq("id", moderatorId).maybeSingle();
+  const persona = normalizeModeratorPersona(current?.persona);
+  persona.presetId = null;
+
+  const { error } = await ctx.admin.from("virtual_moderators").update({ persona }).eq("id", moderatorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
+/** Owner edits the free-form behavioral guidance directly (whether typed
+ *  from scratch or refining what a preset materialized). Does not touch
+ *  presetId — editing customInstructions after picking a preset is exactly
+ *  the "customize" path, not a reason to silently drop the provenance tag. */
+export async function setModeratorCustomInstructions(panelId: string, moderatorId: string, customInstructions: string): Promise<Result<null>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+  const trimmed = customInstructions.slice(0, 2000);
+
+  const { data: current } = await ctx.admin.from("virtual_moderators").select("persona").eq("id", moderatorId).maybeSingle();
+  const persona = normalizeModeratorPersona(current?.persona);
+  persona.customInstructions = trimmed;
+
+  const { error } = await ctx.admin.from("virtual_moderators").update({ persona }).eq("id", moderatorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
 }
 
 /** Owner sets/updates this moderator's persona self-description -- the
@@ -179,6 +242,8 @@ export async function createVirtualModerator(panelId: string, name: string): Pro
       telegramUsername: null,
       lastError: null,
       personaDescription: "",
+      personaCustomInstructions: "",
+      personaPresetId: null,
     },
   };
 }

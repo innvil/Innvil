@@ -16,9 +16,10 @@ import {
   listVirtualModerators, getModeratorPlanInfo, createVirtualModerator,
   requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
   connectCommunity, listModeratorCommunities, setDeploymentEnabled, setCommunityBotAckMode,
-  setModeratorPersonaDescription,
+  setModeratorPersonaDescription, applyModeratorPersonaPreset, clearModeratorPersonaPreset, setModeratorCustomInstructions,
   type VirtualModeratorRow, type ModeratorPlanInfo, type CommunityDeploymentRow,
 } from "@/src/lib/actions/moderator";
+import { MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS } from "@/src/lib/moderator/presets";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
@@ -4119,6 +4120,11 @@ function TelegramConnectRow({
   const [personaSaving, setPersonaSaving] = React.useState(false);
   const [personaMsg, setPersonaMsg] = React.useState<string | null>(null);
 
+  const [instructionsDraft, setInstructionsDraft] = React.useState(moderator.personaCustomInstructions);
+  const [instructionsSaving, setInstructionsSaving] = React.useState(false);
+  const [instructionsMsg, setInstructionsMsg] = React.useState<string | null>(null);
+  const [showInstructions, setShowInstructions] = React.useState(false);
+
   React.useEffect(() => {
     setStatus(moderator.provisioningStatus);
     setTelegramUsername(moderator.telegramUsername);
@@ -4129,12 +4135,25 @@ function TelegramConnectRow({
     setPersonaDraft(moderator.personaDescription);
   }, [moderator.personaDescription]);
 
+  React.useEffect(() => {
+    setInstructionsDraft(moderator.personaCustomInstructions);
+  }, [moderator.personaCustomInstructions]);
+
   const savePersona = async () => {
     setPersonaSaving(true); setPersonaMsg(null);
     const res = await setModeratorPersonaDescription(panelId, moderator.id, personaDraft);
     setPersonaSaving(false);
     if (!res.ok) { setPersonaMsg(res.error); return; }
     setPersonaMsg("Saved.");
+    await onChanged();
+  };
+
+  const saveInstructions = async () => {
+    setInstructionsSaving(true); setInstructionsMsg(null);
+    const res = await setModeratorCustomInstructions(panelId, moderator.id, instructionsDraft);
+    setInstructionsSaving(false);
+    if (!res.ok) { setInstructionsMsg(res.error); return; }
+    setInstructionsMsg("Saved.");
     await onChanged();
   };
 
@@ -4231,6 +4250,13 @@ function TelegramConnectRow({
 
       {lastError && <p className="text-xs text-red-400 mt-2">{lastError}</p>}
 
+      <PersonaPresetPicker
+        panelId={panelId}
+        moderatorId={moderator.id}
+        currentPresetId={moderator.personaPresetId}
+        onApplied={onChanged}
+      />
+
       <div className="mt-3">
         <label className="text-xs fp-text-faint">
           Persona — how {moderator.name} describes itself when asked ("what's your persona?"). This is the
@@ -4253,6 +4279,34 @@ function TelegramConnectRow({
           </button>
         </div>
         {personaMsg && <p className="text-[11px] mt-1 fp-safe">{personaMsg}</p>}
+      </div>
+
+      <div className="mt-3">
+        <button onClick={() => setShowInstructions((v) => !v)} className="text-[11px] fp-text-dim hover:fp-text underline">
+          {showInstructions ? "Hide behavior instructions" : "Advanced: behavior instructions"}
+        </button>
+        {showInstructions && (
+          <div className="mt-1.5">
+            <textarea
+              value={instructionsDraft}
+              onChange={(e) => setInstructionsDraft(e.target.value)}
+              placeholder="Free-form guidance for how this moderator should behave — set automatically when you pick a preset above, or write your own."
+              maxLength={2000}
+              rows={3}
+              className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border resize-y"
+            />
+            <div className="flex items-center gap-2 mt-1.5">
+              <button
+                onClick={saveInstructions}
+                disabled={instructionsSaving || instructionsDraft === moderator.personaCustomInstructions}
+                className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60"
+              >
+                {instructionsSaving ? "Saving…" : "Save"}
+              </button>
+              {instructionsMsg && <p className="text-[11px] fp-safe">{instructionsMsg}</p>}
+            </div>
+          </div>
+        )}
       </div>
 
       {expanded && (
@@ -4283,6 +4337,102 @@ function TelegramConnectRow({
       {CONNECTED_PROVISIONING_STATUSES.has(status) && (
         <ModeratorCommunities panelId={panelId} moderatorId={moderator.id} botAckEnabled={botAckEnabled} />
       )}
+    </div>
+  );
+}
+
+/** Preset picker — quick starting point for a moderator's persona. Applying a
+ *  preset is a ONE-TIME materialization onto the persona fields (see
+ *  presets.ts); it never re-applies later, so subsequent edits to the
+ *  description/instructions below are never silently overwritten. */
+function PersonaPresetPicker({
+  panelId,
+  moderatorId,
+  currentPresetId,
+  onApplied,
+}: {
+  panelId: string;
+  moderatorId: string;
+  currentPresetId: string | null;
+  onApplied: () => void | Promise<void>;
+}) {
+  const [showMore, setShowMore] = React.useState(false);
+  const [previewId, setPreviewId] = React.useState<string | null>(null);
+  const [applying, setApplying] = React.useState<string | null>(null);
+
+  const surfaced = MODERATOR_PERSONA_PRESETS.filter((p) => DEFAULT_SURFACED_PRESET_IDS.includes(p.id));
+  const visible = showMore ? MODERATOR_PERSONA_PRESETS : surfaced;
+
+  const apply = async (presetId: string) => {
+    setApplying(presetId);
+    const res = await applyModeratorPersonaPreset(panelId, moderatorId, presetId);
+    setApplying(null);
+    if (res.ok) { setPreviewId(null); await onApplied(); }
+  };
+
+  const clearPreset = async () => {
+    setApplying("__custom__");
+    await clearModeratorPersonaPreset(panelId, moderatorId);
+    setApplying(null);
+    await onApplied();
+  };
+
+  return (
+    <div className="mt-3">
+      <label className="text-xs fp-text-faint">
+        Persona preset — a quick starting point (you can still customize the description and behavior below after).
+      </label>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1.5">
+        {visible.map((preset) => {
+          const active = currentPresetId === preset.id;
+          const expanded = previewId === preset.id;
+          return (
+            <div
+              key={preset.id}
+              onClick={() => setPreviewId(expanded ? null : preset.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPreviewId(expanded ? null : preset.id); }}
+              className={`text-left fp-panel-raised border rounded-lg p-2.5 cursor-pointer ${active ? "fp-gold-border" : "fp-line-soft"}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold">{preset.label}</p>
+                {active && <span className="text-[10px] fp-gold shrink-0">Active</span>}
+              </div>
+              <p className="text-[11px] fp-text-faint mt-0.5">{preset.shortDescription}</p>
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {preset.tags.map((t) => (
+                  <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-full fp-line-soft border fp-text-dim">{t}</span>
+                ))}
+              </div>
+              {expanded && (
+                <div className="mt-2 pt-2 border-t fp-line-soft">
+                  <p className="text-[11px] fp-text-faint italic">Example voice: &ldquo;{preset.exampleVoice}&rdquo;</p>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); apply(preset.id); }}
+                    disabled={applying === preset.id}
+                    className="fp-btn-primary text-[11px] font-semibold px-2.5 py-1.5 rounded-lg mt-2 disabled:opacity-60"
+                  >
+                    {applying === preset.id ? "Applying…" : active ? "Re-apply" : "Use this persona"}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-3 mt-2">
+        <button onClick={() => setShowMore((v) => !v)} className="text-[11px] fp-text-dim hover:fp-text underline">
+          {showMore ? "Fewer presets" : "More presets"}
+        </button>
+        <button
+          onClick={clearPreset}
+          disabled={applying === "__custom__" || !currentPresetId}
+          className="text-[11px] fp-text-dim hover:fp-text underline disabled:opacity-40"
+        >
+          Custom (clear preset link)
+        </button>
+      </div>
     </div>
   );
 }

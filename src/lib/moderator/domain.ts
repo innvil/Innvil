@@ -36,6 +36,13 @@ export interface ModeratorPersona {
   profanityTolerance: number; // 0-100
   topicsToAvoid: string[];
   customInstructions: string;
+  /** Provenance only -- which persona preset (see presets.ts) this persona
+   *  was last materialized from, purely so the UI can show "based on: X".
+   *  Never read by generation and never causes a later re-application to
+   *  silently overwrite subsequent manual edits -- presets are a one-time
+   *  materialization into the fields above, not a live binding. Null = a
+   *  fully custom persona, or one whose preset link was explicitly cleared. */
+  presetId: string | null;
 }
 
 export const DEFAULT_MODERATOR_PERSONA: ModeratorPersona = {
@@ -50,6 +57,7 @@ export const DEFAULT_MODERATOR_PERSONA: ModeratorPersona = {
   profanityTolerance: 10,
   topicsToAvoid: [],
   customInstructions: "",
+  presetId: null,
 };
 
 export function normalizeModeratorPersona(value: unknown): ModeratorPersona {
@@ -71,6 +79,7 @@ export function normalizeModeratorPersona(value: unknown): ModeratorPersona {
       ? raw.topicsToAvoid.filter((v): v is string => typeof v === "string").slice(0, 20)
       : [],
     customInstructions: typeof raw.customInstructions === "string" ? raw.customInstructions.slice(0, 2000) : "",
+    presetId: typeof raw.presetId === "string" && raw.presetId ? raw.presetId : null,
   };
 }
 

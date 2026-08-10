@@ -2382,6 +2382,57 @@ win over this):**
 >     banned, AI re-anchoring required, persona stated as PRIMARY over AI-ness,
 >     Kwan/Test isolation (no cross-contamination), and the missing-persona case
 >     (neutral fallback, no fabrication). 258 tests pass.
+>   **Persona preset picker — 18 distinct starting personas (v1.5.0).** Follow-up
+>   to v1.4.0, since a blank text field is still a blank-page problem for most
+>   owners. New `src/lib/moderator/presets.ts` (pure, no I/O) — 18 curated
+>   presets (Calm Professional, Friendly Community Mod, Chill & Casual, Witty Mod,
+>   Direct & No-Nonsense, Hype & Energetic, Supportive Guide, Technical Expert,
+>   Strict Moderator, Diplomatic Mediator, Polite Minimalist, Playful Meme Mod,
+>   Community Veteran, Dry Humor, Big-Sibling Mod, Founder-Like, Web3 Native,
+>   Gaming Community Mod), each a genuinely distinct combination of the
+>   *existing* `ModeratorPersona` dials (formality/humor/slang/emojiFrequency/
+>   teasing/chattiness/profanityTolerance) + a tailored `description` +
+>   substantive `customInstructions` (not "You are friendly"-shallow) + UI tags
+>   + a unique example-voice line. 10 are surfaced by default
+>   (`DEFAULT_SURFACED_PRESET_IDS`); the other 8 sit behind "More presets"; a
+>   "Custom" option clears the preset link without touching any field.
+>   **No migration, no new generation plumbing** — `applyPersonaPreset()` is a
+>   ONE-TIME materialization onto the same persona jsonb fields v1.4.0 already
+>   wired into `personaStyle()`/`personaIdentityLine()`, so presets flow through
+>   generation for free. New `ModeratorPersona.presetId` (nullable) is pure UI
+>   provenance ("based on: X") — generation never reads it, and nothing ever
+>   re-applies a preset automatically, so a later manual edit to
+>   description/customInstructions is never silently snapped back.
+>   - New owner actions (`actions/moderator.ts`): `applyModeratorPersonaPreset`,
+>     `clearModeratorPersonaPreset`, `setModeratorCustomInstructions`.
+>     `VirtualModeratorRow` gained `personaCustomInstructions`/`personaPresetId`.
+>   - New UI: `PersonaPresetPicker` (`AdminTabs.tsx`) — a card grid (label,
+>     one-line description, style tags) above the existing persona-description
+>     input; clicking a card previews its example-voice line before an explicit
+>     "Use this persona" click actually applies it (never a stray-click
+>     overwrite); a collapsible "Advanced: behavior instructions" textarea
+>     exposes `customInstructions` directly (owner-editable whether it came
+>     from a preset or was typed from scratch).
+>   - Presets are explicitly scoped to STYLE only — every preset's `overrides`
+>     only ever touches `description`/`customInstructions`/the 6 numeric style
+>     dials (asserted by test); `ModeratorPersona` has no moderation-authority,
+>     identity-ownership, entitlement, or routing fields for a preset to reach
+>     even if it tried. The "Founder-Like" preset's `customInstructions`
+>     explicitly disclaims actually being the founder.
+>   - New `presets.test.ts` (13 tests: catalog shape, exactly 10 surfaced + 8
+>     more, distinct example voices, resolution, cross-preset distinctness on
+>     formality/slang/emoji/verbosity, no two presets share identical dials,
+>     materialization preserves untouched fields, custom-edit-not-overwritten,
+>     style-only boundary). New `chatter-generate.test.ts` cases: a preset
+>     flows into the real generation prompt, Kwan (Calm Professional)/Test
+>     (Chill & Casual) stay isolated including under a shared transcript
+>     dominated by the other's casual style, and an existing presetId-null
+>     moderator is unaffected. 275 tests pass, `tsc --noEmit` clean, production
+>     build clean, diff reviewed (only the intended files changed). Note: the
+>     new preset-picker UI was verified via typecheck + build only, same as
+>     v1.4.0's persona input — the Browser preview tool remained unavailable
+>     this session (ongoing safety-classifier outage), so neither was live
+>     click-tested.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not
