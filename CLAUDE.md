@@ -2675,6 +2675,52 @@ win over this):**
 >     default-persona regression test (the exact live bug), band-escalation proof,
 >     `shortAckText` continuous-probability tests (seeded random). 386 tests pass,
 >     `tsc --noEmit` clean, production build clean. No migration.
+>   **Third live bug fixed the same session (v1.9.3): plain-name targeting was too
+>   aggressive — referential mentions were treated as direct address.**
+>   - Live repro: after Test said "kwan's around too, just replied a sec ago", the
+>     human asked **"why are you responding for kwan though?"** — clearly addressed
+>     to Test ("you" + Test was the immediately-preceding speaker), with "kwan"
+>     merely referenced, not addressed. `resolveDirectedModerator` matched Kwan
+>     anyway (the v1.1.99 plain-name fix only checked whether the name token
+>     appeared ANYWHERE, never distinguishing vocative "hey kwan"/"are you kwan"
+>     from referential "for kwan"/"did test answer for kwan"), so Kwan was forced
+>     to answer a question actually about Test's own prior action — and, with no
+>     real basis to answer from, fabricated an entirely unstated accusation
+>     ("not me impersonating anyone — no ventriloquism required"), reading as a
+>     generic AI customer-support deflection rather than the configured persona.
+>   - **Fix 1 (`chatter-coordinator.ts`):** new `isVocativeOccurrence`/
+>     `trailingCommaVocative` — a name mention only counts as directed address when
+>     it's the sole message content, the first word, immediately preceded by a
+>     vocative cue (hey/hi/yo/hello/**you**), or has a comma directly before it at
+>     the end ("tell me, kwan"). A REFERENTIAL preceding word (for/about/to/did/
+>     does/is/answered/think/said/…) always overrides to non-directed, even at an
+>     edge position ("...for Kwan?"). Once the false match is removed, the
+>     *existing* `wasLastSpeaker` continuity mechanism correctly picks Test (no new
+>     "who's the addressee via 'you'" system needed — continuity already covers it
+>     once the interfering false positive is gone).
+>   - **Fix 2 (`chatter-generate.ts` `SHARED_RULES`):** new invariant — never invent
+>     a stronger accusation/emotion/criticism/motive/premise than what's literally
+>     in the message or grounded conversation history; a plain question like "why
+>     are you responding for X though?" is NOT an accusation of impersonation and
+>     doesn't call for a defensive rebuttal.
+>   - **Fix 3 (hardcoded, per explicit request):** new `SHARED_RULES` entry banning
+>     sliding into generic AI customer-support voice — applies to BOTH CASUAL_CHAT
+>     and ANSWER (not just casual chatter's own framing), explicitly names the
+>     failure pattern (manufactured clever comebacks/defensive rebuttals just to
+>     fill space) as exactly what to avoid.
+>   - New tests: exact live-message repro (`resolveDirectedModerator` → null),
+>     referential-vs-vocative pairs from every example given, no-regression checks
+>     for every existing vocative case (incl. the v1.1.99 "what persona are you
+>     kwan?" fix and the comma-tag "tell me, kwan" case), an end-to-end
+>     `selectChatterAction` test proving Test is picked via continuity, and prompt
+>     assertions for both new SHARED_RULES entries. 394 tests pass, `tsc --noEmit`
+>     clean, production build clean. No migration.
+>   **Deferred, scoped separately (not built this pass):** the user's proposed
+>   "primary + optional secondary responder" model (at most one PRIMARY response
+>   per message as today, with a narrowly-gated OPTIONAL secondary chime-in from a
+>   directly-relevant other moderator) — a genuinely larger architectural change to
+>   `ChatterAction`/dispatch/tests than the routing bug above; needs its own scoped
+>   design pass before implementation.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

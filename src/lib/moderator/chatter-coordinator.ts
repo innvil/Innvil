@@ -334,10 +334,57 @@ function isFuzzyNameToken(token: string, name: string): boolean {
   return false;
 }
 
-/** Resolves which (if any) deployment a message explicitly addresses — by
- *  @username, by its own configured display name, or by a typo-tolerant
- *  near-spelling of that name. Word-boundary-safe (tokenized, never
- *  substring) so a moderator named "Ann" is never triggered by
+// A name mention immediately preceded by one of these reads as REFERENCE
+// ("why did Test answer for Kwan?", "I think Kwan already answered", "does
+// Kwan know about this?") -- the person is being discussed, not addressed.
+// This always wins, even when the name sits at a message's edge ("...for
+// Kwan?") -- "for X"/"about X" is never a real vocative regardless of
+// position. Live bug: "why are you responding for kwan though?" resolved to
+// Kwan (name mentioned) when the actual addressee -- signaled by "you"
+// immediately after the prior speaker, Test -- was Test.
+const REFERENTIAL_PRECEDING_TOKENS = new Set([
+  "for", "about", "to", "from", "on", "behalf",
+  "did", "does", "is", "was", "has", "have", "will", "would", "could", "should",
+  "answer", "answered", "answering", "respond", "responded", "responding",
+  "reply", "replied", "replying", "speaking", "speak",
+  "think", "thinks", "thought", "know", "knows", "knew", "said", "says", "saying",
+]);
+// A name mention immediately preceded by one of these reads as a genuine
+// direct ADDRESS ("hey Kwan", "are you Kwan?") -- second-person framing.
+const VOCATIVE_PRECEDING_TOKENS = new Set(["hey", "hi", "yo", "hello", "you"]);
+
+/** True when the name-token at `tokens[idx]` reads as a direct address to
+ *  that person rather than a third-person mention of them. Mentioning a
+ *  name does not by itself make that person the addressee — distinguishes
+ *  "kwan, what do you think?" / "what persona are you kwan?" (address) from
+ *  "why are you responding for kwan though?" / "I think Kwan already
+ *  answered" (reference). A referential preceding word always wins, even at
+ *  an edge position, since "for X" is never a real vocative. */
+function isVocativeOccurrence(tokens: string[], idx: number): boolean {
+  const prev = idx > 0 ? tokens[idx - 1] : null;
+  if (prev && REFERENTIAL_PRECEDING_TOKENS.has(prev)) return false;
+  if (tokens.length === 1) return true; // the whole message is just the name
+  if (idx === 0) return true; // "kwan, ..." / "kwan what do you think?"
+  if (prev && VOCATIVE_PRECEDING_TOKENS.has(prev)) return true; // "hey kwan" / "are you kwan"
+  return false;
+}
+
+/** A comma directly before a trailing name ("tell me, kwan", "nice one,
+ *  kwan!") is an unambiguous vocative tag in natural English regardless of
+ *  what precedes the comma — but punctuation is stripped by tokenize(), so
+ *  this needs the ORIGINAL text, not the token array. Escapes `name` since
+ *  it's interpolated into a RegExp. */
+function trailingCommaVocative(lowerText: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`,\\s*${escaped}\\s*[?!.]*$`, "i").test(lowerText.trim());
+}
+
+/** Resolves which (if any) deployment a message explicitly ADDRESSES — by
+ *  @username, by its own configured display name used vocatively, or by a
+ *  typo-tolerant near-spelling of that name used vocatively. A referential
+ *  mention of the name (discussing that person, not speaking to them) does
+ *  NOT count — see isVocativeOccurrence. Word-boundary-safe (tokenized,
+ *  never substring) so a moderator named "Ann" is never triggered by
  *  "announcement", and case-insensitive. Ambiguous matches (2+ moderators
  *  plausibly addressed at the same confidence level) resolve to NO match
  *  rather than guessing which one was meant. Works for any configured name —
@@ -352,11 +399,17 @@ export function resolveDirectedModerator(text: string, moderators: ModeratorIden
   const tokens = tokenize(text);
   if (!tokens.length) return null;
 
-  const exact = moderators.filter((m) => tokenize(m.name).some((nt) => tokens.includes(nt)));
+  const exact = moderators.filter((m) =>
+    tokenize(m.name).some(
+      (nt) => tokens.some((t, idx) => t === nt && isVocativeOccurrence(tokens, idx)) || trailingCommaVocative(lower, nt)
+    )
+  );
   if (exact.length === 1) return { deploymentId: exact[0].deploymentId, isTypo: false };
   if (exact.length > 1) return null; // ambiguous -- don't guess
 
-  const fuzzy = moderators.filter((m) => tokenize(m.name).some((nt) => tokens.some((t) => isFuzzyNameToken(t, nt))));
+  const fuzzy = moderators.filter((m) =>
+    tokenize(m.name).some((nt) => tokens.some((t, idx) => isFuzzyNameToken(t, nt) && isVocativeOccurrence(tokens, idx)))
+  );
   if (fuzzy.length === 1) return { deploymentId: fuzzy[0].deploymentId, isTypo: true };
   return null; // no match, or an ambiguous fuzzy match across multiple moderators
 }

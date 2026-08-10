@@ -149,6 +149,21 @@ test("typo hint appears only when addressedWithTypo is true", () => {
 
 /* ---------------------------------------------------------- support-tone rule ---- */
 
+test("REQUIRED: prompt forbids inventing a stronger accusation/emotion/motive than the human actually expressed (live bug: fabricated 'impersonation' framing)", () => {
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /do not invent a stronger accusation, emotion, criticism, motive, or premise/i);
+  assert.match(prompt, /is NOT an accusation of impersonation/i);
+});
+
+test("REQUIRED: prompt hardcodes a ban on sliding into generic AI customer-support mode, for BOTH actions", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /do not turn into a generic ai customer-support assistant/i);
+    assert.match(prompt, /this applies to every reply, not just casual chatter/i);
+  }
+});
+
 test("prompt still bans generic support-chat closers (regression from the earlier fix)", () => {
   const prompt = buildSystemPrompt(baseInput());
   assert.match(prompt, /anything else on your mind/i);

@@ -401,6 +401,54 @@ test("works for arbitrary configured names, not hardcoded to Kwan/Test", () => {
   assert.deepEqual(match, { deploymentId: "dep-mika", isTypo: false });
 });
 
+/* ------------------------------------- referential vs. vocative mentions ---- */
+// Live bug: "why are you responding for kwan though?" resolved to Kwan
+// (Kwan's name is mentioned) when Test -- signaled by "you" right after
+// Test's own prior message -- was the actual addressee. Mentioning a name
+// does not by itself make that person the addressee.
+
+test("REQUIRED (live bug repro): \"why are you responding for kwan though?\" does NOT resolve to Kwan -- referential mention, not an address", () => {
+  const match = resolveDirectedModerator("why are you responding for kwan though?", [KWAN, TEST_MOD]);
+  assert.equal(match, null);
+});
+
+test("REQUIRED: \"why did test answer for kwan?\" resolves to neither -- both names are referential here", () => {
+  const match = resolveDirectedModerator("why did test answer for kwan?", [KWAN, TEST_MOD]);
+  assert.equal(match, null);
+});
+
+test("REQUIRED: \"I think Kwan already answered\" does not address Kwan", () => {
+  const match = resolveDirectedModerator("I think Kwan already answered", [KWAN, TEST_MOD]);
+  assert.equal(match, null);
+});
+
+test("REQUIRED: \"does Kwan know about this?\" does not address Kwan", () => {
+  const match = resolveDirectedModerator("does Kwan know about this?", [KWAN, TEST_MOD]);
+  assert.equal(match, null);
+});
+
+test("REQUIRED: genuine vocative uses still resolve after the referential fix (no regression)", () => {
+  assert.deepEqual(resolveDirectedModerator("kwan, what do you think?", [KWAN, TEST_MOD]), { deploymentId: "dep-kwan", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("what persona are you kwan?", [KWAN, TEST_MOD]), { deploymentId: "dep-kwan", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("hey kwan", [KWAN, TEST_MOD]), { deploymentId: "dep-kwan", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("tell me, kwan", [KWAN, TEST_MOD]), { deploymentId: "dep-kwan", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("test what do you think?", [KWAN, TEST_MOD]), { deploymentId: "dep-test", isTypo: false });
+});
+
+test("REQUIRED (end-to-end, exact live scenario): after Test speaks, \"why are you responding for kwan though?\" selects Test via continuity, not Kwan via a false directed-match", () => {
+  const directedMatch: { deploymentId: string; isTypo: boolean } | null = resolveDirectedModerator("why are you responding for kwan though?", [KWAN, TEST_MOD]);
+  assert.equal(directedMatch, null); // the fix: no false directed match at all
+
+  // directedMatch is null (just asserted above) -- neither candidate is directed;
+  // built explicitly rather than hardcoded false/false so this test would fail
+  // loudly if resolveDirectedModerator regressed and started matching again.
+  const kwan = candidate("dep-kwan", { isDirectedAtBot: (directedMatch as { deploymentId: string } | null)?.deploymentId === "dep-kwan", wasLastSpeaker: false });
+  const test1 = candidate("dep-test", { isDirectedAtBot: (directedMatch as { deploymentId: string } | null)?.deploymentId === "dep-test", wasLastSpeaker: true }); // Test spoke immediately prior
+  const result = selectChatterAction({ text: "why are you responding for kwan though?", candidates: [kwan, test1], now: new Date() });
+  assert.equal(result.type, "ANSWER");
+  if (result.type === "ANSWER") assert.equal(result.deploymentId, "dep-test");
+});
+
 /* ---- continuity priority when combined with the real selection pipeline ---- */
 
 test("REQUIRED: an explicit plain-name mention of a DIFFERENT moderator wins over wasLastSpeaker continuity", () => {
