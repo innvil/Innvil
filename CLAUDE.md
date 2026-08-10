@@ -2642,6 +2642,16 @@ win over this):**
 >   - **Run no migration** (env-only change). **Set `DEEPSEEK_API_KEY`** before this
 >     takes effect — until then CASUAL_CHAT generation fails explicitly rather than
 >     running (no silent no-op, no silent Sonnet spend).
+>   - **Correction (v1.9.1):** DeepSeek V4 defaults thinking to ENABLED — the model
+>     id (`deepseek-v4-flash`) alone was not actually sufficient to disable it, and
+>     `openaiComplete()` (the OpenAI-compatible request path DeepSeek shares) never
+>     sent any reasoning-control field at all until now. It now sends the explicit
+>     `thinking: { type: "disabled" }` request field whenever `disableThinking` is
+>     set — mirroring `anthropicComplete()`'s equivalent field, and kept entirely in
+>     the provider/client layer (`src/lib/ai/client.ts`) rather than moderator code
+>     constructing a provider-specific request shape. New tests assert the actual
+>     outgoing request body (via a `fetch` spy), not just the resolved route. 380
+>     tests pass, `tsc --noEmit` clean, production build clean.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

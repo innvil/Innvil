@@ -226,10 +226,12 @@ function resolveChatterRoute(action: ChatterGenerationAction): ChatterRoute {
     ok: true,
     model: deepseek.model,
     providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
-    // Non-thinking mode: DeepSeek's fast/chat-tier models (unlike its
-    // "reasoner" tier) don't emit chain-of-thought by default, so this is a
-    // model-id choice (deepseek-v4-flash), not a request flag -- mirrors how
-    // openaiComplete() already sends no reasoning-control field.
+    // DeepSeek V4 defaults thinking to ENABLED -- the model id
+    // (deepseek-v4-flash) alone does not disable it. This flag is honored by
+    // openaiComplete() in the provider/client layer (client.ts), which sends
+    // the actual `thinking: { type: "disabled" }` request field -- kept out
+    // of this file so moderator code never constructs provider-specific
+    // request shapes itself.
     disableThinking: true,
     // Casual chatter is short by its own prompt rule (<20 words) -- a low
     // cap keeps replies from turning into essays, unlike ANSWER's generous

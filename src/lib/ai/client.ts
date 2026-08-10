@@ -268,6 +268,14 @@ async function openaiComplete(baseUrl: string, key: string, model: string, opts:
     model,
     max_tokens: opts.maxTokens ?? 1024,
     ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
+    // DeepSeek's V4 API (the only current caller that sets disableThinking on
+    // this provider path — see deepseekChatterProvider()/resolveChatterRoute())
+    // defaults thinking to ENABLED and requires this explicit toggle to turn it
+    // off; the model id alone (e.g. "deepseek-v4-flash") is not sufficient.
+    // Mirrors anthropicComplete()'s equivalent field below — kept here in the
+    // provider layer, not in moderator code, so callers never construct
+    // provider-specific request shapes themselves.
+    ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
     messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))],
   });
   if (!res.ok) {

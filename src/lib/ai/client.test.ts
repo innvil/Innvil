@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { INNVIL_REQUIRED_MODEL, assertInnvilModel, getInnvilModelConfig, deepseekChatterProvider } from "./client";
+import { INNVIL_REQUIRED_MODEL, assertInnvilModel, getInnvilModelConfig, deepseekChatterProvider, aiComplete } from "./client";
 
 /**
  * Model-enforcement invariant: every Innvil-authored AI automation must
@@ -113,5 +113,56 @@ test("deepseekChatterProvider honors explicit model/base-url overrides (Flash ->
     assert.equal(p?.model, "deepseek-v4-pro");
     // trailing slash stripped, same as the other baseUrl resolvers in this file
     assert.equal(p?.baseUrl, "https://gateway.example.com");
+  });
+});
+
+/**
+ * REQUIRED (live correction): DeepSeek V4 defaults thinking to ENABLED and
+ * needs the explicit `thinking: { type: "disabled" }` request field -- the
+ * model id alone ("deepseek-v4-flash") is not sufficient. This must be sent
+ * by the OpenAI-compatible request path in THIS file (the provider/client
+ * layer), never constructed by moderator code. Verified against the actual
+ * outgoing request body, not just the resolved route.
+ */
+
+async function withFetchSpy<T>(responseBody: unknown, fn: (calls: Array<{ url: string; body: unknown }>) => Promise<T>): Promise<T> {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    return await fn(calls);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("REQUIRED: disableThinking sends thinking:{type:\"disabled\"} on the OpenAI-compatible (DeepSeek) request path", async () => {
+  await withFetchSpy({ choices: [{ message: { content: "hey" } }] }, async (calls) => {
+    await aiComplete({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "deepseek-v4-flash",
+      disableThinking: true,
+      providerOverride: { provider: "openai", apiKey: "sk-test", baseUrl: "https://api.deepseek.com" },
+    });
+    assert.equal(calls.length, 1);
+    const body = calls[0].body as { thinking?: { type: string } };
+    assert.deepEqual(body.thinking, { type: "disabled" });
+  });
+});
+
+test("without disableThinking, no thinking field is sent on the OpenAI-compatible path", async () => {
+  await withFetchSpy({ choices: [{ message: { content: "hey" } }] }, async (calls) => {
+    await aiComplete({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "gpt-test",
+      providerOverride: { provider: "openai", apiKey: "sk-test", baseUrl: "https://example.com" },
+    });
+    const body = calls[0].body as { thinking?: unknown };
+    assert.equal(body.thinking, undefined);
   });
 });
