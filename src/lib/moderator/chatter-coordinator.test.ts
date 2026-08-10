@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectChatterAction, resolveDirectedModerator, type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity } from "./chatter-coordinator";
+import { selectChatterAction, resolveDirectedModerator, isConversationalOpener, type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity } from "./chatter-coordinator";
 
 /**
  * Natural Chatter is contextual SOCIAL ACTION SELECTION, not response
@@ -116,9 +116,96 @@ test('REQUIRED: unmentioned "lol" -> SILENCE (trivial_low_value), no text action
   assert.deepEqual(result.reasons, ["trivial_low_value"]);
 });
 
-test("a bare greeting with no room-address term stays trivial -> SILENCE", () => {
+test("REVISED (was: bare greeting stays trivial -> SILENCE): a bare greeting with no room-address term is now a real conversational opener, not silence -- see isConversationalOpener generalization", () => {
   const result = single({ text: "gm" });
-  assert.equal(result.type, "SILENCE");
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.ok(result.reasons.includes("community_opener"));
+});
+
+/* ============================================ isConversationalOpener ==========
+   Semantic, not lexical: a conversation opener is identified by its SOCIAL
+   FUNCTION (a bid to start/restart/re-enter interaction), not by membership
+   in a fixed greeting/room-address phrase list. Live bug: "hey there again"
+   (no "everyone"/"guys"/etc.) was silenced as low_social_priority even
+   though it's plainly a re-entry bid. These tests prove generalization, not
+   phrase memorization -- each group is a DIFFERENT message shape from the
+   ones the implementation regexes literally quote in comments. ================ */
+
+test("REQUIRED: clear openers/re-entry are recognized -- generalizes beyond any single fixed phrase", () => {
+  const openers = [
+    "hey there again", "hello again", "I'm back", "back here", "back again",
+    "morning", "yo",
+    // casing/punctuation variants
+    "HEY THERE AGAIN!", "Hello Again.", "I'M BACK", "Yo!", "Morning,",
+  ];
+  for (const text of openers) {
+    assert.equal(isConversationalOpener(text), true, `expected an opener: "${text}"`);
+  }
+});
+
+test("REQUIRED: room-addressed openers are recognized", () => {
+  for (const text of ["hey everyone", "anyone here?", "morning guys"]) {
+    assert.equal(isConversationalOpener(text), true, `expected an opener: "${text}"`);
+  }
+});
+
+test("REQUIRED: opener cue + substantive intent -> NOT purely an opener (question/request wins)", () => {
+  for (const text of ["hey, can someone explain this?", "morning, why did my order fail?", "yo kwan, what happened?"]) {
+    assert.equal(isConversationalOpener(text), false, `expected NOT an opener (question/request wins): "${text}"`);
+  }
+});
+
+test("REQUIRED: ordinary statements are not openers, even ones sharing a little vocabulary", () => {
+  for (const text of ["that's interesting", "looks good", "I already tried that", "the price changed"]) {
+    assert.equal(isConversationalOpener(text), false, `should not be an opener: "${text}"`);
+  }
+});
+
+test("REQUIRED: a pure acknowledgement/closure after a moderator reply is not an opener, even with a greeting word", () => {
+  assert.equal(isConversationalOpener("hey thanks, that fixed it"), false);
+  assert.equal(isConversationalOpener("okay thanks"), false);
+});
+
+test("REQUIRED: no arbitrary length gate -- a longer message can be an opener, a one-word message can be an opener", () => {
+  assert.equal(isConversationalOpener("good evening, nice to see this place active again"), true);
+  assert.equal(isConversationalOpener("yo"), true);
+});
+
+test("a re-entry cue near a problem word stays a real report, not an opener (\"again\" isn't a magic word on its own)", () => {
+  assert.equal(isConversationalOpener("it broke again"), false);
+  assert.equal(isConversationalOpener("failed again, still stuck"), false);
+});
+
+/* ---- opener + room-activity is a response-selection concern, not part of the definition ---- */
+
+test("REQUIRED: the SAME opener message is classified identically regardless of how busy the room is -- selectChatterAction's context decides the ACTION, not the classification", () => {
+  // Case A: quiet room -> engages.
+  const quiet = single({ text: "hey there again" });
+  assert.equal(quiet.type, "CASUAL_CHAT");
+  assert.ok(quiet.reasons.includes("community_opener"));
+
+  // Case B: a moderator JUST answered (busy/active exchange) -> coordinator
+  // may choose not to reply, but that's a response-selection decision, not
+  // a reclassification of the message as "not an opener".
+  const busy = single({ text: "hey there again", recentlyAnsweredByModerator: true });
+  assert.equal(busy.type, "SILENCE");
+  assert.deepEqual(busy.reasons, ["already_handled"]);
+  // isConversationalOpener itself is unaffected by room state -- it's a
+  // pure function of the text alone.
+  assert.equal(isConversationalOpener("hey there again"), true);
+});
+
+/* ---- spam/repetition: an immediate repeat after being answered doesn't double-reply ---- */
+
+test("REQUIRED: repeating the same opener right after a moderator reply does not produce a second reply", () => {
+  // 1st "hey" in a quiet room -> engages.
+  const first = single({ text: "hey" });
+  assert.equal(first.type, "CASUAL_CHAT");
+  // 2nd "hey" immediately after, now that a moderator has just answered ->
+  // recentlyAnsweredByModerator suppresses the repeat instead of replying again.
+  const second = single({ text: "hey", recentlyAnsweredByModerator: true });
+  assert.equal(second.type, "SILENCE");
+  assert.deepEqual(second.reasons, ["already_handled"]);
 });
 
 test('a DIRECTED laugh ("@bot lol") -> REACT (a real Telegram reaction), never a text reply', () => {

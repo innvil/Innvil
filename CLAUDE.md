@@ -2721,6 +2721,55 @@ win over this):**
 >   directly-relevant other moderator) — a genuinely larger architectural change to
 >   `ChatterAction`/dispatch/tests than the routing bug above; needs its own scoped
 >   design pass before implementation.
+>   **Fourth live bug fixed the same session (v1.9.4): conversation-opener detection
+>   was lexical, not semantic.** `isCommunityOpener()` required a fixed greeting word
+>   (gm/good morning/hey/hi/hello/...) AND a fixed room-address word (everyone/
+>   anyone/guys/all/folks) together — a bare re-entry greeting like **"hey there
+>   again"** (no room-address noun) matched neither, fell through to the generic
+>   SUBSTANTIVE rule (which only engages when directed-at-bot or mid an active
+>   exchange), and silenced as `low_social_priority` even though it's plainly a bid
+>   to re-enter the conversation.
+>   - Replaced with **`isConversationalOpener(text)`** (exported from
+>     `chatter-coordinator.ts`, mirrors `resolveDirectedModerator`'s export-for-
+>     testing pattern) — a semantic classifier combining FOUR signals (presence-check
+>     `COMMUNITY_CHECK_IN_RE`, re-entry `RE_ENTRY_RE` — "again"/"I'm back"/"back
+>     again"/"back here", broadened greeting/salutation `GREETING_RE` — added
+>     yo/sup/what's up, and the existing room-address/check-in patterns) via OR, but
+>     bounded by **hard exclusions checked first**: a real question (`isLikelyQuestion`),
+>     a request (`REQUEST_MARKER_RE`), a problem report (`hasProblemWord`/
+>     `NOT_WORKING_RE`), or an acknowledgement/closure (`CLOSING_ACK_RE`/
+>     `isPositiveClosing`/`isAcknowledgementOnly`) always wins over a greeting word —
+>     "hey, why is my order stuck?" stays a QUESTION, "hey thanks, that fixed it"
+>     stays a CLOSURE, "it broke again" stays a problem report (not fooled by "again"
+>     alone). A presence-check question ("anyone here?") is carved out from the
+>     question-exclusion, since it's opener territory despite the "?". No arbitrary
+>     length gate anywhere in the function (word/char count is never the deciding
+>     factor, matching the codebase's existing TRIVIAL-classification philosophy).
+>     Deliberately did NOT add a standalone "message contains a room-address noun"
+>     fallback — "I already told everyone" contains "everyone" but is a plain
+>     statement, not a bid to interact (same referential-vs-address distinction as
+>     the (A) plain-name-targeting fix above).
+>   - Room activity/quietness/who-spoke-last stays entirely OUT of the opener
+>     DEFINITION (per explicit instruction) — `isConversationalOpener` takes no
+>     time/context argument at all; `selectChatterAction`'s existing
+>     `COMMUNITY_OPENER` branch (`recentlyAnsweredByModerator`/
+>     `recentlyRespondedByHuman` → `already_handled`) is completely unchanged and is
+>     what decides whether a recognized opener actually gets a reply.
+>   - **One pre-existing test's expectation changed** (not preserved as a
+>     regression-guard, since it directly contradicted the new requirement): a bare
+>     `"gm"` with no room-address word previously asserted SILENCE; it now asserts
+>     `CASUAL_CHAT` + `community_opener`, matching the explicit requirement that bare
+>     "hi"/"hello"/"morning" count as openers.
+>   - New tests (chatter-coordinator.test.ts, +9): clear openers/re-entry generalize
+>     across shapes never literally quoted together in one regex (incl. casing/
+>     punctuation variants), room-addressed openers, opener-cue-plus-substantive-
+>     intent correctly yields to question/request, ordinary non-opener statements,
+>     acknowledgement-after-greeting stays a closure, no length gate (long AND
+>     one-word openers), a re-entry word near a problem word stays a real report, the
+>     same opener text classifies identically regardless of room busyness (only the
+>     downstream ACTION differs), and an immediate same-text repeat right after a
+>     moderator reply doesn't double-reply. 403 tests pass, `tsc --noEmit` clean,
+>     production build clean. No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /
