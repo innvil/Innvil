@@ -2463,6 +2463,32 @@ win over this):**
 >     routing through this human-only check, and the existing staleness
 >     boundary (95 minutes, different person) still correctly excluded. 280
 >     tests pass.
+>   **Short questions were being swallowed as trivial filler — IMPLEMENTED
+>   (v1.5.2).** Live bug, caught testing the v1.5.1 fix in the live chat: right
+>   after Test replied to "anyone here?", asking "who else?" got silenced with
+>   `reason=already_handled_recent_reply` — as if it were throwaway filler, not
+>   a real question. Root cause: `isTrivial()`'s word-count/char-length check
+>   (≤2 words, ≤16 chars) doesn't know or care about question-ness — it even
+>   **strips the trailing `?`** the same as `!`/`.` when computing the char
+>   length — so a genuinely short question like "who else?" or "is this
+>   perfect?" (which also independently matches `isPositiveClosing` via
+>   "perfect") was classified `TRIVIAL` before `classifyMessageKind` ever
+>   reached the `QUESTION` check. `isAcknowledgementOnly` already had its own
+>   internal "ends with `?`" guard for this exact reason, but `isTrivial`/
+>   `CLOSING_ACK_RE`/`isPositiveClosing` didn't share it.
+>   - Fix: `classifyMessageKind` now computes `looksLikeQuestion = trimmed.endsWith("?")`
+>   once and skips the ENTIRE trivial-check group when true, going straight to
+>   `QUESTION` — no matter how short the message is. `CLOSING_ACK_RE` was
+>   already naturally immune (its anchor only allows trailing `.`/`!`), but the
+>   guard now covers all four checks in one obvious place instead of relying on
+>   each function to remember to exclude `?` individually.
+>   - New tests (`chatter-coordinator.test.ts`): the exact live repro ("who
+>   else?" → `ANSWER`, not silenced), a short question with zero other signal
+>   still answering, `isPositiveClosing`'s "is this perfect?" blind spot fixed,
+>   and a short acknowledgement-shaped question ("makes sense?") correctly
+>   routing to `ANSWER` instead of `TRIVIAL`. 284 tests pass, zero regressions
+>   (confirmed no existing test relies on a `?`-terminated message resolving to
+>   `TRIVIAL`).
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

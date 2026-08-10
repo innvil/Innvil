@@ -365,8 +365,19 @@ function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (isCommunityOpener(trimmed)) return "COMMUNITY_OPENER";
-  if (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed)) return "TRIVIAL";
-  if (isLikelyQuestion(trimmed)) return "QUESTION";
+  // A message ending in "?" is NEVER trivial/closing filler, even if it's
+  // short -- question-ness always wins. Live bug: "who else?" (2 words) was
+  // swallowed as TRIVIAL because isTrivial()'s char-length check strips
+  // trailing "?" along with "!."/no question-awareness at all, and
+  // isPositiveClosing has the same word-count blind spot (e.g. "is this
+  // perfect?" would otherwise match on "perfect"). isAcknowledgementOnly
+  // already has its own internal "ends with ?" guard for the same reason;
+  // checking it here too keeps this one rule easy to find in one place.
+  const looksLikeQuestion = trimmed.endsWith("?");
+  if (!looksLikeQuestion && (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed))) {
+    return "TRIVIAL";
+  }
+  if (looksLikeQuestion || isLikelyQuestion(trimmed)) return "QUESTION";
   return "SUBSTANTIVE";
 }
 

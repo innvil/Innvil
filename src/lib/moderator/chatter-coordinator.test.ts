@@ -583,3 +583,31 @@ test('ADVERSARIAL: isKnownConcatenation does not falsely decompose a real proble
   const result = single({ text: "yeah lol total failure", wasLastSpeaker: true });
   assert.equal(result.type, "CASUAL_CHAT");
 });
+
+/* -------------------------------------------- a short question is never trivial ---- */
+// Live bug: "who else?" (2 words) was silenced with reason
+// already_handled_recent_reply -- isTrivial()'s word-count/char-length check
+// doesn't know or care that the message is a real question (it even strips
+// the trailing "?" the same as "!"/"."), so it was classified TRIVIAL before
+// ever reaching isLikelyQuestion. A message ending in "?" must always route
+// to QUESTION/ANSWER, no matter how short.
+
+test('REQUIRED (live bug repro): "who else?" right after a recent moderator reply -> ANSWER, not silenced as already-handled trivia', () => {
+  const result = single({ text: "who else?", recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "ANSWER");
+});
+
+test('a short question is ANSWERed even with no other signal at all (not swallowed by the 2-word trivial heuristic)', () => {
+  const result = single({ text: "who else?" });
+  assert.equal(result.type, "ANSWER");
+});
+
+test('REQUIRED: isPositiveClosing\'s word-count blind spot does not swallow a real question ("is this perfect?" must ANSWER, not REACT)', () => {
+  const result = single({ text: "is this perfect?", recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "ANSWER");
+});
+
+test('a short acknowledgement-shaped question ("makes sense?") still routes to ANSWER, not TRIVIAL', () => {
+  const result = single({ text: "makes sense?" });
+  assert.equal(result.type, "ANSWER");
+});

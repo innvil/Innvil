@@ -285,6 +285,25 @@
 >   correctly counting as responded, a moderator's prior message never routing
 >   through this human-only check, and the existing staleness boundary (95
 >   minutes, different person) still correctly excluded. 280 tests pass.
+>
+> **Short questions were being swallowed as trivial filler — IMPLEMENTED
+> (v1.5.2).** Live bug, caught testing the v1.5.1 fix live: right after Test
+> replied to "anyone here?", asking "who else?" got silenced with
+> `reason=already_handled_recent_reply` as if it were throwaway filler.
+> - Root cause: `isTrivial()`'s word-count/char-length check doesn't know or
+>   care about question-ness -- it strips the trailing `?` the same as `!`/`.`
+>   when computing char length, so a short question ("who else?", "is this
+>   perfect?") was classified `TRIVIAL` before `classifyMessageKind` ever
+>   reached the `QUESTION` check. `isAcknowledgementOnly` already had its own
+>   "ends with `?`" guard for this reason; `isTrivial`/`CLOSING_ACK_RE`/
+>   `isPositiveClosing` didn't share it.
+> - Fix: `classifyMessageKind` computes `looksLikeQuestion` once and skips the
+>   entire trivial-check group when the message ends in `?`, going straight to
+>   `QUESTION` regardless of length.
+> - New tests (`chatter-coordinator.test.ts`): the exact live repro, a short
+>   question with no other signal, `isPositiveClosing`'s "is this perfect?"
+>   blind spot, and a short acknowledgement-shaped question ("makes sense?").
+>   284 tests pass, zero regressions.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 
