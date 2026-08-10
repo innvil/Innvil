@@ -826,6 +826,31 @@ for (const text of SHORT_QUESTIONS_UNPUNCTUATED) {
   });
 }
 
+/* ------------------------------------------------- misplaced "?" typo ---- */
+// Live bug: "?just testing things up, what's up" (a stray "?" typed at the
+// START, e.g. a fat-fingered mobile keyboard) has NO trailing "?" and its
+// leading word is "?just" -- neither of isLikelyQuestion's two checks
+// (endsWith("?"), leading-word regex) matched, so it fell through to
+// isConversationalOpener's "what's up" greeting match, then got silenced
+// via the COMMUNITY_OPENER "already_handled" suppression (a moderator had
+// JUST replied) -- indistinguishable from being ignored entirely.
+
+test('REQUIRED (live bug repro): a "?" typed at the START of the message still signals question intent', () => {
+  const result = single({ text: "?just testing things up, what's up", recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "ANSWER");
+  assert.notEqual(result.type, "SILENCE");
+});
+
+test('"?" anywhere in the middle of the message also signals question intent, not only at the very end', () => {
+  const result = single({ text: "wait what ? is that even right" });
+  assert.equal(result.type, "ANSWER");
+});
+
+test('a message with NO "?" anywhere and no leading question word still correctly stays non-QUESTION (the fix is not "always treat everything as a question")', () => {
+  const result = single({ text: "that's interesting" });
+  assert.notEqual(result.type, "ANSWER");
+});
+
 /* --------------------------------------------------- directed short messages ---- */
 
 test('REQUIRED: "kwan?" directed at Kwan -> ANSWER, not TRIVIAL/SHORT_ACK', () => {

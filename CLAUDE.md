@@ -2792,6 +2792,29 @@ win over this):**
 >   folks", "it's pretty quiet in here today") to concretely demonstrate this isn't
 >   an ever-growing fixed-phrase list. 404 tests pass, `tsc --noEmit` clean,
 >   production build clean. No migration.
+>   **Fifth live bug fixed the same session (v1.9.6): a MISPLACED "?" broke question
+>   detection entirely.** Live repro: right after Test replied "hey, what's up?", the
+>   human sent **"?just testing things up, what's up"** (a stray "?" typed at the
+>   START — a common mobile-keyboard/autocorrect typo) and got no response.
+>   `isLikelyQuestion()` only checked `t.endsWith("?")` (false here — the real "?" is
+>   at the start, not the end) and a leading-word regex anchored at the very first
+>   characters (also false — the message starts with `"?just"`, not a question word).
+>   With question-detection failing, the message fell through to
+>   `isConversationalOpener`'s `"what's up"` greeting match (COMMUNITY_OPENER), whose
+>   `already_handled` suppression fired (a moderator had JUST replied) — silenced,
+>   indistinguishable from being ignored outright.
+>   - Fix: `isLikelyQuestion()` now treats a `"?"` ANYWHERE in the message as question
+>     intent (`t.includes("?")`), not only as the very last character — a misplaced
+>     question mark is still the human typing a question, regardless of position.
+>     Checked before `isConversationalOpener` in `classifyMessageKind`'s existing
+>     ordering, so this class of message now correctly resolves to QUESTION → ANSWER,
+>     which (unlike COMMUNITY_OPENER) has no "already answered" suppression at all.
+>   - New tests: exact live repro (leading `"?"` + a moderator having just replied →
+>     ANSWER, not SILENCE), a `"?"` embedded mid-message also signals question intent,
+>     and a control proving the fix isn't "treat everything as a question" (a message
+>     with no `"?"` anywhere and no leading question word still correctly stays
+>     non-QUESTION). 407 tests pass, `tsc --noEmit` clean, production build clean. No
+>     migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

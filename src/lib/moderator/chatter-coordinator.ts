@@ -60,7 +60,14 @@ const MAX_CONSECUTIVE_BOT_MESSAGES = 2;
 // not via a per-case exception.
 function isLikelyQuestion(text: string): boolean {
   const t = text.trim().toLowerCase();
-  if (t.endsWith("?")) return true;
+  // A "?" ANYWHERE in the message signals question intent, not only when
+  // it's the very last character -- a misplaced "?" (leading, via a
+  // fat-fingered/mobile-keyboard typo, e.g. "?just testing things, what's
+  // up") is still the human typing a question mark; requiring it exactly at
+  // the end silently dropped the message to a lower-priority classification
+  // (live bug: fell through to a bare conversational-opener match instead
+  // of QUESTION, then got suppressed as "already handled").
+  if (t.includes("?")) return true;
   return /^(who|what|when|where|why|how|which|does|do|is|are|can|could|should|would|will|anyone|anybody|someone)\b/.test(t);
 }
 
