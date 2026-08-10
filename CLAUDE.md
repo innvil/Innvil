@@ -2291,6 +2291,39 @@ win over this):**
 >   that happens to mention a positive word mid-paragraph (5+ words) still
 >   stays `SUBSTANTIVE`. New tests cover both the longer-words case and the
 >   mid-paragraph non-closing case.
+>   **TRIVIAL/closing acknowledgement detection is now intent-based rather than
+>   gated by an arbitrary small character limit (v1.3.0):** longer acknowledgements
+>   can resolve to REACT/SILENCE, while acknowledgement + new substantive content
+>   still routes normally. Live bug: after a moderator's joke, "prettyaccurate too.
+>   lol" (3 words, 23 chars — over every length cap tried so far, including the
+>   v1.2.0/v1.2.1 widenings) generated a full follow-up reply instead of reacting
+>   or staying silent, because length/word-count was the classification gate.
+>   New `isAcknowledgementOnly()` replaces it with a semantic check: hard
+>   exclusions first (ends with "?", a contrast/continuation marker "but/however/
+>   though/although/except/still/also", a request marker "can/could/would you" /
+>   "please", or — critically — a negative-state/problem word matched by STEM,
+>   not exact word-boundary regex, so "failure" is caught the same as "failed";
+>   deliberately over-inclusive since a false trigger just means a real reply
+>   instead of a reaction, never the reverse). Only past those gates does it
+>   tokenize, require at least one recognized ack/laugh/thanks/agreement signal,
+>   and tolerate a SMALL residual of otherwise-unclassifiable leftover words
+>   (≤2) as a weak fallback signal, not the decisive one — a single leftover
+>   token is never assumed safe by tolerance alone (a bare "broken"/"down"/
+>   "error" residual is excluded by the explicit vocabulary regardless of
+>   count). A dedicated `isKnownConcatenation()` word-break check recognizes a
+>   glued-together closing like "prettyaccurate" ("pretty"+"accurate") as
+>   recognized content without resorting to blanket tolerance. Existing
+>   `isTrivial`/`CLOSING_ACK_RE`/`isPositiveClosing` length-bounded checks are
+>   kept as fast-path additions (harmless redundancy for short cases), but the
+>   new semantic check is what actually resolves anything longer. Adversarial
+>   tests added specifically for the single-residual-token risk the fix targets
+>   ("yeah lol broken", "haha okay it's failed", "yeah lol down", "lol yeah
+>   error", "yeah lol total failure" catching the "failure"-vs-"fail" regex gap)
+>   plus a long fabricated-topic message that merely opens with an ack word,
+>   confirming none are silently swallowed. 245 tests pass, zero regressions to
+>   plain-name targeting, @username/reply targeting, directed-over-continuity
+>   priority, persona isolation, history grounding, deterministic selection, or
+>   bot-loop protections.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

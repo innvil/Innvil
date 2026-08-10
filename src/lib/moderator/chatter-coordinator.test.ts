@@ -463,3 +463,123 @@ test("a genuinely longer sentence that happens to mention a positive word mid-pa
   const result = single({ text: "that was a really great effort from the whole team honestly", wasLastSpeaker: true });
   assert.equal(result.type, "CASUAL_CHAT");
 });
+
+/* ---------------------------------------------- semantic closing detection ---- */
+// Live bug: length/word-count is not a valid proxy for "does this message
+// introduce a new conversational obligation." A moderator told a joke
+// ("Why did the developer go broke? Because they used up all their cache.
+// 😁"), the human replied "prettyaccurate too. lol" (3 words, 23 chars --
+// over every length heuristic tried so far), and the moderator generated a
+// full follow-up text reply ("glad it landed 😁") instead of reacting or
+// staying silent. isAcknowledgementOnly() replaces length with a semantic
+// check: strip agreement/approval/laughter/thanks/closing vocabulary +
+// neutral filler, and see whether any real content is left.
+
+test("REQUIRED (live bug repro): a long acknowledgement reacting to a moderator's joke resolves to SILENCE or REACT, never another generated reply", () => {
+  const result = single({ text: "prettyaccurate too. lol", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
+  assert.notEqual(result.type, "CASUAL_CHAT");
+  assert.notEqual(result.type, "ANSWER");
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["already_handled_recent_reply"]);
+});
+
+const LONG_TRIVIAL_ACKNOWLEDGEMENTS = [
+  "prettyaccurate too. lol",
+  "yeah lol that's actually pretty accurate",
+  "haha okay fair enough, I get you now",
+  "that makes sense, thanks for explaining",
+  "alright, sounds good to me then",
+  "yeah that's basically what I meant",
+  "that's actually hilarious lol",
+];
+
+for (const text of LONG_TRIVIAL_ACKNOWLEDGEMENTS) {
+  test(`REQUIRED: long acknowledgement "${text}" is not treated as substantive -- resolves to SILENCE, never a generated reply`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.notEqual(result.type, "CASUAL_CHAT");
+    assert.notEqual(result.type, "ANSWER");
+    assert.equal(result.type, "SILENCE");
+  });
+}
+
+test("a long acknowledgement DIRECTED at the bot still resolves to REACT, not a generated reply", () => {
+  const result = single({ text: "haha okay fair enough, I get you now", isDirectedAtBot: true });
+  assert.equal(result.type, "REACT");
+});
+
+const ACKNOWLEDGEMENT_PLUS_NEW_CONTENT = [
+  "yeah that's accurate, but the API is still failing",
+  "okay got it, now I have another issue",
+  "that's accurate, though production behaves differently",
+];
+
+for (const text of ACKNOWLEDGEMENT_PLUS_NEW_CONTENT) {
+  test(`REQUIRED: acknowledgement + new statement "${text}" still gets a real reply (not swallowed as trivial)`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.equal(result.type, "CASUAL_CHAT");
+  });
+}
+
+const ACKNOWLEDGEMENT_PLUS_NEW_QUESTION = [
+  "fair enough, what should I change?",
+  "makes sense, but why is Test not responding?",
+  "lol yeah, also can you check the deployment?",
+];
+
+for (const text of ACKNOWLEDGEMENT_PLUS_NEW_QUESTION) {
+  test(`REQUIRED: acknowledgement + new question "${text}" still routes to ANSWER (not swallowed as trivial)`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.equal(result.type, "ANSWER");
+  });
+}
+
+test("REQUIRED (context-sensitive closing, pure acknowledgement half): \"yeah that makes sense now, thanks\" right after a moderator reply -> TRIVIAL/SILENCE", () => {
+  const result = single({ text: "yeah that makes sense now, thanks", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "SILENCE");
+});
+
+test('REQUIRED (context-sensitive closing, acknowledgement + new problem half): "yeah that makes sense, but I\'m still getting a 500" -> SUBSTANTIVE/CASUAL_CHAT, not silenced', () => {
+  const result = single({ text: "yeah that makes sense, but I'm still getting a 500", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+});
+
+/* --------------------------------- adversarial: single-token problem residue ---- */
+// Explicit regression coverage for the exact critique: a single unrecognized
+// residual token must NOT be assumed safe by tolerance alone -- "broken",
+// "failed", "down", and "error" are precisely the kind of one-word residue
+// that a bare "<=1 leftover token" rule would have waved through. These must
+// all still get a real reply, never be swallowed as a closing.
+
+const SINGLE_TOKEN_PROBLEM_REPORTS = [
+  "yeah lol broken",
+  "haha okay it's failed",
+  "yeah lol down",
+  "lol yeah error",
+];
+
+for (const text of SINGLE_TOKEN_PROBLEM_REPORTS) {
+  test(`ADVERSARIAL: "${text}" carries ack-signal words (yeah/lol/haha/thanks) but a real one-word problem report -- must NOT be silenced`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.notEqual(result.type, "SILENCE");
+    assert.notEqual(result.type, "REACT");
+    assert.equal(result.type, "CASUAL_CHAT");
+  });
+}
+
+test("ADVERSARIAL: a long, genuinely new statement that merely starts with an ack word is not swallowed just because it has plenty of ack/filler words sprinkled in", () => {
+  const result = single({
+    text: "yeah honestly we migrated the whole billing system to a new provider and rewrote the order pipeline overnight",
+    wasLastSpeaker: true,
+  });
+  assert.equal(result.type, "CASUAL_CHAT");
+});
+
+test("ADVERSARIAL: a benign unclassifiable residual word (not a problem word, not decomposable) still classifies as a closing and reacts when directed at the bot", () => {
+  const result = single({ text: "haha yeah fair point honestly", isDirectedAtBot: true });
+  assert.equal(result.type, "REACT");
+});
+
+test('ADVERSARIAL: isKnownConcatenation does not falsely decompose a real problem word ("failure") that happens to start with letters shared by dictionary words ("fail")', () => {
+  const result = single({ text: "yeah lol total failure", wasLastSpeaker: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+});

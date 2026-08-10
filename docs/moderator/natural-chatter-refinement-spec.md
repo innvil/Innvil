@@ -183,6 +183,58 @@
 > longer sentence that happens to mention a positive word mid-paragraph (5+
 > words, e.g. "that was a really great effort from the whole team honestly")
 > is correctly left `SUBSTANTIVE`. New tests cover both cases.
+>
+> **TRIVIAL/closing acknowledgement detection is now intent-based rather than
+> gated by an arbitrary small character limit — IMPLEMENTED (v1.3.0).** Longer
+> acknowledgements can resolve to REACT/SILENCE, while acknowledgement + new
+> substantive content still routes normally. The v1.2.0/v1.2.1 widenings (12→16
+> chars, then decoupling positive closings to a 4-word bound) were still the
+> same flawed approach with more headroom, per direct user critique: length is
+> not a valid proxy for "does this introduce a new conversational obligation."
+> Live repro: a moderator told a joke, the human replied "prettyaccurate too.
+> lol" (3 words, 23 chars — over every cap tried), and the moderator generated
+> a full follow-up reply instead of reacting or staying silent.
+> - **`isAcknowledgementOnly(text)`** (`chatter-coordinator.ts`, NEW) replaces
+>   length-gating with hard semantic exclusions checked first, unconditionally:
+>   ends with `?` (falls through to `QUESTION` classification), a contrast/
+>   continuation marker (`but/however/though/although/except/still/also`), a
+>   request marker (`can/could/would you`, `please`), or a negative-state/
+>   problem word. Only past those does it tokenize, require at least one
+>   recognized ack/laugh/thanks/agreement signal token, and tolerate a small
+>   (≤2) residual of otherwise-unclassifiable leftover words as a weak
+>   fallback — never the decisive signal.
+> - **Problem-word detection is stem-based, not exact-word regex.** An initial
+>   `/\bfail(?:s|ed|ing)?\b/`-style regex silently misses "failure" (no word
+>   boundary right after "fail" mid-word), which would have fallen back to the
+>   residual-tolerance count and been waved through — caught by an adversarial
+>   test (`"yeah lol total failure"`) before shipping. `hasProblemWord()` now
+>   checks `token.startsWith(stem)` against a small stem list
+>   (broken/fail/down/error/bug/crash/issue/problem/stuck/glitch/outage/wrong/
+>   incorrect) — deliberately over-inclusive (e.g. "downtown" also starts with
+>   "down") since a false trigger only costs a real reply instead of a
+>   reaction, never the reverse.
+> - **A single leftover token is never assumed safe by tolerance alone** — a
+>   bare residual like "broken"/"down"/"error" is excluded by the explicit
+>   problem-word check regardless of how few tokens are left, directly
+>   addressing user feedback that an initial `residual.length <= 1` design made
+>   token count the decisive factor rather than a weak one.
+> - **`isKnownConcatenation(token)`** (word-break DP over `ACK_TOKENS`/
+>   `NEUTRAL_TOKENS`) recognizes a glued-together closing like "prettyaccurate"
+>   ("pretty"+"accurate", the literal live typo with no space) as fully
+>   recognized content, so the ≤2 residual tolerance doesn't have to be widened
+>   just to accommodate that one case.
+> - Existing `isTrivial`/`CLOSING_ACK_RE`/`isPositiveClosing` length-bounded
+>   checks are kept as fast-path additions (harmless redundancy for genuinely
+>   short cases) — the new semantic check is what actually resolves anything
+>   longer, satisfying "primarily conversational intent, not a character cap."
+> - Adversarial regression tests target exactly the risk called out: single
+>   problem-word residues ("yeah lol broken", "haha okay it's failed", "yeah
+>   lol down", "lol yeah error", "yeah lol total failure"), a long fabricated
+>   topic that merely opens with an ack word, and a benign unclassifiable
+>   residual that should still react when directed. 245 tests pass; zero
+>   regressions to plain-name targeting, @username/reply targeting,
+>   directed-over-continuity priority, persona isolation, history grounding,
+>   deterministic selection, or bot-loop protections.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 

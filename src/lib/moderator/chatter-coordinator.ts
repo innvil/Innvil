@@ -123,6 +123,139 @@ function isPositiveClosing(text: string): boolean {
 // signaled the conversation is done.
 const CLOSING_ACK_RE = /^(i\s+see,?\s*)?(ok(ay)?|alright|got\s*it|makes\s*sense|fair\s*enough|understood|noted|cool|sounds\s*good)[.!]*$/i;
 
+// ---------------------------------------------------------------------
+// Broader closing/acknowledgement detection. LENGTH IS NOT A VALID SIGNAL
+// for "does this introduce a new conversational obligation" -- a live bug
+// ("prettyaccurate too. lol", 3 words / 23 chars, following a moderator's
+// joke) proved no fixed word-count or character cap can ever separate a
+// legitimately long acknowledgement ("yeah lol that's actually pretty
+// accurate") from a genuinely substantive statement of similar length
+// ("yeah but production is still returning 500s after the deploy"). This
+// asks instead whether the message is semantically just agreement/approval/
+// laughter/thanks/closing sentiment with no new question, request, problem
+// report, or claim -- checked via explicit vocabulary (contrast/request/
+// problem-word markers), NOT by counting how much text is "left over" after
+// stripping filler. A single leftover word is not assumed safe by default --
+// see PROBLEM_WORD_RE / isKnownConcatenation below for why.
+// ---------------------------------------------------------------------
+
+/** Agreement, approval, laughter, thanks, or closing-sentiment words --
+ *  carry no NEW information on their own. */
+const ACK_TOKENS = new Set([
+  "yeah", "yep", "yup", "yes", "nah", "nope", "right", "true", "same", "exactly",
+  "agreed", "totally", "definitely", "absolutely", "indeed", "relatable",
+  "accurate", "correct", "valid", "fair", "hilarious", "funny", "nice", "sweet",
+  "great", "perfect", "awesome", "amazing", "excellent", "fantastic", "glad",
+  "good", "fine", "cool", "noted", "understood", "understand", "ok", "okay",
+  "alright", "makes", "sense", "sounds", "enough", "appreciate", "appreciated",
+  "thanks", "thank", "thankyou", "thx", "ty", "cheers", "lol", "lmao", "lel",
+  "rofl", "get", "got",
+]);
+/** Discourse filler / stopwords -- neutral either way, stripped before
+ *  checking what's actually left. Deliberately does NOT include verbs like
+ *  "have"/"is"/"need" that commonly introduce genuinely new content. */
+const NEUTRAL_TOKENS = new Set([
+  "too", "now", "then", "so", "well", "honestly", "basically", "pretty",
+  "really", "super", "very", "actually", "just", "a", "an", "the", "i", "you",
+  "we", "they", "it", "he", "she", "s", "to", "me", "for", "what", "how",
+  "why", "that", "this",
+]);
+const LAUGH_TOKEN_RE = /^h?a?(?:ha)+h?$/;
+
+function isAckOrNeutralToken(token: string): boolean {
+  return ACK_TOKENS.has(token) || NEUTRAL_TOKENS.has(token) || LAUGH_TOKEN_RE.test(token);
+}
+
+// A contrast/continuation marker anywhere in the message is treated as an
+// unconditional signal that the human is adding something beyond a closing
+// acknowledgement. Deliberately NOT scoped to "only when followed by
+// substantive content" -- under-detecting a closing is a harmless miss (the
+// bot just replies normally instead of reacting), while over-detecting one
+// and silencing genuinely new content is exactly the failure mode this fix
+// exists to eliminate.
+const CONTINUATION_MARKER_RE = /\b(but|however|though|although|except|still|also)\b/i;
+// An explicit request/action ask is never a pure acknowledgement, even
+// without a trailing "?".
+const REQUEST_MARKER_RE = /\b(can|could|would)\s+(you|we)\b|\bplease\b/i;
+// Negative-state / problem vocabulary is ALWAYS treated as substantive,
+// regardless of how few residual tokens are left over. A single word like
+// "broken"/"error"/"down" is exactly the kind of one-token residue that
+// must never be waved through just because there's "only one leftover
+// token" -- this explicit vocabulary is the actual decisive check for that
+// case; residual token COUNT (below) is only a weak fallback signal for
+// leftover words that aren't a known problem term, never the deciding
+// factor on its own. Matched by STEM/PREFIX (token.startsWith(stem)), not a
+// word-boundary-anchored regex -- an exact-form regex like
+// /\bfail(?:s|ed|ing)?\b/ silently misses "failure" (no word boundary right
+// after "fail" inside it), which would otherwise fall back to the residual-
+// count tolerance and get waved through. A stem match is deliberately
+// over-inclusive (e.g. "downtown" also starts with "down") -- that's the
+// SAFE direction: worst case an unrelated word makes the bot reply for real
+// instead of reacting, never the reverse (silencing real new content).
+const PROBLEM_STEMS = [
+  "broken", "broke", "breaking", "fail", "down", "error", "bug", "crash",
+  "issue", "problem", "stuck", "glitch", "outage", "wrong", "incorrect",
+];
+function hasProblemWord(tokens: string[]): boolean {
+  return tokens.some((t) => PROBLEM_STEMS.some((stem) => t.startsWith(stem)));
+}
+const NOT_WORKING_RE = /\b(not|isn'?t|doesn'?t|won'?t|can'?t)\s+work(?:ing)?\b/i;
+
+/** True when `token` is fully composed of a sequence of ACK_TOKENS/
+ *  NEUTRAL_TOKENS words back-to-back with no leftover characters -- catches
+ *  a casually glued-together closing like "prettyaccurate" ("pretty" +
+ *  "accurate", a live-observed typo with no space) as recognized content,
+ *  WITHOUT resorting to a blanket "tolerate any 1 unknown token" rule that
+ *  would also wave through a genuine one-word problem report like "broken"
+ *  (which has no such decomposition). Each matched piece must be 2+
+ *  characters so single-letter neutral tokens ("a", "i", "s") can't trivially
+ *  "decompose" an arbitrary word. */
+function isKnownConcatenation(token: string): boolean {
+  if (token.length < 4) return false;
+  const reachable = new Array(token.length + 1).fill(false);
+  reachable[0] = true;
+  for (let end = 1; end <= token.length; end++) {
+    for (let start = 0; start < end; start++) {
+      if (!reachable[start]) continue;
+      const piece = token.slice(start, end);
+      if (piece.length >= 2 && isAckOrNeutralToken(piece)) {
+        reachable[end] = true;
+        break;
+      }
+    }
+  }
+  return reachable[token.length];
+}
+
+/** True when a message is PURELY acknowledgement/agreement/laughter/thanks/
+ *  closing sentiment -- no new question, request, problem report, or claim
+ *  -- no matter how many words it took to say so. The decisive checks are
+ *  semantic (contrast/request/problem vocabulary, checked first and
+ *  unconditionally); residual token count is only consulted afterward, as a
+ *  weak fallback for otherwise-unclassifiable leftover words ("thanks for
+ *  explaining", "that's what I meant") -- it never overrides an explicit
+ *  problem/contrast/request/question signal, and a single leftover token is
+ *  NOT automatically assumed safe (see isKnownConcatenation / hasProblemWord). */
+function isAcknowledgementOnly(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.endsWith("?")) return false; // let QUESTION classification handle it
+  if (CONTINUATION_MARKER_RE.test(trimmed)) return false;
+  if (REQUEST_MARKER_RE.test(trimmed)) return false;
+  if (NOT_WORKING_RE.test(trimmed)) return false;
+  const tokens = tokenize(trimmed);
+  if (!tokens.length) return false;
+  if (hasProblemWord(tokens)) return false;
+  const hasSignal = tokens.some((t) => ACK_TOKENS.has(t) || LAUGH_TOKEN_RE.test(t));
+  if (!hasSignal) return false;
+  const residual = tokens.filter((t) => !isAckOrNeutralToken(t) && !isKnownConcatenation(t));
+  // Weak fallback only -- real substantive content is already excluded
+  // above by explicit vocabulary, not by counting leftover words. This just
+  // tolerates a couple of otherwise-unclassifiable filler words without
+  // opening the door to a long genuinely new statement that merely happens
+  // to start with "yeah"/"lol".
+  return residual.length <= 2;
+}
+
 /** A human explicitly asking whether a DIFFERENT moderator is around
  *  ("any other moderator who can respond here?", "anyone else?", "other
  *  mod?") is a strong routing signal, not an ordinary question the
@@ -232,7 +365,7 @@ function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (isCommunityOpener(trimmed)) return "COMMUNITY_OPENER";
-  if (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed)) return "TRIVIAL";
+  if (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed)) return "TRIVIAL";
   if (isLikelyQuestion(trimmed)) return "QUESTION";
   return "SUBSTANTIVE";
 }
