@@ -21,6 +21,11 @@ export interface ChatterContextMessage {
   text: string;
   /** Set only when senderType is INNVIL_MODERATOR — which deployment sent it. */
   deploymentId?: string | null;
+  /** When this message was sent — used to distinguish "the room is mid an
+   *  active exchange" from "the last message just happens to be from a
+   *  moderator/human, from hours ago." Optional only for callers that don't
+   *  have it (e.g. tests); community-runtime always populates it. */
+  createdAt?: string | null;
 }
 
 export type ChatterGenerationAction = "CASUAL_CHAT" | "ANSWER";

@@ -235,6 +235,29 @@
 >   regressions to plain-name targeting, @username/reply targeting,
 >   directed-over-continuity priority, persona isolation, history grounding,
 >   deterministic selection, or bot-loop protections.
+>
+> **Community-opener staleness guard — IMPLEMENTED (v1.3.1).** Found by directly
+> checking the live Telegram chat (per the workflow: query `moderator_activity_log`
+> for the exact decision/reason before touching classification code). "hey guys
+> 👋" sent 95 minutes after the previous message (a moderator's reply) was
+> silenced with `decision=SILENCE reason=already_handled`, even though the room
+> had gone completely quiet in between.
+> - Root cause: `community-runtime.ts`'s `recentlyAnsweredByModerator` /
+>   `recentlyRespondedByHuman` / `wasLastSpeaker` were computed purely from WHO
+>   sent the message immediately before this one in history — with no regard for
+>   WHEN. A moderator's reply from hours ago, simply because it happens to be the
+>   last row, was indistinguishable from one sent 10 seconds ago.
+> - Fix: new exported `isRecentMessage(createdAt, now)` +
+>   `RECENT_EXCHANGE_WINDOW_MS` (5 minutes). `loadRecentContext` now also selects
+>   `created_at` from `community_messages`, threaded onto `ChatterContextMessage`
+>   as an optional `createdAt` field. `handleHumanMessage` gates all three flags
+>   on `isRecentMessage(priorMessage.createdAt, now)` — a stale prior message no
+>   longer counts as "the room is mid an active exchange" for either the
+>   COMMUNITY_OPENER already-handled suppression or the continuity bias in
+>   `pickCandidate`.
+> - Tests in `community-runtime.test.ts`: the exact 95-minute live repro, a
+>   30-second-old exchange still correctly counting as active, and the exact
+>   5-minute boundary (strict less-than, both sides). 250 tests pass.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 

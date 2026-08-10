@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isDuplicateUpdate, resolveEventOrigin } from "./community-runtime";
+import { isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
  *  isDuplicateUpdate uses, enforcing a real (integration_id, update_id)
@@ -119,4 +119,43 @@ test("resolveEventOrigin: does not leak a match from a different community", asy
   ]);
   const result = await resolveEventOrigin(admin, "community-1", "200");
   assert.deepEqual(result, { origin: "HUMAN", interactionDepth: 0 });
+});
+
+/* ------------------------------------------ isRecentMessage staleness guard ---- */
+// Live bug: "hey guys 👋" sent 95 minutes after the previous message (a
+// moderator reply) was silenced with reason "already_handled" -- the runtime
+// treated "the last message happens to be from a moderator" as "the room is
+// mid an active exchange" with NO regard for how much time had actually
+// passed. isRecentMessage is the fix: recentlyAnsweredByModerator /
+// recentlyRespondedByHuman / wasLastSpeaker now all additionally require the
+// prior message to be within RECENT_EXCHANGE_WINDOW_MS.
+
+test('REQUIRED (live bug repro): a prior message 95 minutes old is NOT "recent" -- a new community opener must not be silenced as already_handled', () => {
+  const now = new Date("2026-08-10T01:34:26Z");
+  const priorMessageAt = new Date("2026-08-09T23:59:40Z"); // 94m46s earlier
+  assert.equal(isRecentMessage(priorMessageAt.toISOString(), now), false);
+});
+
+test("a prior message from 30 seconds ago IS recent -- an active back-and-forth is still treated as active", () => {
+  const now = new Date("2026-08-10T01:34:26Z");
+  const priorMessageAt = new Date(now.getTime() - 30_000);
+  assert.equal(isRecentMessage(priorMessageAt.toISOString(), now), true);
+});
+
+test("exactly at the window boundary is NOT recent (strict less-than)", () => {
+  const now = new Date("2026-08-10T01:34:26Z");
+  const priorMessageAt = new Date(now.getTime() - RECENT_EXCHANGE_WINDOW_MS);
+  assert.equal(isRecentMessage(priorMessageAt.toISOString(), now), false);
+});
+
+test("one second inside the window boundary IS recent", () => {
+  const now = new Date("2026-08-10T01:34:26Z");
+  const priorMessageAt = new Date(now.getTime() - RECENT_EXCHANGE_WINDOW_MS + 1000);
+  assert.equal(isRecentMessage(priorMessageAt.toISOString(), now), true);
+});
+
+test("no prior message (null/undefined createdAt) is never treated as recent", () => {
+  const now = new Date();
+  assert.equal(isRecentMessage(null, now), false);
+  assert.equal(isRecentMessage(undefined, now), false);
 });

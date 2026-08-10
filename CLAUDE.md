@@ -2324,6 +2324,25 @@ win over this):**
 >   plain-name targeting, @username/reply targeting, directed-over-continuity
 >   priority, persona isolation, history grounding, deterministic selection, or
 >   bot-loop protections.
+>   **Community-opener staleness guard (v1.3.1):** live bug caught while checking
+>   the live Telegram chat — "hey guys 👋" sent 95 minutes after the previous
+>   message (a moderator reply, "glad it landed 😄") was silenced with reason
+>   `already_handled`, even though the room had gone completely quiet in
+>   between. Root cause: `recentlyAnsweredByModerator`/`recentlyRespondedByHuman`/
+>   `wasLastSpeaker` in `community-runtime.ts` were computed purely from WHO sent
+>   the prior message in history, with no regard for WHEN — a moderator's reply
+>   from hours ago, simply because it's the last row, was treated identically to
+>   one from 10 seconds ago. New `isRecentMessage(createdAt, now)` (exported,
+>   `RECENT_EXCHANGE_WINDOW_MS` = 5 minutes) gates all three: `loadRecentContext`
+>   now also selects `created_at` (threaded onto `ChatterContextMessage` as
+>   `createdAt`), and `handleHumanMessage` only treats the prior message as
+>   "the room is mid an active exchange" when it's within the window. New tests
+>   in `community-runtime.test.ts` cover the exact 95-minute live repro, an
+>   active 30-second-old exchange still counting as recent, and the exact
+>   window boundary (strict less-than). Diagnosed via `moderator_activity_log`
+>   (`decision=SILENCE reason=already_handled`), which is what made this
+>   provable rather than guessed — worth querying first for any "the bot didn't
+>   respond" report before touching classification code.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

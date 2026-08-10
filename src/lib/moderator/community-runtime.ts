@@ -415,13 +415,32 @@ async function recordBotSpoke(admin: SupabaseClient, deploymentId: string, now: 
 async function loadRecentContext(admin: SupabaseClient, communityId: string, limit = 10): Promise<ChatterContextMessage[]> {
   const { data } = await admin
     .from("community_messages")
-    .select("sender_type, sender_display_name, text, deployment_id")
+    .select("sender_type, sender_display_name, text, deployment_id, created_at")
     .eq("community_id", communityId)
     .order("created_at", { ascending: false })
     .limit(limit);
-  return ((data ?? []) as Array<{ sender_type: string; sender_display_name: string | null; text: string; deployment_id: string | null }>)
+  return ((data ?? []) as Array<{ sender_type: string; sender_display_name: string | null; text: string; deployment_id: string | null; created_at: string }>)
     .reverse()
-    .map((r) => ({ senderType: r.sender_type as ChatterContextMessage["senderType"], senderName: r.sender_display_name, text: r.text, deploymentId: r.deployment_id }));
+    .map((r) => ({
+      senderType: r.sender_type as ChatterContextMessage["senderType"],
+      senderName: r.sender_display_name,
+      text: r.text,
+      deploymentId: r.deployment_id,
+      createdAt: r.created_at,
+    }));
+}
+
+/** A prior message only counts as "the room is mid an active exchange" if it
+ *  happened recently. Without this, a moderator's last message from hours
+ *  ago (simply because it's the last row in history) makes the runtime
+ *  treat a brand-new opener sent much later as "already handled" and stay
+ *  silent — a live-observed bug: "hey guys 👋" sent 95 minutes after the
+ *  previous message (a moderator reply) was silenced with reason
+ *  "already_handled" even though the room had gone completely quiet. */
+export const RECENT_EXCHANGE_WINDOW_MS = 5 * 60_000;
+export function isRecentMessage(createdAt: string | null | undefined, now: Date): boolean {
+  if (!createdAt) return false;
+  return now.getTime() - new Date(createdAt).getTime() < RECENT_EXCHANGE_WINDOW_MS;
 }
 
 async function handleHumanMessage(admin: SupabaseClient, panelId: string, community: { id: string }, message: TelegramMessage, event: CommunityEvent) {
@@ -443,11 +462,15 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   // (recordCommunityMessage, called by the caller before branching here), so
   // it's recentContext's LAST entry; the one before it (index length-2) is
   // what "recentlyAnsweredByModerator"/"recentlyRespondedByHuman"/
-  // "wasLastSpeaker" check.
+  // "wasLastSpeaker" check. All three additionally require priorMessage to be
+  // RECENT (see isRecentMessage) -- who spoke last is meaningless on its own
+  // after the room has gone quiet for a while; see RECENT_EXCHANGE_WINDOW_MS.
   const recentContext = await loadRecentContext(admin, community.id, 10);
   const priorMessage = recentContext.length >= 2 ? recentContext[recentContext.length - 2] : null;
-  const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR";
-  const recentlyRespondedByHuman = priorMessage?.senderType === "HUMAN";
+  const now = new Date();
+  const priorMessageIsRecent = isRecentMessage(priorMessage?.createdAt, now);
+  const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessageIsRecent;
+  const recentlyRespondedByHuman = priorMessage?.senderType === "HUMAN" && priorMessageIsRecent;
 
   // Resolved ONCE per event (not per-candidate): @username, reply-to, the
   // moderator's own configured name, or a typo-tolerant near-spelling of it
@@ -461,7 +484,10 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   const candidates: ChatterCandidate[] = deployments.map((d, i) => ({
     deploymentId: d.deploymentId,
     isDirectedAtBot: repliedToDeploymentId === d.deploymentId || directedMatch?.deploymentId === d.deploymentId,
-    wasLastSpeaker: priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessage.deploymentId === d.deploymentId,
+    // Same staleness guard as recentlyAnsweredByModerator above -- a
+    // moderator's last message from hours ago doesn't mean it's "mid an
+    // active exchange" just because it's the last row in history.
+    wasLastSpeaker: priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessage.deploymentId === d.deploymentId && priorMessageIsRecent,
     pacing: pacings[i],
   }));
 
