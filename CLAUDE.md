@@ -2865,6 +2865,42 @@ win over this):**
 >   dictionary. Input understanding is independent of the moderator's output persona:
 >   every moderator understands the same user meaning, while responding according to
 >   its own saved Innvil persona.
+>   **Architecture correction (v1.9.8), same day: persona dial-bands were treated as
+>   the identity source — restructured to a clear hierarchy.** Per explicit
+>   feedback, v1.9.7's dead-zone fix was correct to close (moderate dial values must
+>   never mean zero style guidance) but wrong to let `personaStyle()` — the numeric-
+>   dial mechanics — read as the sole source of "is this moderator Witty vs
+>   Professional." **Persona identity now has an explicit, stated hierarchy: (1) the
+>   saved persona `description` (already authoritative via `personaIdentityLine`,
+>   unchanged) → (2) `customInstructions` → (3) numeric dials, which only REFINE
+>   intensity/mechanics within that identity, never define it.**
+>   - `customInstructions` was pulled OUT of `personaStyle()`'s dial-mechanics array
+>     (where it sat undifferentiated among "use emoji occasionally"-type bullets) into
+>     its own `personaCustomInstructionsLine()`, positioned right after the persona
+>     description and explicitly framed as "as authoritative as your persona
+>     description above."
+>   - New `STYLE_HIERARCHY_PREFACE`, inserted immediately before the dial-mechanics
+>     block in `buildSystemPrompt`: *"The following are secondary style/intensity
+>     notes — they refine HOW you express the persona and behavioral guidance above,
+>     they do NOT redefine who you are. If they ever seem to pull in a different
+>     direction than your configured persona/description, the persona wins."* Makes
+>     the hierarchy an explicit instruction, not something inferred from ordering.
+>   - **Dead-zone fix completed properly** (v1.9.7 left `teasing`/`humor` with only a
+>     low-end band, no middle) and **every band reworded to soft/probabilistic
+>     language** ("when it fits", "don't force it", "acceptable when context
+>     supports it") — never a rigid rule mandating a visible gimmick every message.
+>   - **Preset data check (per explicit request): already fine.** Every one of the 18
+>     presets in `presets.ts` already carries a distinct, substantive `description` +
+>     detailed `customInstructions` (e.g. Witty Mod: *"playful and clever, with dry
+>     humor and the occasional joke — but still genuinely useful"*) — none are generic
+>     or numbers-only. No preset-data rewrite was needed.
+>   - New tests: two presets with genuinely moderate dial values (Witty Mod / Calm
+>     Professional) proving materially different persona identity survives — each
+>     prompt contains its OWN description + customInstructions verbatim, cross-
+>     checked absent from the other's prompt, plus the hierarchy-preface text itself
+>     and confirmation that dials still add concrete mechanics (refine, not replace).
+>     Existing dead-zone tests updated for the reworded (softer) band text. 421 tests
+>     pass, `tsc --noEmit` clean, production build clean. No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

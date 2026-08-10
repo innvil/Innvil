@@ -64,35 +64,45 @@ export type ChatterGenerationResult = { ok: true; reply: string } | { ok: true; 
 const NO_REPLY_SENTINEL = "NO_REPLY";
 const MAX_REPLY_CHARS = 300;
 
+/**
+ * Persona hierarchy (do not collapse this): (1) the saved persona
+ * description (personaIdentityLine) and (2) customInstructions
+ * (personaCustomInstructionsLine, below) are the AUTHORITATIVE source of who
+ * a moderator is -- temperament, identity, voice. This function is (3): the
+ * numeric dials only REFINE how strongly that identity manifests in
+ * mechanics (capitalization, slang density, reply length, emoji, teasing) --
+ * they are not a substitute identity, and a moderate/dead-center dial value
+ * must never mean "no guidance at all" (that was the live bug: a preset
+ * whose dials all happened to land in the old binary thresholds' gap
+ * produced zero style instruction and read as a generic, professional-
+ * sounding default regardless of its configured persona). Every band below
+ * is deliberately SOFT/probabilistic language ("when it fits", "don't force
+ * it") describing a tendency, never a rigid rule that mandates a visible
+ * gimmick in every message.
+ */
 function personaStyle(p: ModeratorPersona): string[] {
   const style: string[] = [];
   if (p.language && p.language !== "en") style.push(`Mix in ${p.language} naturally where it fits.`);
 
-  // Continuous bands for every dial below -- no dead zone in the middle.
-  // Live bug: a preset (formality=30, slang=35, chattiness=40, teasing=55)
-  // landed in the gap of EVERY one of these thresholds at once (none were
-  // >70/<30, >60/<20, etc.), so the model got ZERO style instruction beyond
-  // the free-text description/customInstructions and defaulted to a
-  // neutral/professional-reading voice regardless of the configured preset
-  // (same class of bug already fixed for emojiFrequency below).
-
   if (p.formality > 70) style.push("Always capitalize the start of your sentences and use complete punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
   else if (p.formality < 30) style.push("Always write in lowercase with relaxed punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
-  else style.push("Casual capitalization and punctuation is fine — you're not locked into strict sentence-starting capitals and full punctuation, but you're not locked into all-lowercase either. Whatever reads naturally for a short chat message.");
+  else style.push("Moderately casual: natural conversational grammar, not stiff or overly formal, but not locked into all-lowercase either. Whatever reads naturally for a short chat message.");
 
   if (p.slang > 60) style.push("Slang and internet-speak are welcome.");
   else if (p.slang < 20) style.push("Avoid slang — keep language plain and standard.");
-  else style.push("A little slang/internet-speak here and there is fine when it genuinely fits — it's just not your dominant style, so don't force it into every message.");
+  else style.push("Casual wording is fine where it naturally fits, but don't overdo the slang — it's a light seasoning, not your dominant style.");
 
   if (p.chattiness < 30) style.push("Keep replies very brief — often just a few words.");
   else if (p.chattiness > 70) style.push("You can be a bit more talkative, but stay concise.");
-  else style.push("Keep replies a normal conversational length — not forced to be ultra-short, not rambling either.");
+  else style.push("Concise by default, with enough personality to feel conversational — not forced to be ultra-short, not rambling either.");
 
   if (p.humor > 60) style.push("Light humor is welcome when it fits.");
   else if (p.humor < 20) style.push("Keep it straightforward — humor/jokes aren't really your thing.");
+  else style.push("A little humor is fine when the moment genuinely calls for it, but it's not something you lean on.");
 
   if (p.teasing > 60) style.push("A bit of playful teasing/ribbing is fine when it fits the moment.");
   else if (p.teasing < 20) style.push("Skip the teasing/ribbing — keep interactions straightforward.");
+  else style.push("Light playful banter is acceptable when context supports it — don't force it, and never at someone's expense.");
 
   if (p.emojiFrequency < 15) style.push("Avoid emoji almost entirely — plain text only, essentially never.");
   else if (p.emojiFrequency < 40) style.push("Emoji are rare for you — use one only occasionally, when it genuinely fits, never more than one per message.");
@@ -101,8 +111,17 @@ function personaStyle(p: ModeratorPersona): string[] {
 
   if (p.profanityTolerance < 30) style.push("Keep language clean.");
   if (p.topicsToAvoid.length) style.push(`Avoid discussing: ${p.topicsToAvoid.join(", ")}.`);
-  if (p.customInstructions.trim()) style.push(p.customInstructions.trim());
   return style;
+}
+
+/** customInstructions is tier 2 of the persona hierarchy (see personaStyle's
+ *  doc comment) -- owner-authored behavioral guidance, authoritative
+ *  alongside the persona description, and deliberately kept OUT of
+ *  personaStyle's dial-mechanics array so it isn't just one more bullet
+ *  buried among "use emoji occasionally"-type notes. */
+function personaCustomInstructionsLine(p: ModeratorPersona): string | null {
+  const custom = p.customInstructions.trim();
+  return custom ? `Behavioral guidance for how you act (as authoritative as your persona description above): ${custom}` : null;
 }
 
 const SHARED_RULES = [
@@ -146,17 +165,28 @@ function typoLine(input: GenerateChatterReplyInput): string | null {
   return `The human addressed you with a slight misspelling of your name rather than spelling it exactly right. You may naturally acknowledge or gently joke about that if it fits your personality, but you don't have to make a big deal of it.`;
 }
 
+// Explicit hierarchy framing, placed right before the dial-derived mechanics
+// below -- makes the ordering an instruction, not just an implementation
+// detail the model has to infer from position. Persona description +
+// customInstructions (above this line) define WHO the moderator is; these
+// notes only tune HOW that identity is expressed.
+const STYLE_HIERARCHY_PREFACE =
+  "The following are secondary style/intensity notes -- they refine HOW you express the persona and behavioral guidance above, they do NOT redefine who you are. If they ever seem to pull in a different direction than your configured persona/description, the persona wins.";
+
 function buildSystemPrompt(input: GenerateChatterReplyInput): string {
   const style = personaStyle(input.persona);
+  const customInstructions = personaCustomInstructionsLine(input.persona);
 
   if (input.action === "ANSWER") {
     return [
       `You are ${input.moderatorName}, a moderator in a Telegram community, answering a genuine question from a member.`,
       identityAndPresenceLine(input),
       personaIdentityLine(input),
+      customInstructions,
       typoLine(input),
       `Be concise and natural for Telegram — not a formal support ticket reply. Use relevant knowledge you actually have; do not fabricate facts, features, prices, or policies.`,
       ...SHARED_RULES,
+      STYLE_HIERARCHY_PREFACE,
       style.join(" "),
       `Decide naturally: if you genuinely don't know and can't give a useful answer, or two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}`,
       `Otherwise respond with ONLY the message you'd actually send — no quotation marks, no explanation, no markdown, under 30 words.`,
@@ -168,10 +198,12 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
     `You are ${input.moderatorName}, a casual, human-feeling member/moderator of a Telegram community group chat — NOT a customer-support assistant and NOT a formal chatbot.`,
     identityAndPresenceLine(input),
     personaIdentityLine(input),
+    customInstructions,
     typoLine(input),
     `This message has already been selected as ordinary social conversation (CASUAL_CHAT) — just respond naturally, don't ask what you can help with.`,
     `Talk like a real community member: short, natural, informal, matching the room's own brevity/slang/energy. Casual chatter is normally 2-20 words. Never sound like an AI summarizer ("Sounds like you're planning to..."). Never open with "Hello! How can I assist you today?" or similar helpdesk phrasing. Avoid support-agent stock phrases like "you haven't said what you're asking about", "give us some details and someone can help", or "please provide more information" — a real group member would just ask "what happened?" or "wait what happened?" instead. It's fine to joke, tease lightly, or keep it very short — you don't need to explain obvious things or fully resolve everything in one message.`,
     ...SHARED_RULES,
+    STYLE_HIERARCHY_PREFACE,
     style.join(" "),
     `Decide naturally: if two other people are clearly mid-conversation and this message isn't really addressed to you or the group at large, or a reply genuinely wouldn't add anything, respond with EXACTLY: ${NO_REPLY_SENTINEL}`,
     `Otherwise respond with ONLY the short message you'd actually send in the chat — no quotation marks, no explanation, no markdown, under 20 words.`,

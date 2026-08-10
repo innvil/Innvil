@@ -480,7 +480,7 @@ test("REQUIRED: personaStyle gives an explicit slang instruction at every value,
 test("REQUIRED: personaStyle gives an explicit chattiness instruction at every value, no silent gap", () => {
   for (const chattiness of [0, 29, 30, 50, 70, 71, 100]) {
     const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, chattiness }).join(" ");
-    assert.match(style, /brief|talkative|conversational length/i, `chattiness=${chattiness} produced no chattiness instruction`);
+    assert.match(style, /brief|talkative|conversational/i, `chattiness=${chattiness} produced no chattiness instruction`);
   }
 });
 
@@ -493,7 +493,7 @@ test("REQUIRED (exact live bug): the Witty Mod preset's dials (formality=30, sla
   const style = personaStyle(witty).join(" ");
   assert.match(style, /capital|lowercase|punctuation/i);
   assert.match(style, /slang/i);
-  assert.match(style, /brief|talkative|conversational length/i);
+  assert.match(style, /brief|talkative|conversational/i);
   // humor=80 clears the existing >60 threshold already -- confirms the wit
   // signal genuinely reaches the model, not just that nothing crashed.
   assert.match(style, /light humor is welcome/i);
@@ -502,11 +502,48 @@ test("REQUIRED (exact live bug): the Witty Mod preset's dials (formality=30, sla
 test("formality/slang/chattiness instructions escalate across the range, not just a binary", () => {
   const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, ...over }).join(" ");
   assert.match(at({ formality: 90 }), /always capitalize the start/i);
-  assert.match(at({ formality: 50 }), /casual capitalization and punctuation is fine/i);
+  assert.match(at({ formality: 50 }), /moderately casual/i);
   assert.match(at({ formality: 10 }), /always write in lowercase/i);
   assert.match(at({ slang: 90 }), /slang and internet-speak are welcome/i);
-  assert.match(at({ slang: 40 }), /a little slang\/internet-speak here and there is fine/i);
+  assert.match(at({ slang: 40 }), /casual wording is fine where it naturally fits/i);
   assert.match(at({ slang: 5 }), /avoid slang/i);
+});
+
+/* -------------------------------------- persona hierarchy: identity > dials ---- */
+// REQUIRED: description + customInstructions are the AUTHORITATIVE identity
+// source; numeric dials only refine mechanics/intensity. Two presets with
+// moderate dial values (Kwan's chattiness=40 lands in the middle band, Test's
+// humor=20 sits right at the edge of the dead zone) must still produce
+// materially different persona IDENTITY -- proving moderate dials never
+// collapse two different personas into one generic/default voice.
+
+test("REQUIRED (persona hierarchy): two moderate-dial presets (Witty Mod / Calm Professional) still produce materially different persona identity, and dials refine rather than replace it", () => {
+  const kwan = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  const test1 = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+
+  const kwanPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: kwan, action: "ANSWER" }));
+  const testPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-test", moderatorName: "Test", persona: test1, action: "ANSWER" }));
+
+  // Identity (tier 1: description) is present verbatim and distinct per moderator.
+  assert.match(kwanPrompt, /playful and clever, with dry humor/i);
+  assert.match(testPrompt, /composed, clear, and respectful/i);
+  assert.doesNotMatch(kwanPrompt, /composed, clear, and respectful/i);
+  assert.doesNotMatch(testPrompt, /playful and clever, with dry humor/i);
+
+  // customInstructions (tier 2) also present and distinct, as authoritative
+  // behavioral guidance -- not buried inside the dial-mechanics bullet list.
+  assert.match(kwanPrompt, /be playful and quick-witted/i);
+  assert.match(testPrompt, /speak like a composed, professional community moderator/i);
+
+  // The hierarchy itself is stated explicitly, not just implied by ordering.
+  assert.match(kwanPrompt, /secondary style\/intensity notes/i);
+  assert.match(kwanPrompt, /the persona wins/i);
+
+  // Dials REFINE (both still get concrete mechanics), they do not REPLACE
+  // identity -- neither prompt reads as empty/generic just because some of
+  // its dials land in the moderate range.
+  assert.match(kwanPrompt, /light humor is welcome/i); // Kwan humor=80, clears the high band
+  assert.match(testPrompt, /avoid slang — keep language plain and standard/i); // Test slang=5, clears the low band
 });
 
 test("REQUIRED: two-moderator persona isolation holds for the DeepSeek-routed CASUAL_CHAT action too", () => {
