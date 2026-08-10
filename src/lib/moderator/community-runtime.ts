@@ -3,7 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
-import { virtualModBotAcknowledgement, virtualModNaturalChatterActive } from "./plan";
+import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import { selectChatterAction, resolveDirectedModerator, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, type ChatterContextMessage } from "./chatter-generate";
@@ -471,7 +471,47 @@ export function humanRecentlyResponded(
   return priorMessage.senderPlatformId !== currentSenderPlatformId;
 }
 
-async function handleHumanMessage(admin: SupabaseClient, panelId: string, community: { id: string }, message: TelegramMessage, event: CommunityEvent) {
+/* -------------------------------------------------- trial reactive quota ---- */
+// Phase 4.M (B): 20 successfully-executed reactive conversational text
+// responses (CASUAL_CHAT/ANSWER/SHORT_ACK) per community per local
+// community day, trial only. No per-community timezone field exists
+// anywhere in the schema yet (see migration 0050's header), so "local day"
+// is a UTC calendar date for now -- revisit once real per-community
+// timezone configuration exists.
+export function reactiveQuotaDay(now: Date): string {
+  return now.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+}
+
+/** Read-only check, done BEFORE any AI generation is attempted (spec §17) --
+ *  never itself consumes quota. Only meaningful for trial entitlement;
+ *  callers must gate on that first (paid tiers are out of scope, spec §2). */
+export async function hasReactiveQuotaRemaining(admin: SupabaseClient, communityId: string, quotaDay: string): Promise<boolean> {
+  const { data } = await admin
+    .from("community_reactive_quota")
+    .select("reactive_count")
+    .eq("community_id", communityId)
+    .eq("quota_day", quotaDay)
+    .maybeSingle();
+  return ((data as { reactive_count: number } | null)?.reactive_count ?? 0) < TRIAL_REACTIVE_DAILY_LIMIT;
+}
+
+/** Called ONLY after a reactive text response has actually been sent
+ *  successfully -- atomic upsert-increment (migration 0050), avoiding a
+ *  read-then-write race between concurrent webhook deliveries. Never blocks
+ *  the send that's already happened; a race that pushes the count slightly
+ *  past the limit is a harmless, bounded overshoot, not a correctness bug. */
+export async function recordReactiveQuotaUse(admin: SupabaseClient, panelId: string, communityId: string, quotaDay: string): Promise<void> {
+  await admin.rpc("increment_community_reactive_quota", { p_panel_id: panelId, p_community_id: communityId, p_quota_day: quotaDay });
+}
+
+async function handleHumanMessage(
+  admin: SupabaseClient,
+  panelId: string,
+  community: { id: string },
+  message: TelegramMessage,
+  event: CommunityEvent,
+  isTrialEntitlement: boolean
+) {
   const deployments = await findChatterDeployments(admin, community.id);
   if (!deployments.length) return; // no chatter-eligible deployment in this community
 
@@ -541,6 +581,19 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
     return;
   }
 
+  // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
+  // (spec §17) -- SHORT_ACK/CASUAL_CHAT/ANSWER are all reactive conversational
+  // text responses and share this one gate; REACT/SILENCE above are
+  // unaffected (moderation is never gated by this either). A plain read, not
+  // itself a quota consumption.
+  if (isTrialEntitlement && !(await hasReactiveQuotaRemaining(admin, community.id, reactiveQuotaDay(now)))) {
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "SILENCE", "trial_reactive_quota_exhausted", {
+      reasons: ["trial_reactive_quota_exhausted"],
+      attemptedAction: action.type,
+    });
+    return;
+  }
+
   let replyText: string;
   if (action.type === "SHORT_ACK") {
     // Deterministic, zero Sonnet calls.
@@ -587,6 +640,13 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   const sent = await executeAction(admin, String(message.chat.id), sendAction);
   await recordBotSpoke(admin, deployment.deploymentId, new Date());
   await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", action.type, action.reasons.join(","), { reasons: action.reasons });
+
+  // Only consumed after the send actually succeeded (spec §7) -- never for a
+  // failed outbound send, a declined/failed generation (both already
+  // returned above), or a SILENCE/REACT (neither reaches this line at all).
+  if (isTrialEntitlement && sent.sentMessageId) {
+    await recordReactiveQuotaUse(admin, panelId, community.id, reactiveQuotaDay(now));
+  }
 
   if (sent.sentMessageId) {
     await admin.from("community_messages").insert({
@@ -670,7 +730,11 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
 
   if (sender.senderType === "HUMAN") {
     if (!virtualModNaturalChatterActive(settings)) return;
-    await handleHumanMessage(admin, integration.panel_id, community, message, event);
+    // Phase 4.M (B): the 20/day reactive quota is trial-only (spec §2) --
+    // paid tiers are unaffected and this patch does not change their
+    // existing (unlimited) behavior.
+    const isTrialEntitlement = moderatorEntitlementSource(settings) === "trial";
+    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement);
     return;
   }
 

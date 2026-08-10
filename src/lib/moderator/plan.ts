@@ -49,6 +49,12 @@ const MODES: ModeratorCommercialMode[] = ["commission", "rental"];
 export const TRIAL_DURATION_DAYS = 7;
 /** §38/§39: one shared proactive budget/local-community-day, across GM/GN/revival/starters. Not yet enforced (Proactive Mode isn't built) — stored now so later phases don't have to retrofit the schema. */
 export const TRIAL_PROACTIVE_DAILY_LIMIT = 2;
+/** Phase 4.M (B): 20 successfully-executed REACTIVE conversational text
+ *  responses (CASUAL_CHAT/ANSWER/SHORT_ACK) per community per local
+ *  community day, trial only — a maximum, not a target. Separate from
+ *  TRIAL_PROACTIVE_DAILY_LIMIT above; moderation is never gated by it. Paid
+ *  tiers are unaffected (this patch is trial-only per spec §2). */
+export const TRIAL_REACTIVE_DAILY_LIMIT = 20;
 
 export interface ModeratorTrialState {
   active: boolean;

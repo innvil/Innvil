@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded } from "./community-runtime";
+import {
+  isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
+  reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
+} from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
  *  isDuplicateUpdate uses, enforcing a real (integration_id, update_id)
@@ -193,4 +196,68 @@ test("a stale prior message from a different person is not recent enough to coun
 
 test("no prior message at all -> false", () => {
   assert.equal(humanRecentlyResponded(null, "user-K", new Date()), false);
+});
+
+/* ------------------------------------------ trial reactive quota (Phase 4.M B) ---- */
+// 20 successfully-executed reactive conversational text responses
+// (CASUAL_CHAT/ANSWER/SHORT_ACK) per community per local community day,
+// trial only -- checked BEFORE AI generation, consumed only after a
+// successful send.
+
+test("reactiveQuotaDay: formats as a UTC calendar date (YYYY-MM-DD)", () => {
+  assert.equal(reactiveQuotaDay(new Date("2026-08-10T23:59:59Z")), "2026-08-10");
+  assert.equal(reactiveQuotaDay(new Date("2026-08-11T00:00:00Z")), "2026-08-11");
+});
+
+/** Fake mimicking .from("community_reactive_quota").select().eq().eq().maybeSingle()
+ *  over an in-memory row, plus .rpc() for the atomic increment -- records
+ *  every rpc call so tests can assert on what was actually sent. */
+function fakeQuotaAdmin(existingCount: number | null) {
+  const rpcCalls: Array<{ name: string; params: unknown }> = [];
+  const admin = {
+    from(_table: string) {
+      const api = {
+        select() { return api; },
+        eq() { return api; },
+        async maybeSingle() {
+          return { data: existingCount === null ? null : { reactive_count: existingCount }, error: null };
+        },
+      };
+      return api;
+    },
+    async rpc(name: string, params: unknown) {
+      rpcCalls.push({ name, params });
+      return { data: null, error: null };
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+  return { admin, rpcCalls };
+}
+
+test("REQUIRED: no usage recorded yet (no row) -> quota remaining", async () => {
+  const { admin } = fakeQuotaAdmin(null);
+  assert.equal(await hasReactiveQuotaRemaining(admin, "community-1", "2026-08-10"), true);
+});
+
+test("REQUIRED: under the 20/day limit -> quota remaining", async () => {
+  const { admin } = fakeQuotaAdmin(19);
+  assert.equal(await hasReactiveQuotaRemaining(admin, "community-1", "2026-08-10"), true);
+});
+
+test("REQUIRED: exactly at the 20/day limit -> exhausted", async () => {
+  const { admin } = fakeQuotaAdmin(20);
+  assert.equal(await hasReactiveQuotaRemaining(admin, "community-1", "2026-08-10"), false);
+});
+
+test("over the limit (e.g. from a race-condition overshoot) -> still exhausted", async () => {
+  const { admin } = fakeQuotaAdmin(21);
+  assert.equal(await hasReactiveQuotaRemaining(admin, "community-1", "2026-08-10"), false);
+});
+
+test("REQUIRED: recordReactiveQuotaUse calls the atomic increment RPC with the right scoping params", async () => {
+  const { admin, rpcCalls } = fakeQuotaAdmin(0);
+  await recordReactiveQuotaUse(admin, "panel-1", "community-1", "2026-08-10");
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].name, "increment_community_reactive_quota");
+  assert.deepEqual(rpcCalls[0].params, { p_panel_id: "panel-1", p_community_id: "community-1", p_quota_day: "2026-08-10" });
 });

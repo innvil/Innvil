@@ -2165,7 +2165,7 @@ win over this):**
 >   panel burns supply); keep adding SaaS sinks to drive utility + holders.
 > - Branding: platform currency is *anvil* now → *ANVIL* the coin later (logo = the mark).
 
-### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement ((A) DONE v1.1.84, (B)–(F) NOTED)
+### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement ((A) DONE v1.1.84, (B) DONE v1.7.0, (C)–(F) NOTED)
 
 > Telegram-based AI community moderator add-on. Foundation already built and live in
 > this branch: Managed Bot provisioning (BotFather-token fallback + Telegram Managed
@@ -2178,7 +2178,7 @@ win over this):**
 > Coordinator (`src/lib/moderator/coordinator.ts` / `chatter-coordinator.ts`) →
 > `CommunityAction` → Telegram adapter, orchestrated in `community-runtime.ts`.
 > `docs/moderator/natural-chatter-refinement-spec.md` is the verbatim source-of-truth
-> spec (57 sections); implement (B)–(F) FROM that file, not from this summary. Scope
+> spec (57 sections); implement (C)–(F) FROM that file, not from this summary. Scope
 > is tightly bounded to 6 things:
 > - **(A) Reactive response selection/pacing — DONE (final form: v1.1.97).**
 >   **Natural Chatter uses contextual social action selection. It does NOT use flat
@@ -2541,13 +2541,59 @@ win over this):**
 >   action-selection checks (`"who else?"` never `SILENCE`/`REACT`-only,
 >   `"prettyaccurate too. lol"` never `CASUAL_CHAT`/`ANSWER`). 324 tests pass
 >   (up from 284).
+>   **(B) IMPLEMENTED (v1.7.0) — 20/day trial reactive quota.** 20
+>   successfully-executed reactive conversational text responses
+>   (`CASUAL_CHAT`/`ANSWER`/`SHORT_ACK`) per community per local community day,
+>   trial entitlement only — a maximum, never a target; silence stays a
+>   first-class valid outcome regardless. Paid tiers are unaffected (spec §2 —
+>   out of scope for this patch).
+>   - New migration `0050_reactive_quota.sql` — `community_reactive_quota`
+>     (panel_id, community_id, quota_day, reactive_count; PK on
+>     (community_id, quota_day), service-role only) + atomic SQL RPC
+>     `increment_community_reactive_quota` (single upsert-on-conflict
+>     statement, avoids a read-then-write race between concurrent webhook
+>     deliveries). **Run migration 0050.**
+>   - "Local community day" is a UTC calendar date for now — no per-community
+>     timezone field exists anywhere in the schema (the spec's pointer to
+>     "existing proactive-quota timezone infrastructure" doesn't actually
+>     exist yet either; Proactive Mode was never built beyond reserved
+>     `deployment_state` columns). Revisit once real per-community timezone
+>     configuration exists.
+>   - `plan.ts`: new `TRIAL_REACTIVE_DAILY_LIMIT = 20`, alongside the existing
+>     (still-unenforced) `TRIAL_PROACTIVE_DAILY_LIMIT = 2`.
+>   - `community-runtime.ts`: `reactiveQuotaDay(now)` (pure),
+>     `hasReactiveQuotaRemaining` (plain read, called BEFORE any AI generation
+>     is attempted — spec §17, so an exhausted trial never pays for a wasted
+>     Sonnet call), `recordReactiveQuotaUse` (calls the atomic RPC, called
+>     ONLY after a text response actually sends successfully — spec §7, never
+>     for a failed send, declined generation, or a `SILENCE`/`REACT`, neither
+>     of which reaches that code path at all). `handleHumanMessage` gained an
+>     `isTrialEntitlement` parameter (computed once in the webhook dispatcher
+>     via `moderatorEntitlementSource(settings) === "trial"`); the gate sits
+>     right after the `REACT` branch, so `SHORT_ACK`/`CASUAL_CHAT`/`ANSWER`
+>     share one check (all three are genuine "reactive conversational text
+>     responses" per spec §3, none are in §4's explicit non-counting list) —
+>     `REACT`/`SILENCE` above it are structurally unaffected.
+>   - Judgment calls made explicit for review: (1) `SHORT_ACK` counts toward
+>     and is gated by the quota same as `CASUAL_CHAT`/`ANSWER`, even though
+>     it's deterministic/zero-AI-cost — it's still a genuine reactive text
+>     send per the spec's own counting definition, and excluding it would let
+>     a trial bot talk unboundedly via canned acknowledgements once real
+>     replies are exhausted; (2) UTC-day bucketing instead of inventing
+>     timezone infrastructure that doesn't exist elsewhere in the codebase.
+>   - New tests (`community-runtime.test.ts`, +6): `reactiveQuotaDay`
+>     UTC-formatting, quota-remaining true with no prior usage / under limit,
+>     exhausted exactly at the limit and over it (race overshoot), and the
+>     RPC call shape (`recordReactiveQuotaUse` sends the right scoping
+>     params). 330 tests pass.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not
 >   built — so there's nothing to isolate until that exists).
-> - **(B) Trial reactive quota = 20/day** (successful sends only, per community per
->   local community day, checked before AI generation) — separate from the existing
->   2/day proactive quota; moderation enforcement never consumes or is blocked by it.
+> - **(B) Trial reactive quota = 20/day — DONE (v1.7.0, see release note above).**
+>   Successful sends only, per community per local community day, checked before AI
+>   generation — separate from the existing 2/day proactive quota; moderation
+>   enforcement never consumes or is blocked by it.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

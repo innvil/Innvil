@@ -1,10 +1,11 @@
 # Natural Chatter + Community Moderation Refinement Spec
 
-> Status: **(A) IMPLEMENTED (v1.1.84) — (B)–(F) still NOTED, not built.** This is
-> the source-of-truth spec for the next Virtual Moderator iteration, captured
-> verbatim as given so no fidelity is lost before implementation. See the pointer
-> in `CLAUDE.md` (Phase 4.M) for where this sits in the roadmap. Do not implement
-> (B)–(F) from memory/paraphrase — implement from this file.
+> Status: **(A) IMPLEMENTED (v1.1.84), (B) IMPLEMENTED (v1.7.0) — (C)–(F) still
+> NOTED, not built.** This is the source-of-truth spec for the next Virtual
+> Moderator iteration, captured verbatim as given so no fidelity is lost before
+> implementation. See the pointer in `CLAUDE.md` (Phase 4.M) for where this sits
+> in the roadmap. Do not implement (C)–(F) from memory/paraphrase — implement
+> from this file.
 >
 > Scope boundary (§55 below): this patch is ONLY (A) reactive Natural Chatter
 > selection/pacing, (B) the 20/day trial reactive response entitlement, (C)
@@ -329,6 +330,41 @@
 >   directed "kwan?"/"test?", 7 trivial controls, 4 long-ack controls, 4
 >   ack+question cases, 3 ack+substantive cases, explicit action-selection
 >   checks). 324 tests pass.
+>
+> **(B) 20/day trial reactive quota — IMPLEMENTED (v1.7.0).** Implements
+> spec §1-§17 (trial reactive response limit) verbatim; §18 onward (C-F,
+> link moderation / spam / warnings / admin routing) remain NOTED, not built.
+> - Migration `0050_reactive_quota.sql`: `community_reactive_quota`
+>   (panel_id, community_id, quota_day, reactive_count; PK on (community_id,
+>   quota_day)) + atomic SQL RPC `increment_community_reactive_quota`
+>   (single upsert-on-conflict statement).
+> - §6 ("local community day"): no per-community timezone field exists
+>   anywhere in the schema -- the spec's own pointer to "existing proactive
+>   quota timezone infrastructure" doesn't actually exist either, since
+>   Proactive Mode was never built beyond reserved `deployment_state`
+>   columns. Uses UTC calendar days for now; revisit once real per-community
+>   timezone configuration exists.
+> - §7 (count only successful execution) + §17 (check before AI generation):
+>   `hasReactiveQuotaRemaining` is a plain read, called in
+>   `community-runtime.ts`'s `handleHumanMessage` right after the `REACT`
+>   branch (before `SHORT_ACK`/`CASUAL_CHAT`/`ANSWER` are attempted) --
+>   `recordReactiveQuotaUse` (the atomic increment) is called only after
+>   `executeAction`'s `SEND_TEXT` actually returns a sent message id.
+> - §3 vs §4 (what counts): `SHORT_ACK` counts toward and is gated by the
+>   quota the same as `CASUAL_CHAT`/`ANSWER` -- it's a genuine "reactive
+>   conversational text response" per §3's own definition, it isn't in §4's
+>   explicit non-counting list, and excluding it would let a trial bot talk
+>   unboundedly via canned acknowledgements once real AI replies are
+>   exhausted. `REACT`/`SILENCE` are structurally unaffected (neither reaches
+>   the gate at all).
+> - §2 (trial-only): gated on `moderatorEntitlementSource(settings) ===
+>   "trial"`, computed once in the webhook dispatcher and threaded into
+>   `handleHumanMessage` as a new `isTrialEntitlement` parameter -- paid tiers
+>   are completely untouched by this patch.
+> - New tests (`community-runtime.test.ts`, +6): `reactiveQuotaDay`
+>   UTC-formatting, quota-remaining true with no prior usage / under limit,
+>   exhausted exactly at the limit and over it (race overshoot), and the RPC
+>   call shape. 330 tests pass. **Run migration 0050.**
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 
