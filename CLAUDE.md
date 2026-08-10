@@ -2433,6 +2433,19 @@ win over this):**
 >     v1.4.0's persona input — the Browser preview tool remained unavailable
 >     this session (ongoing safety-classifier outage), so neither was live
 >     click-tested.
+>   **Persona preset picker made collapsible (v1.6.1).** User feedback after
+>   live use: the 10-card grid rendered open by default inside every
+>   moderator's row was "way too cramped," especially with multiple moderators
+>   on screen. `PersonaPresetPicker` now defaults CLOSED — a single header
+>   button shows "Persona preset — [current preset name]" (or "a quick
+>   starting point" when unset/custom) with a rotating chevron, matching the
+>   existing expand/collapse pattern used elsewhere in `AdminTabs.tsx`. The
+>   card grid, "More presets"/"Custom" controls, and per-card example-voice
+>   preview only render when expanded. No change to preset data/materialization
+>   logic — purely a layout/visibility change. 324 tests pass (unaffected,
+>   no logic touched), `tsc --noEmit` clean, build clean. Note: verified via
+>   typecheck + build only, same limitation as v1.5.0/v1.4.0 — the Browser
+>   preview tool remained unavailable this session.
 >   **Same-sender "already handled" false suppression — IMPLEMENTED (v1.5.1).**
 >   Live bug, found by checking the live Telegram chat immediately after v1.5.0
 >   deployed: "anyone here?" sent 16 seconds after the SAME person's own

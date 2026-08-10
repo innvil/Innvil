@@ -4356,12 +4356,14 @@ function PersonaPresetPicker({
   currentPresetId: string | null;
   onApplied: () => void | Promise<void>;
 }) {
+  const [open, setOpen] = React.useState(false);
   const [showMore, setShowMore] = React.useState(false);
   const [previewId, setPreviewId] = React.useState<string | null>(null);
   const [applying, setApplying] = React.useState<string | null>(null);
 
   const surfaced = MODERATOR_PERSONA_PRESETS.filter((p) => DEFAULT_SURFACED_PRESET_IDS.includes(p.id));
   const visible = showMore ? MODERATOR_PERSONA_PRESETS : surfaced;
+  const activePreset = currentPresetId ? MODERATOR_PERSONA_PRESETS.find((p) => p.id === currentPresetId) : null;
 
   const apply = async (presetId: string) => {
     setApplying(presetId);
@@ -4379,60 +4381,70 @@ function PersonaPresetPicker({
 
   return (
     <div className="mt-3">
-      <label className="text-xs fp-text-faint">
-        Persona preset — a quick starting point (you can still customize the description and behavior below after).
-      </label>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1.5">
-        {visible.map((preset) => {
-          const active = currentPresetId === preset.id;
-          const expanded = previewId === preset.id;
-          return (
-            <div
-              key={preset.id}
-              onClick={() => setPreviewId(expanded ? null : preset.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPreviewId(expanded ? null : preset.id); }}
-              className={`text-left fp-panel-raised border rounded-lg p-2.5 cursor-pointer ${active ? "fp-gold-border" : "fp-line-soft"}`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold">{preset.label}</p>
-                {active && <span className="text-[10px] fp-gold shrink-0">Active</span>}
-              </div>
-              <p className="text-[11px] fp-text-faint mt-0.5">{preset.shortDescription}</p>
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {preset.tags.map((t) => (
-                  <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-full fp-line-soft border fp-text-dim">{t}</span>
-                ))}
-              </div>
-              {expanded && (
-                <div className="mt-2 pt-2 border-t fp-line-soft">
-                  <p className="text-[11px] fp-text-faint italic">Example voice: &ldquo;{preset.exampleVoice}&rdquo;</p>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); apply(preset.id); }}
-                    disabled={applying === preset.id}
-                    className="fp-btn-primary text-[11px] font-semibold px-2.5 py-1.5 rounded-lg mt-2 disabled:opacity-60"
-                  >
-                    {applying === preset.id ? "Applying…" : active ? "Re-apply" : "Use this persona"}
-                  </button>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+      >
+        <span className="text-xs fp-text-faint">
+          Persona preset — {activePreset ? <span className="fp-gold">{activePreset.label}</span> : "a quick starting point"}
+        </span>
+        <ChevronDown size={14} className={`fp-text-faint transition-transform shrink-0 ${open ? "" : "-rotate-90"}`} />
+      </button>
+      {open && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1.5">
+            {visible.map((preset) => {
+              const active = currentPresetId === preset.id;
+              const expanded = previewId === preset.id;
+              return (
+                <div
+                  key={preset.id}
+                  onClick={() => setPreviewId(expanded ? null : preset.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setPreviewId(expanded ? null : preset.id); }}
+                  className={`text-left fp-panel-raised border rounded-lg p-2.5 cursor-pointer ${active ? "fp-gold-border" : "fp-line-soft"}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold">{preset.label}</p>
+                    {active && <span className="text-[10px] fp-gold shrink-0">Active</span>}
+                  </div>
+                  <p className="text-[11px] fp-text-faint mt-0.5">{preset.shortDescription}</p>
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {preset.tags.map((t) => (
+                      <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-full fp-line-soft border fp-text-dim">{t}</span>
+                    ))}
+                  </div>
+                  {expanded && (
+                    <div className="mt-2 pt-2 border-t fp-line-soft">
+                      <p className="text-[11px] fp-text-faint italic">Example voice: &ldquo;{preset.exampleVoice}&rdquo;</p>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); apply(preset.id); }}
+                        disabled={applying === preset.id}
+                        className="fp-btn-primary text-[11px] font-semibold px-2.5 py-1.5 rounded-lg mt-2 disabled:opacity-60"
+                      >
+                        {applying === preset.id ? "Applying…" : active ? "Re-apply" : "Use this persona"}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-3 mt-2">
-        <button onClick={() => setShowMore((v) => !v)} className="text-[11px] fp-text-dim hover:fp-text underline">
-          {showMore ? "Fewer presets" : "More presets"}
-        </button>
-        <button
-          onClick={clearPreset}
-          disabled={applying === "__custom__" || !currentPresetId}
-          className="text-[11px] fp-text-dim hover:fp-text underline disabled:opacity-40"
-        >
-          Custom (clear preset link)
-        </button>
-      </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            <button onClick={() => setShowMore((v) => !v)} className="text-[11px] fp-text-dim hover:fp-text underline">
+              {showMore ? "Fewer presets" : "More presets"}
+            </button>
+            <button
+              onClick={clearPreset}
+              disabled={applying === "__custom__" || !currentPresetId}
+              className="text-[11px] fp-text-dim hover:fp-text underline disabled:opacity-40"
+            >
+              Custom (clear preset link)
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
