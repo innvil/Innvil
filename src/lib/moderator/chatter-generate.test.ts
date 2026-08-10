@@ -278,3 +278,123 @@ test("REQUIRED: an existing moderator with no preset (presetId null) keeps worki
   // before presets existed -- unaffected by the new preset catalog.
   assert.match(prompt, /No specific persona description has been configured/i);
 });
+
+/* ------------------------------------------------- task-based model routing ---- */
+// resolveChatterRoute() is the ONLY place that decides provider/model for
+// chatter generation. It must key strictly on action.type (never text), never
+// let CASUAL_CHAT silently escalate to Sonnet on DeepSeek failure, and never
+// change what persona/prompt content gets sent (see the provider-independence
+// test below).
+
+const { resolveChatterRoute } = __testables;
+
+function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) prev[k] = process.env[k];
+  try {
+    for (const [k, v] of Object.entries(vars)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fn();
+  } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+test("REQUIRED: ANSWER routes to Sonnet 5 at effort medium, never DeepSeek -- even when DeepSeek is configured", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("ANSWER");
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "claude-sonnet-5");
+      assert.equal(route.effort, "medium");
+      assert.equal(route.providerOverride, undefined);
+      assert.equal(route.automation, "NATURAL_CHATTER_ANSWER");
+    }
+  });
+});
+
+test("REQUIRED: CASUAL_CHAT routes to DeepSeek v4 Flash in non-thinking mode, never Sonnet", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "deepseek-v4-flash");
+      assert.notEqual(route.model, "claude-sonnet-5");
+      assert.equal(route.disableThinking, true);
+      assert.equal(route.automation, "NATURAL_CHATTER_CASUAL");
+      assert.ok(route.providerOverride);
+      assert.equal(route.providerOverride?.provider, "openai");
+      assert.equal(route.providerOverride?.apiKey, "sk-deepseek-test");
+      assert.equal(route.providerOverride?.baseUrl, "https://api.deepseek.com");
+    }
+  });
+});
+
+test("REQUIRED: CASUAL_CHAT never silently falls back to Sonnet when DeepSeek is unconfigured", () => {
+  withEnv({ DEEPSEEK_API_KEY: undefined }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, false);
+    if (!route.ok) {
+      assert.match(route.error, /DeepSeek/i);
+      assert.doesNotMatch(route.error, /sonnet/i);
+    }
+  });
+});
+
+test("REQUIRED: DeepSeek model/base-url are centrally configurable -- switching Flash to Pro is a config change, not a code change", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: "deepseek-v4-pro", DEEPSEEK_BASE_URL: "https://custom.example.com" }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "deepseek-v4-pro");
+      assert.equal(route.providerOverride?.baseUrl, "https://custom.example.com");
+    }
+  });
+});
+
+test("REQUIRED: CASUAL_CHAT gets a low output-token cap; ANSWER keeps its generous cap", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const casual = resolveChatterRoute("CASUAL_CHAT");
+    const answer = resolveChatterRoute("ANSWER");
+    assert.equal(casual.ok, true);
+    assert.equal(answer.ok, true);
+    if (casual.ok && answer.ok) {
+      assert.ok(casual.maxTokens < answer.maxTokens);
+      assert.ok(casual.maxTokens <= 200);
+    }
+  });
+});
+
+test("REQUIRED: routing keys strictly on action.type, not message content -- resolveChatterRoute takes no text/message argument at all", () => {
+  // Structural proof: the function signature is (action: ChatterGenerationAction) => ChatterRoute.
+  // If this ever grows a second parameter for message text, this call site breaks loudly.
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, true);
+  });
+});
+
+test("REQUIRED: persona/prompt construction is provider-independent -- identical output regardless of DeepSeek configuration", () => {
+  const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "laid-back, dry humor, terse" };
+  const input = baseInput({ moderatorName: "Kwan", persona, action: "CASUAL_CHAT" });
+  const withoutDeepseek = buildSystemPrompt(input);
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: "deepseek-v4-pro" }, () => {
+    const withDeepseek = buildSystemPrompt(input);
+    assert.equal(withDeepseek, withoutDeepseek);
+    assert.match(withDeepseek, /laid-back, dry humor, terse/);
+  });
+});
+
+test("REQUIRED: two-moderator persona isolation holds for the DeepSeek-routed CASUAL_CHAT action too", () => {
+  const kwanPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: FORMAL_MODERATOR_A, action: "CASUAL_CHAT" }));
+  const testPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-test", moderatorName: "Test", persona: CASUAL_MODERATOR_B, action: "CASUAL_CHAT" }));
+  assert.doesNotMatch(kwanPrompt, /Slang and internet-speak are welcome/i);
+  assert.match(testPrompt, /Slang and internet-speak are welcome/i);
+  assert.match(kwanPrompt, /You are Kwan/);
+  assert.match(testPrompt, /You are Test/);
+});

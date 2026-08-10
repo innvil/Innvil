@@ -171,6 +171,30 @@ export function aiConfigured(): boolean {
 }
 
 /**
+ * Dedicated provider for Natural Chatter's CASUAL_CHAT generation only —
+ * NOT a Sonnet substitute for anything else. Mirrors aiprimetechProvider()'s
+ * shape (its own key/provider/spend, returned as a providerOverride so
+ * aiComplete's primary/AI_FALLBACK_* Sonnet-resolution path is never
+ * consulted at all — see chatter-generate.ts). Returns null when unconfigured;
+ * callers must fail/decline explicitly rather than falling through to Sonnet.
+ *
+ * DeepSeek's `/chat/completions` endpoint is OpenAI-compatible, so this reuses
+ * openaiComplete() with no new wire code. Env:
+ *   DEEPSEEK_API_KEY          required — no default, no fallback to AI_API_KEY
+ *   DEEPSEEK_BASE_URL         default https://api.deepseek.com
+ *   DEEPSEEK_CHATTER_MODEL    default deepseek-v4-flash (non-thinking chatter
+ *                             model; switching to a "pro"/reasoner model later
+ *                             is a config change here, never automatic).
+ */
+export function deepseekChatterProvider(): { provider: AiProvider; apiKey: string; baseUrl: string; model: string } | null {
+  const key = process.env.DEEPSEEK_API_KEY?.trim().replace(/^['"]|['"]$/g, "") || undefined;
+  if (!key) return null;
+  const baseUrl = (process.env.DEEPSEEK_BASE_URL?.trim().replace(/\/+$/, "")) || "https://api.deepseek.com";
+  const model = process.env.DEEPSEEK_CHATTER_MODEL?.trim() || "deepseek-v4-flash";
+  return { provider: "openai", apiKey: key, baseUrl, model };
+}
+
+/**
  * Callers on a hard platform deadline (e.g. the Telegram webhook route's
  * `maxDuration = 30`) need the AI call to fail well before that deadline, not
  * hang until the whole function gets killed — a killed function never runs

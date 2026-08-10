@@ -1,6 +1,6 @@
 import "server-only";
 
-import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
+import { aiComplete, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 
 /**
@@ -172,11 +172,80 @@ function buildContextLines(input: GenerateChatterReplyInput): string {
     .join("\n");
 }
 
+export type ChatterRoute =
+  | {
+      ok: true;
+      model: string;
+      automation: string;
+      maxTokens: number;
+      effort?: "low" | "medium" | "high" | "xhigh" | "max";
+      disableThinking?: boolean;
+      providerOverride?: { provider: "anthropic" | "openai"; apiKey: string; baseUrl: string };
+    }
+  | { ok: false; error: string };
+
+/**
+ * Task-based model routing -- never persona-based ("the model changes, the
+ * persona does not"). ANSWER is substantive, knowledge-grounded Q&A and stays
+ * hard-locked to Sonnet 5 via getInnvilModelConfig() (throws rather than
+ * silently downgrading -- unchanged from before this routing existed).
+ * CASUAL_CHAT is low-stakes social chatter and routes to a dedicated,
+ * cheaper DeepSeek provider (deepseekChatterProvider() -- its own env-config
+ * key/base-url/model, returned as an aiComplete providerOverride, which
+ * bypasses the primary/AI_FALLBACK_* Sonnet-resolution path entirely).
+ *
+ * This is the ONLY place that decides provider/model for chatter generation,
+ * and it keys strictly on the coordinator's own action.type (selectChatterAction's
+ * return value) -- never on message text/keywords. When DeepSeek isn't
+ * configured, this returns ok:false; generateChatterReply below surfaces that
+ * as a generation failure and NEVER falls through to the Sonnet/ANSWER branch
+ * -- there is no automatic escalation from a cheap model to an expensive one.
+ */
+function resolveChatterRoute(action: ChatterGenerationAction): ChatterRoute {
+  if (action === "ANSWER") {
+    const { model, effort } = getInnvilModelConfig();
+    return {
+      ok: true,
+      model,
+      effort,
+      // Claude 5's adaptive thinking spends part of maxTokens on invisible
+      // reasoning before any reply text ever comes out -- thinking stays ON
+      // at the standard "medium" effort (not disabled, not lowered further
+      // without measured usage data first), so maxTokens is a generous
+      // ceiling well above what thinking + a short reply could need, not
+      // a target -- the reply must never be cut off mid-sentence.
+      maxTokens: 1024,
+      automation: "NATURAL_CHATTER_ANSWER",
+    };
+  }
+
+  // CASUAL_CHAT -- dedicated DeepSeek route, no Sonnet involvement at all.
+  const deepseek = deepseekChatterProvider();
+  if (!deepseek) return { ok: false, error: "DeepSeek chatter provider not configured (DEEPSEEK_API_KEY)" };
+  return {
+    ok: true,
+    model: deepseek.model,
+    providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+    // Non-thinking mode: DeepSeek's fast/chat-tier models (unlike its
+    // "reasoner" tier) don't emit chain-of-thought by default, so this is a
+    // model-id choice (deepseek-v4-flash), not a request flag -- mirrors how
+    // openaiComplete() already sends no reasoning-control field.
+    disableThinking: true,
+    // Casual chatter is short by its own prompt rule (<20 words) -- a low
+    // cap keeps replies from turning into essays, unlike ANSWER's generous
+    // ceiling above.
+    maxTokens: 150,
+    automation: "NATURAL_CHATTER_CASUAL",
+  };
+}
+
 /** CASUAL_CHAT/ANSWER only — the two actions selectChatterAction() ever
- *  routes to an actual Sonnet 5 call. SILENCE/REACT/SHORT_ACK never call
- *  this function at all. */
+ *  routes to an actual model call. SILENCE/REACT/SHORT_ACK never call this
+ *  function at all. */
 export async function generateChatterReply(input: GenerateChatterReplyInput): Promise<ChatterGenerationResult> {
-  if (!aiConfigured()) return { ok: false, error: "AI not configured" };
+  const route = resolveChatterRoute(input.action);
+  if (!route.ok) return { ok: false, error: route.error };
+  if (!route.providerOverride && !aiConfigured()) return { ok: false, error: "AI not configured" };
 
   const contextLines = buildContextLines(input);
 
@@ -186,21 +255,15 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
   ].join("\n\n");
 
   try {
-    const { model, effort } = getInnvilModelConfig();
     const raw = await aiComplete({
       system: buildSystemPrompt(input),
       messages: [{ role: "user", content: userContent }],
-      model,
-      effort,
-      // Claude 5's adaptive thinking spends part of maxTokens on invisible
-      // reasoning before any reply text ever comes out -- thinking stays ON
-      // at the standard "medium" effort (not disabled, not lowered further
-      // without measured usage data first), so maxTokens is a generous
-      // ceiling well above what thinking + a short reply could need, not
-      // a target -- the reply must never be cut off mid-sentence.
-      // MAX_REPLY_CHARS still caps the final visible display length.
-      maxTokens: 1024,
-      automation: input.action === "ANSWER" ? "NATURAL_CHATTER_ANSWER" : "NATURAL_CHATTER_CASUAL",
+      model: route.model,
+      ...(route.effort ? { effort: route.effort } : {}),
+      ...(route.disableThinking ? { disableThinking: true } : {}),
+      ...(route.providerOverride ? { providerOverride: route.providerOverride } : {}),
+      maxTokens: route.maxTokens,
+      automation: route.automation,
     });
     const text = raw.trim();
     if (!text || text.toUpperCase() === NO_REPLY_SENTINEL || text.toUpperCase().startsWith(NO_REPLY_SENTINEL)) {
@@ -227,4 +290,4 @@ export function shortAckText(persona: ModeratorPersona, random: () => number = M
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live
  *  AI call. Not used by any other runtime code. */
-export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine };
+export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute };

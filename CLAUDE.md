@@ -2594,6 +2594,54 @@ win over this):**
 >   Successful sends only, per community per local community day, checked before AI
 >   generation — separate from the existing 2/day proactive quota; moderation
 >   enforcement never consumes or is blocked by it.
+> - **Task-based model routing for chatter generation — DONE (v1.9.0).** Virtual
+>   Moderator task-based model routing: CASUAL_CHAT now uses DeepSeek V4 Flash in
+>   non-thinking mode; SILENCE/REACT/SHORT_ACK remain zero-call; substantive Project
+>   Knowledge/Q&A ANSWER generation remains Claude Sonnet 5 at medium effort. Persona
+>   configuration is provider-independent and remains authoritative across both
+>   routes. Flash is the intended long-term chatter model pending live quality
+>   validation; V4 Pro is the explicit next candidate if Flash quality is
+>   insufficient.
+>   - New `resolveChatterRoute(action)` (`src/lib/moderator/chatter-generate.ts`,
+>     exported via `__testables`) is the SOLE provider/model decision point for
+>     chatter generation — keyed strictly on `selectChatterAction()`'s own
+>     `action.type` (never message text/keywords, never touched/bypassed). ANSWER
+>     calls the existing `getInnvilModelConfig()` (Sonnet 5, medium, hard-enforced,
+>     throws rather than downgrading — unchanged). CASUAL_CHAT calls new
+>     `deepseekChatterProvider()` (`src/lib/ai/client.ts`, mirrors
+>     `aiprimetechProvider()`'s shape) which reads `DEEPSEEK_API_KEY`/
+>     `DEEPSEEK_BASE_URL`/`DEEPSEEK_CHATTER_MODEL` (default `deepseek-v4-flash`) and
+>     returns an `aiComplete` `providerOverride` — this bypasses the primary/
+>     `AI_FALLBACK_*` Sonnet-resolution path entirely, so there is no code path from
+>     CASUAL_CHAT to Sonnet at all. When DeepSeek is unconfigured or the call fails,
+>     `generateChatterReply` returns a generation failure (logged
+>     `GENERATION_FAILED`, same handling as any other failed generation) — it never
+>     escalates to Sonnet automatically; switching Flash→Pro later is a
+>     `DEEPSEEK_CHATTER_MODEL` env change only, no code change.
+>   - CASUAL_CHAT gets a low `maxTokens` (150, vs ANSWER's 1024) matching its own
+>     existing prompt rule (<20 words) — short natural chatter, never an
+>     assistant-style essay. Prompt construction (`buildSystemPrompt`,
+>     `personaIdentityLine`, `personaStyle`, `buildContextLines`, `SHARED_RULES`) is
+>     completely unchanged and provider-agnostic — the exact same persona/identity/
+>     history content is sent regardless of which provider ends up running it; only
+>     `model`/`providerOverride`/`maxTokens` differ per action.
+>   - Existing per-call `[ai-usage]` logging (`src/lib/ai/client.ts`) already covers
+>     both routes (model, effort, disableThinking, token counts) via the
+>     `automation` tag (`NATURAL_CHATTER_CASUAL` / `NATURAL_CHATTER_ANSWER`) — no new
+>     telemetry pipeline needed for a first pass at per-customer chatter-volume
+>     accounting.
+>   - New tests: `src/lib/ai/client.test.ts` (+3 — `deepseekChatterProvider` null
+>     when unconfigured/never reuses `AI_API_KEY`, default model/base-url, override
+>     config) and `src/lib/moderator/chatter-generate.test.ts` (+8 — ANSWER always
+>     Sonnet even when DeepSeek is configured, CASUAL_CHAT always DeepSeek Flash
+>     non-thinking, no-silent-Sonnet-fallback on missing DeepSeek key, Flash→Pro
+>     config-only proof, low-vs-generous token caps, prompt content identical
+>     regardless of DeepSeek configuration, two-moderator persona isolation holds
+>     for the DeepSeek-routed action). 378 tests pass, `tsc --noEmit` clean,
+>     production build clean.
+>   - **Run no migration** (env-only change). **Set `DEEPSEEK_API_KEY`** before this
+>     takes effect — until then CASUAL_CHAT generation fails explicitly rather than
+>     running (no silent no-op, no silent Sonnet spend).
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /
@@ -2999,6 +3047,21 @@ AI_FALLBACK_API_KEY=your_aiprimetech_key
 AI_FALLBACK_BASE_URL=https://aiprimetech.io
 # AI_FALLBACK_PROVIDER=anthropic   # default; aiprimetech speaks Anthropic-style /v1/messages
 # AI_FALLBACK_MODEL=claude-sonnet-5
+#
+# --- Task-based model routing (Virtual Moderator Natural Chatter only) ---
+# CASUAL_CHAT (low-stakes social chatter) routes to a DEDICATED DeepSeek
+# provider instead of Sonnet 5 — its own key/base-url/model, entirely
+# separate from AI_API_KEY/AI_FALLBACK_* above. ANSWER (substantive,
+# knowledge-grounded Q&A) stays hard-locked to Sonnet 5 via
+# getInnvilModelConfig() — this carve-out does NOT touch that path or the
+# INNVIL_REQUIRED_MODEL invariant above. If DEEPSEEK_API_KEY is unset,
+# CASUAL_CHAT generation fails explicitly (GENERATION_FAILED, logged) — it
+# NEVER silently falls through to Sonnet. See
+# src/lib/ai/client.ts deepseekChatterProvider() and
+# src/lib/moderator/chatter-generate.ts resolveChatterRoute().
+DEEPSEEK_API_KEY=your_deepseek_key
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# DEEPSEEK_CHATTER_MODEL=deepseek-v4-flash   # next candidate if quality is insufficient: deepseek-v4-pro (explicit config change only, never automatic)
 ```
 
 ---
