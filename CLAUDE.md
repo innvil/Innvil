@@ -2433,6 +2433,36 @@ win over this):**
 >     v1.4.0's persona input — the Browser preview tool remained unavailable
 >     this session (ongoing safety-classifier outage), so neither was live
 >     click-tested.
+>   **Same-sender "already handled" false suppression — IMPLEMENTED (v1.5.1).**
+>   Live bug, found by checking the live Telegram chat immediately after v1.5.0
+>   deployed: "anyone here?" sent 16 seconds after the SAME person's own
+>   unanswered "yo! what's up" was silenced with `decision=SILENCE
+>   reason=already_handled`, even though nothing had actually been handled — the
+>   prior message just happened to also be from a human (K asking themselves
+>   twice, not a different member engaging). Diagnosed via `moderator_activity_log`
+>   the same way as the v1.3.1 staleness bug — confirmed via the actual
+>   decision/reason before touching classification code, same workflow now
+>   established for any "the bot didn't respond" report.
+>   - Root cause: `recentlyRespondedByHuman` in `community-runtime.ts` only
+>     checked the prior message's SENDER TYPE ("was it human"), never WHO
+>     specifically — so two consecutive messages from the same person (neither
+>     of which got any reply) incorrectly read as "a human already responded to
+>     this room."
+>   - Fix: new exported `humanRecentlyResponded(priorMessage, currentSenderPlatformId,
+>     now)` (pure, alongside `isRecentMessage`) requires the prior human message
+>     to be both RECENT (existing v1.3.1 guard) AND from a DIFFERENT platform
+>     user id than the current message's sender. `loadRecentContext` now also
+>     selects `sender_platform_id` (already written on every insert since
+>     migration 0047, just not previously read back), threaded onto
+>     `ChatterContextMessage` as `senderPlatformId`.
+>   - `recentlyAnsweredByModerator` is unaffected (a moderator reply always
+>     counts as genuine engagement regardless of who asks next).
+>   - New tests in `community-runtime.test.ts`: the exact live repro (same
+>     person, 16s apart → not "responded"), a different person's recent message
+>     correctly counting as responded, a moderator's prior message never
+>     routing through this human-only check, and the existing staleness
+>     boundary (95 minutes, different person) still correctly excluded. 280
+>     tests pass.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

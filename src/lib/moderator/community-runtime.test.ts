@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS } from "./community-runtime";
+import { isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
  *  isDuplicateUpdate uses, enforcing a real (integration_id, update_id)
@@ -158,4 +158,39 @@ test("no prior message (null/undefined createdAt) is never treated as recent", (
   const now = new Date();
   assert.equal(isRecentMessage(null, now), false);
   assert.equal(isRecentMessage(undefined, now), false);
+});
+
+/* ------------------------------------------- humanRecentlyResponded ---- */
+// Live bug: "anyone here?" sent 16 seconds after the SAME person's own
+// unanswered "yo! what's up" was silenced with reason "already_handled" --
+// nothing had actually been handled, the prior message just happened to
+// also be from a human. Fixed by requiring the prior human message to be
+// from a DIFFERENT person, not merely "human."
+
+test('REQUIRED (live bug repro): the SAME person\'s own unanswered prior message does NOT count as "already responded"', () => {
+  const now = new Date("2026-08-10T06:16:05Z");
+  const priorMessage = { senderType: "HUMAN", senderPlatformId: "user-K", createdAt: new Date(now.getTime() - 16_000).toISOString() };
+  assert.equal(humanRecentlyResponded(priorMessage, "user-K", now), false);
+});
+
+test("REQUIRED: a DIFFERENT person's recent message DOES count as already responded", () => {
+  const now = new Date("2026-08-10T06:16:05Z");
+  const priorMessage = { senderType: "HUMAN", senderPlatformId: "user-OTHER", createdAt: new Date(now.getTime() - 16_000).toISOString() };
+  assert.equal(humanRecentlyResponded(priorMessage, "user-K", now), true);
+});
+
+test("a moderator's prior message never counts as humanRecentlyResponded (that's recentlyAnsweredByModerator's job)", () => {
+  const now = new Date();
+  const priorMessage = { senderType: "INNVIL_MODERATOR", senderPlatformId: null, createdAt: now.toISOString() };
+  assert.equal(humanRecentlyResponded(priorMessage, "user-K", now), false);
+});
+
+test("a stale prior message from a different person is not recent enough to count", () => {
+  const now = new Date("2026-08-10T06:16:05Z");
+  const priorMessage = { senderType: "HUMAN", senderPlatformId: "user-OTHER", createdAt: new Date(now.getTime() - 95 * 60_000).toISOString() };
+  assert.equal(humanRecentlyResponded(priorMessage, "user-K", now), false);
+});
+
+test("no prior message at all -> false", () => {
+  assert.equal(humanRecentlyResponded(null, "user-K", new Date()), false);
 });

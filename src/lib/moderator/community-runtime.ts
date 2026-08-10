@@ -415,11 +415,20 @@ async function recordBotSpoke(admin: SupabaseClient, deploymentId: string, now: 
 async function loadRecentContext(admin: SupabaseClient, communityId: string, limit = 10): Promise<ChatterContextMessage[]> {
   const { data } = await admin
     .from("community_messages")
-    .select("sender_type, sender_display_name, text, deployment_id, created_at")
+    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at")
     .eq("community_id", communityId)
     .order("created_at", { ascending: false })
     .limit(limit);
-  return ((data ?? []) as Array<{ sender_type: string; sender_display_name: string | null; text: string; deployment_id: string | null; created_at: string }>)
+  return (
+    (data ?? []) as Array<{
+      sender_type: string;
+      sender_display_name: string | null;
+      sender_platform_id: string | null;
+      text: string;
+      deployment_id: string | null;
+      created_at: string;
+    }>
+  )
     .reverse()
     .map((r) => ({
       senderType: r.sender_type as ChatterContextMessage["senderType"],
@@ -427,6 +436,7 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       text: r.text,
       deploymentId: r.deployment_id,
       createdAt: r.created_at,
+      senderPlatformId: r.sender_platform_id,
     }));
 }
 
@@ -441,6 +451,24 @@ export const RECENT_EXCHANGE_WINDOW_MS = 5 * 60_000;
 export function isRecentMessage(createdAt: string | null | undefined, now: Date): boolean {
   if (!createdAt) return false;
   return now.getTime() - new Date(createdAt).getTime() < RECENT_EXCHANGE_WINDOW_MS;
+}
+
+/** True only when a DIFFERENT human recently engaged the room -- NOT when
+ *  the prior message is simply human, which would also match the same
+ *  person's own earlier, unanswered message. Live bug: "anyone here?" right
+ *  after the SAME person's own unanswered "yo! what's up" was silenced as
+ *  already_handled, even though nothing had actually been handled -- the
+ *  prior message just happened to also be human. A different person's prior
+ *  message genuinely signals "the room organically engaged"; the same
+ *  asker's own unanswered follow-up does not. */
+export function humanRecentlyResponded(
+  priorMessage: { senderType: string; senderPlatformId?: string | null; createdAt?: string | null } | null,
+  currentSenderPlatformId: string,
+  now: Date
+): boolean {
+  if (!priorMessage || priorMessage.senderType !== "HUMAN") return false;
+  if (!isRecentMessage(priorMessage.createdAt, now)) return false;
+  return priorMessage.senderPlatformId !== currentSenderPlatformId;
 }
 
 async function handleHumanMessage(admin: SupabaseClient, panelId: string, community: { id: string }, message: TelegramMessage, event: CommunityEvent) {
@@ -470,7 +498,7 @@ async function handleHumanMessage(admin: SupabaseClient, panelId: string, commun
   const now = new Date();
   const priorMessageIsRecent = isRecentMessage(priorMessage?.createdAt, now);
   const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessageIsRecent;
-  const recentlyRespondedByHuman = priorMessage?.senderType === "HUMAN" && priorMessageIsRecent;
+  const recentlyRespondedByHuman = humanRecentlyResponded(priorMessage ?? null, event.sender.platformUserId, now);
 
   // Resolved ONCE per event (not per-candidate): @username, reply-to, the
   // moderator's own configured name, or a typo-tolerant near-spelling of it

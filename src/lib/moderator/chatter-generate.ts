@@ -26,6 +26,11 @@ export interface ChatterContextMessage {
    *  moderator/human, from hours ago." Optional only for callers that don't
    *  have it (e.g. tests); community-runtime always populates it. */
   createdAt?: string | null;
+  /** Set only when senderType is HUMAN — the platform user id, used to tell
+   *  "a DIFFERENT person already engaged" apart from "the same person sent
+   *  another message and got no reply." Optional for callers that don't
+   *  have it (e.g. tests). */
+  senderPlatformId?: string | null;
 }
 
 export type ChatterGenerationAction = "CASUAL_CHAT" | "ANSWER";

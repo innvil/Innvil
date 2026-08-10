@@ -258,6 +258,33 @@
 > - Tests in `community-runtime.test.ts`: the exact 95-minute live repro, a
 >   30-second-old exchange still correctly counting as active, and the exact
 >   5-minute boundary (strict less-than, both sides). 250 tests pass.
+>
+> **Same-sender "already handled" false suppression — IMPLEMENTED (v1.5.1).**
+> Live bug, found the same way as the v1.3.1 staleness bug (query
+> `moderator_activity_log` for the exact decision/reason before touching
+> classification code) — checked immediately after v1.5.0 deployed. "anyone
+> here?" sent 16 seconds after the SAME person's own unanswered "yo! what's
+> up" was silenced with `decision=SILENCE reason=already_handled`, even
+> though nothing had actually been handled — the prior message just happened
+> to also be from a human (the same asker, not a different member engaging).
+> - Root cause: `recentlyRespondedByHuman` only checked the prior message's
+>   sender TYPE ("was it human"), never WHO specifically — so two consecutive
+>   messages from the same person, neither of which got any reply, incorrectly
+>   read as "a human already responded to this room."
+> - Fix: new exported `humanRecentlyResponded(priorMessage,
+>   currentSenderPlatformId, now)` (pure, alongside `isRecentMessage`) requires
+>   the prior human message to be both RECENT (the v1.3.1 guard) AND from a
+>   DIFFERENT platform user id than the current sender. `loadRecentContext`
+>   now also selects `sender_platform_id` (already written on every insert
+>   since migration 0047, just not previously read back), threaded onto
+>   `ChatterContextMessage` as `senderPlatformId`. `recentlyAnsweredByModerator`
+>   is unaffected — a moderator reply always counts as genuine engagement
+>   regardless of who asks next.
+> - Tests in `community-runtime.test.ts`: the exact live repro (same person,
+>   16s apart → not "responded"), a different person's recent message
+>   correctly counting as responded, a moderator's prior message never routing
+>   through this human-only check, and the existing staleness boundary (95
+>   minutes, different person) still correctly excluded. 280 tests pass.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 
