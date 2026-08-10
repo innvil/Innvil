@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { __testables, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { __testables, shortAckText, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
@@ -388,6 +388,56 @@ test("REQUIRED: persona/prompt construction is provider-independent -- identical
     assert.equal(withDeepseek, withoutDeepseek);
     assert.match(withDeepseek, /laid-back, dry humor, terse/);
   });
+});
+
+/* ------------------------------------------------- emoji dead-zone fix ---- */
+// REQUIRED (live bug): the default persona (emojiFrequency=30) and most
+// presets (5-50) previously fell in a silent gap (the old rule only fired
+// below 20 or above 60), so the model got NO emoji instruction at all and
+// defaulted to using none. personaStyle must now give every emojiFrequency
+// value SOME explicit instruction, with no dead zone.
+
+test("REQUIRED: personaStyle gives an explicit emoji instruction at every emojiFrequency value, no silent gap", () => {
+  for (const freq of [0, 5, 14, 15, 30, 39, 40, 50, 64, 65, 80, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: freq }).join(" ");
+    assert.match(style, /emoji/i, `emojiFrequency=${freq} produced no emoji instruction at all`);
+  }
+});
+
+test("REQUIRED: the DEFAULT persona (emojiFrequency 30) gets a real emoji instruction, not silence (the exact live bug)", () => {
+  const style = personaStyle(DEFAULT_MODERATOR_PERSONA).join(" ");
+  assert.match(style, /emoji are rare for you/i);
+});
+
+test("emoji instruction escalates from avoid -> rare -> moderate -> welcome across the range", () => {
+  const at = (freq: number) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: freq }).join(" ");
+  assert.match(at(5), /avoid emoji almost entirely/i);
+  assert.match(at(30), /rare for you/i);
+  assert.match(at(50), /fine in moderation/i);
+  assert.match(at(80), /natural part of how you write/i);
+});
+
+test("REQUIRED: shortAckText scales probability continuously with emojiFrequency (default persona is no longer excluded)", () => {
+  const persona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 30 };
+  // Deterministic random stub: always "wins" the roll (returns 0).
+  const alwaysRolls = () => 0;
+  assert.match(shortAckText(persona, alwaysRolls), /😄/);
+});
+
+test("shortAckText never appends emoji when emojiFrequency is near zero, even on a winning roll", () => {
+  const persona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 0 };
+  const alwaysRolls = () => 0;
+  assert.doesNotMatch(shortAckText(persona, alwaysRolls), /😄/);
+});
+
+test("shortAckText's emoji chance grows with emojiFrequency (higher dial -> higher hit rate at a fixed roll)", () => {
+  // Roll exactly at the boundary a low-emoji persona would just barely miss --
+  // a higher emojiFrequency should still clear it.
+  const roll = () => 0.14; // 14% roll
+  const low = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 20 };   // chance = 10% -> misses
+  const high = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 80 };  // chance = 40% -> hits
+  assert.doesNotMatch(shortAckText(low, roll), /😄/);
+  assert.match(shortAckText(high, roll), /😄/);
 });
 
 test("REQUIRED: two-moderator persona isolation holds for the DeepSeek-routed CASUAL_CHAT action too", () => {

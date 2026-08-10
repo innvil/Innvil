@@ -75,8 +75,14 @@ function personaStyle(p: ModeratorPersona): string[] {
   else if (p.chattiness > 70) style.push("You can be a bit more talkative, but stay concise.");
   if (p.humor > 60) style.push("Light humor is welcome when it fits.");
   if (p.teasing > 60) style.push("A bit of playful teasing/ribbing is fine when it fits the moment.");
-  if (p.emojiFrequency < 20) style.push("Use emoji sparingly, if at all.");
-  else if (p.emojiFrequency > 60) style.push("Emoji are welcome when they fit the vibe.");
+  // Continuous bands, no dead zone in the middle -- the default persona (30)
+  // and most presets (5-50) previously got NO emoji instruction at all
+  // (the old rule only fired below 20 or above 60), so the model just
+  // defaulted to using none.
+  if (p.emojiFrequency < 15) style.push("Avoid emoji almost entirely — plain text only, essentially never.");
+  else if (p.emojiFrequency < 40) style.push("Emoji are rare for you — use one only occasionally, when it genuinely fits, never more than one per message.");
+  else if (p.emojiFrequency < 65) style.push("Emoji are fine in moderation — use one now and then when it fits the moment, not in every message.");
+  else style.push("Emoji are a natural part of how you write — feel free to use one in most messages when it fits the vibe.");
   if (p.profanityTolerance < 30) style.push("Keep language clean.");
   if (p.topicsToAvoid.length) style.push(`Avoid discussing: ${p.topicsToAvoid.join(", ")}.`);
   if (p.customInstructions.trim()) style.push(p.customInstructions.trim());
@@ -281,10 +287,14 @@ const SHORT_ACK_PHRASES = ["yeah", "nice", "fair", "gotcha", "true", "ha, fair",
 
 /** SHORT_ACK is deterministic — no Sonnet call. A small varied pool avoids
  *  it reading as a canned single-phrase bot; persona.emojiFrequency decides
- *  whether a light emoji gets appended. */
+ *  whether a light emoji gets appended. Scales continuously with the dial
+ *  (capped at a 50% chance at emojiFrequency=100) instead of only firing
+ *  above a hard 60 threshold, which silently excluded most real personas
+ *  (default is 30; only 1 of 18 presets clears 60). */
 export function shortAckText(persona: ModeratorPersona, random: () => number = Math.random): string {
   const phrase = SHORT_ACK_PHRASES[Math.floor(random() * SHORT_ACK_PHRASES.length)];
-  if (persona.emojiFrequency > 60 && random() < 0.4) return `${phrase} 😄`;
+  const chance = (persona.emojiFrequency / 100) * 0.5;
+  if (persona.emojiFrequency > 5 && random() < chance) return `${phrase} 😄`;
   return phrase;
 }
 

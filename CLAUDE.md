@@ -2652,6 +2652,29 @@ win over this):**
 >     constructing a provider-specific request shape. New tests assert the actual
 >     outgoing request body (via a `fetch` spy), not just the resolved route. 380
 >     tests pass, `tsc --noEmit` clean, production build clean.
+>   **Two more live bugs fixed the same session (v1.9.2):**
+>   - **REACT was silently failing with zero observability.** `executeAction()`'s
+>     REACT branch (`community-runtime.ts`) called Telegram's `setMessageReaction`
+>     but discarded the result — a rejection (bot lacking rights, or the chat's own
+>     restricted allowed-reactions set) looked IDENTICAL to a successful react from
+>     every log/activity angle, since the caller unconditionally logged decision
+>     `"REACT"` regardless of whether Telegram actually accepted it. `executeAction`
+>     now returns `{sentMessageId, ok, error}`; a failed REACT logs `REACT_FAILED`
+>     (with the Telegram error) and `console.error`s instead of silently no-op'ing.
+>   - **Emoji had a large dead zone.** `personaStyle()` only gave the model an emoji
+>     instruction below 20 or above 60 — nothing in 20-60 got ANY signal, and the
+>     default persona (`emojiFrequency: 30`) plus 15 of the 18 presets land in
+>     exactly that gap, so a terse-chatter-styled model just defaulted to none.
+>     Replaced with four continuous bands (<15 avoid / <40 rare / <65 moderate /
+>     else welcome) covering the whole 0-100 range with no gap.
+>     `shortAckText()` had the same shape of bug (emoji only ever possible above
+>     emojiFrequency 60, at a flat 40% roll) — now scales continuously
+>     (`chance = emojiFrequency/100 * 0.5`, gated only near-zero) so the dial
+>     actually has graduated effect instead of a hard cliff almost nothing clears.
+>   - New tests: emoji-instruction coverage across the full range (no gap),
+>     default-persona regression test (the exact live bug), band-escalation proof,
+>     `shortAckText` continuous-probability tests (seeded random). 386 tests pass,
+>     `tsc --noEmit` clean, production build clean. No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

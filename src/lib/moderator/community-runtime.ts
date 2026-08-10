@@ -261,34 +261,39 @@ async function recordBotAck(admin: SupabaseClient, deploymentId: string, now: Da
 
 /* --------------------------------------------------------------- outbound ---- */
 
-async function executeAction(admin: SupabaseClient, chatId: string, action: CommunityAction): Promise<{ sentMessageId: string | null }> {
-  if (action.kind === "IGNORE") return { sentMessageId: null };
+async function executeAction(admin: SupabaseClient, chatId: string, action: CommunityAction): Promise<{ sentMessageId: string | null; ok: boolean; error?: string }> {
+  if (action.kind === "IGNORE") return { sentMessageId: null, ok: true };
 
   const { data: deployment } = await admin
     .from("moderator_deployments")
     .select("id, moderator_id")
     .eq("id", action.targetDeploymentId)
     .maybeSingle();
-  if (!deployment) return { sentMessageId: null };
+  if (!deployment) return { sentMessageId: null, ok: false, error: "deployment not found" };
 
   const { data: integration } = await admin
     .from("telegram_bot_integrations")
     .select("id")
     .eq("virtual_moderator_id", deployment.moderator_id)
     .maybeSingle();
-  if (!integration) return { sentMessageId: null };
+  if (!integration) return { sentMessageId: null, ok: false, error: "telegram integration not found" };
 
   const { data: tokenData } = await admin.rpc("get_telegram_bot_key", { p_row: integration.id, p_secret: providerKeySecret() });
   const token = tokenData as string | null;
-  if (!token) return { sentMessageId: null };
+  if (!token) return { sentMessageId: null, ok: false, error: "bot token unavailable" };
 
   if (action.kind === "REACT") {
-    await telegramApiCall(token, "setMessageReaction", {
+    // Result was previously discarded here -- a rejected reaction (bot
+    // lacking rights, or the chat's own restricted reaction set) failed
+    // completely silently, with the caller logging "REACT" as if it had
+    // worked. Now surfaced so the caller can log/console.error the real
+    // outcome instead of assuming success.
+    const res = await telegramApiCall(token, "setMessageReaction", {
       chat_id: chatId,
       message_id: action.targetMessageId,
       reaction: [{ type: "emoji", emoji: action.emoji }],
     });
-    return { sentMessageId: null };
+    return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
   }
 
   if (action.kind === "SEND_TEXT") {
@@ -297,10 +302,10 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
       text: action.text,
       reply_to_message_id: action.replyToMessageId ?? undefined,
     });
-    return { sentMessageId: res.ok ? String(res.result.message_id) : null };
+    return { sentMessageId: res.ok ? String(res.result.message_id) : null, ok: res.ok, error: res.ok ? undefined : res.error };
   }
 
-  return { sentMessageId: null };
+  return { sentMessageId: null, ok: true };
 }
 
 /* ----------------------------------------------------------- observability ---- */
@@ -576,7 +581,15 @@ async function handleHumanMessage(
     // Deterministic, zero Sonnet calls — a real Telegram reaction, never a
     // standalone emoji text message, and never starts another bot-chain event.
     const reactAction: CommunityAction = { kind: "REACT", emoji: action.emoji, targetDeploymentId: deployment.deploymentId, targetMessageId: event.messageId };
-    await executeAction(admin, String(message.chat.id), reactAction);
+    const result = await executeAction(admin, String(message.chat.id), reactAction);
+    if (!result.ok) {
+      // Previously silent -- Telegram rejecting the reaction (missing bot
+      // rights, or the chat restricting its allowed-reactions set) looked
+      // identical to a successful react from every log/observability angle.
+      console.error("[telegram/community] REACT failed", result.error);
+      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "REACT_FAILED", action.reasons.join(","), { reasons: action.reasons, emoji: action.emoji, error: result.error });
+      return;
+    }
     await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "REACT", action.reasons.join(","), { reasons: action.reasons, emoji: action.emoji });
     return;
   }
