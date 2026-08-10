@@ -146,7 +146,12 @@ export interface ModeratorCapacity {
   maxActiveSlots: number;
 }
 
-const CAPACITY: Record<ModeratorPlanTier, ModeratorCapacity> = {
+/** Exported so the customer-facing entitlement layer (customer-entitlement.ts)
+ *  can reuse the exact same tier->slots numbers rather than duplicating them —
+ *  the tier names and Active Moderator Slot counts are shared between the
+ *  legacy owner-facing model and the storefront customer product; only WHO
+ *  holds the entitlement and WHO pays differs. */
+export const CAPACITY: Record<ModeratorPlanTier, ModeratorCapacity> = {
   basic: { maxCommunities: 1, maxActiveSlots: 2 },
   standard: { maxCommunities: 2, maxActiveSlots: 5 },
   premium: { maxCommunities: 3, maxActiveSlots: 10 },

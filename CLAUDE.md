@@ -2615,6 +2615,113 @@ win over this):**
 > provider ordering, billing, trial duration, active mod slots, publishing, campaign
 > generation, and any other unrelated moderation feature.
 
+### Phase 4.M.1: AI Moderator product-placement + entitlement correction — Phase 1 of N (v1.8.0)
+
+> **Product correction: the AI Moderator is a STOREFRONT product, purchased by a panel
+> CUSTOMER, not the panel owner.** Before this, the entire Virtual Moderator surface —
+> including the 7-day trial — was 100% owner-facing: `startModeratorTrialIfEligible`
+> granted the trial to the panel OWNER the moment *they* connected a Telegram community
+> (keyed by `owner_id`, zero customer involvement), `commercialMode`/pricing constants
+> existed in `money.ts` but were **never wired to any actual billing execution path**
+> (grepped every reference — `commercialMode` was only ever displayed as a label in the
+> owner UI), and `virtual_moderators` had no `customer_id` column at all. This was
+> confirmed via a full investigation report (root-cause questions 1–13) before any code
+> was touched, per explicit instruction not to silently rewrite money ownership.
+> **This is Phase 1 of a multi-phase migration** (scope explicitly agreed with the user
+> before implementation): entitlement + pricing + a real, working customer billing path
+> and a new storefront tab. Deferred to Phase 2: migrating the Telegram
+> provisioning/connect-community UI into the storefront (it reuses the existing, complex,
+> already-working owner-side pipeline in `actions/moderator.ts` — wiring that through
+> customer auth deserves its own careful pass, not a rushed duplication here), and
+> narrowing the owner `ModeratorTab` to config-only.
+>
+> **Free trial eligibility (exact rule):**
+> `account age >= 30 days AND >= $50 lifetime completed panel-service spend` (ESTABLISHED),
+> **OR** `>= $100 lifetime completed panel-service spend regardless of account age`
+> (HIGH_VALUE), **OR** `maintain >= $10 customer wallet balance during the fixed 7-day
+> trial window` (WALLET). Precedence when multiple paths qualify: HIGH_VALUE >
+> ESTABLISHED > WALLET — a durable non-wallet source is always preferred, so a customer
+> who also clears a spend/age bar is never subjected to the $10 maintenance rule.
+> - New `src/lib/moderator/customer-entitlement.ts` (pure, no I/O): `resolveTrialQualification`,
+>   `isTrialCurrentlyAccessible`, `trialAccessGranted`, `sumNetOrderSpend`,
+>   `customerModeratorCapacity`/`customerModeratorMaxSavedModerators` (reuses
+>   `moderator/plan.ts`'s existing `CAPACITY` table — Basic/Standard/Premium/Pro slot
+>   counts were already 2/5/10/20, unchanged, now exported for reuse).
+> - **The $10 is never a fee.** It's the customer's own usable wallet balance — never
+>   charged, never confiscated by starting or maintaining a trial.
+> - **Fixed trial window, no calendar-extension exploit:** `trialAccessGranted()` combines
+>   a FIXED `trialEndsAt` (set once at start, never recomputed) with a LIVE, derived
+>   wallet-maintenance check — there is deliberately no persisted "paused" flag, so
+>   dipping below $10 for days and restoring later can never grant extra days; pause/resume
+>   is a pure function of (qualification source, current wallet balance, now vs. the
+>   original `trialEndsAt`). ESTABLISHED/HIGH_VALUE-qualified trials are permanently
+>   exempt from the $10 rule.
+> - **Lifetime spend** is computed from the canonical `balance_transactions` ledger, not
+>   `orders.status` (which the codebase's own `refundOrder()` sets to `'refunded'` even
+>   for a PARTIAL refund — filtering on `status = 'completed'` alone would silently drop
+>   partially-refunded fulfilled orders). `sumNetOrderSpend()` nets `type IN ('order',
+>   'refund') AND ref_order_id IS NOT NULL` — verified by grep that `ref_order_id` is
+>   **only ever set** by genuine order placement/refund code, never by deposits or other
+>   add-on subscription charges (e.g. the Automator's $6.99 charge also uses
+>   `type='order'` but never sets `ref_order_id` — filtering by type alone would NOT have
+>   safely excluded it).
+>
+> **New pricing (canonical source: `money.ts`, single source of truth — no scattered
+> literals):** Basic $49.99/2 slots, Standard $99.99/5, Premium $179.99/10, Pro
+> $299.99/20 (replaces the old, never-actually-billed $29/$59/$99/$179). Enterprise
+> (20+ slots) is contact-only — `MODERATOR_ENTERPRISE_MIN_SLOTS = 21`, structurally not a
+> `ModeratorPlanTier` value (cannot compile into normal tier billing), routed through the
+> existing customer→owner support-ticket path (`contactEnterpriseModeratorSales` →
+> `createTicket`) — no direct customer→Innvil channel exists by design (keeps Innvil
+> invisible to end customers, the same boundary used everywhere else).
+>
+> **Billing/ownership architecture (the money-ownership correction):**
+> - New migration `0051_customer_moderator_entitlement.sql`: `virtual_moderators
+>   .customer_id` (nullable — NULL = owner-created/dev moderator under the old model,
+>   set = customer-owned under the new one; both coexist during the migration), new
+>   `customer_moderator_entitlement` table (one row per panel+customer: trial state +
+>   paid subscription state, PK on `(panel_id, customer_id)`), and atomic RPC
+>   `charge_customer_for_moderator_subscription` — debits the customer's wallet the full
+>   price via the existing `apply_balance_change` (which already row-locks and raises on
+>   insufficient balance) and credits the panel owner's Innvil balance with their
+>   `MODERATOR_COMMISSION_SHARE` (20%) commission in the SAME transaction — both-or-neither,
+>   so a failed charge can never leave a partial credit or an active paid entitlement
+>   (the app layer only persists the tier after receiving `'OK'` back). The remaining 80%
+>   is Innvil's own revenue, realized implicitly by never being credited anywhere further
+>   — the same pattern already used for the 5% order commission.
+> - New `src/lib/actions/customer-moderator.ts` (storefront-session-authed, mirrors the
+>   established `automator-sub.ts` `ctx(panelId)` pattern exactly): `getModeratorEligibility`,
+>   `startCustomerModeratorTrial`, `subscribeCustomerModeratorPlan`, `cancelCustomerModeratorPlan`,
+>   `contactEnterpriseModeratorSales`, `listCustomerModerators`, `createCustomerModerator`.
+>   Every action derives `customer_id` from the AUTHENTICATED session lookup
+>   (`customer_accounts` by `user_id` + `panelId`) — never from a client-supplied ID — and
+>   every query/write is scoped by both `panel_id` and that resolved `customer_id`, so one
+>   panel's customer structurally cannot reach another customer's (or another panel's)
+>   entitlement/moderator rows. Uses the codebase's established code-level tenancy
+>   enforcement via the service-role client (same convention as every other owner/customer
+>   action here), not RLS.
+>
+> **Storefront UX:** new `src/components/customer/AiModeratorSurface.tsx`, mounted as a
+> new "AI Moderator" nav item in `CustomerDashboard.tsx` (customer-facing, alongside
+> Campaign/Mass order). Shows eligibility copy (established/high-value/wallet-route
+> messaging exactly as specified, no mention of the old "prior order history" rule),
+> trial start, the 4 paid tier cards + Enterprise contact card, and the customer's own
+> saved moderators with a create-moderator control. Telegram connection is explicitly
+> labeled "coming soon to this dashboard — contact support to connect a moderator today"
+> (Phase 2, per the agreed scope split — see above).
+>
+> **New tests:** `customer-entitlement.test.ts` (31 — every boundary from the spec:
+> ESTABLISHED age/spend both-required at 29/30 days and $49.99/$50.00, HIGH_VALUE at
+> $99.99/$100.00, WALLET at $9.99/$10.00, the ESTABLISHED-vs-WALLET overlap precedence,
+> the exact wallet-pause/restore/no-extension-exploit sequence day-by-day, deposits/
+> refunds/subscription-charges correctly excluded from spend), `money.test.ts` (6 —
+> canonical prices, slot counts, Enterprise boundary + compile-time tier-safety). 367
+> tests pass total, `tsc --noEmit` clean, production build clean, diff reviewed.
+> **Run migration 0051** before any customer attempts to use this. Note: no dedicated
+> action-level Supabase-integration tests were added for tenant isolation (no such
+> pattern exists for ANY server action in this codebase — enforcement is structural,
+> via the `ctx()` scoping pattern, consistent with every other customer-facing action).
+
 ### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (NOTED, not built)
 
 > Extends Phase 4.M. Adds a shared, tenant-scoped **Project Knowledge Base** (project

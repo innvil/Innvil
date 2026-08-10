@@ -31,20 +31,27 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
   return INNVIL_PRO_PRICE;
 }
 
-/** Innvil Virtual Moderator — owner-rented-access tier prices (monthly, USD, from the
- *  panel's Innvil balance). Owner-rented = owner pays this, sets their own customer
- *  price, keeps the difference. Innvil-processed commission mode uses the same tiers
- *  for capacity but is billed per completed customer subscription instead (§3A) —
- *  see moderator/plan.ts. */
-export const MODERATOR_BASIC_PRICE = 29;
-export const MODERATOR_STANDARD_PRICE = 59;
-export const MODERATOR_PREMIUM_PRICE = 99;
-export const MODERATOR_PRO_PRICE = 179;
+/** Innvil Virtual Moderator — CUSTOMER-facing subscription prices (monthly, USD).
+ *  This is a storefront product: the panel's CUSTOMER pays this from their own
+ *  panel wallet (customer_accounts.balance), not the owner's Innvil balance —
+ *  see src/lib/moderator/customer-entitlement.ts and actions/customer-moderator.ts.
+ *  Reference point: ~$50/month for ONE human moderator; these tiers replace that
+ *  with continuous, multi-slot AI coverage. Slot counts mirror the existing
+ *  ModeratorCapacity table in moderator/plan.ts (CAPACITY) exactly — same tier
+ *  names, same numbers, reused rather than duplicated. */
+export const MODERATOR_BASIC_PRICE = 49.99;
+export const MODERATOR_STANDARD_PRICE = 99.99;
+export const MODERATOR_PREMIUM_PRICE = 179.99;
+export const MODERATOR_PRO_PRICE = 299.99;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
-/** Owner-rented access costs 20% below the customer-facing selling price (approved model). */
-export const MODERATOR_RENTAL_DISCOUNT = 0.2;
-/** Innvil-processed commission: panel owner's share of Innvil-collected customer revenue. */
+/** Innvil-processed commission: panel owner's share of Innvil-collected customer
+ *  revenue, credited to the panel's own Innvil balance per charge (§ "Ownership /
+ *  revenue architecture" — customer pays the full price; the owner is credited
+ *  this share, not the full amount; the remainder is Innvil's revenue). */
 export const MODERATOR_COMMISSION_SHARE = 0.2;
+/** More than this many Active Moderator Slots is Enterprise -- contact-only, no
+ *  self-serve price or tier constant; see moderator/customer-entitlement.ts. */
+export const MODERATOR_ENTERPRISE_MIN_SLOTS = 21;
 
 export type ModeratorPlanTier = "basic" | "standard" | "premium" | "pro";
 export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
@@ -52,10 +59,6 @@ export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
   if (tier === "premium") return MODERATOR_PREMIUM_PRICE;
   if (tier === "standard") return MODERATOR_STANDARD_PRICE;
   return MODERATOR_BASIC_PRICE;
-}
-/** Owner cost under rented access = tier price minus the approved 20% discount. */
-export function moderatorRentedCost(tier: ModeratorPlanTier): number {
-  return round4(moderatorPlanPrice(tier) * (1 - MODERATOR_RENTAL_DISCOUNT));
 }
 
 /** Suggested default for the customer-facing automator subscription. Owners can override

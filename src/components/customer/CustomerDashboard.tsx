@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Menu, X, Wallet, Plus, Clock, Star, RotateCcw, Zap,
   LayoutGrid, ListOrdered, MessageSquare, KeyRound, UserCircle2,
-  ShoppingCart, CheckCircle2, LogOut, FileText, AlertTriangle, ClipboardList,
+  ShoppingCart, CheckCircle2, LogOut, FileText, AlertTriangle, ClipboardList, Bot,
 } from "lucide-react";
 import {
   customerServices, customerOrders, customerWallet, customerTickets,
@@ -17,6 +17,7 @@ import { ApiDocs } from "./ApiDocs";
 import { CustomerTickets } from "./CustomerTickets";
 import { SupportChat } from "./SupportChat";
 import { CampaignSurface } from "./CampaignSurface";
+import { AiModeratorSurface } from "./AiModeratorSurface";
 import { MassOrder } from "./MassOrder";
 import { formatMoney, currencySymbol } from "@/src/lib/money";
 import type { DashboardWidget } from "@/src/lib/dashboard-layout";
@@ -250,13 +251,14 @@ function BinancePayPanel({
    Wallet, Tickets, API, Profile. No Login/Register here.
    ========================================================= */
 
-type CustomerPage = "dashboard" | "order" | "massorder" | "campaign" | "orders" | "wallet" | "tickets" | "api" | "profile";
+type CustomerPage = "dashboard" | "order" | "massorder" | "campaign" | "moderator" | "orders" | "wallet" | "tickets" | "api" | "profile";
 
 const NAV: Array<{ k: CustomerPage; label: string; icon: typeof LayoutGrid }> = [
   { k: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { k: "order", label: "New Order", icon: ShoppingCart },
   { k: "massorder", label: "Mass order", icon: ClipboardList },
   { k: "campaign", label: "Campaign", icon: Zap },
+  { k: "moderator", label: "AI Moderator", icon: Bot },
   { k: "orders", label: "Orders", icon: ListOrdered },
   { k: "wallet", label: "Wallet", icon: Wallet },
   { k: "tickets", label: "Tickets", icon: MessageSquare },
@@ -902,6 +904,9 @@ export function CustomerDashboard({
         {page === "campaign" && (
           <CampaignSurface panelId={panelId} currency={currency} onContactSupport={() => go("tickets")} />
         )}
+
+        {/* ---------- AI MODERATOR ---------- */}
+        {page === "moderator" && <AiModeratorSurface panelId={panelId} />}
 
         {/* ---------- ORDERS ---------- */}
         {page === "orders" && (
