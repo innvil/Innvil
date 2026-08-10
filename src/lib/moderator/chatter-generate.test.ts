@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { __testables, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 
-const { buildSystemPrompt, buildContextLines, personaStyle } = __testables;
+const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine } = __testables;
 
 /**
  * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
@@ -152,4 +152,74 @@ test("prompt still bans generic support-chat closers (regression from the earlie
   const prompt = buildSystemPrompt(baseInput());
   assert.match(prompt, /anything else on your mind/i);
   assert.match(prompt, /do not manufacture a follow-up question/i);
+});
+
+/* ------------------------------------------------------ persona identity ---- */
+// Live bug: "hey test, can you tell what persona are you?" got "just a
+// regular mod persona here... nothing fancier than that" instead of a real
+// persona answer -- the moderator collapsed persona questions into generic
+// AI/mod identity. Root cause: the prompt had writing-STYLE mechanics
+// (personaStyle: capitalization, slang, emoji frequency) but no first-person-
+// usable self-DESCRIPTION, and no rule distinguishing a persona question from
+// an AI-identity question -- so the model fell back to the only self-
+// referential guidance it had (the AI-honesty rule) for both.
+
+const TEST_PERSONA: ModeratorPersona = {
+  ...DEFAULT_MODERATOR_PERSONA,
+  description: "laid-back, friendly, concise, slightly witty",
+};
+
+const KWAN_PERSONA: ModeratorPersona = {
+  ...DEFAULT_MODERATOR_PERSONA,
+  description: "formal, calm, thoughtful",
+};
+
+test("REQUIRED: a configured persona description is surfaced verbatim as the authoritative persona answer", () => {
+  const line = personaIdentityLine(baseInput({ persona: TEST_PERSONA }));
+  assert.match(line, /laid-back, friendly, concise, slightly witty/);
+  assert.match(line, /authoritative answer/i);
+});
+
+test("REQUIRED: prompt explicitly instructs answering persona questions from the configured persona, not as an AI-identity question", () => {
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: TEST_PERSONA }));
+  assert.match(prompt, /laid-back, friendly, concise, slightly witty/);
+  assert.match(prompt, /different question from asking whether you're AI/i);
+  assert.match(prompt, /do not reinterpret a persona question as an AI-identity question/i);
+});
+
+test("REQUIRED: prompt forbids denying/flattening a configured persona", () => {
+  const prompt = buildSystemPrompt(baseInput({ persona: TEST_PERSONA }));
+  assert.match(prompt, /never say things like "just an ai", "no special persona", "just a regular mod"/i);
+});
+
+test("REQUIRED: AI-identity rule requires re-anchoring to name + persona, not replacing it", () => {
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: TEST_PERSONA }));
+  assert.match(prompt, /re-anchor to your name and configured persona/i);
+  assert.match(prompt, /never let it replace or erase your persona identity/i);
+});
+
+test("REQUIRED: persona is the PRIMARY identity, AI-ness explicitly secondary", () => {
+  const prompt = buildSystemPrompt(baseInput({ persona: TEST_PERSONA }));
+  assert.match(prompt, /your persona is your PRIMARY identity; AI-ness is secondary/i);
+});
+
+test("REQUIRED: separate moderators -- Test only receives Test's persona, Kwan only receives Kwan's, no cross-contamination", () => {
+  const testPrompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: TEST_PERSONA }));
+  const kwanPrompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona: KWAN_PERSONA }));
+  assert.match(testPrompt, /laid-back, friendly, concise, slightly witty/);
+  assert.doesNotMatch(testPrompt, /formal, calm, thoughtful/);
+  assert.match(kwanPrompt, /formal, calm, thoughtful/);
+  assert.doesNotMatch(kwanPrompt, /laid-back, friendly, concise, slightly witty/);
+});
+
+test("REQUIRED: missing/unconfigured persona -- does not fabricate one, answers neutrally from name/role instead", () => {
+  const line = personaIdentityLine(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  assert.match(line, /No specific persona description has been configured/i);
+  assert.match(line, /rather than inventing detailed personality traits/i);
+  assert.doesNotMatch(line, /laid-back|formal, calm, thoughtful/);
+});
+
+test("REQUIRED: missing persona is grounded in the prompt too (not silently dropped)", () => {
+  const prompt = buildSystemPrompt(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  assert.match(prompt, /No specific persona description has been configured/i);
 });

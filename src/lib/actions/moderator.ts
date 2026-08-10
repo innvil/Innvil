@@ -13,7 +13,7 @@
 
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
-import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib/moderator/domain";
+import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT, normalizeModeratorPersona } from "@/src/lib/moderator/domain";
 import {
   hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon,
   TRIAL_DURATION_DAYS, virtualModBotAcknowledgement, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY,
@@ -63,6 +63,10 @@ export interface VirtualModeratorRow {
   provisioningStatus: string;
   telegramUsername: string | null;
   lastError: string | null;
+  /** Owner-authored self-description ("laid-back, friendly, concise") -- the
+   *  authoritative answer when a member asks the moderator what its persona
+   *  is. Empty when never configured. */
+  personaDescription: string;
 }
 
 export async function listVirtualModerators(panelId: string): Promise<VirtualModeratorRow[]> {
@@ -70,7 +74,7 @@ export async function listVirtualModerators(panelId: string): Promise<VirtualMod
   if (!ctx) return [];
   const { data } = await ctx.admin
     .from("virtual_moderators")
-    .select("id, name, status, provisioning_status, last_error, telegram_bot_integrations(username)")
+    .select("id, name, status, provisioning_status, last_error, persona, telegram_bot_integrations(username)")
     .eq("panel_id", panelId)
     .order("created_at", { ascending: true });
   return ((data as Array<Record<string, unknown>>) ?? []).map((row) => {
@@ -83,8 +87,28 @@ export async function listVirtualModerators(panelId: string): Promise<VirtualMod
       provisioningStatus: String(row.provisioning_status),
       telegramUsername: username ?? null,
       lastError: (row.last_error as string | null) ?? null,
+      personaDescription: normalizeModeratorPersona(row.persona).description,
     };
   });
+}
+
+/** Owner sets/updates this moderator's persona self-description -- the
+ *  authoritative "who am I" text Natural Chatter draws from when asked about
+ *  its persona/personality. Merges into the existing persona jsonb rather
+ *  than replacing it, so the style knobs (formality/humor/slang/...) are
+ *  preserved untouched. */
+export async function setModeratorPersonaDescription(panelId: string, moderatorId: string, description: string): Promise<Result<null>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+  const trimmed = description.trim().slice(0, 300);
+
+  const { data: current } = await ctx.admin.from("virtual_moderators").select("persona").eq("id", moderatorId).maybeSingle();
+  const persona = normalizeModeratorPersona(current?.persona);
+  persona.description = trimmed;
+
+  const { error } = await ctx.admin.from("virtual_moderators").update({ persona }).eq("id", moderatorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
 }
 
 export interface ModeratorPlanInfo {
@@ -154,6 +178,7 @@ export async function createVirtualModerator(panelId: string, name: string): Pro
       provisioningStatus: data.provisioning_status,
       telegramUsername: null,
       lastError: null,
+      personaDescription: "",
     },
   };
 }

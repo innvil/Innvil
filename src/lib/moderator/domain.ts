@@ -21,6 +21,12 @@ export type { ModeratorPersonalityPreset, ModeratorProvisioningStatus };
 
 export interface ModeratorPersona {
   language: string;          // e.g. "en", "en+tl" (Taglish)
+  /** Owner-authored, first-person-usable self-description ("laid-back,
+   *  friendly, concise, slightly witty") -- the AUTHORITATIVE answer to "what
+   *  persona/personality are you?", distinct from the style knobs below
+   *  (which govern HOW the moderator writes, not WHO it says it is). Empty
+   *  string = genuinely unconfigured; never fabricate one when blank. */
+  description: string;
   formality: number;         // 0-100
   humor: number;             // 0-100
   slang: number;             // 0-100
@@ -34,6 +40,7 @@ export interface ModeratorPersona {
 
 export const DEFAULT_MODERATOR_PERSONA: ModeratorPersona = {
   language: "en",
+  description: "",
   formality: 30,
   humor: 50,
   slang: 40,
@@ -52,6 +59,7 @@ export function normalizeModeratorPersona(value: unknown): ModeratorPersona {
     typeof v === "number" && Number.isFinite(v) ? Math.min(Math.max(Math.round(v), 0), 100) : fallback;
   return {
     language: typeof raw.language === "string" && raw.language ? raw.language : DEFAULT_MODERATOR_PERSONA.language,
+    description: typeof raw.description === "string" ? raw.description.trim().slice(0, 300) : "",
     formality: pct(raw.formality, DEFAULT_MODERATOR_PERSONA.formality),
     humor: pct(raw.humor, DEFAULT_MODERATOR_PERSONA.humor),
     slang: pct(raw.slang, DEFAULT_MODERATOR_PERSONA.slang),

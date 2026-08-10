@@ -2343,6 +2343,45 @@ win over this):**
 >   (`decision=SILENCE reason=already_handled`), which is what made this
 >   provable rather than guessed — worth querying first for any "the bot didn't
 >   respond" report before touching classification code.
+>   **Moderator persona identity — configurable + primary over AI-ness (v1.4.0).**
+>   Live bug: asked "what persona are you?", moderators collapsed into generic
+>   "just an AI... no special persona... nothing fancier than that" instead of a
+>   real persona answer. Root cause was two-fold: (1) **no moderator had ever had
+>   a persona actually configured** — `virtual_moderators.persona` was set once to
+>   `DEFAULT_MODERATOR_PERSONA` at creation with NO owner-facing action or UI to
+>   ever change it, so Kwan and Test were running on byte-identical bland
+>   defaults; (2) even with numeric style knobs (formality/humor/slang/...) set,
+>   the prompt only had writing-MECHANICS instructions ("write in lowercase"),
+>   never a first-person-usable self-DESCRIPTION, and no rule distinguishing a
+>   persona question from an AI-identity question — so the model fell back to the
+>   only self-referential guidance it had (the AI-honesty rule) for both.
+>   - New `ModeratorPersona.description` (`domain.ts`) — an owner-authored,
+>     free-text self-description ("laid-back, friendly, concise, slightly
+>     witty"), stored in the existing `persona` jsonb column (no migration).
+>   - New owner action **`setModeratorPersonaDescription`** (`actions/moderator.ts`,
+>     merges into the existing persona object, preserves the style knobs) — the
+>     FIRST persona-editing action to exist at all. `VirtualModeratorRow` gained
+>     `personaDescription`; `listVirtualModerators` reads it via
+>     `normalizeModeratorPersona`.
+>   - New **"Persona" input + Save button** in the owner's Virtual Moderator tab
+>     (`AdminTabs.tsx` `TelegramConnectRow`) — always visible per moderator,
+>     independent of Telegram-connection status.
+>   - `chatter-generate.ts`: new `personaIdentityLine()` surfaces the configured
+>     description as the AUTHORITATIVE persona answer (or an honest "nothing
+>     configured, don't invent traits" fallback when blank) — separate from
+>     `personaStyle()`, which still governs HOW the moderator writes, not WHO it
+>     says it is. Rewrote the AI-honesty `SHARED_RULES` entry to require
+>     re-anchoring to name + persona immediately after any AI/bot acknowledgement
+>     ("yeah, I'm AI-powered, but here I'm Kwan — laid-back and to the point") —
+>     AI-ness never replaces the persona. New rule explicitly separates persona
+>     questions from AI-identity questions and bans "just an AI"/"no special
+>     persona"/"just a regular mod"/"nothing fancier than that" phrasing whenever
+>     a persona IS configured.
+>   - Tests (`chatter-generate.test.ts`): persona surfaced verbatim + marked
+>     authoritative, persona-vs-AI-question distinction present, denial phrasing
+>     banned, AI re-anchoring required, persona stated as PRIMARY over AI-ness,
+>     Kwan/Test isolation (no cross-contamination), and the missing-persona case
+>     (neutral fallback, no fabrication). 258 tests pass.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

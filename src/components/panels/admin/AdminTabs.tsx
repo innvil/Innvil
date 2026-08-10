@@ -16,6 +16,7 @@ import {
   listVirtualModerators, getModeratorPlanInfo, createVirtualModerator,
   requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
   connectCommunity, listModeratorCommunities, setDeploymentEnabled, setCommunityBotAckMode,
+  setModeratorPersonaDescription,
   type VirtualModeratorRow, type ModeratorPlanInfo, type CommunityDeploymentRow,
 } from "@/src/lib/actions/moderator";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
@@ -4114,11 +4115,28 @@ function TelegramConnectRow({
   const [busy, setBusy] = React.useState(false);
   const [rowMsg, setRowMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
 
+  const [personaDraft, setPersonaDraft] = React.useState(moderator.personaDescription);
+  const [personaSaving, setPersonaSaving] = React.useState(false);
+  const [personaMsg, setPersonaMsg] = React.useState<string | null>(null);
+
   React.useEffect(() => {
     setStatus(moderator.provisioningStatus);
     setTelegramUsername(moderator.telegramUsername);
     setLastError(moderator.lastError);
   }, [moderator.provisioningStatus, moderator.telegramUsername, moderator.lastError]);
+
+  React.useEffect(() => {
+    setPersonaDraft(moderator.personaDescription);
+  }, [moderator.personaDescription]);
+
+  const savePersona = async () => {
+    setPersonaSaving(true); setPersonaMsg(null);
+    const res = await setModeratorPersonaDescription(panelId, moderator.id, personaDraft);
+    setPersonaSaving(false);
+    if (!res.ok) { setPersonaMsg(res.error); return; }
+    setPersonaMsg("Saved.");
+    await onChanged();
+  };
 
   // Poll while waiting on Telegram — Innvil detects success asynchronously via
   // the Manager Bot's own webhook, there's no redirect back into this tab.
@@ -4212,6 +4230,30 @@ function TelegramConnectRow({
       </div>
 
       {lastError && <p className="text-xs text-red-400 mt-2">{lastError}</p>}
+
+      <div className="mt-3">
+        <label className="text-xs fp-text-faint">
+          Persona — how {moderator.name} describes itself when asked ("what's your persona?"). This is the
+          moderator's stable identity; being AI-powered is only mentioned if directly asked.
+        </label>
+        <div className="flex items-center gap-2 mt-1">
+          <input
+            value={personaDraft}
+            onChange={(e) => setPersonaDraft(e.target.value)}
+            placeholder="e.g. laid-back, friendly, concise, slightly witty"
+            maxLength={300}
+            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+          />
+          <button
+            onClick={savePersona}
+            disabled={personaSaving || personaDraft === moderator.personaDescription}
+            className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60"
+          >
+            {personaSaving ? "Saving…" : "Save"}
+          </button>
+        </div>
+        {personaMsg && <p className="text-[11px] mt-1 fp-safe">{personaMsg}</p>}
+      </div>
 
       {expanded && (
         <div className="mt-3">
