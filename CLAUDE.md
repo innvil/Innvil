@@ -2279,6 +2279,18 @@ win over this):**
 >   (upbeat-closing → REACT, neutral-closing → SILENCE, ambient upbeat still
 >   reacts) and `chatter-generate.test.ts` (prompt asserts the fixed-style rule is
 >   present).
+>   **Positive-closing detection decoupled from the character cap (v1.2.1):**
+>   the v1.2.0 fix widened `isTrivial`'s character cap 12→16 to catch "okay,
+>   perfect!", but that's the same fragile-heuristic class of bug — a slightly
+>   longer 2-word closing using longer words ("that's fantastic!", 17 chars)
+>   would still fall through it. New `isPositiveClosing()` bounds by WORD COUNT
+>   only (≤4 words containing a `POSITIVE_WORD_RE` hit), independent of
+>   `isTrivial`'s character cap, and is OR'd into `classifyMessageKind`'s
+>   `TRIVIAL` branch alongside `isTrivial`/`CLOSING_ACK_RE` — the same pattern
+>   already used for `CLOSING_ACK_RE` in v1.1.98. A genuinely longer sentence
+>   that happens to mention a positive word mid-paragraph (5+ words) still
+>   stays `SUBSTANTIVE`. New tests cover both the longer-words case and the
+>   mid-paragraph non-closing case.
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

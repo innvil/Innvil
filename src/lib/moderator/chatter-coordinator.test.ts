@@ -452,3 +452,14 @@ test("an upbeat closing reacts even when NOT directed and NOT mid a continuity t
   const result = single({ text: "awesome, thanks!" });
   assert.equal(result.type, "REACT");
 });
+
+test('REQUIRED: a positive closing with LONGER words still reacts, not just short ones -- "that\'s fantastic!" is 17 chars but only 2 words, and must not fall through to a text reply the way a raw character cap would cause', () => {
+  const result = single({ text: "that's fantastic!", wasLastSpeaker: true });
+  assert.equal(result.type, "REACT");
+  assert.equal(result.type === "REACT" && result.emoji, "😄");
+});
+
+test("a genuinely longer sentence that happens to mention a positive word mid-paragraph is NOT treated as a closing (word-count bound still applies)", () => {
+  const result = single({ text: "that was a really great effort from the whole team honestly", wasLastSpeaker: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+});

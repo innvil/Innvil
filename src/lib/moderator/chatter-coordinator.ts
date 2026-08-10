@@ -59,10 +59,13 @@ function isLikelyQuestion(text: string): boolean {
 
 /** Trivial = low-content chatter ("lol", "nice", "ok", "thanks") — it can
  *  still earn a REACT or SHORT_ACK given the right context (e.g. directed at
- *  the bot), but it never earns CASUAL_CHAT/ANSWER purely on its own. The
- *  16-char cap (up from 12) is enough to cover a short compound closing like
- *  "okay, perfect!" (14 chars, still only 2 words) without opening the door
- *  to genuinely longer sentences that just happen to use short words. */
+ *  the bot), but it never earns CASUAL_CHAT/ANSWER purely on its own. Bounded
+ *  by word count AND a generous character cap so a short message using long
+ *  words ("understood, appreciated") still counts, while a longer sentence
+ *  that happens to use short words doesn't. This cap is intentionally NOT
+ *  relied on for positive-closing detection below — see isPositiveClosing,
+ *  which caused a live bug ("okay, perfect!" missed at 12 chars) precisely
+ *  because a raw character cap is a fragile signal for that case. */
 function isTrivial(text: string): boolean {
   const words = text.trim().split(/\s+/).filter(Boolean);
   return words.length <= 2 && text.trim().replace(/[!?.]+$/, "").length <= 16;
@@ -100,6 +103,17 @@ const THANKS_RE = /\b(thanks|thank\s*you|thx|ty)\b/i;
 // acknowledging with an emoji.
 const POSITIVE_WORD_RE = /\b(perfect|awesome|amazing|excellent|fantastic|sweet|love\s*it|nice\s*one|great)\b/i;
 const LOVE_RE = /\blove(?:d|s)?\b/i;
+// Bounded by WORD COUNT only, not character length -- isTrivial's char cap
+// is exactly the fragile heuristic that missed "okay, perfect!" originally,
+// and would still miss slightly longer variants like "that's fantastic!"
+// (17 chars, still just 2 words) if reused here. A short closing that
+// carries a positive word is flagged regardless of how long those words
+// are; a genuinely longer sentence that happens to mention "great" mid-
+// paragraph (5+ words) is not a closing and stays SUBSTANTIVE.
+function isPositiveClosing(text: string): boolean {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  return words.length <= 4 && POSITIVE_WORD_RE.test(text);
+}
 // A closing acknowledgement ("I see, okay.", "got it", "alright", "fair
 // enough") ends an exchange -- it deserves the same treatment as trivial
 // filler regardless of word count. Without this, "I see, okay." (3 words)
@@ -218,7 +232,7 @@ function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (isCommunityOpener(trimmed)) return "COMMUNITY_OPENER";
-  if (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed)) return "TRIVIAL";
+  if (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed)) return "TRIVIAL";
   if (isLikelyQuestion(trimmed)) return "QUESTION";
   return "SUBSTANTIVE";
 }

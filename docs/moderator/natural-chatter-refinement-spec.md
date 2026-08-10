@@ -166,6 +166,23 @@
 >   REACT with the right emoji, neutral closing → still SILENCE, ambient upbeat
 >   closing with no directed/continuity signal still reacts) and
 >   `chatter-generate.test.ts` (prompt contains the fixed-style rule verbatim).
+>
+> **Positive-closing detection decoupled from the character cap — IMPLEMENTED
+> (v1.2.1).** Follow-up correction, same day, prompted by the user asking
+> whether the trivial-closing check was still character-bounded after v1.2.0.
+> It was — `isTrivial`'s cap had only been widened 12→16 to fit "okay,
+> perfect!", which is the exact same fragile-heuristic class of bug: a
+> slightly longer 2-word closing that uses longer words ("that's fantastic!",
+> 17 chars after stripping the trailing `!`) would still fall through the cap
+> and get a full `CASUAL_CHAT` reply. New `isPositiveClosing(text)` in
+> `chatter-coordinator.ts` bounds by WORD COUNT only (≤4 words, one of which
+> matches `POSITIVE_WORD_RE`) — no character length involved — and is OR'd
+> into `classifyMessageKind`'s `TRIVIAL` branch alongside `isTrivial` and
+> `CLOSING_ACK_RE`, mirroring how `CLOSING_ACK_RE` was already added
+> independent of `isTrivial` in v1.1.98 for the same reason. A genuinely
+> longer sentence that happens to mention a positive word mid-paragraph (5+
+> words, e.g. "that was a really great effort from the whole team honestly")
+> is correctly left `SUBSTANTIVE`. New tests cover both cases.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 
