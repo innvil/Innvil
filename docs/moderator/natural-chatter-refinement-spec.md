@@ -304,6 +304,31 @@
 >   question with no other signal, `isPositiveClosing`'s "is this perfect?"
 >   blind spot, and a short acknowledgement-shaped question ("makes sense?").
 >   284 tests pass, zero regressions.
+>
+> **Intent-over-length made architectural, not a patch — IMPLEMENTED (v1.6.0).**
+> Direct user instruction after v1.5.2: the fix above only guarded the "ends
+> with `?`" case. `"who else"` (no `?`) was STILL swallowed as `TRIVIAL`
+> because `isTrivial()` ran before `isLikelyQuestion()` for anything not
+> ending in `?` -- v1.5.2 never actually reordered the two checks.
+> - `isTrivial()` DELETED entirely (not patched, not scoped down). Every
+>   "trivial control" it existed for (`lol`/`nice`/`cool`/`okay`/`got it`/
+>   `thanks`/`fair enough`) was verified to already be covered by
+>   `isAcknowledgementOnly`/`CLOSING_ACK_RE` without it.
+> - `classifyMessageKind` reordered: `EMPTY/TOO_SHORT -> COMMUNITY_OPENER ->
+>   QUESTION -> TRIVIAL -> SUBSTANTIVE`. Question/request intent is checked
+>   structurally BEFORE trivial classification exists to swallow it.
+> - `isLikelyQuestion()` extended with `which`/`anyone`/`anybody`/`someone` to
+>   catch headless questions with no `?` at all ("who else", "anyone else").
+> - Regression caught before shipping: deleting `isTrivial()` broke
+>   `RESOLVED_ACK_RE` phrases ("fixed", "solved", "nvm") reaching the TRIVIAL
+>   action branch, since those words aren't in `isAcknowledgementOnly`'s
+>   `ACK_TOKENS`. Fixed by having `isAcknowledgementOnly` also treat a
+>   `RESOLVED_ACK_RE` match as a signal, reusing the existing regex rather than
+>   duplicating risky general-purpose vocabulary.
+> - New tests: +46 (12 punctuated short questions, 5 headless questions,
+>   directed "kwan?"/"test?", 7 trivial controls, 4 long-ack controls, 4
+>   ack+question cases, 3 ack+substantive cases, explicit action-selection
+>   checks). 324 tests pass.
 
 Implement the next Natural Chatter + Community Moderation refinement for Innvil Virtual Moderator.
 

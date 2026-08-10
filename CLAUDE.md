@@ -2489,6 +2489,45 @@ win over this):**
 >   routing to `ANSWER` instead of `TRIVIAL`. 284 tests pass, zero regressions
 >   (confirmed no existing test relies on a `?`-terminated message resolving to
 >   `TRIVIAL`).
+>   **Intent-over-length made architectural, not a patch — IMPLEMENTED
+>   (v1.6.0).** The v1.5.2 fix only guarded the "ends with `?`" case. Live-caught
+>   follow-up: `"who else"` (no `?`) was STILL swallowed as `TRIVIAL`, because
+>   `isTrivial()`'s raw word-count/char-count check ran *before*
+>   `isLikelyQuestion()` ever got a turn for anything not ending in `?` — the
+>   v1.5.2 guard only ever checked the punctuation, never actually reordered
+>   the two checks. Direct instruction from the user: fix this at the
+>   architecture level, not with another special case.
+>   - **`isTrivial()` deleted entirely** (not patched, not scoped down — removed).
+>   Every "trivial control" it existed to catch (`"lol"`, `"nice"`, `"cool"`,
+>   `"okay"`, `"got it"`, `"thanks"`, `"fair enough"`) was verified to already be
+>   semantically covered by `isAcknowledgementOnly`/`CLOSING_ACK_RE` without it.
+>   - **`classifyMessageKind` reordered**: `EMPTY/TOO_SHORT → COMMUNITY_OPENER →
+>   QUESTION (isLikelyQuestion) → TRIVIAL (CLOSING_ACK_RE / isPositiveClosing /
+>   isAcknowledgementOnly) → SUBSTANTIVE`. Question/request intent is now
+>   checked structurally before any trivial classification exists to swallow
+>   it — this is a property of the ORDER, not a per-message exception.
+>   - **`isLikelyQuestion()` extended** to catch headless questions with no `?`
+>   at all: added `which`/`anyone`/`anybody`/`someone` to the leading-word
+>   check, so `"who else"`, `"why though"`, `"anyone else"` etc. are recognized
+>   on their own terms — not inferred from missing punctuation.
+>   - **Regression from the deletion, caught before shipping**: `RESOLVED_ACK_RE`
+>   phrases (`"fixed"`, `"solved"`, `"nvm"`, `"figured it out"`) used to reach
+>   the `TRIVIAL` action branch only because the old `isTrivial()` swallowed
+>   them by word count; removing it made `"fixed now"` fall through to
+>   `SUBSTANTIVE` since none of those words are in `isAcknowledgementOnly`'s
+>   `ACK_TOKENS` vocabulary. Fixed by having `isAcknowledgementOnly` also treat
+>   a `RESOLVED_ACK_RE` match as a signal (reusing the existing regex rather
+>   than duplicating its vocabulary into `ACK_TOKENS`, where words like
+>   `"fixed"`/`"working"` would risk misclassifying unrelated substantive
+>   sentences).
+>   - New tests (`chatter-coordinator.test.ts`, +46): 12 punctuated short
+>   questions, 5 headless/unpunctuated short questions, directed `"kwan?"`/
+>   `"test?"` resolving to `ANSWER` (not `TRIVIAL`/`SHORT_ACK`), 7 trivial
+>   controls, 4 long-acknowledgement controls, 4 acknowledgement+question cases,
+>   3 acknowledgement+substantive-continuation cases, and explicit
+>   action-selection checks (`"who else?"` never `SILENCE`/`REACT`-only,
+>   `"prettyaccurate too. lol"` never `CASUAL_CHAT`/`ANSWER`). 324 tests pass
+>   (up from 284).
 >   **Still not covered by (A):** the quota-aware/business-knowledge-aware signals
 >   from §11 that depend on (B) or Phase 4.N; durable per-moderator memory (there is
 >   no durable moderator-memory system at all yet — Phase 4.N remains NOTED/not

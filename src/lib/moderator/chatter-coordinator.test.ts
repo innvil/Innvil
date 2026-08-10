@@ -611,3 +611,134 @@ test('a short acknowledgement-shaped question ("makes sense?") still routes to A
   const result = single({ text: "makes sense?" });
   assert.equal(result.type, "ANSWER");
 });
+
+/* ============================================================
+   ARCHITECTURAL FIX: intent beats length structurally.
+   classifyMessageKind now checks question/request intent (isLikelyQuestion)
+   BEFORE any trivial/closing check runs at all -- isTrivial() (a raw
+   word-count/char-count heuristic) has been REMOVED entirely, not patched
+   with another special case. TRIVIAL is decided purely semantically now.
+   ============================================================ */
+
+/* -------------------------------------------- short questions, punctuated ---- */
+
+const SHORT_QUESTIONS_PUNCTUATED = [
+  "who else?", "why?", "how so?", "which one?", "what happened?",
+  "anyone else?", "you sure?", "what now?", "can you?", "help me?",
+  "where?", "when?",
+];
+
+for (const text of SHORT_QUESTIONS_PUNCTUATED) {
+  test(`REQUIRED: short question "${text}" is never TRIVIAL -- routes to ANSWER`, () => {
+    const result = single({ text });
+    assert.notEqual(result.type, "SILENCE");
+    assert.notEqual(result.type, "REACT");
+    assert.notEqual(result.type, "SHORT_ACK");
+    assert.equal(result.type, "ANSWER");
+  });
+}
+
+/* ------------------------------------------ short questions, unpunctuated ---- */
+
+const SHORT_QUESTIONS_UNPUNCTUATED = ["who else", "why though", "how so", "what happened", "anyone else"];
+
+for (const text of SHORT_QUESTIONS_UNPUNCTUATED) {
+  test(`REQUIRED: headless (no "?") short question "${text}" is never TRIVIAL -- routes to ANSWER`, () => {
+    const result = single({ text });
+    assert.equal(result.type, "ANSWER");
+  });
+}
+
+/* --------------------------------------------------- directed short messages ---- */
+
+test('REQUIRED: "kwan?" directed at Kwan -> ANSWER, not TRIVIAL/SHORT_ACK', () => {
+  const result = single({ text: "kwan?", isDirectedAtBot: true });
+  assert.equal(result.type, "ANSWER");
+  assert.equal(result.type === "ANSWER" && result.deploymentId, DEPLOYMENT_A);
+});
+
+test('REQUIRED: "test?" directed at Test -> ANSWER, not TRIVIAL/SHORT_ACK', () => {
+  const result = single({ text: "test?", isDirectedAtBot: true });
+  assert.equal(result.type, "ANSWER");
+  assert.equal(result.type === "ANSWER" && result.deploymentId, DEPLOYMENT_A);
+});
+
+test('resolveDirectedModerator still resolves a plain-name-plus-"?" message ("kwan?") to the right moderator', () => {
+  const kwan: ModeratorIdentity = { deploymentId: "dep-kwan", name: "Kwan", botUsername: null };
+  const test1: ModeratorIdentity = { deploymentId: "dep-test", name: "Test", botUsername: null };
+  assert.deepEqual(resolveDirectedModerator("kwan?", [kwan, test1]), { deploymentId: "dep-kwan", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("test?", [kwan, test1]), { deploymentId: "dep-test", isTypo: false });
+});
+
+/* -------------------------------------------------------------- trivial controls ---- */
+
+const TRIVIAL_CONTROLS = ["lol", "nice", "cool", "okay", "got it", "thanks", "fair enough"];
+
+for (const text of TRIVIAL_CONTROLS) {
+  test(`REQUIRED: trivial control "${text}" remains SILENCE/REACT (never a generated reply)`, () => {
+    const result = single({ text });
+    assert.notEqual(result.type, "CASUAL_CHAT");
+    assert.notEqual(result.type, "ANSWER");
+  });
+}
+
+/* --------------------------------------------------- long acknowledgement controls ---- */
+
+const LONG_ACK_CONTROLS = [
+  "prettyaccurate too. lol",
+  "yeah lol that's actually pretty accurate",
+  "that makes sense, thanks for explaining",
+  "haha okay fair enough, I get you now",
+];
+
+for (const text of LONG_ACK_CONTROLS) {
+  test(`REQUIRED: long acknowledgement control "${text}" remains TRIVIAL (SILENCE/REACT, never a generated reply)`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.notEqual(result.type, "CASUAL_CHAT");
+    assert.notEqual(result.type, "ANSWER");
+  });
+}
+
+/* ----------------------------------------------------- acknowledgement + question ---- */
+
+const ACK_PLUS_QUESTION = [
+  "yeah makes sense, why?",
+  "fair enough, what now?",
+  "okay got it, but who else?",
+  "lol yeah, how so?",
+];
+
+for (const text of ACK_PLUS_QUESTION) {
+  test(`REQUIRED: acknowledgement + new question "${text}" must NOT be TRIVIAL -- routes to ANSWER`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.equal(result.type, "ANSWER");
+  });
+}
+
+/* ------------------------------------------ acknowledgement + substantive continuation ---- */
+
+const ACK_PLUS_SUBSTANTIVE = [
+  "yeah that's accurate, but production is still broken",
+  "makes sense, auth is failing now",
+  "fair enough, I have another issue",
+];
+
+for (const text of ACK_PLUS_SUBSTANTIVE) {
+  test(`REQUIRED: acknowledgement + substantive continuation "${text}" must NOT be TRIVIAL -- gets a real reply`, () => {
+    const result = single({ text, wasLastSpeaker: true });
+    assert.equal(result.type, "CASUAL_CHAT");
+  });
+}
+
+/* --------------------------------------------------------- action-selection checks ---- */
+
+test('REQUIRED (action-selection): "who else?" reaches the appropriate responder path, never SILENCE/REACT-only due to shortness', () => {
+  const result = single({ text: "who else?", recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "ANSWER");
+});
+
+test('REQUIRED (action-selection): "prettyaccurate too. lol" resolves to REACT/SILENCE/SHORT_ACK, never CASUAL_CHAT/ANSWER', () => {
+  const result = single({ text: "prettyaccurate too. lol", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
+  assert.notEqual(result.type, "CASUAL_CHAT");
+  assert.notEqual(result.type, "ANSWER");
+});

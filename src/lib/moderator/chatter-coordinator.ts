@@ -51,24 +51,17 @@ const MIN_REPLY_GAP_MS = 20_000;
 /** Cap on the bot replying to itself/back-to-back without an intervening human message — same bypasses as above. */
 const MAX_CONSECUTIVE_BOT_MESSAGES = 2;
 
+// Question/request intent, including HEADLESS questions with no trailing
+// "?" ("who else", "why though", "what happened", "anyone else") -- these
+// must be recognized on their own semantic terms, never inferred merely from
+// the absence of a "?". Checked BEFORE any trivial/closing classification
+// (see classifyMessageKind) so a short question can never be swallowed as
+// filler just because it's short -- intent outranks length structurally,
+// not via a per-case exception.
 function isLikelyQuestion(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (t.endsWith("?")) return true;
-  return /^(who|what|when|where|why|how|does|do|is|are|can|could|should|would|will)\b/.test(t);
-}
-
-/** Trivial = low-content chatter ("lol", "nice", "ok", "thanks") — it can
- *  still earn a REACT or SHORT_ACK given the right context (e.g. directed at
- *  the bot), but it never earns CASUAL_CHAT/ANSWER purely on its own. Bounded
- *  by word count AND a generous character cap so a short message using long
- *  words ("understood, appreciated") still counts, while a longer sentence
- *  that happens to use short words doesn't. This cap is intentionally NOT
- *  relied on for positive-closing detection below — see isPositiveClosing,
- *  which caused a live bug ("okay, perfect!" missed at 12 chars) precisely
- *  because a raw character cap is a fragile signal for that case. */
-function isTrivial(text: string): boolean {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  return words.length <= 2 && text.trim().replace(/[!?.]+$/, "").length <= 16;
+  return /^(who|what|when|where|why|how|which|does|do|is|are|can|could|should|would|will|anyone|anybody|someone)\b/.test(t);
 }
 
 const COMMUNITY_ADDRESS_RE = /\b(everyone|anyone|guys|all|folks)\b/i;
@@ -103,13 +96,15 @@ const THANKS_RE = /\b(thanks|thank\s*you|thx|ty)\b/i;
 // acknowledging with an emoji.
 const POSITIVE_WORD_RE = /\b(perfect|awesome|amazing|excellent|fantastic|sweet|love\s*it|nice\s*one|great)\b/i;
 const LOVE_RE = /\blove(?:d|s)?\b/i;
-// Bounded by WORD COUNT only, not character length -- isTrivial's char cap
-// is exactly the fragile heuristic that missed "okay, perfect!" originally,
-// and would still miss slightly longer variants like "that's fantastic!"
-// (17 chars, still just 2 words) if reused here. A short closing that
-// carries a positive word is flagged regardless of how long those words
-// are; a genuinely longer sentence that happens to mention "great" mid-
-// paragraph (5+ words) is not a closing and stays SUBSTANTIVE.
+// Bounded by WORD COUNT only, not character length -- a raw character cap
+// was the fragile heuristic that missed "okay, perfect!" originally, and
+// would still miss slightly longer variants like "that's fantastic!" (17
+// chars, still just 2 words) if used here. A short closing that carries a
+// positive word is flagged regardless of how long those words are; a
+// genuinely longer sentence that happens to mention "great" mid-paragraph
+// (5+ words) is not a closing and stays SUBSTANTIVE. Never reached at all
+// for anything ending in "?" -- see classifyMessageKind, which checks
+// question intent first.
 function isPositiveClosing(text: string): boolean {
   const words = text.trim().split(/\s+/).filter(Boolean);
   return words.length <= 4 && POSITIVE_WORD_RE.test(text);
@@ -245,7 +240,14 @@ function isAcknowledgementOnly(text: string): boolean {
   const tokens = tokenize(trimmed);
   if (!tokens.length) return false;
   if (hasProblemWord(tokens)) return false;
-  const hasSignal = tokens.some((t) => ACK_TOKENS.has(t) || LAUGH_TOKEN_RE.test(t));
+  // RESOLVED_ACK_RE ("fixed", "solved", "nvm", "figured it out", ...) is its
+  // own acknowledgement vocabulary, reused here rather than duplicated into
+  // ACK_TOKENS -- these words (esp. "fixed"/"working") are common enough in
+  // ordinary substantive sentences that adding them to the general-purpose
+  // token set would risk misclassifying unrelated content; matching the
+  // same precise phrase list selectChatterAction's REACT branch already
+  // uses keeps the two in lockstep.
+  const hasSignal = tokens.some((t) => ACK_TOKENS.has(t) || LAUGH_TOKEN_RE.test(t)) || RESOLVED_ACK_RE.test(trimmed);
   if (!hasSignal) return false;
   const residual = tokens.filter((t) => !isAckOrNeutralToken(t) && !isKnownConcatenation(t));
   // Weak fallback only -- real substantive content is already excluded
@@ -361,23 +363,22 @@ export function resolveDirectedModerator(text: string, moderators: ModeratorIden
 
 type MessageKind = "EMPTY" | "TOO_SHORT" | "COMMUNITY_OPENER" | "TRIVIAL" | "QUESTION" | "SUBSTANTIVE";
 
+/** Classification order is the actual architecture here, not an
+ *  implementation detail: QUESTION/request intent is decided BEFORE any
+ *  trivial/closing check gets a turn, so a real question can never be
+ *  swallowed as filler just because it's short. There is no independent
+ *  length-based "isTrivial" fallback anymore -- TRIVIAL is decided purely
+ *  semantically (isAcknowledgementOnly / CLOSING_ACK_RE / isPositiveClosing),
+ *  each of which already excludes anything carrying a question, request,
+ *  contrast, or problem signal. Length is never the decisive reason a
+ *  message is treated as trivial; at most it's a soft bound inside those
+ *  semantic checks (e.g. isAcknowledgementOnly's residual-token tolerance). */
 function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (isCommunityOpener(trimmed)) return "COMMUNITY_OPENER";
-  // A message ending in "?" is NEVER trivial/closing filler, even if it's
-  // short -- question-ness always wins. Live bug: "who else?" (2 words) was
-  // swallowed as TRIVIAL because isTrivial()'s char-length check strips
-  // trailing "?" along with "!."/no question-awareness at all, and
-  // isPositiveClosing has the same word-count blind spot (e.g. "is this
-  // perfect?" would otherwise match on "perfect"). isAcknowledgementOnly
-  // already has its own internal "ends with ?" guard for the same reason;
-  // checking it here too keeps this one rule easy to find in one place.
-  const looksLikeQuestion = trimmed.endsWith("?");
-  if (!looksLikeQuestion && (isTrivial(trimmed) || CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed))) {
-    return "TRIVIAL";
-  }
-  if (looksLikeQuestion || isLikelyQuestion(trimmed)) return "QUESTION";
+  if (isLikelyQuestion(trimmed)) return "QUESTION";
+  if (CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed)) return "TRIVIAL";
   return "SUBSTANTIVE";
 }
 
