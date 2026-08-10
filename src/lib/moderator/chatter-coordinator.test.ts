@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectChatterAction, resolveDirectedModerator, isConversationalOpener, type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity } from "./chatter-coordinator";
+import {
+  selectChatterAction, resolveDirectedModerator, isConversationalOpener,
+  isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
+  type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity,
+} from "./chatter-coordinator";
 
 /**
  * Natural Chatter is contextual SOCIAL ACTION SELECTION, not response
@@ -1011,4 +1015,68 @@ test('REQUIRED (action-selection): "prettyaccurate too. lol" resolves to REACT/S
   const result = single({ text: "prettyaccurate too. lol", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
   assert.notEqual(result.type, "CASUAL_CHAT");
   assert.notEqual(result.type, "ANSWER");
+});
+
+/* ================================== ambient-greeting model fallback ==========
+   REQUIRED (live bug): "waddup guys" (phonetic slang, no "?", no directed
+   name) silenced as low_social_priority -- no deterministic classifier can
+   connect that spelling to "what's up". isAmbientOpenerFallbackCandidate /
+   resolveAmbientOpenerFallback are the pure, gated entry points
+   community-runtime.ts uses around the (separately tested, in
+   chatter-generate.test.ts) model classification call. ================ */
+
+test('REQUIRED: "waddup guys" is the exact residual bucket the fallback gate targets', () => {
+  const result = single({ text: "waddup guys" });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["low_social_priority"]);
+  assert.equal(isAmbientOpenerFallbackCandidate(result, "waddup guys"), true);
+});
+
+test("REQUIRED: the fallback gate only fires for the exact low_social_priority SILENCE, not other silence reasons", () => {
+  const alreadyHandled = single({ text: "gm everyone", recentlyRespondedByHuman: true });
+  assert.equal(isAmbientOpenerFallbackCandidate(alreadyHandled, "gm everyone"), false);
+
+  const trivial = single({ text: "lol" });
+  assert.equal(trivial.type, "SILENCE");
+  assert.notDeepEqual(trivial.reasons, ["low_social_priority"]);
+  assert.equal(isAmbientOpenerFallbackCandidate(trivial, "lol"), false);
+});
+
+test("REQUIRED: the fallback gate never fires on a non-SILENCE action", () => {
+  const answered = single({ text: "who else?" });
+  assert.equal(isAmbientOpenerFallbackCandidate(answered, "who else?"), false);
+});
+
+test("REQUIRED: the fallback gate is length-bounded -- a long ambient statement never qualifies, even if it happens to land in low_social_priority", () => {
+  const longText = "well honestly this is just a fairly long ambient statement about something unrelated";
+  const result = single({ text: longText });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["low_social_priority"]);
+  assert.equal(isAmbientOpenerFallbackCandidate(result, longText), false);
+});
+
+test("REQUIRED: resolveAmbientOpenerFallback engages a candidate in a quiet room, mirroring COMMUNITY_OPENER handling", () => {
+  const a = candidate(DEPLOYMENT_A);
+  const result = resolveAmbientOpenerFallback({ text: "waddup guys", candidates: [a], now: new Date() });
+  assert.equal(result.type, "CASUAL_CHAT");
+  if (result.type === "CASUAL_CHAT") {
+    assert.equal(result.deploymentId, DEPLOYMENT_A);
+    assert.ok(result.reasons.includes("ambient_greeting_model_confirmed"));
+  }
+});
+
+test("REQUIRED: resolveAmbientOpenerFallback respects the SAME already_handled suppression as a real COMMUNITY_OPENER", () => {
+  const a = candidate(DEPLOYMENT_A);
+  const result = resolveAmbientOpenerFallback({ text: "waddup guys", candidates: [a], now: new Date(), recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["already_handled"]);
+});
+
+test("REQUIRED (end-to-end shape): the fallback path produces the exact same downstream action shape a deterministic COMMUNITY_OPENER would", () => {
+  // Proves the fallback is a second-pass ENTRY into the existing handling,
+  // not a new/parallel action category with different semantics.
+  const a = candidate(DEPLOYMENT_A);
+  const deterministic = single({ text: "gm guys" }); // a real, deterministic COMMUNITY_OPENER
+  const fallback = resolveAmbientOpenerFallback({ text: "waddup guys", candidates: [a], now: new Date() });
+  assert.equal(deterministic.type, fallback.type);
 });

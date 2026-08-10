@@ -2918,6 +2918,58 @@ win over this):**
 >   regression test asserts Witty Mod's formality specifically resolves to the
 >   lowercase band, not the neutral one. 422 tests pass, `tsc --noEmit` clean,
 >   production build clean. No migration.
+>   **Ninth live issue, resolved with an explicit product decision (v1.9.10): narrow
+>   model-assisted fallback for phonetic slang greetings.** Live repro: `"waddup
+>   guys"` (no `"?"`, no directed name) stayed silenced (`low_social_priority`).
+>   Investigated whether this generalizes deterministically like the earlier "?"
+>   and comma-vocative fixes did — it does NOT: "waddup" is a phonetic respelling of
+>   "what's up" (th→d, dropped `'s`) with no punctuation/positional signal
+>   connecting the two spellings, unlike a `"?"` anywhere or a comma before a name.
+>   A hand-tuned regex for this phonetic family would just be the brittle lexical
+>   patch already explicitly ruled out, in a different shape. **Reported this
+>   honestly instead of shipping a disguised dictionary** — user chose to add a
+>   narrow, opt-in model fallback (over accepting the deterministic limit).
+>   - `selectChatterAction`/`classifyMessageKind` stay pure/synchronous/AI-free —
+>     unchanged. The fallback lives entirely in `community-runtime.ts`'s
+>     already-async dispatch, gated by new pure `isAmbientOpenerFallbackCandidate()`
+>     (`chatter-coordinator.ts`): fires ONLY on the exact `"low_social_priority"`
+>     SILENCE (ambient, non-directed, no continuity, nothing deterministic matched)
+>     AND a short message (≤8 words) — the narrowest possible surface, not "every
+>     silence."
+>   - New `classifyAmbientGreeting(text)` (`chatter-generate.ts`) — a
+>     **classification call, not generation**: one word out (`GREETING`/`OTHER`),
+>     `maxTokens: 5`, routed through the existing `deepseekChatterProvider()` (same
+>     cheap DeepSeek Flash path as CASUAL_CHAT, **never Sonnet**), via the same
+>     `providerOverride` mechanism that structurally bypasses the Sonnet-resolution
+>     path. On any failure (unconfigured key, network error, non-200) returns
+>     `ok:false` and the caller keeps the original deterministic SILENCE — no
+>     escalation to a more expensive provider, ever.
+>   - New `resolveAmbientOpenerFallback()` (`chatter-coordinator.ts`) — called only
+>     after the model confirms a greeting; mirrors `selectChatterAction`'s
+>     `COMMUNITY_OPENER` branch exactly (same `already_handled` suppression, same
+>     candidate selection), so this is a second-pass ENTRY into existing handling,
+>     not a new/parallel action category.
+>   - **Cost/volume estimate (per explicit requirement to quantify before
+>     building):** gated to the `low_social_priority` residual bucket, which live
+>     traffic showed at roughly 5–10% of incoming messages; the ≤8-word gate narrows
+>     that further. Expect low-single-digit-percent of total messages to ever reach
+>     this call — most real messages are already resolved by a question mark, a
+>     directed name, a problem word, or an acknowledgement signal before reaching
+>     this fallback at all. Existing `[ai-usage]` logging (tagged
+>     `AMBIENT_GREETING_CLASSIFY`) already covers this call for cost auditing — no
+>     new telemetry needed.
+>   - New tests: `chatter-coordinator.test.ts` (+7 — exact live-bug repro, gate
+>     fires only for `low_social_priority` not other silence reasons, never on a
+>     non-SILENCE action, length-bounded, `already_handled` suppression preserved,
+>     same downstream action shape as a real `COMMUNITY_OPENER`) and
+>     `chatter-generate.test.ts` (+4, fetch-spy verified — routes to
+>     `deepseek-v4-flash`/non-thinking/tiny `max_tokens`, `"OTHER"` classifies as
+>     not-a-greeting, unconfigured DeepSeek makes **zero** network calls, a failed
+>     call surfaces as `ok:false` without throwing). 433 tests pass, `tsc --noEmit`
+>     clean, production build clean. **Run no migration** (reuses the existing
+>     `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_CHATTER_MODEL` env vars —
+>     same credential, now used for two purposes: CASUAL_CHAT generation and this
+>     narrow classification fallback).
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

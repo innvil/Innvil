@@ -5,8 +5,11 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
 import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
-import { selectChatterAction, resolveDirectedModerator, type ChatterCandidate, type ChatterPacingState } from "./chatter-coordinator";
-import { generateChatterReply, shortAckText, type ChatterContextMessage } from "./chatter-generate";
+import {
+  selectChatterAction, resolveDirectedModerator, isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
+  type ChatterCandidate, type ChatterPacingState,
+} from "./chatter-coordinator";
+import { generateChatterReply, shortAckText, classifyAmbientGreeting, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 
@@ -567,7 +570,20 @@ async function handleHumanMessage(
   // Picks the socially appropriate ACTION (SILENCE/REACT/SHORT_ACK/
   // CASUAL_CHAT/ANSWER) and AT MOST ONE responder across every eligible
   // deployment — deterministic, no probability roll anywhere.
-  const action = selectChatterAction({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman });
+  let action = selectChatterAction({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman });
+
+  if (action.type === "SILENCE" && isAmbientOpenerFallbackCandidate(action, event.text)) {
+    // Narrow, cheap fallback for messages that failed every deterministic
+    // classifier (see chatter-coordinator.ts "ambient-greeting model
+    // fallback") -- e.g. "waddup guys", a phonetic greeting spelling no
+    // regex can connect to "what's up". A single DeepSeek Flash
+    // classification call (5-token output, never Sonnet); on any failure
+    // the original deterministic SILENCE stands, no escalation.
+    const classified = await classifyAmbientGreeting(event.text);
+    if (classified.ok && classified.isGreeting) {
+      action = resolveAmbientOpenerFallback({ text: event.text, candidates, now, recentlyAnsweredByModerator, recentlyRespondedByHuman });
+    }
+  }
 
   if (action.type === "SILENCE") {
     await logActivity(admin, panelId, community.id, null, "human_message", "SILENCE", action.reasons.join(","), { reasons: action.reasons });

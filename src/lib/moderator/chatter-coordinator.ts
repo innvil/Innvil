@@ -647,3 +647,50 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     reasons: [picked.isDirectedAtBot ? "directed_casual" : "active_conversation_continuity"],
   };
 }
+
+/* ================================== ambient-greeting model fallback ==========
+   Deterministic classification (isConversationalOpener + everything above)
+   cannot recognize a message like "waddup guys" as a greeting -- it's a
+   phonetic respelling of "what's up" with no punctuation/positional signal
+   connecting the two spellings, unlike the "?" anywhere / comma-flanked-name
+   signals that already make other cases orthography-agnostic. Building a
+   hand-tuned pattern for this one phonetic family would just be the same
+   brittle lexical patch in regex form. Per explicit product decision, this
+   narrow gap is covered by an OPTIONAL, cheap model-assisted classification
+   call (DeepSeek Flash, yes/no only, see chatter-generate.ts
+   classifyAmbientGreeting) -- gated as tightly as possible so it only ever
+   fires on the exact residual bucket nothing deterministic could resolve.
+   selectChatterAction() itself stays pure/synchronous/AI-free; this fallback
+   lives entirely in community-runtime.ts's already-async dispatch, calling
+   the two pure helpers below before/after the model call. ================ */
+
+/** Narrow gate for even ATTEMPTING the fallback classifier call -- only the
+ *  exact "low_social_priority" SILENCE (ambient, non-directed, no
+ *  continuity, nothing deterministic matched) on a SHORT message. A long
+ *  ambient statement landing in this bucket is very unlikely to be a
+ *  misspelled greeting, so length keeps the fallback rare and cheap rather
+ *  than firing on every silence. */
+export function isAmbientOpenerFallbackCandidate(action: ChatterAction, text: string): boolean {
+  if (action.type !== "SILENCE") return false;
+  if (!action.reasons.includes("low_social_priority")) return false;
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 8;
+}
+
+/** Called ONLY after the model fallback has confirmed a message that failed
+ *  every deterministic signal genuinely functions as a greeting/social bid.
+ *  Mirrors selectChatterAction's COMMUNITY_OPENER branch exactly (same
+ *  already_handled suppression, same candidate selection) -- this is not a
+ *  new action category, just a second-pass entry into the same handling,
+ *  reached via model confirmation instead of a regex match. */
+export function resolveAmbientOpenerFallback(input: ChatterActionInput): ChatterAction {
+  const eligible = input.candidates.filter((c) =>
+    candidateEligible(c.pacing, input.now, bypassesPacing("COMMUNITY_OPENER", c.isDirectedAtBot, c.wasLastSpeaker))
+  );
+  if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman) {
+    return { type: "SILENCE", reasons: ["already_handled"] };
+  }
+  const picked = pickCandidate(eligible);
+  if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
+  return { type: "CASUAL_CHAT", deploymentId: picked.deploymentId, reasons: ["ambient_greeting_model_confirmed", "unanswered", "moderator_available"] };
+}

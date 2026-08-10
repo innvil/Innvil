@@ -357,6 +357,40 @@ export function shortAckText(persona: ModeratorPersona, random: () => number = M
   return phrase;
 }
 
+/**
+ * Ambient-greeting fallback classification -- see chatter-coordinator.ts's
+ * "ambient-greeting model fallback" section for the full architecture
+ * rationale. Called ONLY for the narrow residual bucket
+ * isAmbientOpenerFallbackCandidate() gates on (a "low_social_priority"
+ * SILENCE on a short message) -- i.e. a message that failed every
+ * deterministic classifier, most commonly a phonetic/slang greeting
+ * spelling with no other structural signal ("waddup guys"). This is a
+ * CLASSIFICATION call (one word out), not generation -- deliberately
+ * separate from generateChatterReply, uses the same cheap DeepSeek route as
+ * CASUAL_CHAT (never Sonnet), and NEVER escalates to a different/more
+ * expensive provider on failure -- an unconfigured or failed call just
+ * means the original deterministic SILENCE stands, exactly like any other
+ * generation failure elsewhere in this file.
+ */
+export async function classifyAmbientGreeting(text: string): Promise<{ ok: true; isGreeting: boolean } | { ok: false; error: string }> {
+  const deepseek = deepseekChatterProvider();
+  if (!deepseek) return { ok: false, error: "DeepSeek chatter provider not configured (DEEPSEEK_API_KEY)" };
+  try {
+    const raw = await aiComplete({
+      system: `You classify a single short chat message. Decide whether it functions as a GREETING or informal social check-in -- a bid to start or re-enter conversation (e.g. "hey", "yo", "sup", phonetic/slang spellings of "what's up" like "waddup"/"wassup", casual hellos) -- as opposed to an ordinary statement, question, or unrelated remark. Respond with EXACTLY one word: GREETING or OTHER. No punctuation, no explanation.`,
+      messages: [{ role: "user", content: text }],
+      model: deepseek.model,
+      providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+      disableThinking: true,
+      maxTokens: 5,
+      automation: "AMBIENT_GREETING_CLASSIFY",
+    });
+    return { ok: true, isGreeting: raw.trim().toUpperCase().startsWith("GREETING") };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "ambient greeting classification failed" };
+  }
+}
+
 /** Exported for prompt-assembly tests (chatter-generate.test.ts) — verifying
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live

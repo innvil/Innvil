@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { __testables, shortAckText, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { __testables, shortAckText, classifyAmbientGreeting, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
@@ -561,4 +561,88 @@ test("REQUIRED: two-moderator persona isolation holds for the DeepSeek-routed CA
   assert.match(testPrompt, /Slang and internet-speak are welcome/i);
   assert.match(kwanPrompt, /You are Kwan/);
   assert.match(testPrompt, /You are Test/);
+});
+
+/* ================================== ambient-greeting model fallback ==========
+   REQUIRED (live bug): "waddup guys" (no "?", no directed name) was silenced
+   -- isConversationalOpener has no orthography-independent signal for a
+   phonetic slang greeting. classifyAmbientGreeting is the narrow, opt-in
+   model fallback for exactly that residual case -- verified here against the
+   ACTUAL outgoing request (via a fetch spy, not just the parsed result), and
+   proven to never touch Sonnet and never escalate on failure. ================ */
+
+function withFetchSpy<T>(responseBody: unknown, fn: (calls: Array<{ url: string; body: unknown }>) => Promise<T> | T): Promise<T> {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  return Promise.resolve(fn(calls)).finally(() => {
+    globalThis.fetch = originalFetch;
+  });
+}
+
+function withEnvAsync<T>(vars: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) prev[k] = process.env[k];
+  for (const [k, v] of Object.entries(vars)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  return Promise.resolve(fn()).finally(() => {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+}
+
+test("REQUIRED: classifyAmbientGreeting routes to DeepSeek Flash (never Sonnet), sends a tiny classification request", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "GREETING" } }] }, async (calls) => {
+      const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /deepseek/i);
+      const body = calls[0].body as { model?: string; max_tokens?: number; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.thinking?.type, "disabled");
+      assert.ok((body.max_tokens ?? 1024) <= 10, "classification output should be tiny, not a full reply");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isGreeting, true);
+    });
+  });
+});
+
+test('REQUIRED: "OTHER" response classifies as not-a-greeting', async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "OTHER" } }] }, async () => {
+      const result = await classifyAmbientGreeting("the price changed");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isGreeting, false);
+    });
+  });
+});
+
+test("REQUIRED: unconfigured DeepSeek fails explicitly -- no network call attempted, never falls back to Sonnet", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(result.ok, false);
+      assert.equal(calls.length, 0, "must not attempt any network call when DeepSeek is unconfigured");
+    });
+  });
+});
+
+test("a failed DeepSeek call surfaces as ok:false rather than throwing or escalating", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
+    try {
+      const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(result.ok, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
