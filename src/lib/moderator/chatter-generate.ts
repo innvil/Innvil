@@ -84,9 +84,18 @@ function personaStyle(p: ModeratorPersona): string[] {
   const style: string[] = [];
   if (p.language && p.language !== "en") style.push(`Mix in ${p.language} naturally where it fits.`);
 
+  // Live bug: Witty Mod (formality=30) still capitalized sentence starts --
+  // 30 fell into the old neutral "either way is fine" middle band, which
+  // explicitly permitted it. Neither Witty Mod's description nor its
+  // customInstructions say anything about capitalization at all, so this is
+  // purely a dial-threshold call. Raised the lowercase cutoff so anything
+  // below "semi-formal" territory (Founder-Like=45, Supportive Guide=40,
+  // Diplomatic Mediator=55, Strict Moderator/Polite Minimalist=60, Technical
+  // Expert=65 stay in the neutral band; Calm Professional=75 stays strict)
+  // reliably skews lowercase instead of leaving it genuinely either-way.
   if (p.formality > 70) style.push("Always capitalize the start of your sentences and use complete punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
-  else if (p.formality < 30) style.push("Always write in lowercase with relaxed punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
-  else style.push("Moderately casual: natural conversational grammar, not stiff or overly formal, but not locked into all-lowercase either. Whatever reads naturally for a short chat message.");
+  else if (p.formality < 40) style.push("Always write in lowercase with relaxed punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
+  else style.push("Semi-formal: natural sentence capitalization and normal punctuation, without being stiff — this isn't a strict fixed-caps rule the way a professional persona has, just ordinary, unforced writing.");
 
   if (p.slang > 60) style.push("Slang and internet-speak are welcome.");
   else if (p.slang < 20) style.push("Avoid slang — keep language plain and standard.");

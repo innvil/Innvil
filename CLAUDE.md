@@ -2901,6 +2901,23 @@ win over this):**
 >     and confirmation that dials still add concrete mechanics (refine, not replace).
 >     Existing dead-zone tests updated for the reworded (softer) band text. 421 tests
 >     pass, `tsc --noEmit` clean, production build clean. No migration.
+>   **Eighth live bug fixed the same session (v1.9.9): formality=30 still fell into
+>   the neutral "either way is fine" band, not lowercase.** Live repro: Kwan (Witty
+>   Mod, `formality:30`) kept capitalizing sentence starts after v1.9.8. Root cause:
+>   the "always lowercase" threshold was `< 30` — Kwan's exact value (30) fell one
+>   point short, landing in the neutral middle band, which explicitly permits either
+>   style. Neither Witty Mod's `description` nor its `customInstructions` say
+>   anything about capitalization, so this was purely a dial-threshold call, not a
+>   hierarchy issue. Raised the lowercase cutoff to `< 40` — chosen so every preset
+>   the user characterized as "professional or semi-formal" (Founder-Like 45,
+>   Supportive Guide 40, Diplomatic Mediator 55, Strict Moderator/Polite Minimalist
+>   60, Technical Expert 65, Calm Professional 75) stays in the neutral/strict bands,
+>   while Witty Mod and every other casual-leaning preset (10–35) now reliably skews
+>   lowercase. Neutral band renamed "Semi-formal" and reworded to make the
+>   professional-vs-casual distinction explicit in the prompt text itself. New
+>   regression test asserts Witty Mod's formality specifically resolves to the
+>   lowercase band, not the neutral one. 422 tests pass, `tsc --noEmit` clean,
+>   production build clean. No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

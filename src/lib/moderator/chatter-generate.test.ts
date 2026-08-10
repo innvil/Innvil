@@ -499,10 +499,18 @@ test("REQUIRED (exact live bug): the Witty Mod preset's dials (formality=30, sla
   assert.match(style, /light humor is welcome/i);
 });
 
+test("REQUIRED (exact live bug, follow-up): Witty Mod's formality=30 resolves to the LOWERCASE band specifically, not the neutral semi-formal one -- live repro was Kwan still capitalizing sentence starts", () => {
+  const witty = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  const style = personaStyle(witty).join(" ");
+  assert.match(style, /always write in lowercase/i);
+  assert.doesNotMatch(style, /semi-formal/i);
+  assert.doesNotMatch(style, /always capitalize the start/i);
+});
+
 test("formality/slang/chattiness instructions escalate across the range, not just a binary", () => {
   const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, ...over }).join(" ");
   assert.match(at({ formality: 90 }), /always capitalize the start/i);
-  assert.match(at({ formality: 50 }), /moderately casual/i);
+  assert.match(at({ formality: 50 }), /semi-formal/i);
   assert.match(at({ formality: 10 }), /always write in lowercase/i);
   assert.match(at({ slang: 90 }), /slang and internet-speak are welcome/i);
   assert.match(at({ slang: 40 }), /casual wording is fine where it naturally fits/i);
