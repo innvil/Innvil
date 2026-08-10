@@ -578,6 +578,74 @@ test("REQUIRED (end-to-end, exact live scenario): after Test speaks, \"why are y
   if (result.type === "ANSWER") assert.equal(result.deploymentId, "dep-test");
 });
 
+/* ---------------------------------- comma-flanked mid-sentence vocative ---- */
+// Live bug: "okay, test, waddup?" (a name flanked by commas in the MIDDLE of
+// the message -- a completely standard written vocative pattern) wasn't
+// recognized as addressing Test at all. isLikelyQuestion already handled
+// "waddup?" correctly (a trailing "?" is orthography-agnostic) -- the actual
+// gap was purely positional/structural in resolveDirectedModerator, not a
+// slang-comprehension gap. Fixed via commaPrecededVocative, which generalizes
+// by POSITION (comma immediately before the name), not by phrase list.
+
+test('REQUIRED (live bug repro): "okay, test, waddup?" resolves to Test, not left undirected', () => {
+  assert.deepEqual(resolveDirectedModerator("okay, test, waddup?", [KWAN, TEST_MOD]), { deploymentId: "dep-test", isTypo: false });
+});
+
+test("REQUIRED (end-to-end, exact live scenario): Test is selected even though Kwan spoke most recently -- the comma-flanked name wins over continuity", () => {
+  const kwan = candidate("dep-kwan", { wasLastSpeaker: true }); // Kwan spoke immediately prior, per the live transcript
+  const test1 = candidate("dep-test", { isDirectedAtBot: resolveDirectedModerator("okay, test, waddup?", [KWAN, TEST_MOD])?.deploymentId === "dep-test" });
+  const result = selectChatterAction({ text: "okay, test, waddup?", candidates: [kwan, test1], now: new Date() });
+  assert.equal(result.type, "ANSWER");
+  if (result.type === "ANSWER") assert.equal(result.deploymentId, "dep-test");
+});
+
+test("REQUIRED: generalizes by POSITION, not phrase memorization -- fresh informal wording around a comma-flanked name still resolves correctly", () => {
+  assert.deepEqual(resolveDirectedModerator("well, kwan, why is this happening", [KWAN, TEST_MOD]), { deploymentId: "dep-kwan", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("so, test, any updates on that", [KWAN, TEST_MOD]), { deploymentId: "dep-test", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("lol okay, kwan, fr what do u think", [KWAN, TEST_MOD]), { deploymentId: "dep-kwan", isTypo: false });
+});
+
+test("REQUIRED: referential mid-sentence mentions are still correctly excluded (no regression from the comma-vocative fix)", () => {
+  // No comma directly before the name in any of these -- must stay non-directed.
+  assert.equal(resolveDirectedModerator("why did test answer for kwan?", [KWAN, TEST_MOD]), null);
+  assert.equal(resolveDirectedModerator("ngl I think kwan already replied to that", [KWAN, TEST_MOD]), null);
+  assert.equal(resolveDirectedModerator("not sure why test would say that", [KWAN, TEST_MOD]), null);
+});
+
+test('REQUIRED: casual question without canonical grammar still routes to the named moderator, not silence -- "yo test can u explain this?"', () => {
+  const directedMatch = resolveDirectedModerator("yo test can u explain this?", [KWAN, TEST_MOD]);
+  assert.deepEqual(directedMatch, { deploymentId: "dep-test", isTypo: false });
+  const kwan = candidate("dep-kwan", { wasLastSpeaker: true }); // Kwan spoke last -- must NOT win over the named Test
+  const test1 = candidate("dep-test", { isDirectedAtBot: true });
+  const result = selectChatterAction({ text: "yo test can u explain this?", candidates: [kwan, test1], now: new Date() });
+  assert.equal(result.type, "ANSWER");
+  if (result.type === "ANSWER") assert.equal(result.deploymentId, "dep-test");
+});
+
+test('REQUIRED: casual, comma-flanked substantive ask (no "?") -- problem content wins classification, but the named moderator still gets picked', () => {
+  const directedMatch = resolveDirectedModerator("well, test, why is my order stuck", [KWAN, TEST_MOD]);
+  assert.deepEqual(directedMatch, { deploymentId: "dep-test", isTypo: false });
+  const test1 = candidate("dep-test", { isDirectedAtBot: true });
+  const kwan = candidate("dep-kwan");
+  const result = selectChatterAction({ text: "well, test, why is my order stuck", candidates: [kwan, test1], now: new Date() });
+  assert.notEqual(result.type, "SILENCE");
+  if (result.type !== "SILENCE") assert.equal(result.deploymentId, "dep-test");
+});
+
+test('REQUIRED: closure in informal/shorthand form is acknowledgement/closure, not a needless new reply -- "kk thx"', () => {
+  // Directed, so the outcome distinguishes TRIVIAL specifically (REACT via
+  // THANKS_RE) from a generic "not directed" silence -- a weaker assertion
+  // (merely "not CASUAL_CHAT/ANSWER") would pass even if this fell through
+  // to SILENCE for an unrelated reason, proving nothing about TRIVIAL.
+  const result = single({ text: "kk thx", isDirectedAtBot: true });
+  assert.equal(result.type, "REACT");
+});
+
+test("REQUIRED: unknown/ambiguous informal wording with no real signal stays silent rather than inventing a specific interpretation", () => {
+  const result = single({ text: "vibes ig" });
+  assert.equal(result.type, "SILENCE");
+});
+
 /* ---- continuity priority when combined with the real selection pipeline ---- */
 
 test("REQUIRED: an explicit plain-name mention of a DIFFERENT moderator wins over wasLastSpeaker continuity", () => {

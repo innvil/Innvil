@@ -455,6 +455,60 @@ test("shortAckText's emoji chance grows with emojiFrequency (higher dial -> high
   assert.match(shortAckText(high, roll), /😄/);
 });
 
+/* ------------------------------------------- other persona-dial dead zones ---- */
+// REQUIRED (live bug): "Witty Mod" preset (formality=30, slang=35,
+// chattiness=40, teasing=55) landed in the OLD binary threshold's gap for
+// EVERY one of these dials at once (none were >70/<30, >60/<20, etc.), so
+// the model got ZERO style instruction for any of them and defaulted to a
+// neutral/professional-reading voice despite the preset. Same class of bug
+// as the emoji dead zone above, now closed for every dial with a gap.
+
+test("REQUIRED: personaStyle gives an explicit formality instruction at every value, no silent gap", () => {
+  for (const formality of [0, 15, 29, 30, 50, 69, 70, 71, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formality }).join(" ");
+    assert.match(style, /capital|lowercase|punctuation/i, `formality=${formality} produced no formality instruction`);
+  }
+});
+
+test("REQUIRED: personaStyle gives an explicit slang instruction at every value, no silent gap", () => {
+  for (const slang of [0, 19, 20, 40, 60, 61, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, slang }).join(" ");
+    assert.match(style, /slang/i, `slang=${slang} produced no slang instruction`);
+  }
+});
+
+test("REQUIRED: personaStyle gives an explicit chattiness instruction at every value, no silent gap", () => {
+  for (const chattiness of [0, 29, 30, 50, 70, 71, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, chattiness }).join(" ");
+    assert.match(style, /brief|talkative|conversational length/i, `chattiness=${chattiness} produced no chattiness instruction`);
+  }
+});
+
+test("REQUIRED (exact live bug): the Witty Mod preset's dials (formality=30, slang=35, chattiness=40, teasing=55) each produce a real style instruction, not silence", () => {
+  const witty = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  assert.equal(witty.formality, 30);
+  assert.equal(witty.slang, 35);
+  assert.equal(witty.chattiness, 40);
+  assert.equal(witty.teasing, 55);
+  const style = personaStyle(witty).join(" ");
+  assert.match(style, /capital|lowercase|punctuation/i);
+  assert.match(style, /slang/i);
+  assert.match(style, /brief|talkative|conversational length/i);
+  // humor=80 clears the existing >60 threshold already -- confirms the wit
+  // signal genuinely reaches the model, not just that nothing crashed.
+  assert.match(style, /light humor is welcome/i);
+});
+
+test("formality/slang/chattiness instructions escalate across the range, not just a binary", () => {
+  const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, ...over }).join(" ");
+  assert.match(at({ formality: 90 }), /always capitalize the start/i);
+  assert.match(at({ formality: 50 }), /casual capitalization and punctuation is fine/i);
+  assert.match(at({ formality: 10 }), /always write in lowercase/i);
+  assert.match(at({ slang: 90 }), /slang and internet-speak are welcome/i);
+  assert.match(at({ slang: 40 }), /a little slang\/internet-speak here and there is fine/i);
+  assert.match(at({ slang: 5 }), /avoid slang/i);
+});
+
 test("REQUIRED: two-moderator persona isolation holds for the DeepSeek-routed CASUAL_CHAT action too", () => {
   const kwanPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: FORMAL_MODERATOR_A, action: "CASUAL_CHAT" }));
   const testPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-test", moderatorName: "Test", persona: CASUAL_MODERATOR_B, action: "CASUAL_CHAT" }));

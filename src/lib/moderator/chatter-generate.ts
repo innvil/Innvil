@@ -67,22 +67,38 @@ const MAX_REPLY_CHARS = 300;
 function personaStyle(p: ModeratorPersona): string[] {
   const style: string[] = [];
   if (p.language && p.language !== "en") style.push(`Mix in ${p.language} naturally where it fits.`);
+
+  // Continuous bands for every dial below -- no dead zone in the middle.
+  // Live bug: a preset (formality=30, slang=35, chattiness=40, teasing=55)
+  // landed in the gap of EVERY one of these thresholds at once (none were
+  // >70/<30, >60/<20, etc.), so the model got ZERO style instruction beyond
+  // the free-text description/customInstructions and defaulted to a
+  // neutral/professional-reading voice regardless of the configured preset
+  // (same class of bug already fixed for emojiFrequency below).
+
   if (p.formality > 70) style.push("Always capitalize the start of your sentences and use complete punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
   else if (p.formality < 30) style.push("Always write in lowercase with relaxed punctuation, every message — this is a fixed habit of how you write, not something you adjust message to message.");
+  else style.push("Casual capitalization and punctuation is fine — you're not locked into strict sentence-starting capitals and full punctuation, but you're not locked into all-lowercase either. Whatever reads naturally for a short chat message.");
+
   if (p.slang > 60) style.push("Slang and internet-speak are welcome.");
   else if (p.slang < 20) style.push("Avoid slang — keep language plain and standard.");
+  else style.push("A little slang/internet-speak here and there is fine when it genuinely fits — it's just not your dominant style, so don't force it into every message.");
+
   if (p.chattiness < 30) style.push("Keep replies very brief — often just a few words.");
   else if (p.chattiness > 70) style.push("You can be a bit more talkative, but stay concise.");
+  else style.push("Keep replies a normal conversational length — not forced to be ultra-short, not rambling either.");
+
   if (p.humor > 60) style.push("Light humor is welcome when it fits.");
+  else if (p.humor < 20) style.push("Keep it straightforward — humor/jokes aren't really your thing.");
+
   if (p.teasing > 60) style.push("A bit of playful teasing/ribbing is fine when it fits the moment.");
-  // Continuous bands, no dead zone in the middle -- the default persona (30)
-  // and most presets (5-50) previously got NO emoji instruction at all
-  // (the old rule only fired below 20 or above 60), so the model just
-  // defaulted to using none.
+  else if (p.teasing < 20) style.push("Skip the teasing/ribbing — keep interactions straightforward.");
+
   if (p.emojiFrequency < 15) style.push("Avoid emoji almost entirely — plain text only, essentially never.");
   else if (p.emojiFrequency < 40) style.push("Emoji are rare for you — use one only occasionally, when it genuinely fits, never more than one per message.");
   else if (p.emojiFrequency < 65) style.push("Emoji are fine in moderation — use one now and then when it fits the moment, not in every message.");
   else style.push("Emoji are a natural part of how you write — feel free to use one in most messages when it fits the vibe.");
+
   if (p.profanityTolerance < 30) style.push("Keep language clean.");
   if (p.topicsToAvoid.length) style.push(`Avoid discussing: ${p.topicsToAvoid.join(", ")}.`);
   if (p.customInstructions.trim()) style.push(p.customInstructions.trim());

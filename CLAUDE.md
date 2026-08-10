@@ -2815,6 +2815,56 @@ win over this):**
 >     with no `"?"` anywhere and no leading question word still correctly stays
 >     non-QUESTION). 407 tests pass, `tsc --noEmit` clean, production build clean. No
 >     migration.
+>   **Sixth + seventh live issues fixed the same session (v1.9.7): mid-sentence
+>   vocative targeting gap, and a persona-dial dead zone extended beyond emoji.**
+>   - **Targeting — corrected diagnosis, not a slang dictionary.** Live repro:
+>     `"okay, test, waddup?"` (right after Test's own prior reply) got no response.
+>     Investigation showed `isLikelyQuestion` already correctly fired on the trailing
+>     `"?"` (orthography-agnostic — that axis was never broken). The actual gap:
+>     **"test" sits in the middle of the sentence, flanked by commas on both sides** —
+>     a standard written-English vocative pattern — but `resolveDirectedModerator`
+>     only recognized a name as directly-addressed when it was the sole message, the
+>     first word, preceded by hey/hi/yo/hello/you, or comma-preceded **at the very
+>     end**. A comma-flanked name in the middle was never covered, so "test" never
+>     resolved as addressee, selection fell to `wasLastSpeaker` continuity (which
+>     picked Kwan, who'd spoken most recently), and Kwan — correctly recognizing it
+>     couldn't sensibly answer a question naming someone else — declined outright
+>     (`MODEL_DECLINED`). **This was a targeting/address-resolution bug, not a
+>     slang-comprehension one** — explicitly did not build a slang dictionary or a new
+>     normalization pipeline; the fix is purely positional/structural
+>     (`commaPrecededVocative`, generalized from the prior end-anchored-only version
+>     to match a comma immediately before a name anywhere in the message), which
+>     generalizes to any informal wording around it without recognizing the words at
+>     all. Zero new model/API calls.
+>   - **Persona dead zone extended beyond emoji.** Separately confirmed live: a
+>     moderator saved with the "Witty Mod" preset (`formality:30, slang:35,
+>     chattiness:40, teasing:55`) read as generically professional despite the
+>     preset. Root cause: `personaStyle()`'s formality/slang/chattiness/teasing
+>     thresholds (`>70`/`<30`, `>60`/`<20`, etc.) had the exact same dead-zone gap
+>     already fixed for `emojiFrequency` in v1.9.2 — Witty Mod's dials land in the
+>     unfixed gap of every one of those four dials simultaneously, so the model got
+>     zero explicit style instruction for any of them and defaulted to a neutral
+>     voice. Closed the same way as emoji: continuous bands with a real middle-range
+>     instruction for each dial, preserving the existing high/low wording exactly
+>     (tests assert on those exact strings).
+>   - New tests (chatter-coordinator.test.ts, +10; chatter-generate.test.ts, +6):
+>     exact live repro for both bugs, comma-flanked-vocative generalization with fresh
+>     informal wording never quoted in the implementation, referential-mention
+>     regression guard (no comma before the name still correctly excluded), required
+>     categories (casual question/request without canonical grammar, greeting +
+>     substantive-ask precedence, informal closure via existing ack-token vocabulary,
+>     ambiguous slang staying silent rather than inventing a specific interpretation),
+>     Witty Mod's exact live dial values producing real instructions instead of
+>     silence, and formality/slang/chattiness escalating across the full range. 420
+>     tests pass, `tsc --noEmit` clean, production build clean. No migration.
+>
+>   **Product invariant (added per explicit instruction):** Virtual Moderators
+>   interpret contemporary informal chat by communicative intent rather than
+>   canonical spelling. Slang, phonetic spelling, abbreviations, punctuation/casing
+>   noise, and other casual chat forms must not require an ever-growing vocabulary
+>   dictionary. Input understanding is independent of the moderator's output persona:
+>   every moderator understands the same user meaning, while responding according to
+>   its own saved Innvil persona.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

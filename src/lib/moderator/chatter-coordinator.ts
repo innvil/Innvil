@@ -391,14 +391,20 @@ function isVocativeOccurrence(tokens: string[], idx: number): boolean {
   return false;
 }
 
-/** A comma directly before a trailing name ("tell me, kwan", "nice one,
- *  kwan!") is an unambiguous vocative tag in natural English regardless of
- *  what precedes the comma — but punctuation is stripped by tokenize(), so
- *  this needs the ORIGINAL text, not the token array. Escapes `name` since
- *  it's interpolated into a RegExp. */
-function trailingCommaVocative(lowerText: string, name: string): boolean {
+/** A comma directly before a name ("tell me, kwan", "okay, test, waddup?",
+ *  "well, kwan, why is this happening") is an unambiguous vocative tag in
+ *  natural written English regardless of what precedes the comma OR what
+ *  follows the name — this is a positional/structural signal, not a
+ *  phrase-list one, so it generalizes to any informal wording around it
+ *  without needing to recognize the surrounding words at all. Live bug:
+ *  "okay, test, waddup?" (name flanked by commas in the MIDDLE of the
+ *  message) wasn't recognized as addressing Test at all -- the prior fix
+ *  only covered a comma-preceded name at the very END of the message.
+ *  Punctuation is stripped by tokenize(), so this needs the ORIGINAL text,
+ *  not the token array. Escapes `name` since it's interpolated into a RegExp. */
+function commaPrecededVocative(lowerText: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`,\\s*${escaped}\\s*[?!.]*$`, "i").test(lowerText.trim());
+  return new RegExp(`,\\s*${escaped}\\b`, "i").test(lowerText);
 }
 
 /** Resolves which (if any) deployment a message explicitly ADDRESSES — by
@@ -423,7 +429,7 @@ export function resolveDirectedModerator(text: string, moderators: ModeratorIden
 
   const exact = moderators.filter((m) =>
     tokenize(m.name).some(
-      (nt) => tokens.some((t, idx) => t === nt && isVocativeOccurrence(tokens, idx)) || trailingCommaVocative(lower, nt)
+      (nt) => tokens.some((t, idx) => t === nt && isVocativeOccurrence(tokens, idx)) || commaPrecededVocative(lower, nt)
     )
   );
   if (exact.length === 1) return { deploymentId: exact[0].deploymentId, isTypo: false };
