@@ -129,7 +129,16 @@ test("REVISED (was: bare greeting stays trivial -> SILENCE): a bare greeting wit
    (no "everyone"/"guys"/etc.) was silenced as low_social_priority even
    though it's plainly a re-entry bid. These tests prove generalization, not
    phrase memorization -- each group is a DIFFERENT message shape from the
-   ones the implementation regexes literally quote in comments. ================ */
+   ones the implementation regexes literally quote in comments.
+
+   isConversationalOpener() is a NARROW, purely positive signal detector --
+   it does not know about questions/requests/problems/acknowledgements, so
+   it correctly returns true for "hey thanks, that fixed it" (it DOES
+   contain a greeting cue). Precedence between an opener signal and a
+   stronger classification (question/problem/acknowledgement) is decided by
+   classifyMessageKind's ORDERING, not inside this function -- tested below
+   via the real end-to-end pipeline (single()/selectChatterAction), which is
+   what actually exercises that precedence. ================ */
 
 test("REQUIRED: clear openers/re-entry are recognized -- generalizes beyond any single fixed phrase", () => {
   const openers = [
@@ -149,21 +158,25 @@ test("REQUIRED: room-addressed openers are recognized", () => {
   }
 });
 
-test("REQUIRED: opener cue + substantive intent -> NOT purely an opener (question/request wins)", () => {
-  for (const text of ["hey, can someone explain this?", "morning, why did my order fail?", "yo kwan, what happened?"]) {
-    assert.equal(isConversationalOpener(text), false, `expected NOT an opener (question/request wins): "${text}"`);
+test("REQUIRED: generalizes to UNSEEN combinations of the same signal types, not phrase memorization", () => {
+  // None of these exact strings appear anywhere in the implementation's
+  // regexes/comments -- they recombine the same underlying signal types
+  // (greeting, re-entry, presence-check) in fresh wording/word order.
+  const unseen = [
+    "well hey, good to see this place lively again",
+    "sup, back again folks",
+    "it's pretty quiet in here today",
+    "just wanted to say I'm back",
+  ];
+  for (const text of unseen) {
+    assert.equal(isConversationalOpener(text), true, `expected an opener (unseen phrasing): "${text}"`);
   }
 });
 
-test("REQUIRED: ordinary statements are not openers, even ones sharing a little vocabulary", () => {
-  for (const text of ["that's interesting", "looks good", "I already tried that", "the price changed"]) {
+test("REQUIRED: ordinary statements with no opener signal at all are not openers", () => {
+  for (const text of ["that's interesting", "looks good", "I already tried that", "the price changed", "okay thanks"]) {
     assert.equal(isConversationalOpener(text), false, `should not be an opener: "${text}"`);
   }
-});
-
-test("REQUIRED: a pure acknowledgement/closure after a moderator reply is not an opener, even with a greeting word", () => {
-  assert.equal(isConversationalOpener("hey thanks, that fixed it"), false);
-  assert.equal(isConversationalOpener("okay thanks"), false);
 });
 
 test("REQUIRED: no arbitrary length gate -- a longer message can be an opener, a one-word message can be an opener", () => {
@@ -171,9 +184,38 @@ test("REQUIRED: no arbitrary length gate -- a longer message can be an opener, a
   assert.equal(isConversationalOpener("yo"), true);
 });
 
-test("a re-entry cue near a problem word stays a real report, not an opener (\"again\" isn't a magic word on its own)", () => {
-  assert.equal(isConversationalOpener("it broke again"), false);
-  assert.equal(isConversationalOpener("failed again, still stuck"), false);
+/* ---- precedence: a real question/problem/closure outranks a mere opener
+   SIGNAL, decided by classifyMessageKind's ordering (exercised end-to-end
+   here, not by asking isConversationalOpener to know about these things) ---- */
+
+test("REQUIRED: opener cue + substantive question/request intent -> QUESTION wins, not COMMUNITY_OPENER", () => {
+  for (const text of ["hey, can someone explain this?", "morning, why did my order fail?", "yo kwan, what happened?"]) {
+    const result = single({ text });
+    assert.equal(result.type, "ANSWER", `expected ANSWER (question wins over the opener cue): "${text}"`);
+  }
+});
+
+test("REQUIRED: a pure acknowledgement/closure after a moderator reply wins over a greeting cue, not COMMUNITY_OPENER", () => {
+  // "fixed" triggers the RESOLVED_ACK_RE reaction path -- proves TRIVIAL
+  // classification won, not COMMUNITY_OPENER (which would produce CASUAL_CHAT).
+  const withGreeting = single({ text: "hey thanks, that fixed it" });
+  assert.equal(withGreeting.type, "REACT");
+  assert.notEqual(withGreeting.type, "CASUAL_CHAT");
+
+  const bareAck = single({ text: "okay thanks" });
+  assert.equal(bareAck.type, "SILENCE");
+  assert.deepEqual(bareAck.reasons, ["trivial_low_value"]);
+});
+
+test('a re-entry cue near a problem word stays a real report, not an opener ("again" isn\'t a magic word on its own)', () => {
+  // isConversationalOpener DOES detect the re-entry signal in isolation
+  // (it's purely positive, by design) -- the problem word is what makes the
+  // OVERALL message resolve to SUBSTANTIVE, not COMMUNITY_OPENER.
+  assert.equal(isConversationalOpener("it broke again"), true);
+  const result = single({ text: "it broke again" });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["low_social_priority"]);
+  assert.notEqual(result.type, "CASUAL_CHAT");
 });
 
 /* ---- opener + room-activity is a response-selection concern, not part of the definition ---- */

@@ -64,66 +64,40 @@ function isLikelyQuestion(text: string): boolean {
   return /^(who|what|when|where|why|how|which|does|do|is|are|can|could|should|would|will|anyone|anybody|someone)\b/.test(t);
 }
 
-// ---- signals feeding isConversationalOpener (below classifyMessageKind's
-// other helpers, since it needs to run several of them as hard exclusions) ----
+// ---- signals feeding isConversationalOpener ----
 
-// A presence-check ("anyone here?", "how's everyone doing?") is opener
-// territory even though it's phrased as a question -- checked as its own
-// carve-out inside isConversationalOpener, ahead of the generic
-// "a real question isn't an opener" exclusion. Deliberately NOT a standalone
-// "does this message contain a room-address noun" check -- "I already told
-// everyone" contains "everyone" but is a plain statement, not a bid to
-// interact (the same referential-vs-address distinction already applied to
-// moderator names in resolveDirectedModerator above).
+// A presence-check ("anyone here?", "how's everyone doing?", "quiet in here
+// today") -- reused directly by classifyMessageKind below to give opener
+// detection precedence over the generic "ends with ?" question heuristic,
+// without isConversationalOpener itself needing to know anything about
+// questions.
 const COMMUNITY_CHECK_IN_RE =
   /\bhow(?:'s|s|\s+is)\s+(?:everyone|everything)\b|\bwhat(?:'s|s|\s+is)\s+everyone\s+(?:up\s+to|doing)\b|\banyone\s+(?:doing\s+anything|around|here)\b|\bquiet\s+(?:in\s+here|today)\b/i;
-// Greeting/salutation + informal attention-getters. One signal among
-// several feeding isConversationalOpener below -- not the whole rule; the
-// hard exclusions there are what stop this from swallowing "hey, why is my
-// order stuck?" as an opener.
+// Greeting/salutation + informal attention-getters -- one signal among
+// several combined in isConversationalOpener below.
 const GREETING_RE = /\b(gm|good\s*morning|good\s*evening|good\s*afternoon|morning|evening|hey|hi|hello|yo|sup|what'?s\s*up)\b/i;
 // Re-entry framing doesn't require a greeting word at all ("I'm back",
 // "back again", bare "again" on its own).
 const RE_ENTRY_RE = /\b(?:i'?m\s+back|back\s+again|back\s+here|back\s+in(?:\s+here)?|good\s+to\s+be\s+back)\b|\bagain\b/i;
 
-/** Would a normal participant reasonably read this message as a bid to
- *  start, restart, or re-enter interaction -- a greeting, re-entry phrase,
- *  presence check, or informal attention-getter? This is the message's own
- *  semantic FUNCTION, decided from a combination of signals (presence-check,
- *  re-entry, greeting, room-address), never from membership in one fixed
- *  phrase list and never from room activity/quietness/who-spoke-last (that's
- *  a response-selection concern, handled downstream in selectChatterAction's
- *  COMMUNITY_OPENER branch, not part of this definition).
- *
- *  Bounded by hard exclusions checked FIRST so a greeting word never
- *  hijacks a message that's actually something stronger: "hey, why is my
- *  order stuck?" is a QUESTION, "hey, can someone explain this?" is a
- *  REQUEST, "hey thanks, that fixed it" is a CLOSURE, "it broke again" is a
- *  problem report -- none of those are openers despite a greeting/"again". */
+/** Does this text carry a conversational-opener SIGNAL -- a greeting,
+ *  re-entry phrase, or presence check -- the kind of language a normal
+ *  participant would read as a bid to start/restart/re-enter interaction?
+ *  Deliberately narrow and purely POSITIVE: this function does not decide
+ *  final classification and does not know about questions, requests,
+ *  problem reports, or acknowledgements -- a message can (and often does)
+ *  carry an opener signal AND something stronger ("hey, why is my order
+ *  stuck?" plainly opens with a greeting). Precedence between opener and
+ *  those other classifications is classifyMessageKind's job, reusing the
+ *  SAME canonical classifiers (isLikelyQuestion, hasProblemWord, the
+ *  existing trivial/acknowledgement checks) via ordering -- not duplicated
+ *  here. Never depends on room activity/quietness/who-spoke-last (that's a
+ *  response-selection concern, handled downstream in selectChatterAction's
+ *  COMMUNITY_OPENER branch), and never on message length. */
 export function isConversationalOpener(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
-
-  // Presence-check phrasing is opener territory even though it LOOKS like a
-  // question ("anyone here?") -- carved out before the question exclusion.
-  if (COMMUNITY_CHECK_IN_RE.test(t)) return true;
-
-  // Hard exclusions: real question/request/problem/closure content wins,
-  // even when a greeting word is also present.
-  if (isLikelyQuestion(t)) return false;
-  if (REQUEST_MARKER_RE.test(t)) return false;
-  if (hasProblemWord(tokenize(t)) || NOT_WORKING_RE.test(t)) return false;
-  if (CLOSING_ACK_RE.test(t) || isPositiveClosing(t) || isAcknowledgementOnly(t)) return false;
-
-  if (RE_ENTRY_RE.test(t)) return true;
-  if (GREETING_RE.test(t)) return true;
-  // No bare "does this mention a room-address noun" fallback on purpose --
-  // "everyone"/"guys"/"folks" appearing in a message doesn't by itself make
-  // it an opener (see the comment on COMMUNITY_CHECK_IN_RE above). Every
-  // "room-addressed" example this function needs to catch (e.g. "hey
-  // everyone", "morning guys", "anyone here?") already matches via
-  // COMMUNITY_CHECK_IN_RE, RE_ENTRY_RE, or GREETING_RE above.
-  return false;
+  return COMMUNITY_CHECK_IN_RE.test(t) || RE_ENTRY_RE.test(t) || GREETING_RE.test(t);
 }
 
 const RESOLVED_ACK_RE = /\b(fixed|solved|working now|got it working|nvm|figured it out)\b/i;
@@ -466,13 +440,32 @@ type MessageKind = "EMPTY" | "TOO_SHORT" | "COMMUNITY_OPENER" | "TRIVIAL" | "QUE
  *  each of which already excludes anything carrying a question, request,
  *  contrast, or problem signal. Length is never the decisive reason a
  *  message is treated as trivial; at most it's a soft bound inside those
- *  semantic checks (e.g. isAcknowledgementOnly's residual-token tolerance). */
+ *  semantic checks (e.g. isAcknowledgementOnly's residual-token tolerance).
+ *
+ *  isConversationalOpener() is a purely POSITIVE signal (see its own doc
+ *  comment) -- it does not know about questions/requests/problems/
+ *  acknowledgements, so a message that's ALSO one of those (e.g. "hey, why
+ *  is my order stuck?") needs precedence decided HERE, by ordering, reusing
+ *  the SAME canonical classifiers rather than duplicating their logic:
+ *    1. A presence-check ("anyone here?") is opener territory even though
+ *       it's ALSO question-shaped -- COMMUNITY_CHECK_IN_RE is a more
+ *       specific signal than the generic isLikelyQuestion heuristic, so
+ *       it's checked first.
+ *    2. A real question, then a problem report, then an acknowledgement/
+ *       closure, each outrank a bare greeting/re-entry word that happens to
+ *       also be present ("it broke again" stays SUBSTANTIVE, not opener;
+ *       "hey thanks, that fixed it" stays TRIVIAL, not opener).
+ *    3. Only once none of those claim the message does a real opener
+ *       signal (greeting/re-entry, or a presence-check already handled in
+ *       step 1) resolve to COMMUNITY_OPENER. */
 function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
-  if (isConversationalOpener(trimmed)) return "COMMUNITY_OPENER";
+  if (COMMUNITY_CHECK_IN_RE.test(trimmed)) return "COMMUNITY_OPENER";
   if (isLikelyQuestion(trimmed)) return "QUESTION";
+  if (hasProblemWord(tokenize(trimmed)) || NOT_WORKING_RE.test(trimmed)) return "SUBSTANTIVE";
   if (CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed)) return "TRIVIAL";
+  if (isConversationalOpener(trimmed)) return "COMMUNITY_OPENER";
   return "SUBSTANTIVE";
 }
 

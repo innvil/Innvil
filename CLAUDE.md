@@ -2770,6 +2770,28 @@ win over this):**
 >     downstream ACTION differs), and an immediate same-text repeat right after a
 >     moderator reply doesn't double-reply. 403 tests pass, `tsc --noEmit` clean,
 >     production build clean. No migration.
+>   **Architecture correction (v1.9.5), same day:** `isConversationalOpener` initially
+>   duplicated question/request/problem/acknowledgement detection as internal "hard
+>   exclusions", re-implementing logic that already existed for other purposes. Per
+>   explicit feedback, restructured so **`isConversationalOpener` is now a narrow,
+>   purely POSITIVE signal detector** (`COMMUNITY_CHECK_IN_RE || RE_ENTRY_RE ||
+>   GREETING_RE`, nothing else) — it correctly returns `true` for "hey thanks, that
+>   fixed it" (it DOES contain a greeting cue) and does not itself decide final
+>   classification. **All precedence now lives in `classifyMessageKind`'s ordering**,
+>   reusing the SAME canonical helpers already used elsewhere in the file
+>   (`isLikelyQuestion`, `hasProblemWord`/`NOT_WORKING_RE`, the existing
+>   `CLOSING_ACK_RE`/`isPositiveClosing`/`isAcknowledgementOnly` trivial check) rather
+>   than new duplicated regex logic: presence-check (`COMMUNITY_CHECK_IN_RE`, a more
+>   specific signal than generic question-detection) → real question → problem report
+>   → acknowledgement/closure → opener signal → substantive, in that order. Tests
+>   updated to match: opener-vs-stronger-classification precedence is now proven via
+>   the real end-to-end pipeline (`single()`/`selectChatterAction`), not by asking the
+>   narrowed function to know about those other categories; added a dedicated
+>   "generalizes to UNSEEN combinations of the same signal types" test (fresh
+>   sentence constructions never quoted in the implementation, e.g. "sup, back again
+>   folks", "it's pretty quiet in here today") to concretely demonstrate this isn't
+>   an ever-growing fixed-phrase list. 404 tests pass, `tsc --noEmit` clean,
+>   production build clean. No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /
