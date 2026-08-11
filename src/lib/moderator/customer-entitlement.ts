@@ -10,25 +10,25 @@
    Trial eligibility (exact rule, from the approved spec):
      eligibleEstablished = accountAgeDays >= 30 AND lifetimeCompletedServiceSpend >= 50
      eligibleHighValue   = lifetimeCompletedServiceSpend >= 100
-     eligibleByWallet    = walletBalance >= 10
+     eligibleByWallet    = walletBalance >= 20
      canStartTrial = eligibleEstablished OR eligibleHighValue OR eligibleByWallet
 
    Precedence when resolving WHICH source to persist (HIGH_VALUE, then
    ESTABLISHED, then WALLET) prefers a durable non-wallet qualification over
    WALLET, so a customer who happens to also clear a spend/age bar is never
-   subjected to the $10 maintenance rule.
+   subjected to the $20 maintenance rule.
 
-   The $10 is NEVER a fee — it is the customer's own usable wallet balance,
+   The $20 is NEVER a fee — it is the customer's own usable wallet balance,
    never charged or confiscated by starting/maintaining a trial.
 
    Trial window is FIXED at start (trialStartedAt/trialEndsAt) and never
-   recomputed. A WALLET-qualified trial whose balance drops below $10 loses
+   recomputed. A WALLET-qualified trial whose balance drops below $20 loses
    ACCESS (a live, derived check re-evaluated every read) without touching
    the window — restoring the balance re-enables access only if the
    original window hasn't expired. There is deliberately no persisted
    "paused" flag: pause/resume is a pure function of (qualification source,
    current wallet balance, now vs. trialEndsAt), which structurally
-   prevents any "dip below $10 to extend the trial" exploit.
+   prevents any "dip below $20 to extend the trial" exploit.
    ========================================================= */
 
 import type { ModeratorPlanTier } from "@/src/lib/money";
@@ -37,7 +37,7 @@ import { CAPACITY, TRIAL_CAPACITY, type ModeratorCapacity } from "./plan";
 export const TRIAL_ESTABLISHED_MIN_AGE_DAYS = 30;
 export const TRIAL_ESTABLISHED_MIN_SPEND = 50;
 export const TRIAL_HIGH_VALUE_MIN_SPEND = 100;
-export const TRIAL_WALLET_MIN_BALANCE = 10;
+export const TRIAL_WALLET_MIN_BALANCE = 20;
 export const CUSTOMER_TRIAL_DURATION_DAYS = 7;
 
 export type TrialQualificationSource = "ESTABLISHED" | "HIGH_VALUE" | "WALLET";

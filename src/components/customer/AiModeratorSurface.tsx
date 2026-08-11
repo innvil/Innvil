@@ -32,9 +32,9 @@ function eligibilityCopy(info: ModeratorEligibilityInfo): string {
     return "You're eligible for a free 7-day AI Moderator trial based on your panel service spend.";
   }
   if (info.wouldQualifyVia === "WALLET") {
-    return "Keep at least $10 in your panel wallet during the 7-day trial. The $10 remains yours and can still be used for panel services.";
+    return "Keep at least $20 in your panel wallet during the 7-day trial. The $20 remains yours and can still be used for panel services.";
   }
-  return "Add funds to reach a $10 wallet balance and unlock your free trial.";
+  return "Add funds to reach a $20 wallet balance and unlock your free trial.";
 }
 
 function TierCard({ t, current, onSubscribe, busy }: { t: (typeof TIERS)[number]; current: ModeratorPlanTier | null; onSubscribe: (tier: ModeratorPlanTier) => void; busy: boolean }) {
@@ -150,7 +150,7 @@ export function AiModeratorSurface({ panelId }: { panelId?: string }) {
         )}
         {info.trialPausedForWallet && (
           <div className="mt-3 flex items-center gap-2 text-xs text-red-400">
-            <AlertTriangle size={14} /> Your AI Moderator trial is paused because your wallet balance is below $10. Add funds to resume access before the trial expires.
+            <AlertTriangle size={14} /> Your AI Moderator trial is paused because your wallet balance is below $20. Add funds to resume access before the trial expires.
           </div>
         )}
         {info.entitlementSource && typeof info.entitlementSource === "string" && info.entitlementSource !== "trial" && (

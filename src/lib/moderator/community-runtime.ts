@@ -18,6 +18,11 @@ import {
   applyReorderInstruction, advanceSequenceTask, isTaskExpired, expectedParticipant, expectedNumericValue,
   type ConversationTask, type TaskModeratorIdentity,
 } from "./task-state";
+import {
+  extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
+  COLLAB_ROUTABLE_CATEGORIES, PROMOTION_WARNING_LIMIT, type LinkWarningState,
+} from "./link-moderation";
+import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -140,10 +145,10 @@ async function resolveCommunity(admin: SupabaseClient, panelId: string, chat: Te
       { panel_id: panelId, platform: "telegram", chat_id: chatId, handle: chat.username ?? null, title: chat.title ?? null, chat_type: chat.type ?? null },
       { onConflict: "panel_id,platform,chat_id" }
     )
-    .select("id, bot_ack_mode")
+    .select("id, bot_ack_mode, collab_contact")
     .single();
   if (error || !data) return null;
-  return data as { id: string; bot_ack_mode: BotAckMode };
+  return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null };
 }
 
 /** Tenant-isolated sender classification (spec §2/§4/§5) — the DB lookups behind event-types.ts's pure decision. */
@@ -377,6 +382,17 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
       reply_to_message_id: action.replyToMessageId ?? undefined,
     });
     return { sentMessageId: res.ok ? String(res.result.message_id) : null, ok: res.ok, error: res.ok ? undefined : res.error };
+  }
+
+  if (action.kind === "DELETE_MESSAGE") {
+    const res = await telegramApiCall(token, "deleteMessage", { chat_id: chatId, message_id: action.targetMessageId });
+    return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
+  }
+
+  if (action.kind === "RESTRICT_USER") {
+    // BAN only in v1 (see event-types.ts's CommunityAction doc comment).
+    const res = await telegramApiCall(token, "banChatMember", { chat_id: chatId, user_id: action.targetPlatformUserId });
+    return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
   }
 
   return { sentMessageId: null, ok: true };
@@ -833,10 +849,184 @@ async function routeConversationTask(
   return true;
 }
 
-async function handleHumanMessage(
+/* --------------------------------------------------------- link moderation ---- */
+// Phase 4.M (C)-(F). Moderation asks a SEPARATE question from chatter (spec
+// §18/§50): "does this message violate community policy?" — it runs
+// independent of, and is never disabled by, the reactive chatter quota
+// (spec §45), and needs no @mention (spec §46). See link-moderation.ts for
+// the pure classification/policy layer this section persists state for and
+// executes enforcement from.
+
+async function loadLinkWarningState(admin: SupabaseClient, communityId: string, platformUserId: string): Promise<LinkWarningState> {
+  const { data } = await admin
+    .from("moderator_link_warning_state")
+    .select("warning_count, recent_link_hash, recent_link_at, recent_link_count_in_window")
+    .eq("community_id", communityId)
+    .eq("platform_user_id", platformUserId)
+    .maybeSingle();
+  if (!data) return EMPTY_WARNING_STATE;
+  return {
+    warningCount: data.warning_count ?? 0,
+    recentLinkHash: data.recent_link_hash ?? null,
+    recentLinkAt: data.recent_link_at ?? null,
+    recentLinkCountInWindow: data.recent_link_count_in_window ?? 0,
+  };
+}
+
+async function persistLinkWarningState(
+  admin: SupabaseClient,
+  panelId: string,
+  communityId: string,
+  platformUserId: string,
+  state: LinkWarningState,
+  violation: { kind: string; now: Date } | null
+): Promise<void> {
+  await admin.from("moderator_link_warning_state").upsert(
+    {
+      panel_id: panelId,
+      community_id: communityId,
+      platform_user_id: platformUserId,
+      warning_count: state.warningCount,
+      recent_link_hash: state.recentLinkHash,
+      recent_link_at: state.recentLinkAt,
+      recent_link_count_in_window: state.recentLinkCountInWindow,
+      ...(violation ? { last_violation_at: violation.now.toISOString(), last_violation_kind: violation.kind } : {}),
+    },
+    { onConflict: "community_id,platform_user_id" }
+  );
+}
+
+/** Same token-resolution shape as executeAction, exposed standalone for
+ *  moderation's admin-role check (which needs a token BEFORE deciding which
+ *  action, if any, to execute). Deliberately not refactored to share code
+ *  with executeAction, to avoid touching that already-established path. */
+async function getBotTokenForDeployment(admin: SupabaseClient, deploymentId: string): Promise<string | null> {
+  const { data: deployment } = await admin.from("moderator_deployments").select("moderator_id").eq("id", deploymentId).maybeSingle();
+  if (!deployment) return null;
+  const { data: integration } = await admin.from("telegram_bot_integrations").select("id").eq("virtual_moderator_id", deployment.moderator_id).maybeSingle();
+  if (!integration) return null;
+  const { data: tokenData } = await admin.rpc("get_telegram_bot_key", { p_row: integration.id, p_secret: providerKeySecret() });
+  return (tokenData as string | null) ?? null;
+}
+
+/** Admins/trusted roles may legitimately post partner/AMA/campaign links
+ *  (spec §43) — reuses Telegram's own membership status rather than
+ *  inventing a parallel trust concept. Fails closed (not exempt) on any
+ *  lookup error, since the exemption is a convenience, not a safety-
+ *  relevant default. */
+async function isSenderAdminOrTrusted(token: string, chatId: string, platformUserId: string): Promise<boolean> {
+  const res = await telegramApiCall<{ status: string }>(token, "getChatMember", { chat_id: chatId, user_id: platformUserId });
+  if (!res.ok) return false;
+  return res.result.status === "administrator" || res.result.status === "creator";
+}
+
+/** Checked BEFORE ordinary task/chatter routing (spec §18) for every human
+ *  message, regardless of chatter entitlement/quota. Zero AI calls when the
+ *  message contains no links at all (the overwhelming majority of ordinary
+ *  chatter) — extractLinks is a cheap regex scan. `handled: true` means the
+ *  message was DELETED (nothing left to task-route or chat about, so the
+ *  caller must not do either); `collabRoutable: true` (only meaningful when
+ *  `handled` is false) tells the caller this message may naturally mention
+ *  the community's configured collab contact if ordinary chatter decides to
+ *  reply to it at all — moderation itself never sends that reply, chatter's
+ *  own existing selection/quota governs whether anything is said. */
+async function runLinkModeration(
   admin: SupabaseClient,
   panelId: string,
   community: { id: string },
+  chatId: string,
+  event: CommunityEvent,
+  deployments: ChatterDeployment[],
+  now: Date
+): Promise<{ handled: boolean; collabRoutable: boolean }> {
+  const links = extractLinks(event.text);
+  if (!links.length || !deployments.length) return { handled: false, collabRoutable: false };
+
+  const enforcer = deployments[0];
+  const senderPlatformId = event.sender.platformUserId;
+
+  const priorState = await loadLinkWarningState(admin, community.id, senderPlatformId);
+  const observedState = recordLinkObservation(priorState, linkHash(links[0]), now);
+  const floodRepeat = isFloodRepeat(observedState);
+
+  const recentContextSummary = (await loadRecentContext(admin, community.id, 6)).map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
+  const classification = await classifyLinkIntent(event.text, recentContextSummary);
+
+  const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
+  const isAdminOrTrusted = token ? await isSenderAdminOrTrusted(token, chatId, senderPlatformId) : false;
+
+  const enforcement = decideLinkEnforcement({
+    category: classification.category,
+    confidence: classification.confidence,
+    isAdminOrTrusted,
+    floodRepeat,
+    priorWarningCount: priorState.warningCount,
+  });
+
+  await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", enforcement.kind, classification.category, {
+    confidence: classification.confidence,
+    floodRepeat,
+    isAdminOrTrusted,
+  });
+
+  if (enforcement.kind === "ALLOW") {
+    // Still persist the flood-window observation (needed for the NEXT
+    // message's flood detection) -- but never touch warningCount on an ALLOW.
+    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, { ...observedState, warningCount: priorState.warningCount }, null);
+    return { handled: false, collabRoutable: COLLAB_ROUTABLE_CATEGORIES.has(classification.category) };
+  }
+
+  // DELETE_WARN or DELETE_BAN from here -- the message is being removed, so
+  // nothing further should try to task-route or chat about its now-gone content.
+  if (token) {
+    const deleteResult = await executeAction(admin, chatId, { kind: "DELETE_MESSAGE", targetDeploymentId: enforcer.deploymentId, targetMessageId: event.messageId });
+    if (!deleteResult.ok) console.error("[telegram/community] link moderation DELETE_MESSAGE failed", deleteResult.error);
+  }
+
+  if (enforcement.kind === "DELETE_BAN") {
+    if (token) {
+      const banResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "BAN" });
+      if (!banResult.ok) console.error("[telegram/community] link moderation RESTRICT_USER failed", banResult.error);
+    }
+    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, observedState, { kind: enforcement.reason, now });
+    return { handled: true, collabRoutable: false };
+  }
+
+  // DELETE_WARN
+  const nextState: LinkWarningState = { ...observedState, warningCount: enforcement.warningNumber };
+  await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
+
+  const warningText = await generateModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT);
+  if (token) {
+    const sendResult = await executeAction(admin, chatId, {
+      kind: "SEND_TEXT",
+      text: warningText,
+      targetDeploymentId: enforcer.deploymentId,
+      replyToMessageId: null,
+      origin: "HUMAN",
+      interactionDepth: 0,
+      causationMessageId: event.messageId,
+    });
+    if (sendResult.sentMessageId) {
+      await admin.from("community_messages").insert({
+        panel_id: panelId,
+        community_id: community.id,
+        platform_message_id: sendResult.sentMessageId,
+        sender_type: "INNVIL_MODERATOR",
+        sender_platform_id: null,
+        sender_display_name: enforcer.moderatorName,
+        deployment_id: enforcer.deploymentId,
+        text: warningText,
+      });
+    }
+  }
+  return { handled: true, collabRoutable: false };
+}
+
+async function handleHumanMessage(
+  admin: SupabaseClient,
+  panelId: string,
+  community: { id: string; collab_contact?: string | null },
   message: TelegramMessage,
   event: CommunityEvent,
   isTrialEntitlement: boolean,
@@ -846,11 +1036,21 @@ async function handleHumanMessage(
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
   if (!deployments.length) return; // no chatter-eligible deployment in this community
 
+  // Link moderation is a SEPARATE decision from chatter (spec §18/§50) --
+  // checked first, independent of and never disabled by the reactive
+  // chatter quota (spec §45). If the message got deleted, there is nothing
+  // left to task-route or chat about, so it short-circuits everything else.
+  const chatId = String(message.chat.id);
+  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date());
+  timer.mark("link_moderation_check", { handled: moderation.handled });
+  if (moderation.handled) return;
+  const collabContact = moderation.collabRoutable ? (community.collab_contact ?? null) : null;
+
   // Checked BEFORE any ordinary chatter routing -- an active/newly-created
   // conversational task fully owns this message (see routeConversationTask's
   // doc comment for why "task-local state wins" means suppressing ordinary
   // selection entirely, not just for the participant whose turn it is).
-  const taskHandled = await routeConversationTask(admin, panelId, community, String(message.chat.id), event, deployments, new Date());
+  const taskHandled = await routeConversationTask(admin, panelId, community, chatId, event, deployments, new Date());
   timer.mark("conversation_task_check", { handled: taskHandled });
   if (taskHandled) return;
 
@@ -968,6 +1168,7 @@ async function handleHumanMessage(
     isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
     addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
     otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+    collabContact,
     timer,
   });
 
@@ -1025,6 +1226,7 @@ async function handleHumanMessage(
           // its own contribution is still individually required.
           priorResponsesToThisMessage: priorResponses,
           individualContributionExpected,
+          collabContact,
           timer,
         });
         if (result.replied) priorResponses.push({ moderatorName: additionalDeployment.moderatorName, text: result.text });
@@ -1088,11 +1290,16 @@ async function respondAsDeployment(params: {
    *  GenerateChatterReplyInput's doc comments for both fields. */
   priorResponsesToThisMessage?: { moderatorName: string; text: string }[];
   individualContributionExpected?: boolean;
+  /** Phase 4.M (F) — set only when the triggering message was link-
+   *  classified as a genuine collab/AMA/partnership inquiry AND the
+   *  community has a configured contact. See GenerateChatterReplyInput's
+   *  doc comment. */
+  collabContact?: string | null;
   timer: RequestTimer;
 }): Promise<{ replied: false } | { replied: true; text: string }> {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, now, recentContext,
-    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, timer,
+    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, timer,
   } = params;
 
   // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
@@ -1145,6 +1352,7 @@ async function respondAsDeployment(params: {
         otherActiveModeratorNames,
         priorResponsesToThisMessage,
         individualContributionExpected,
+        collabContact,
       }),
       CHATTER_TOTAL_BUDGET_MS
     );

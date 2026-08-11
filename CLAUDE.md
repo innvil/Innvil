@@ -3412,26 +3412,86 @@ win over this):**
 >     it is, completion, TTL boundaries, FREEFORM progression). 539 tests pass (up from
 >     507), `tsc --noEmit` clean, production build clean. **Run migration `0052`
 >     before this governs any live community.**
-> - **(C) Intelligent external-link moderation** — links classified by intent, not
->   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
->   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /
->   `PHISHING_OR_SCAM` / `EXPLICIT_CONTENT` / `UNKNOWN_OR_AMBIGUOUS`); works with no
->   mention needed.
-> - **(D) Spam vs. legitimate-follow-up distinction** — a ~30-minute window governs
->   only the RAPID-FLOOD interpretation, never a moderation-history reset; a
->   legitimate AMA/collab follow-up after 30 min is a fresh evaluation, but a
->   repeated ad after 30 min still escalates the same warning count.
-> - **(E) Natural (non-robotic) warning escalation** — persona-voiced warnings, 3
->   strikes → kick/ban for ordinary unsolicited promotion, immediate ban for
->   high-confidence explicit content, scoped per tenant+community+Telegram user.
-> - **(F) Configurable collab/AMA contact routing** — new community-level setting
->   (same UX pattern as the existing bot-ack toggle) letting the owner name who
->   partnership/AMA/collab inquiries get routed to; never hardcode a username, never
->   invent one if unset, and this routing is conversational only — never an
->   authorization grant.
-> Explicitly OUT of scope for this patch: bot provisioning, managed-bot credentials,
-> provider ordering, billing, trial duration, active mod slots, publishing, campaign
-> generation, and any other unrelated moderation feature.
+> - **(C)-(F) IMPLEMENTED (v1.11.0) — intelligent external-link moderation, spam vs.
+>   legitimate-follow-up distinction, natural warning escalation, configurable
+>   collab/AMA routing.** Moderation is a genuinely separate decision from Natural
+>   Chatter (spec §18/§50): it runs on every human message regardless of @mention
+>   (spec §46) and is never disabled by the reactive chatter quota (spec §45) — only
+>   short-circuits ordinary task/chatter routing for THIS message when the message
+>   was actually deleted (nothing left to respond to).
+>   - **Pure policy layer** `src/lib/moderator/link-moderation.ts` — `extractLinks`/
+>     `normalizeLink`/`linkHash` (URL + bare `@handle` extraction, tracking-param
+>     stripping without changing destination identity, spec §44); `LinkCategory`
+>     taxonomy (`SAFE_RELEVANT_LINK`/`APPROVED_PARTNER_LINK`/`COLLABORATION_REQUEST`/
+>     `AMA_REQUEST`/`PARTNERSHIP_REQUEST`/`UNSOLICITED_PROMOTION`/`LINK_SPAM_OR_FLOOD`/
+>     `PHISHING_OR_SCAM`/`EXPLICIT_CONTENT`/`UNKNOWN_OR_AMBIGUOUS`); `recordLinkObservation`/
+>     `isFloodRepeat` (30-minute flood window, `FLOOD_REPEAT_THRESHOLD=3` same-link
+>     repeats — spec §30, changes ONLY the rapid-flood interpretation, never resets
+>     `warningCount`, kept as a genuinely separate field — spec §31); and the
+>     deterministic policy itself, `decideLinkEnforcement()` (spec §42, "don't use LLM
+>     as sole ban authority" — classification informs this, never decides alone):
+>     severe content (explicit/phishing, high confidence) → immediate `DELETE_BAN`,
+>     role-exempt for nobody; safe/partner/collab/AMA/partnership/unknown → `ALLOW`;
+>     flood/spam signal → `DELETE_BAN` (checked BEFORE the admin exemption below, since
+>     a rapid burst reads as a safety signal, not ordinary self-promotion — spec §43's
+>     "don't exempt trusted accounts from ALL safety logic"); admin/trusted role →
+>     `ALLOW` (ordinary-ad exemption only); otherwise 3-strike `DELETE_WARN` escalation
+>     → `DELETE_BAN` on the 4th (`PROMOTION_WARNING_LIMIT=3`).
+>   - **AI-touching half** `src/lib/moderator/link-classify.ts` — `classifyLinkIntent`
+>     (Sonnet 5 medium, the hard `INNVIL_REQUIRED_MODEL` default — moderation decisions
+>     delete content and ban people, exactly the consequence class the model invariant
+>     protects; NOT the DeepSeek CASUAL_CHAT carve-out) degrades to
+>     `UNKNOWN_OR_AMBIGUOUS`/low on any failure so an AI hiccup can never itself cause
+>     a deletion/ban; `generateModerationWarning` (persona-voiced, spec §24 — explicitly
+>     bans robotic "Violation N/3" wording — falls back to a small VARIED template pool,
+>     never one fixed sentence, if generation fails).
+>   - **Enforcement**: new `CommunityAction` kinds `DELETE_MESSAGE`/`RESTRICT_USER`
+>     (`mode:"BAN"` only in v1) in `event-types.ts`, executed via Telegram
+>     `deleteMessage`/`banChatMember` (`community-runtime.ts`'s `executeAction`).
+>     Admin/trusted-role check reuses Telegram's own `getChatMember` status
+>     (administrator/creator) rather than inventing a parallel trust concept — fails
+>     closed (not exempt) on any lookup error.
+>   - **State**: new `moderator_link_warning_state` table (migration `0053`, per
+>     community+Telegram-user, mirrors `deployment_state`'s shape) holds BOTH
+>     long-term `warning_count` and the short-term flood-window fields as genuinely
+>     separate columns, never merged.
+>   - **(F) Collab/AMA routing** — new `communities.collab_contact` column (same
+>     per-community settings pattern as `bot_ack_mode`), owner-editable via new
+>     `setCommunityCollabContact` action + a text input in the Communities section of
+>     `AdminTabs.tsx`. Routing happens through the EXISTING chatter pipeline, not a
+>     separate generation call: when link classification lands on a COLLAB/AMA/
+>     PARTNERSHIP category and a contact is configured, `runLinkModeration` (which
+>     `ALLOW`s these — spec §39, never delete a legitimate collab link) passes
+>     `collabRoutable` up to `handleHumanMessage`, which threads the community's
+>     `collab_contact` into `GenerateChatterReplyInput` — a new `collabContactLine()`
+>     prompt block (`chatter-generate.ts`) lets the moderator naturally mention it IF
+>     ordinary chatter's own selection/quota decides to reply at all (spec §45: this
+>     conversational reply DOES consume reactive quota, unlike enforcement itself).
+>     A new `SHARED_RULES` entry bans inventing a contact when none is configured
+>     (spec §35/§38); `collabContactLine`'s own text states the routing is
+>     conversational only, never an authorization grant (spec §36).
+>   - **Known v1 simplification** (documented honestly, not hidden): the enforcing/
+>     classifying moderator is always `deployments[0]` (the first chatter-eligible
+>     deployment in the community) rather than picking whichever specific deployment
+>     has delete/restrict rights — Telegram simply rejects the API call if that bot
+>     lacks rights (surfaced via `console.error`, never silently swallowed), so
+>     enforcement still degrades safely, it just doesn't yet retry a different bot.
+>   - New tests: `link-moderation.test.ts` (+33 — extraction/normalization, all 14
+>     of spec §54's required scenarios via `decideLinkEnforcement`, the flood-window
+>     boundary incl. the 30-minute non-reset-of-history proof, admin exemption not
+>     applying to severe/flood signals), `link-classify.test.ts` (+11 — fetch-spy
+>     verified Sonnet-only routing for both classification and warning generation,
+>     malformed/failed-call degradation, the anti-robotic-wording prompt assertion,
+>     varied fallback templates), `chatter-generate.test.ts` (+5 — collab-contact
+>     line grounding, no-invented-username rule, wired into both ANSWER/CASUAL_CHAT).
+>   588 tests pass (up from 539), `tsc --noEmit` clean, production build clean.
+>   **Run migration `0053` before this governs any live community.**
+>
+>   **Also folded into this release**: the free-trial wallet-maintenance threshold
+>   (`TRIAL_WALLET_MIN_BALANCE`, `src/lib/moderator/customer-entitlement.ts`) raised
+>   from $10 to $20 per explicit instruction — a pure constant change, storefront copy
+>   (`AiModeratorSurface.tsx`) and tests updated to match. No migration (not persisted
+>   as a DB value, computed live).
 
 ### Phase 4.M.1: AI Moderator product-placement + entitlement correction — Phase 1 of N (v1.8.0)
 

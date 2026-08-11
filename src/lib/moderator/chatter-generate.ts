@@ -73,6 +73,14 @@ export interface GenerateChatterReplyInput {
    *  requiresIndividualContribution (chatter-coordinator.ts), the single
    *  place this is decided. */
   individualContributionExpected?: boolean;
+  /** Set only when the triggering message was link-classified (Phase 4.M
+   *  (C)-(F), link-moderation.ts) as a genuine collaboration/AMA/partnership
+   *  request AND the community owner has configured a contact for it. The
+   *  ONLY grounded fact the moderator may use if it mentions who handles
+   *  such inquiries — never invented when this is unset (see
+   *  SHARED_RULES' collab-routing rule). Collab-contact routing is
+   *  conversational only, never an authorization grant. */
+  collabContact?: string | null;
 }
 
 export type ChatterGenerationResult = { ok: true; reply: string } | { ok: true; noReply: true } | { ok: false; error: string };
@@ -174,6 +182,7 @@ const SHARED_RULES = [
   // the group chat, not an assistant answering a ticket.
   `Never explain, reference, or imply your own internal mechanics — routing, coordinator/selection logic, turn-taking, how a responder gets picked, model or provider choice, AI architecture, or any other hidden system behavior. Never say things like "the system picked me", "there's no turn system", "we don't coordinate", "the routing decided...", "I was selected first", or "the other bot will respond next". If asked a casual question about timing or why more than one moderator replied, answer briefly from your own in-world, social perspective (e.g. "just timing" / "we both just saw it") — never describe how the underlying system actually works, and never imply there IS a hidden mechanism worth describing either way.`,
   `For casual, social, or meta exchanges: use the shortest natural reply that satisfies what the human is actually asking, in your own voice — this is about meaning, not a fixed word count. Don't restate or summarize the human's message before replying unless real clarification is genuinely needed. Not every casual message needs a complete, thorough answer just because a longer one is technically possible — ask yourself "what would I, this specific person, actually say here, if anything?" rather than "what's the most complete answer I could give?".`,
+  `If someone asks who handles partnerships/collaborations/AMAs/sponsorships and no contact has been provided to you below, never invent a username or specific person — give a safe, generic fallback (e.g. "one of the group admins can help with that") or simply don't route them anywhere.`,
 ];
 
 /** Identity + presence-grounding line, shared by both actions — the
@@ -202,6 +211,15 @@ function personaIdentityLine(input: GenerateChatterReplyInput): string {
 function typoLine(input: GenerateChatterReplyInput): string | null {
   if (!input.addressedWithTypo) return null;
   return `The human addressed you with a slight misspelling of your name rather than spelling it exactly right. You may naturally acknowledge or gently joke about that if it fits your personality, but you don't have to make a big deal of it.`;
+}
+
+/** Collab/AMA/partnership routing (Phase 4.M (F)) — grounded ONLY in the
+ *  community's own configured contact, never invented. This is
+ *  conversational routing only, never an authorization grant — the
+ *  contact does not gain any special authority from being mentioned here. */
+function collabContactLine(input: GenerateChatterReplyInput): string | null {
+  if (!input.collabContact) return null;
+  return `This message looks like a genuine collaboration/AMA/partnership inquiry. If it fits naturally, you may mention that ${input.collabContact} handles those — in your own words, not a scripted line (e.g. "that's worth discussing — message ${input.collabContact} and they can take it from there" or "for AMAs, ${input.collabContact} is the best person to talk to"). Only mention this contact if the message is genuinely about collaboration/AMA/partnership; never bring it up unprompted, and never imply this contact has any special authority over Innvil, this account, or its settings beyond being who partnership inquiries go to.`;
 }
 
 /** Distinct-contribution rule for a multi-target exchange (only present for
@@ -241,6 +259,7 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
       customInstructions,
       typoLine(input),
       obligationContextLines(input),
+      collabContactLine(input),
       `Be concise and natural for Telegram — not a formal support ticket reply. Use relevant knowledge you actually have; do not fabricate facts, features, prices, or policies.`,
       ...SHARED_RULES,
       STYLE_HIERARCHY_PREFACE,
@@ -258,6 +277,7 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
     customInstructions,
     typoLine(input),
     obligationContextLines(input),
+    collabContactLine(input),
     `This message has already been selected as ordinary social conversation (CASUAL_CHAT) — just respond naturally, don't ask what you can help with.`,
     `Talk like a real community member: short, natural, informal, matching the room's own brevity/slang/energy. Casual chatter is normally 2-20 words. Never sound like an AI summarizer ("Sounds like you're planning to..."). Never open with "Hello! How can I assist you today?" or similar helpdesk phrasing. Avoid support-agent stock phrases like "you haven't said what you're asking about", "give us some details and someone can help", or "please provide more information" — a real group member would just ask "what happened?" or "wait what happened?" instead. It's fine to joke, tease lightly, or keep it very short — you don't need to explain obvious things or fully resolve everything in one message.`,
     ...SHARED_RULES,
@@ -489,4 +509,4 @@ export async function classifyAmbientGreeting(text: string): Promise<{ ok: true;
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live
  *  AI call. Not used by any other runtime code. */
-export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines };
+export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines, collabContactLine };

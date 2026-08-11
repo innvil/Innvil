@@ -5,7 +5,7 @@ import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
-const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines } = __testables;
+const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine } = __testables;
 
 /**
  * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
@@ -879,4 +879,35 @@ test("personaReactionEmoji is pure/deterministic given a fixed random source -- 
   const a = personaReactionEmoji("😂", persona, () => 0);
   const b = personaReactionEmoji("😂", persona, () => 0);
   assert.equal(a, b);
+});
+
+/* ============================================ collab-contact routing (Phase 4.M (F)) ==
+   Conversational routing only, never an authorization grant (spec §36) --
+   grounded ONLY in the community's own configured contact, never invented. */
+
+test("collabContactLine is null when no contact is configured", () => {
+  assert.equal(collabContactLine(baseInput({})), null);
+});
+
+test("REQUIRED: collabContactLine mentions the EXACT configured contact when set", () => {
+  const line = collabContactLine(baseInput({ collabContact: "@project_admin" }));
+  assert.ok(line);
+  assert.match(line!, /@project_admin/);
+});
+
+test("REQUIRED: never implies the contact has special authority beyond routing", () => {
+  const line = collabContactLine(baseInput({ collabContact: "@project_admin" }));
+  assert.match(line!, /no special authority|never imply this contact has any special authority/i);
+});
+
+test("REQUIRED: no configured contact -- SHARED_RULES bans inventing a username", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", collabContact: null }));
+  assert.match(prompt, /never invent a username/i);
+  assert.doesNotMatch(prompt, /@project_admin/);
+});
+
+test("collabContactLine is wired into both the ANSWER and CASUAL_CHAT prompts when set", () => {
+  const input = baseInput({ collabContact: "@project_admin" });
+  assert.match(buildSystemPrompt({ ...input, action: "CASUAL_CHAT" }), /@project_admin/);
+  assert.match(buildSystemPrompt({ ...input, action: "ANSWER" }), /@project_admin/);
 });

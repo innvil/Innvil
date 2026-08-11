@@ -56,7 +56,15 @@ export type CommunityAction =
       origin: EventOrigin;
       interactionDepth: number;
       causationMessageId: string | null;
-    };
+    }
+  /** Link-moderation enforcement (Phase 4.M (C)-(E)) — removes the offending
+   *  message. Acts as whichever deployment is doing the moderating (the
+   *  bot needs delete rights in that community). */
+  | { kind: "DELETE_MESSAGE"; targetDeploymentId: string; targetMessageId: string }
+  /** Removes the violating user from the community. `mode: "BAN"` is
+   *  permanent (Telegram banChatMember); v1 only ever issues BAN — KICK
+   *  (temporary) is reserved for a future policy knob, not used yet. */
+  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN" };
 
 /* --------------------------------------------------- sender classification ---- */
 // Pure decision given already-resolved facts (spec §2/§3) — the DB lookups

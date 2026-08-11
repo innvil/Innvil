@@ -55,13 +55,13 @@ test("REQUIRED: account age 200 days + spend $100+ -> eligible regardless of whi
 
 /* -------------------------------------------------------------- wallet path ---- */
 
-test("REQUIRED: account age 1 day, $0 spend, wallet $10.00 -> eligible via WALLET", () => {
-  const input: TrialEligibilityInput = { accountAgeDays: 1, lifetimeCompletedServiceSpend: 0, walletBalance: 10 };
+test("REQUIRED: account age 1 day, $0 spend, wallet $20.00 -> eligible via WALLET", () => {
+  const input: TrialEligibilityInput = { accountAgeDays: 1, lifetimeCompletedServiceSpend: 0, walletBalance: 20 };
   assert.equal(resolveTrialQualification(input), "WALLET");
 });
 
-test("REQUIRED: account age 1 day, $0 spend, wallet $9.99 -> NOT eligible", () => {
-  const input: TrialEligibilityInput = { accountAgeDays: 1, lifetimeCompletedServiceSpend: 0, walletBalance: 9.99 };
+test("REQUIRED: account age 1 day, $0 spend, wallet $19.99 -> NOT eligible", () => {
+  const input: TrialEligibilityInput = { accountAgeDays: 1, lifetimeCompletedServiceSpend: 0, walletBalance: 19.99 };
   assert.equal(resolveTrialQualification(input), null);
 });
 
@@ -98,18 +98,18 @@ test("threshold constants match the approved spec exactly", () => {
   assert.equal(TRIAL_ESTABLISHED_MIN_AGE_DAYS, 30);
   assert.equal(TRIAL_ESTABLISHED_MIN_SPEND, 50);
   assert.equal(TRIAL_HIGH_VALUE_MIN_SPEND, 100);
-  assert.equal(TRIAL_WALLET_MIN_BALANCE, 10);
+  assert.equal(TRIAL_WALLET_MIN_BALANCE, 20);
   assert.equal(CUSTOMER_TRIAL_DURATION_DAYS, 7);
 });
 
 /* ------------------------------------------------ wallet trial maintenance ---- */
 
-test("REQUIRED: a WALLET-qualified trial is accessible above $10", () => {
-  assert.equal(isTrialCurrentlyAccessible("WALLET", 12), true);
+test("REQUIRED: a WALLET-qualified trial is accessible above $20", () => {
+  assert.equal(isTrialCurrentlyAccessible("WALLET", 22), true);
 });
 
-test("REQUIRED: a WALLET-qualified trial is NOT accessible below $10", () => {
-  assert.equal(isTrialCurrentlyAccessible("WALLET", 8), false);
+test("REQUIRED: a WALLET-qualified trial is NOT accessible below $20", () => {
+  assert.equal(isTrialCurrentlyAccessible("WALLET", 15), false);
 });
 
 test("REQUIRED: ESTABLISHED-qualified trial remains accessible with $0 wallet", () => {
@@ -122,34 +122,34 @@ test("REQUIRED: HIGH_VALUE-qualified trial remains accessible with $0 wallet", (
 
 /* --------------------------------------------------- full trial access + expiry ---- */
 
-test("REQUIRED: wallet-qualified trial started at $12, drops to $8 during the trial -> access paused", () => {
+test("REQUIRED: wallet-qualified trial started at $22, drops to $15 during the trial -> access paused", () => {
   const trial = { qualificationSource: "WALLET" as const, startedAt: "2026-01-01T00:00:00Z", endsAt: "2026-01-08T00:00:00Z" };
   const now = new Date("2026-01-03T00:00:00Z");
-  assert.equal(trialAccessGranted(trial, 8, now), false);
+  assert.equal(trialAccessGranted(trial, 15, now), false);
 });
 
-test("REQUIRED: restoring wallet to $11 before original expiry -> access restored", () => {
+test("REQUIRED: restoring wallet to $21 before original expiry -> access restored", () => {
   const trial = { qualificationSource: "WALLET" as const, startedAt: "2026-01-01T00:00:00Z", endsAt: "2026-01-08T00:00:00Z" };
   const now = new Date("2026-01-04T00:00:00Z");
-  assert.equal(trialAccessGranted(trial, 11, now), true);
+  assert.equal(trialAccessGranted(trial, 21, now), true);
 });
 
-test("REQUIRED: no calendar-extension exploit -- dropping below $10 for 5 days then restoring on day 6 does not grant extra days", () => {
+test("REQUIRED: no calendar-extension exploit -- dropping below $20 for 5 days then restoring on day 6 does not grant extra days", () => {
   const startedAt = new Date("2026-01-01T00:00:00Z");
   const endsAt = new Date(startedAt.getTime() + CUSTOMER_TRIAL_DURATION_DAYS * 86_400_000); // fixed, 7 days
   const trial = { qualificationSource: "WALLET" as const, startedAt: startedAt.toISOString(), endsAt: endsAt.toISOString() };
 
-  // Days 1-5: below $10 -> paused.
+  // Days 1-5: below $20 -> paused.
   for (let day = 1; day <= 5; day++) {
     const now = new Date(startedAt.getTime() + day * 86_400_000);
     assert.equal(trialAccessGranted(trial, 5, now), false, `day ${day} should be paused`);
   }
   // Day 6: restored -> access resumes, using the SAME original endsAt.
   const day6 = new Date(startedAt.getTime() + 6 * 86_400_000);
-  assert.equal(trialAccessGranted(trial, 11, day6), true);
+  assert.equal(trialAccessGranted(trial, 21, day6), true);
   // The window itself was never touched -- exactly 7 days after start, expired.
   const day7 = new Date(startedAt.getTime() + 7 * 86_400_000 + 1000);
-  assert.equal(trialAccessGranted(trial, 11, day7), false, "trial must still expire exactly on the original schedule");
+  assert.equal(trialAccessGranted(trial, 21, day7), false, "trial must still expire exactly on the original schedule");
 });
 
 test("REQUIRED: ESTABLISHED/HIGH_VALUE exemption -- wallet dropping to $0 does not pause access before normal expiry", () => {

@@ -15,7 +15,7 @@ import { getBinanceReview, type BinanceReview } from "@/src/lib/actions/binance-
 import {
   listVirtualModerators, getModeratorPlanInfo, createVirtualModerator,
   requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
-  connectCommunity, listModeratorCommunities, setDeploymentEnabled, setCommunityBotAckMode,
+  connectCommunity, listModeratorCommunities, setDeploymentEnabled, setCommunityBotAckMode, setCommunityCollabContact,
   setModeratorPersonaDescription, applyModeratorPersonaPreset, clearModeratorPersonaPreset, setModeratorCustomInstructions,
   type VirtualModeratorRow, type ModeratorPlanInfo, type CommunityDeploymentRow,
 } from "@/src/lib/actions/moderator";
@@ -4462,6 +4462,10 @@ function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId
   const [expanded, setExpanded] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+  // Phase 4.M (F) — draft edits per community, keyed by communityId, so
+  // typing in one card's contact field never fights the fetched value.
+  const [collabDrafts, setCollabDrafts] = React.useState<Record<string, string>>({});
+  const [collabSaving, setCollabSaving] = React.useState<string | null>(null);
 
   const refresh = React.useCallback(async () => {
     setCommunities(await listModeratorCommunities(panelId, moderatorId));
@@ -4493,6 +4497,19 @@ function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId
     const res = await setCommunityBotAckMode(panelId, communityId, mode);
     setBusy(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    await refresh();
+  };
+
+  const saveCollabContact = async (communityId: string) => {
+    setCollabSaving(communityId); setMsg(null);
+    const res = await setCommunityCollabContact(panelId, communityId, collabDrafts[communityId] ?? "");
+    setCollabSaving(null);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setCollabDrafts((prev) => {
+      const next = { ...prev };
+      delete next[communityId];
+      return next;
+    });
     await refresh();
   };
 
@@ -4536,41 +4553,65 @@ function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId
           <p className="text-xs fp-text-faint">Loading&hellip;</p>
         ) : communities.length === 0 ? (
           <p className="text-xs fp-text-faint">Not connected to any community yet.</p>
-        ) : communities.map((c) => (
-          <div key={c.deploymentId} className="flex items-center justify-between gap-2 fp-panel-raised border fp-line-soft rounded-lg px-2.5 py-1.5">
-            <div>
-              <p className="text-xs fp-text">{c.title ?? c.handle ?? c.chatId}</p>
-              <p className="text-[11px] fp-text-faint">
-                {c.handle ? `@${c.handle}` : c.chatId} &middot; {c.health.present ? (c.health.canDelete ? "admin" : "member") : "not present"}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {botAckEnabled && (
-                <select
-                  value={c.botAckMode}
-                  onChange={(e) => changeBotAckMode(c.communityId, e.target.value as "off" | "reactions_only" | "acknowledgements" | "role_handoffs")}
+        ) : communities.map((c) => {
+          const collabDraft = collabDrafts[c.communityId] ?? c.collabContact ?? "";
+          const collabDirty = collabDrafts[c.communityId] !== undefined && collabDrafts[c.communityId] !== (c.collabContact ?? "");
+          return (
+          <div key={c.deploymentId} className="fp-panel-raised border fp-line-soft rounded-lg px-2.5 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs fp-text">{c.title ?? c.handle ?? c.chatId}</p>
+                <p className="text-[11px] fp-text-faint">
+                  {c.handle ? `@${c.handle}` : c.chatId} &middot; {c.health.present ? (c.health.canDelete ? "admin" : "member") : "not present"}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {botAckEnabled && (
+                  <select
+                    value={c.botAckMode}
+                    onChange={(e) => changeBotAckMode(c.communityId, e.target.value as "off" | "reactions_only" | "acknowledgements" | "role_handoffs")}
+                    disabled={busy}
+                    className="text-[11px] fp-panel-raised border fp-line-soft rounded-lg px-2 py-1 fp-text-dim outline-none focus:fp-gold-border disabled:opacity-60"
+                    title="Allow Innvil moderators in this community to acknowledge each other"
+                  >
+                    {BOT_ACK_MODE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                )}
+                <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.enabled ? "fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-faint"}`}>
+                  {c.enabled ? "Active" : "Paused"}
+                </span>
+                <button
+                  onClick={() => toggle(c.deploymentId, !c.enabled)}
                   disabled={busy}
-                  className="text-[11px] fp-panel-raised border fp-line-soft rounded-lg px-2 py-1 fp-text-dim outline-none focus:fp-gold-border disabled:opacity-60"
-                  title="Allow Innvil moderators in this community to acknowledge each other"
+                  className="text-[11px] px-2 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-60"
                 >
-                  {BOT_ACK_MODE_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
+                  {c.enabled ? "Pause" : "Resume"}
+                </button>
+              </div>
+            </div>
+            <div className="mt-1.5 pt-1.5 border-t fp-line-soft flex items-center gap-2">
+              <input
+                value={collabDraft}
+                onChange={(e) => setCollabDrafts((prev) => ({ ...prev, [c.communityId]: e.target.value }))}
+                placeholder="Collab/AMA/partnership contact (e.g. @project_admin)"
+                title="The moderator will direct partnership, AMA, and collaboration inquiries to this person. Never invented if left blank."
+                className="flex-1 text-[11px] fp-panel-raised border fp-line-soft rounded-lg px-2 py-1 fp-text outline-none focus:fp-gold-border"
+              />
+              {collabDirty && (
+                <button
+                  onClick={() => saveCollabContact(c.communityId)}
+                  disabled={collabSaving === c.communityId}
+                  className="text-[11px] px-2 py-1 rounded-lg fp-btn-primary font-semibold disabled:opacity-60"
+                >
+                  {collabSaving === c.communityId ? "Saving&hellip;" : "Save"}
+                </button>
               )}
-              <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.enabled ? "fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-faint"}`}>
-                {c.enabled ? "Active" : "Paused"}
-              </span>
-              <button
-                onClick={() => toggle(c.deploymentId, !c.enabled)}
-                disabled={busy}
-                className="text-[11px] px-2 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-60"
-              >
-                {c.enabled ? "Pause" : "Resume"}
-              </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
