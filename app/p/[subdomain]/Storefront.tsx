@@ -744,6 +744,7 @@ export function Storefront({
         panelId={panel.id}
         aiSupport={panel.aiSupport ?? false}
         campaignEnabled={panel.campaignAutomation ?? false}
+        aiModeratorComingSoon
         dashboardLayout={panel.dashboardLayout ?? undefined}
         apiEnabled={apiEnabled}
         hasExistingApiKey={apiHasKey}

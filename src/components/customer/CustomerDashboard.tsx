@@ -351,6 +351,7 @@ export function CustomerDashboard({
   panelId,
   aiSupport = false,
   campaignEnabled = false,
+  aiModeratorComingSoon = false,
   dashboardLayout,
   apiEnabled = true,
   hasExistingApiKey = false,
@@ -407,6 +408,8 @@ export function CustomerDashboard({
   aiSupport?: boolean;
   /** Whether Campaign Automation (plan) is enabled — shows the Campaign tab. */
   campaignEnabled?: boolean;
+  /** Storefront gate: show a Coming Soon state for AI Moderator when true. */
+  aiModeratorComingSoon?: boolean;
   /** Owner-configured home widget layout (Design Tools). Unset = default layout. */
   dashboardLayout?: DashboardWidget[];
   /** Customer API status for this panel. */
@@ -906,7 +909,20 @@ export function CustomerDashboard({
         )}
 
         {/* ---------- AI MODERATOR ---------- */}
-        {page === "moderator" && <AiModeratorSurface panelId={panelId} />}
+        {page === "moderator" && (
+          aiModeratorComingSoon ? (
+            <div className="fp-panel border fp-line rounded-2xl p-6 text-center">
+              <span className="w-10 h-10 rounded-xl fp-violet-soft-bg fp-violet grid place-items-center mx-auto mb-3">
+                <Bot size={18} />
+              </span>
+              <p className="fp-display text-xl mb-2">AI Moderator</p>
+              <p className="fp-text-dim text-sm mb-4">Coming soon for storefront customers.</p>
+              <p className="fp-text-faint text-xs">We&apos;re finishing the customer-facing setup flow.</p>
+            </div>
+          ) : (
+            <AiModeratorSurface panelId={panelId} />
+          )
+        )}
 
         {/* ---------- ORDERS ---------- */}
         {page === "orders" && (
