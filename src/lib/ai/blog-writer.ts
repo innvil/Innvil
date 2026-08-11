@@ -188,6 +188,7 @@ Use at least 4 sections. Use ul/ol where it genuinely helps. Do not include any 
   const text = await aiComplete({
     model: BLOG_MODEL,
     maxTokens: 4096,
+    requestTimeoutMs: 300_000,
     automation: "BLOG_WRITER",
     ...(providerOverride ? { providerOverride } : {}),
     system: `You are Innvil's content writer. ${STYLE_RULES}\n\nVERIFIED PRODUCT FACTS (do not contradict or go beyond these):\n${PRODUCT_FACTS}`,

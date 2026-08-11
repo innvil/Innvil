@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
-  raceWithTimeout, createRequestTimer,
+  raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -359,4 +359,39 @@ test("createRequestTimer never logs message text/prompt/secret content -- only l
   } finally {
     console.log = originalLog;
   }
+});
+
+/* ============================================ multi-responder wiring ==========
+   Human group conversation is not turn-based -- one moderator answering a
+   message does not consume the human's turn. resolveAdditionalResponderIds
+   is the exported pure boundary between chatter-coordinator's raw
+   resolveMultiTargetAddress() result and what handleHumanMessage actually
+   fans a reply out to: it must never re-include the primary responder
+   (dedup-safety -- the primary is already answering via the normal path)
+   and must never exceed MAX_ADDITIONAL_RESPONDERS regardless of how many
+   moderators a "you all"/plural address resolved to (no-pile-on safety). ==== */
+
+test("REQUIRED (dedup-safety): the primary responder is excluded from its own additional-responder set", () => {
+  const result = resolveAdditionalResponderIds("dep-kwan", ["dep-kwan", "dep-test"]);
+  assert.deepEqual(result, ["dep-test"]);
+});
+
+test("REQUIRED: two co-addressed moderators (neither is primary) both become additional responders", () => {
+  const result = resolveAdditionalResponderIds("dep-primary", ["dep-a", "dep-b"]);
+  assert.deepEqual(result, ["dep-a", "dep-b"]);
+});
+
+test("REQUIRED (no-pile-on safety): a plural address resolving to many moderators is capped at MAX_ADDITIONAL_RESPONDERS", () => {
+  const many = ["dep-1", "dep-2", "dep-3", "dep-4", "dep-5", "dep-6"];
+  const result = resolveAdditionalResponderIds("dep-primary", many);
+  assert.equal(result.length, 2); // MAX_ADDITIONAL_RESPONDERS
+  assert.deepEqual(result, ["dep-1", "dep-2"]);
+});
+
+test("an empty multi-target list yields no additional responders", () => {
+  assert.deepEqual(resolveAdditionalResponderIds("dep-primary", []), []);
+});
+
+test("a single co-addressed moderator (no cap needed) still resolves correctly", () => {
+  assert.deepEqual(resolveAdditionalResponderIds("dep-primary", ["dep-a"]), ["dep-a"]);
 });

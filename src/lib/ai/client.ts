@@ -98,6 +98,12 @@ export interface AiCompleteOptions {
    *  provider/key/spend (e.g. aiprimetechProvider() for the blog writer).
    *  No further fallback is attempted if this fails. */
   providerOverride?: { provider: AiProvider; apiKey: string; baseUrl: string };
+  /**
+   * Optional per-call network timeout override in milliseconds.
+   * Keep the 12s default for latency-sensitive surfaces (chat/webhooks),
+   * but allow longer operations (e.g. long-form blog generation).
+   */
+  requestTimeoutMs?: number;
 }
 
 interface AnthropicUsage {
@@ -232,9 +238,14 @@ interface RawAiResponse {
  * phase. Callers get the already-fully-read text back and never touch the
  * network layer's timing themselves.
  */
-async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<RawAiResponse> {
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  requestTimeoutMs: number
+): Promise<RawAiResponse> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -246,7 +257,7 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
     return { ok: res.ok, status: res.status, bodyText };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error(`AI provider request timed out after ${AI_REQUEST_TIMEOUT_MS}ms`);
+      throw new Error(`AI provider request timed out after ${requestTimeoutMs}ms`);
     }
     throw err;
   } finally {
@@ -274,7 +285,7 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
     ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
     system: opts.system,
     messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
-  });
+  }, opts.requestTimeoutMs ?? AI_REQUEST_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`AI provider (anthropic) ${res.status}: ${res.bodyText.slice(0, 300)}`);
   }
@@ -303,7 +314,7 @@ async function openaiComplete(baseUrl: string, key: string, model: string, opts:
     // provider-specific request shapes themselves.
     ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
     messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))],
-  });
+  }, opts.requestTimeoutMs ?? AI_REQUEST_TIMEOUT_MS);
   if (!res.ok) {
     throw new Error(`AI provider (openai) ${res.status}: ${res.bodyText.slice(0, 300)}`);
   }

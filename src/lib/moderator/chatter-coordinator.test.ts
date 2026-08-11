@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   selectChatterAction, resolveDirectedModerator, isConversationalOpener,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
+  resolveMultiTargetAddress, MAX_ADDITIONAL_RESPONDERS,
   type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity,
 } from "./chatter-coordinator";
 
@@ -1079,4 +1080,71 @@ test("REQUIRED (end-to-end shape): the fallback path produces the exact same dow
   const deterministic = single({ text: "gm guys" }); // a real, deterministic COMMUNITY_OPENER
   const fallback = resolveAmbientOpenerFallback({ text: "waddup guys", candidates: [a], now: new Date() });
   assert.equal(deterministic.type, fallback.type);
+});
+
+/* ================================================= resolveMultiTargetAddress ==== */
+// Live bug: "can you both tell me about yourself?" -- Kwan answered alone,
+// explicitly declining to speak for Test ("test can speak for themself
+// though"), but Test was never independently given the SAME message to
+// answer. Human group conversation is not turn-based -- one moderator
+// speaking does not consume the human's turn.
+
+const THIRD_MOD: ModeratorIdentity = { deploymentId: "dep-third", name: "Sam", botUsername: "sam_mod_bot" };
+
+test("REQUIRED: explicit plural address (\"can you both tell me about yourself?\") targets every active moderator -- the exact live repro", () => {
+  const targets = resolveMultiTargetAddress("can you both tell me about yourself?", [KWAN, TEST_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test"]));
+});
+
+test('REQUIRED: "you two" is the same plural-address category as "both"', () => {
+  const targets = resolveMultiTargetAddress("what do you two think?", [KWAN, TEST_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test"]));
+});
+
+test('REQUIRED: "both of you" resolves the same way', () => {
+  const targets = resolveMultiTargetAddress("both of you should weigh in", [KWAN, TEST_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test"]));
+});
+
+test("REQUIRED: a leading named list (\"Kwan and Test, thoughts?\") targets exactly those two, by name", () => {
+  const targets = resolveMultiTargetAddress("Kwan and Test, thoughts?", [KWAN, TEST_MOD, THIRD_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test"]));
+});
+
+test("REQUIRED: a comma-joined leading named list works without \"and\"", () => {
+  const targets = resolveMultiTargetAddress("Kwan, Test, what's up", [KWAN, TEST_MOD, THIRD_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test"]));
+});
+
+test("REQUIRED: singular direct address (\"kwan, what do you think?\") is NOT multi-target -- only one name resolved", () => {
+  assert.equal(resolveMultiTargetAddress("kwan, what do you think?", [KWAN, TEST_MOD]), null);
+});
+
+test("REQUIRED: referential-only mention (\"why did test answer for kwan?\") is NOT multi-target -- not a leading address list", () => {
+  assert.equal(resolveMultiTargetAddress("why did test answer for kwan?", [KWAN, TEST_MOD]), null);
+});
+
+test("REQUIRED: an optional/secondary phrasing (\"anyone else want to add something?\") is not treated as an explicit multi-target -- no named list, no plural-you", () => {
+  assert.equal(resolveMultiTargetAddress("anyone else want to add something?", [KWAN, TEST_MOD]), null);
+});
+
+test('honest limitation: "what are your roles?" carries no grammatical plurality signal ("your" is singular/plural-ambiguous in English) -- correctly resolves to no multi-target rather than inventing one', () => {
+  assert.equal(resolveMultiTargetAddress("what are your roles?", [KWAN, TEST_MOD]), null);
+});
+
+test("resolveMultiTargetAddress requires 2+ moderators to mean anything", () => {
+  assert.equal(resolveMultiTargetAddress("can you both tell me about yourselves?", [KWAN]), null);
+});
+
+test("plural address with 3+ deployed moderators targets ALL of them (bounded downstream by MAX_ADDITIONAL_RESPONDERS, not here)", () => {
+  const targets = resolveMultiTargetAddress("you guys are great", [KWAN, TEST_MOD, THIRD_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test", "dep-third"]));
+});
+
+test("MAX_ADDITIONAL_RESPONDERS is a small, explicit, socially-bounded cap", () => {
+  assert.equal(MAX_ADDITIONAL_RESPONDERS, 2);
+});
+
+test("plain single-name mention with no comma/list stays single-target even for a name that is a substring of another (no false pile-on)", () => {
+  assert.equal(resolveMultiTargetAddress("test, are you around?", [KWAN, TEST_MOD]), null);
 });

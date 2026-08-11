@@ -3098,6 +3098,92 @@ win over this):**
 >     shape and no-sensitive-content guarantee). 451 tests pass, `tsc --noEmit`
 >     clean, production build clean. No migration (no schema change; new
 >     activity-log decision VALUES only, same existing table/columns).
+>   **Twelfth live issue (v1.9.13): Natural Chatter was turn-based — one moderator
+>   answering consumed the human's message, so a second explicitly-addressed
+>   moderator never got a chance to reply.** Live repro: "good, good. can you both
+>   tell me about yourself?" — Kwan answered alone, even saying "test can speak for
+>   themself though" (correctly declining to speak FOR Test), but nothing ever gave
+>   Test an independent turn on that SAME message. Product invariant stated
+>   explicitly by the user: human group conversation is not turn-based — one
+>   moderator speaking does not consume the message; if a message genuinely
+>   addresses multiple moderators, each relevant one may independently answer using
+>   its own persona.
+>   - **New pure detector in `chatter-coordinator.ts`: `resolveMultiTargetAddress(text,
+>     moderators)`.** Two structural signals, OR'd — never a hardcoded phrase
+>     dictionary: (1) `leadingNameListTargets()` — a name-list AT THE START of the
+>     message joined by "and"/commas ("Kwan and Test, thoughts?", "Kwan, Test, what's
+>     up") — the same positional rule that already makes a single name a vocative
+>     (`isVocativeOccurrence`'s `idx===0` case), generalized to 2+ names; (2)
+>     `PLURAL_ADDRESS_RE` — a real grammatical category, plurality of second-person
+>     address ("you both", "you two", "both of you", "the two of you", "you guys",
+>     "both mods/moderators") — when it matches, the target is EVERY currently active
+>     moderator (there's no way to know a subset from a bare pronoun). Deliberately
+>     does NOT try to detect plurality in "what are your roles?" — English's "you"/
+>     "your" carry no singular/plural distinction, so inventing one there would be
+>     exactly the "invent meaning beyond reasonable interpretation" failure class
+>     already ruled out elsewhere in this file; documented as an honest limitation,
+>     with a test proving it correctly resolves to no multi-target rather than a guess.
+>     A referential mention ("why did test answer for kwan?") and a plain single
+>     directed name ("kwan, what do you think?") both correctly stay single-target —
+>     reuses the SAME referential-vs-vocative distinction already relied on by
+>     `resolveDirectedModerator` (v1.9.3), not a new one.
+>   - **`selectChatterAction()` itself is completely UNCHANGED** — the existing
+>     single-primary selection (directed > continuity > quietest-longest, pacing,
+>     every classifier/precedence rule from v1.9.0–1.9.12) is untouched and fully
+>     backward compatible. Multi-target is a strictly ADDITIONAL layer, consulted only
+>     from `community-runtime.ts` alongside the existing separate
+>     `resolveDirectedModerator()` call (`chatter-coordinator.ts` has no access to
+>     moderator names inside `selectChatterAction`, only `deploymentId`s) — and only
+>     ever consulted when the PRIMARY action is already `CASUAL_CHAT`/`ANSWER` (never
+>     for `REACT`/`SHORT_ACK`/`SILENCE`, which already returned before this point).
+>   - **Bounded fan-out: `MAX_ADDITIONAL_RESPONDERS = 2`** (3 responders total,
+>     including the primary) — explicit, socially-bounded cap regardless of how many
+>     moderators are actually deployed (a Pro-tier panel can have up to 20 Active
+>     Moderator Slots; a "you all" must never pile 20 replies onto one message). New
+>     exported pure `resolveAdditionalResponderIds(primaryDeploymentId, multiTargets)`
+>     in `community-runtime.ts` applies the cap AND excludes the primary from its own
+>     additional-responder set (dedup-safety — the primary is already answering via
+>     the normal single-responder path).
+>   - **`community-runtime.ts` refactor: the whole generate→send→log pipeline
+>     extracted into `respondAsDeployment()`**, callable once for the primary
+>     responder and once per additional co-addressed responder — same
+>     budget/timeout/trial-quota-gate/`GENERATION_STARTED`/`GENERATION_TIMEOUT`/
+>     `GENERATION_FAILED`/`MODEL_DECLINED` logging shape every time, just scoped to a
+>     different deployment + ITS OWN persona/prompt (never a copy of the primary's
+>     reply — each additional responder gets an independent `generateChatterReply`
+>     call). `handleHumanMessage`'s primary-path behavior/log decision values are
+>     byte-identical to before the refactor (verified: all 451 pre-existing tests
+>     still pass unchanged). Additional responders bypass pacing/cooldown the same
+>     way a single directed mention already does (`isDirectedAtBot: true` — a genuine
+>     multi-target address is directed at all named moderators, not an ambient one).
+>   - **Loop-safety: zero new protection code needed.** Both the primary's and every
+>     additional responder's sends happen serialized, within the SAME
+>     `handleHumanMessage` invocation triggered by the ONE claimed human event — never
+>     a new webhook delivery or recursive bot-observation path. The bot-ack branch in
+>     `handleCommunityUpdate` (gated on `senderType === "INNVIL_MODERATOR"`) is a
+>     completely separate, untouched code path — an additional responder's own send is
+>     an ordinary `SEND_TEXT` with `origin: "HUMAN"`, so it re-enters the bot-ack
+>     pipeline (via another bot's webhook re-observing it) exactly the same as any
+>     single moderator's reply always has, with the same existing depth-1 bot-ack
+>     bound.
+>   - **Dedup-safety confirmed unchanged (per explicit instruction — no bug found,
+>     left untouched):** `recordCommunityMessage`'s insert-based claim race (spec:
+>     first bot's webhook to claim the inbound message proceeds; every other bot's
+>     simultaneous delivery exits via the pre-existing `!claimed` check) still governs
+>     which ONE webhook invocation runs `handleHumanMessage` at all — multi-target
+>     fan-out happens ENTIRELY inside that single winning invocation, so it can never
+>     interact with or be suppressed by the per-bot-webhook race.
+>   - New tests: `chatter-coordinator.test.ts` (+14 — the exact live repro, "you two"/
+>     "both of you" as the same plural category, a leading named list with and without
+>     "and", singular-direct-target and referential-mention non-triggers, the "what are
+>     your roles?" honest-limitation case, the <2-moderator no-op case, 3+ moderators
+>     under a plural address, the `MAX_ADDITIONAL_RESPONDERS` constant itself, and a
+>     substring-name false-pile-on guard) and `community-runtime.test.ts` (+5 —
+>     `resolveAdditionalResponderIds`'s dedup-safety, multi-target resolution, the
+>     no-pile-on cap, and empty/single-target edge cases). 469 tests pass, `tsc
+>     --noEmit` clean, production build clean. No migration (no schema change —
+>     `moderator_activity_log` already supported multiple rows per source message with
+>     no uniqueness constraint, confirmed by inspection before implementation).
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

@@ -6,8 +6,8 @@ import { telegramApiCall } from "./telegram-client";
 import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
-  selectChatterAction, resolveDirectedModerator, isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
-  type ChatterCandidate, type ChatterPacingState,
+  selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
+  MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
@@ -577,6 +577,19 @@ export async function recordReactiveQuotaUse(admin: SupabaseClient, panelId: str
   await admin.rpc("increment_community_reactive_quota", { p_panel_id: panelId, p_community_id: communityId, p_quota_day: quotaDay });
 }
 
+/** Pure: turns a raw resolveMultiTargetAddress() result into the bounded set
+ *  of ADDITIONAL responders that should independently reply alongside the
+ *  primary. Excludes the primary (already answering — dedup-safety: the
+ *  primary must never also run as an "additional" responder against itself)
+ *  and caps at MAX_ADDITIONAL_RESPONDERS regardless of how many the address
+ *  resolved to (no-pile-on safety — a "you all" in a 20-slot Pro panel must
+ *  never fan out to 20 replies). Order-preserving (deployments closest to
+ *  the front of resolveMultiTargetAddress's result — e.g. a named list's own
+ *  order — are kept over ones the cap would otherwise drop). */
+export function resolveAdditionalResponderIds(primaryDeploymentId: string, multiTargets: string[]): string[] {
+  return multiTargets.filter((id) => id !== primaryDeploymentId).slice(0, MAX_ADDITIONAL_RESPONDERS);
+}
+
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string,
@@ -682,21 +695,98 @@ async function handleHumanMessage(
     return;
   }
 
+  await respondAsDeployment({
+    admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
+    deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, now,
+    recentContext,
+    isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
+    addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
+    otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+    timer,
+  });
+
+  // ---- explicit multi-target address: additional independent responders ----
+  // Human group conversation is not turn-based -- the primary moderator
+  // answering above does not consume the human's turn. Only ever consulted
+  // when the PRIMARY action was already a real reply (never for
+  // REACT/SHORT_ACK/SILENCE, both of which returned before this point, or
+  // for SHORT_ACK, which carries no generation to independently vary by
+  // persona anyway). Each additional responder gets its OWN independent
+  // generation call (own persona/own prompt) -- never a copy of the
+  // primary's reply -- and is sent serialized, within this SAME
+  // handleHumanMessage invocation triggered by the one claimed human event
+  // (never a new webhook delivery or recursive bot-observation path), so no
+  // new loop-safety code is needed: the bot-ack branch in
+  // handleCommunityUpdate is a separate, untouched code path gated on
+  // senderType === "INNVIL_MODERATOR".
+  if (action.type === "CASUAL_CHAT" || action.type === "ANSWER") {
+    const multiTargets = resolveMultiTargetAddress(
+      event.text,
+      deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername }))
+    );
+    if (multiTargets) {
+      const additionalIds = resolveAdditionalResponderIds(deployment.deploymentId, multiTargets);
+      for (const id of additionalIds) {
+        const additionalDeployment = deployments.find((d) => d.deploymentId === id);
+        if (!additionalDeployment) continue;
+        await respondAsDeployment({
+          admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
+          deployment: additionalDeployment, actionType: action.type, reasons: ["multi_target_address"], isTrialEntitlement, now,
+          recentContext,
+          // Each additional responder answers on its own merit, not because
+          // it was @mentioned individually -- but a genuine multi-target
+          // address ("Kwan and Test, thoughts?") is directed at both, so it
+          // should bypass pacing/cooldown the same way a single directed
+          // mention would (see chatter-coordinator.ts bypassesPacing).
+          isDirectedAtBot: true,
+          addressedWithTypo: false,
+          otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== additionalDeployment.deploymentId).map((d) => d.moderatorName),
+          timer,
+        });
+      }
+    }
+  }
+}
+
+/** Generates (if needed), sends, and logs one moderator's response to the
+ *  current human message. Extracted so it can run once for the primary
+ *  responder and, independently, once per additional co-addressed responder
+ *  (see the multi-target block above) -- same budget/timeout/quota/logging
+ *  shape every time, just scoped to a different deployment + its own persona. */
+async function respondAsDeployment(params: {
+  admin: SupabaseClient;
+  panelId: string;
+  communityId: string;
+  chatId: string;
+  event: CommunityEvent;
+  deployment: ChatterDeployment;
+  actionType: "SHORT_ACK" | "CASUAL_CHAT" | "ANSWER";
+  reasons: string[];
+  isTrialEntitlement: boolean;
+  now: Date;
+  recentContext: ChatterContextMessage[];
+  isDirectedAtBot: boolean;
+  addressedWithTypo: boolean;
+  otherActiveModeratorNames: string[];
+  timer: RequestTimer;
+}): Promise<void> {
+  const { admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, now, recentContext, isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, timer } = params;
+
   // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
   // (spec §17) -- SHORT_ACK/CASUAL_CHAT/ANSWER are all reactive conversational
-  // text responses and share this one gate; REACT/SILENCE above are
-  // unaffected (moderation is never gated by this either). A plain read, not
-  // itself a quota consumption.
-  if (isTrialEntitlement && !(await hasReactiveQuotaRemaining(admin, community.id, reactiveQuotaDay(now)))) {
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "SILENCE", "trial_reactive_quota_exhausted", {
+  // text responses and share this one gate. Checked per-responder, so a
+  // second (additional) responder is subject to the exact same quota as the
+  // primary would have been.
+  if (isTrialEntitlement && !(await hasReactiveQuotaRemaining(admin, communityId, reactiveQuotaDay(now)))) {
+    await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "SILENCE", "trial_reactive_quota_exhausted", {
       reasons: ["trial_reactive_quota_exhausted"],
-      attemptedAction: action.type,
+      attemptedAction: actionType,
     });
     return;
   }
 
   let replyText: string;
-  if (action.type === "SHORT_ACK") {
+  if (actionType === "SHORT_ACK") {
     // Deterministic, zero Sonnet calls.
     replyText = shortAckText(deployment.persona);
   } else {
@@ -705,35 +795,35 @@ async function handleHumanMessage(
     // live incident this closes had a recorded community_messages row but
     // ZERO moderator_activity_log rows, because the function died mid-
     // generation before reaching any log call at all.
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "GENERATION_STARTED", action.reasons.join(","), {
-      reasons: action.reasons,
-      actionType: action.type,
+    await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "GENERATION_STARTED", reasons.join(","), {
+      reasons,
+      actionType,
       // Mirrors resolveChatterRoute()'s own routing rule (chatter-generate.ts)
       // -- CASUAL_CHAT -> DeepSeek Flash, ANSWER -> Sonnet 5 medium, always.
-      provider: action.type === "CASUAL_CHAT" ? "deepseek" : "anthropic",
+      provider: actionType === "CASUAL_CHAT" ? "deepseek" : "anthropic",
     });
-    timer.mark("generation_start", { actionType: action.type });
+    timer.mark("generation_start", { actionType, deploymentId: deployment.deploymentId });
 
     const genRace = await raceWithTimeout(
       generateChatterReply({
-        action: action.type,
+        action: actionType,
         selfDeploymentId: deployment.deploymentId,
         moderatorName: deployment.moderatorName,
         persona: deployment.persona,
         recentContext,
         triggerMessage: { senderName: event.sender.displayName, text: event.text },
-        isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
+        isDirectedAtBot,
         // Only true when THIS is the moderator the typo-tolerant match
         // resolved to — lets it optionally play along with the misspelling
         // without forcing every reply to comment on it.
-        addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
+        addressedWithTypo,
         // Grounds the "don't fabricate another moderator's presence" prompt
         // rule in actual deployment state, not the model's guess.
-        otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+        otherActiveModeratorNames,
       }),
       CHATTER_TOTAL_BUDGET_MS
     );
-    timer.mark("generation_end", { timedOut: !genRace.ok });
+    timer.mark("generation_end", { timedOut: !genRace.ok, deploymentId: deployment.deploymentId });
 
     if (!genRace.ok) {
       // Defense in depth: the model call's OWN internal timeout (client.ts's
@@ -742,8 +832,8 @@ async function handleHumanMessage(
       // If it somehow doesn't, this still guarantees the function returns
       // and logs instead of hanging until the platform kills it with no trace.
       console.error("[telegram/community] chatter generation exceeded total budget", CHATTER_TOTAL_BUDGET_MS);
-      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "GENERATION_TIMEOUT", action.reasons.join(","), {
-        reasons: action.reasons,
+      await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "GENERATION_TIMEOUT", reasons.join(","), {
+        reasons,
         budgetMs: CHATTER_TOTAL_BUDGET_MS,
       });
       return;
@@ -752,11 +842,11 @@ async function handleHumanMessage(
 
     if (!generation.ok) {
       console.error("[telegram/community] chatter generation failed", generation.error);
-      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "GENERATION_FAILED", action.reasons.join(","), { reasons: action.reasons });
+      await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "GENERATION_FAILED", reasons.join(","), { reasons });
       return;
     }
     if ("noReply" in generation) {
-      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "MODEL_DECLINED", action.reasons.join(","), { reasons: action.reasons });
+      await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
       return;
     }
     replyText = generation.reply;
@@ -771,23 +861,23 @@ async function handleHumanMessage(
     interactionDepth: 0,
     causationMessageId: event.messageId,
   };
-  const sent = await executeAction(admin, String(message.chat.id), sendAction);
-  timer.mark("telegram_send", { sent: !!sent.sentMessageId });
+  const sent = await executeAction(admin, chatId, sendAction);
+  timer.mark("telegram_send", { sent: !!sent.sentMessageId, deploymentId: deployment.deploymentId });
   await recordBotSpoke(admin, deployment.deploymentId, new Date());
-  await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", action.type, action.reasons.join(","), { reasons: action.reasons });
-  timer.mark("activity_logging");
+  await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", actionType, reasons.join(","), { reasons });
+  timer.mark("activity_logging", { deploymentId: deployment.deploymentId });
 
   // Only consumed after the send actually succeeded (spec §7) -- never for a
   // failed outbound send, a declined/failed generation (both already
   // returned above), or a SILENCE/REACT (neither reaches this line at all).
   if (isTrialEntitlement && sent.sentMessageId) {
-    await recordReactiveQuotaUse(admin, panelId, community.id, reactiveQuotaDay(now));
+    await recordReactiveQuotaUse(admin, panelId, communityId, reactiveQuotaDay(now));
   }
 
   if (sent.sentMessageId) {
     await admin.from("community_messages").insert({
       panel_id: panelId,
-      community_id: community.id,
+      community_id: communityId,
       platform_message_id: sent.sentMessageId,
       sender_type: "INNVIL_MODERATOR",
       sender_platform_id: null,

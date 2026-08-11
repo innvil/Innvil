@@ -442,6 +442,86 @@ export function resolveDirectedModerator(text: string, moderators: ModeratorIden
   return null; // no match, or an ambiguous fuzzy match across multiple moderators
 }
 
+/* ============================================== explicit multi-target address ==========
+   Live bug: "good, good. can you both tell me about yourself?" -- Kwan
+   answered ("test can speak for themself though"), correctly declining to
+   speak FOR Test, but the runtime never gave Test an independent chance to
+   answer the SAME message. Human group conversation is not turn-based: one
+   moderator speaking does not consume the user's turn. When a message
+   genuinely addresses multiple moderators, each relevant one may
+   independently answer using its own persona -- see
+   community-runtime.ts's selectChatterResponders() for how this combines
+   with the existing single-primary selection above (which stays UNCHANGED
+   and fully backward compatible -- this is an ADDITIONAL layer, not a
+   replacement). ========================================================== */
+
+/** Caps total responders (primary + additional) to a socially-reasonable
+ *  number regardless of how many moderators are actually deployed in the
+ *  room (a Pro-tier panel can have up to 20 Active Moderator Slots) -- an
+ *  explicit "you all" should never pile 20 bots onto one message. */
+export const MAX_ADDITIONAL_RESPONDERS = 2;
+
+// A plural SECOND-PERSON address ("you both", "you two", "both of you", "you
+// guys", "both mods") is a real grammatical category (plurality of address),
+// not an arbitrary phrase list -- structurally the same kind of bounded
+// signal as VOCATIVE_PRECEDING_TOKENS above. When this matches, the target
+// is EVERY currently active moderator (bounded by the cap), since the human
+// didn't name anyone specifically. Deliberately does NOT include "your"
+// alone ("what are your roles?") -- English has no morphological distinction
+// between singular and plural "you"/"your", so that phrasing carries no
+// actual plurality signal to detect; inventing one would be exactly the
+// "invent meaning beyond reasonable interpretation" failure mode already
+// ruled out elsewhere in this file.
+const PLURAL_ADDRESS_RE =
+  /\byou\s+(?:both|two|guys|all)\b|\bboth\s+of\s+you\b|\bthe\s+two\s+of\s+you\b|\bboth\s+mods?\b|\bboth\s+moderators?\b/i;
+
+/** A LEADING vocative list of 2+ distinct moderators joined by "and"/commas
+ *  at the very START of the message ("Kwan and Test, thoughts?", "Kwan,
+ *  Test, what's up") -- a positional/structural pattern (name-list at the
+ *  message's start), not a phrase dictionary; generalizes to any number of
+ *  configured names. Deliberately does NOT scan the whole message for name
+ *  pairs (that would resurrect the "any name mention = addressed" bug
+ *  already fixed for single-target resolution) -- only names conjoined
+ *  together at the very front, the same position that already makes a
+ *  single name a vocative (isVocativeOccurrence's idx===0 rule). */
+function leadingNameListTargets(text: string, moderators: ModeratorIdentity[]): string[] {
+  let rest = text.trim().toLowerCase();
+  const found: string[] = [];
+  for (;;) {
+    if (found.length > 0) {
+      const sep = rest.match(/^\s*(?:,\s*(?:and\s+)?|and\s+)/);
+      if (!sep) break;
+      rest = rest.slice(sep[0].length);
+    }
+    const hit = moderators.find((m) => {
+      const n = m.name.toLowerCase();
+      return n.length > 0 && (rest === n || rest.startsWith(`${n} `) || rest.startsWith(`${n},`) || rest.startsWith(`${n}?`) || rest.startsWith(`${n}!`));
+    });
+    if (!hit || found.includes(hit.deploymentId)) break;
+    found.push(hit.deploymentId);
+    rest = rest.slice(hit.name.length);
+  }
+  return found.length >= 2 ? found : [];
+}
+
+/** Resolves the FULL set of moderators a message explicitly/semantically
+ *  addresses TOGETHER (2+), or null if it doesn't. Two independent signals,
+ *  OR'd: a leading named list ("Kwan and Test, ...") targets exactly those
+ *  moderators; a plural address ("you both", "you guys") targets EVERY
+ *  currently active moderator (there's no way to know a subset from a
+ *  pronoun alone). Requires 2+ moderators to exist at all -- meaningless
+ *  otherwise. Only ever consulted by the caller when the primary action is
+ *  already a real reply (ANSWER/CASUAL_CHAT) -- REACT/SHORT_ACK/SILENCE
+ *  never fan out. */
+export function resolveMultiTargetAddress(text: string, moderators: ModeratorIdentity[]): string[] | null {
+  if (moderators.length < 2) return null;
+  const trimmed = text.trim();
+  const named = leadingNameListTargets(trimmed, moderators);
+  if (named.length >= 2) return named;
+  if (PLURAL_ADDRESS_RE.test(trimmed)) return moderators.map((m) => m.deploymentId);
+  return null;
+}
+
 type MessageKind = "EMPTY" | "TOO_SHORT" | "COMMUNITY_OPENER" | "TRIVIAL" | "QUESTION" | "SUBSTANTIVE";
 
 /** Classification order is the actual architecture here, not an
