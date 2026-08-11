@@ -127,6 +127,38 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Bot-ack REACT was silently failing: invalid emoji + swallowed Telegram errors (v1.12.3)
+- **Live test of the v1.12.1 opener-acknowledgement fix showed no reaction on Kwan's "gm everyone"** despite
+  `moderator_activity_log` showing a clean `bot_message -> REACT` decision — the log was lying. Diagnosed by
+  reproducing the exact `setMessageReaction` call live against the real bot token/chat/message id.
+- **Root cause #1 (invalid emoji):** Telegram's `setMessageReaction` only accepts emoji from ITS OWN fixed,
+  platform-wide reaction list — this is separate from a chat's "allow all reactions" admin setting, which just
+  means "allow any reaction from Telegram's list," still excluding anything outside it. `coordinator.ts`'s
+  `REACT_EMOJIS` (`👍`, `👋`, `🙌`) and `chatter-generate.ts`'s `personaReactionEmoji` positive/agreement pools
+  (`🙌`) both included "👋" (waving hand) and/or "🙌" (raised hands), neither of which is a valid Telegram
+  reaction — live-verified `400 REACTION_INVALID` for both, even with the chat's reactions fully open. Replaced
+  with confirmed-valid alternatives (`🎉`, `👏`) — live re-verified accepted.
+- **Root cause #2 (silent failure, same bug class as the `/api/v2` incident):** the bot-ack branch in
+  `community-runtime.ts`'s `handleCommunityUpdate()` called `logBotAckDecision()` (logging the DECIDED action,
+  e.g. "REACT") **before** `executeAction()` even ran, and never checked `executeAction`'s return value
+  afterward — so a Telegram-side rejection was completely invisible, logged identically to success. This is the
+  exact bug class already fixed in the Natural Chatter REACT path back in v1.9.2 (`reactAsDeployment`, which
+  DOES check `result.ok` and logs `REACT_FAILED`) — the bot-ack path had never received the same fix. Now
+  checks `sent.ok`; on failure, `console.error`s the real Telegram error and logs a `{action.kind}_FAILED`
+  activity entry instead of pretending success. `recordBotAck` (the target's pacing/rate-limit bookkeeping) now
+  only runs on a confirmed-successful send — a failed action no longer consumes the target's cooldown/daily-cap
+  budget.
+- **Defense in depth:** `executeAction`'s REACT branch (`community-runtime.ts`, shared by both the bot-ack and
+  Natural Chatter paths) now retries once with `👍` — a near-universal Telegram reaction — whenever the chosen
+  emoji comes back `REACTION_INVALID`, rather than only improving the logging. A single retry, not a discovery
+  round-trip to the chat's actual allowed-reactions set.
+- **Files changed:** `coordinator.ts` (emoji pool), `chatter-generate.ts` (emoji pools), `community-runtime.ts`
+  (`executeAction`'s REACT-fallback retry + the bot-ack caller's honest failure handling).
+- No test suite changes this pass — verified via `tsc --noEmit` (clean), the full 603-test suite (unchanged,
+  no existing test asserted on a specific REACT emoji value), a clean production build, and a live
+  `setMessageReaction` reproduction against the real test chat confirming all three new pool emoji (`👍`, `🎉`,
+  `👏`) are now accepted. No migration.
+
 ### 2026-08-11 — Bot-to-bot opening acknowledgement made deterministic + fixed @username leak (v1.12.1)
 - **Live test found two real bugs after confirming bot-to-bot Telegram delivery itself was finally
   working** (Kwan's message reached Test's webhook, classified correctly as `INNVIL_MODERATOR`). The

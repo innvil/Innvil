@@ -394,7 +394,21 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
       message_id: action.targetMessageId,
       reaction: [{ type: "emoji", emoji: action.emoji }],
     });
-    return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
+    if (res.ok) return { sentMessageId: null, ok: true };
+    // Defense in depth: the chosen emoji may still not be in THIS chat's
+    // (or Telegram's own) allowed-reactions set even after the emoji-pool
+    // fix above -- retry once with "👍", a near-universal Telegram reaction,
+    // rather than silently losing the acknowledgement entirely. A single
+    // retry, not a discovery round-trip to the chat's actual allowed set.
+    if (action.emoji !== "👍" && res.error === "Bad Request: REACTION_INVALID") {
+      const retry = await telegramApiCall(token, "setMessageReaction", {
+        chat_id: chatId,
+        message_id: action.targetMessageId,
+        reaction: [{ type: "emoji", emoji: "👍" }],
+      });
+      return { sentMessageId: null, ok: retry.ok, error: retry.ok ? undefined : retry.error };
+    }
+    return { sentMessageId: null, ok: false, error: res.error };
   }
 
   if (action.kind === "SEND_TEXT") {
@@ -1515,6 +1529,21 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     await logBotAckDecision(admin, integration.panel_id, community.id, event, action);
     if (action.kind === "IGNORE") return;
     const sent = await executeAction(admin, String(message.chat.id), action);
+    if (!sent.ok) {
+      // Previously silent -- logBotAckDecision above already logged the
+      // DECIDED action (e.g. "REACT") before execution even ran, so a
+      // Telegram-side rejection (missing bot rights, an invalid/unsupported
+      // reaction emoji, chat restrictions, ...) looked identical to success
+      // from every log/observability angle. Mirrors reactAsDeployment's
+      // REACT_FAILED pattern (Natural Chatter's own REACT path).
+      console.error("[telegram/community] bot-ack action failed", action.kind, sent.error);
+      await logActivity(admin, integration.panel_id, community.id, action.targetDeploymentId, "bot_message", `${action.kind}_FAILED`, event.sender.senderType, {
+        error: sent.error,
+      });
+      return;
+    }
+    // Only counts against the target's pacing/rate-limit budget once the
+    // action actually landed -- a failed send must never consume it.
     await recordBotAck(admin, action.targetDeploymentId, new Date());
     if (action.kind === "SEND_TEXT" && sent.sentMessageId) {
       await recordBotAckReply(admin, integration.panel_id, community.id, sent.sentMessageId, action);

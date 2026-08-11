@@ -449,8 +449,11 @@ export function personaReactionEmoji(baseEmoji: string, persona: ModeratorPerson
   const pools: Record<ReactionCategory, string[]> = {
     laugh: persona.humor > 60 || persona.teasing > 60 ? ["🤣", "😂", "😆"] : ["😂", "😅"],
     thanks: ["🙏"],
-    positive: persona.formality > 70 ? ["🙂", "👍"] : ["😄", "🔥", "🙌"],
-    agreement: persona.formality > 70 ? ["👍"] : ["👍", "🙌"],
+    // "🙌" (raised hands) is not in Telegram's supported reaction emoji set --
+    // live-verified `400 REACTION_INVALID` even with a chat's reactions fully
+    // open. Replaced with "🎉"/"👏", both confirmed valid.
+    positive: persona.formality > 70 ? ["🙂", "👍"] : ["😄", "🔥", "🎉"],
+    agreement: persona.formality > 70 ? ["👍"] : ["👍", "👏"],
   };
   const pool = pools[category];
   return pool[Math.floor(random() * pool.length)];

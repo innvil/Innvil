@@ -50,7 +50,15 @@ export interface CoordinatorInput {
   random?: () => number;
 }
 
-const REACT_EMOJIS = ["👍", "👋", "🙌"];
+/** Telegram only accepts reactions from ITS OWN fixed, platform-wide emoji
+ *  list for setMessageReaction -- this is NOT the same as a chat's "allow
+ *  all reactions" admin setting (which just means "allow any reaction from
+ *  Telegram's own list", still excluding emoji outside it). Live-verified:
+ *  "👋" (waving hand) and "🙌" (raised hands) both come back
+ *  `400 REACTION_INVALID` even in a chat with reactions fully open -- neither is
+ *  in Telegram's supported reaction set. Every entry here has been confirmed
+ *  against Telegram's actual reaction list. */
+const REACT_EMOJIS = ["👍", "🎉", "👏"];
 
 function todayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
