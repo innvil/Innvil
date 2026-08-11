@@ -600,6 +600,17 @@ export interface ChatterCandidate {
    *  the quietest-longest tie-break actively favors a DIFFERENT moderator
    *  jumping into a conversation it wasn't part of. */
   wasLastSpeaker: boolean;
+  /** True if THIS deployment sent ANY message within the community's
+   *  recent, bounded context window (not just the literal immediately-prior
+   *  one — see wasLastSpeaker for that narrower signal). Broader than
+   *  wasLastSpeaker on purpose: "both mods participated in the exchange"
+   *  needs to recognize a moderator who spoke a couple of turns ago, not
+   *  only the very last speaker. Drives AMBIENT reaction eligibility (see
+   *  the TRIVIAL branch below) — a moderator doesn't need to be personally
+   *  addressed to react to something happening in the room it was actually
+   *  part of, but genuine recent participation is still required so a bare
+   *  "lol" with no meaningful context correctly stays silent. */
+  recentlyParticipated: boolean;
   pacing: ChatterPacingState;
 }
 
@@ -641,6 +652,28 @@ function candidateEligible(pacing: ChatterPacingState, now: Date, bypass: boolea
   if (overParticipating && !bypass) return false;
   if (cooldownActive && !bypass) return false;
   return true;
+}
+
+/** Picks the single most socially-relevant candidate for an AMBIENT (not
+ *  directed) reaction — wasLastSpeaker wins first (the human's remark is
+ *  most likely reacting to exactly this moderator's own preceding message,
+ *  e.g. "woah that's strict lol" right after this moderator said something
+ *  strict), otherwise whoever recentlyParticipated and has been quietest
+ *  longest among them. Returns null when NO candidate has any recent
+ *  relevance at all — that's the deliberate gate that keeps an unrelated
+ *  ambient "lol" with no meaningful context SILENT rather than always
+ *  finding someone to react (see resolveAdditionalReactors for how a
+ *  SECOND relevant candidate can independently react too). */
+function pickRelevantReactor(eligible: ChatterCandidate[]): ChatterCandidate | null {
+  const relevant = eligible.filter((c) => c.wasLastSpeaker || c.recentlyParticipated);
+  if (!relevant.length) return null;
+  const lastSpeaker = relevant.find((c) => c.wasLastSpeaker);
+  if (lastSpeaker) return lastSpeaker;
+  return [...relevant].sort((a, b) => {
+    const aSpoke = a.pacing.lastSpokeAt ? new Date(a.pacing.lastSpokeAt).getTime() : 0;
+    const bSpoke = b.pacing.lastSpokeAt ? new Date(b.pacing.lastSpokeAt).getTime() : 0;
+    return aSpoke - bSpoke;
+  })[0];
 }
 
 /** Picks ONE candidate among several equally-actionable ones. Deterministic,
@@ -709,14 +742,23 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     }
     const directed = eligible.find((c) => c.isDirectedAtBot);
     if (!directed) {
-      // Deliberate design (extensively tested elsewhere in this file): an
-      // AMBIENT trivial remark -- not directed at any specific moderator,
-      // even one carrying a laugh/thanks signal -- stays SILENCE. Reacting
-      // to every passing "lol" in the room that isn't addressed to anyone
-      // would make the bot read as reacting to everything; REACT for
-      // laugh/thanks is intentionally reserved for messages actually
-      // DIRECTED at a moderator (see below).
       if (!eligible.length) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
+      // Explicit product decision (supersedes the earlier "ambient trivial
+      // content always stays SILENCE" rule): a moderator does not need to be
+      // personally addressed before reacting to something happening in the
+      // room — a human moderator reacts to conversations they're part of
+      // even when not directly spoken to. Direct targeting increases
+      // relevance; it is no longer a mandatory prerequisite. Genuine social
+      // relevance (this moderator recently spoke, especially if the human's
+      // remark is plausibly reacting to ITS OWN preceding message) is still
+      // required though — that's what keeps a bare, contextless "lol" a
+      // correct SILENCE (see pickRelevantReactor). Multiple relevant
+      // moderators may each independently react to the same message — see
+      // resolveAdditionalReactors, called separately by the runtime.
+      const relevant = pickRelevantReactor(eligible);
+      if (relevant) {
+        return { type: "REACT", deploymentId: relevant.deploymentId, emoji: reactionFor(trimmed), reasons: ["ambient_relevant_acknowledgement"] };
+      }
       return { type: "SILENCE", reasons: input.recentlyAnsweredByModerator ? ["already_handled_recent_reply"] : ["trivial_low_value"] };
     }
     if (LAUGH_RE.test(trimmed) || THANKS_RE.test(trimmed)) {
@@ -761,6 +803,61 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     deploymentId: picked.deploymentId,
     reasons: [picked.isDirectedAtBot ? "directed_casual" : "active_conversation_continuity"],
   };
+}
+
+/* ============================================== ambient multi-reactor fan-out ==========
+   Reactions are not turn-taking: a reaction from one moderator does not
+   consume the human's message the way a generated TEXT reply does (the
+   existing single-primary CASUAL_CHAT/ANSWER selection above is UNCHANGED
+   and still returns exactly one). Multiple ACTIVE/relevant moderators may
+   each independently react to the SAME ambient message — the runtime calls
+   this SEPARATELY, only after selectChatterAction has already returned a
+   non-directed REACT (i.e. the primary reactor came from
+   pickRelevantReactor above, or from the pre-existing unconditional
+   RESOLVED_ACK_RE/POSITIVE_WORD_RE ambient paths — never from the DIRECTED
+   laugh/thanks path, which stays single-target by design: a message
+   literally addressed at one specific moderator is that moderator's to
+   answer, not a group event). Bounded by MAX_ADDITIONAL_REACTORS regardless
+   of how many moderators are deployed, so a room with many active
+   moderators never turns one "lol" into a wall of reactions. ========== */
+
+/** A reaction pile-on ("lol" -> 6 different emoji from 6 bots) reads as
+ *  exactly the kind of robotic, inhuman behavior this whole feature exists
+ *  to move away from. Capped independent of any specific moderator identity
+ *  or count of deployed slots (a Pro-tier panel can have up to 20 Active
+ *  Moderator Slots) — 1 additional reactor (2 total, matching how the
+ *  product spec's own worked examples always show at most a pair of
+ *  moderators reacting) keeps ambient participation lightweight and
+ *  believable rather than exhaustive. */
+export const MAX_ADDITIONAL_REACTORS = 1;
+
+/** Resolves which OTHER eligible candidates (excluding whoever already
+ *  reacted as primary) should independently react to the SAME message.
+ *  Reuses the identical relevance bar as the primary path — recently
+ *  participated in the exchange (wasLastSpeaker or recentlyParticipated) —
+ *  never a coin flip: whether a candidate is eligible is fully determined
+ *  by its own recorded participation, exactly as pickRelevantReactor
+ *  decided the primary. Deterministic tie-break (quietest-longest) picks
+ *  WHICH of several equally-relevant candidates fill the bounded slots when
+ *  there are more relevant candidates than the cap allows — never random. */
+export function resolveAdditionalReactors(input: ChatterActionInput, primaryDeploymentId: string): string[] {
+  const trimmed = input.text.trim();
+  const kind = classifyMessageKind(trimmed);
+  if (kind !== "TRIVIAL") return [];
+  const eligible = input.candidates.filter(
+    (c) =>
+      c.deploymentId !== primaryDeploymentId &&
+      (c.wasLastSpeaker || c.recentlyParticipated) &&
+      candidateEligible(c.pacing, input.now, bypassesPacing(kind, c.isDirectedAtBot, c.wasLastSpeaker))
+  );
+  return eligible
+    .sort((a, b) => {
+      const aSpoke = a.pacing.lastSpokeAt ? new Date(a.pacing.lastSpokeAt).getTime() : 0;
+      const bSpoke = b.pacing.lastSpokeAt ? new Date(b.pacing.lastSpokeAt).getTime() : 0;
+      return aSpoke - bSpoke;
+    })
+    .slice(0, MAX_ADDITIONAL_REACTORS)
+    .map((c) => c.deploymentId);
 }
 
 /* ================================== ambient-greeting model fallback ==========

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { __testables, shortAckText, classifyAmbientGreeting, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { __testables, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
@@ -814,4 +814,69 @@ test("REQUIRED: persona distinction survives the obligation context -- two diffe
   assert.match(kwanPrompt, new RegExp(kwan.description.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
   assert.match(calmPrompt, new RegExp(test_.description.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
   assert.notEqual(kwan.description, test_.description);
+});
+
+/* ==================================== persona-aware reaction selection ====
+   "The coordinator decides whether a reaction is warranted. The persona
+   layer decides how that reaction is expressed." -- these test the SECOND
+   half: given the coordinator's neutral content-based emoji suggestion,
+   personaReactionEmoji picks how ONE specific moderator expresses it. */
+
+const seq = (values: number[]) => {
+  let i = 0;
+  return () => values[i++ % values.length];
+};
+
+test("REQUIRED: a persona that strongly avoids emoji (emojiFrequency < 15) still reacts -- Telegram reactions ARE emoji -- but gets the plainest option for the category, not an exuberant one", () => {
+  const lowEmoji: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 5 };
+  assert.equal(personaReactionEmoji("😂", lowEmoji), "😄");
+  assert.equal(personaReactionEmoji("🙏", lowEmoji), "🙏");
+  assert.equal(personaReactionEmoji("👍", lowEmoji), "👍");
+  assert.equal(personaReactionEmoji("😄", lowEmoji), "🙂");
+});
+
+test("REQUIRED: emoji use is never forced beyond the plain option for a low-emoji persona, regardless of humor/teasing", () => {
+  const lowEmojiHighHumor: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 5, humor: 90, teasing: 90 };
+  assert.equal(personaReactionEmoji("😂", lowEmojiHighHumor), "😄");
+});
+
+test("a high-humor/teasing persona gets a more exuberant laugh pool than a low-humor one", () => {
+  const witty: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 80, teasing: 80 };
+  const reserved: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 10, teasing: 10 };
+  const wittyEmoji = personaReactionEmoji("😂", witty, seq([0]));
+  const reservedEmoji = personaReactionEmoji("😂", reserved, seq([0]));
+  assert.equal(wittyEmoji, "🤣");
+  assert.equal(reservedEmoji, "😂");
+});
+
+test("a formal persona gets a restrained positive/agreement reaction, a casual one a more expressive pool", () => {
+  const formal: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, formality: 90 };
+  const casual: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, formality: 10 };
+  assert.equal(personaReactionEmoji("😄", formal, seq([0])), "🙂");
+  assert.equal(personaReactionEmoji("😄", casual, seq([0])), "😄");
+  assert.equal(personaReactionEmoji("👍", formal, seq([0])), "👍");
+});
+
+test("randomness (when used) only chooses AMONG equally-valid expressions of the SAME category -- never decides whether to react (that's already decided by the time this function runs)", () => {
+  const witty: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 80 };
+  // Fractional random() outputs (in [0,1)), one per pool slot -- 0, 1/3, 2/3
+  // select pool indices 0, 1, 2 respectively out of the 3-item laugh pool.
+  const results = [0, 1 / 3, 2 / 3].map((r) => personaReactionEmoji("😂", witty, () => r));
+  // Every result is still a laugh-category emoji -- variety in EXPRESSION, never a "no reaction" outcome.
+  for (const r of results) assert.ok(["🤣", "😂", "😆"].includes(r));
+  assert.deepEqual(results, ["🤣", "😂", "😆"]);
+});
+
+test("thanks stays a single, near-universal reaction across personas (🙏)", () => {
+  const witty: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 90 };
+  const formal: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, formality: 90 };
+  assert.equal(personaReactionEmoji("🙏", witty), "🙏");
+  assert.equal(personaReactionEmoji("🙏", formal), "🙏");
+});
+
+test("personaReactionEmoji is pure/deterministic given a fixed random source -- same input, same output, no flakiness in tests", () => {
+  const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60 };
+  const a = personaReactionEmoji("😂", persona, () => 0);
+  const b = personaReactionEmoji("😂", persona, () => 0);
+  assert.equal(a, b);
 });

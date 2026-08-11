@@ -7,10 +7,10 @@ import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderator
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
   selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, requiresIndividualContribution,
-  isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
+  isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback, resolveAdditionalReactors,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
-import { generateChatterReply, shortAckText, classifyAmbientGreeting, type ChatterContextMessage } from "./chatter-generate";
+import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 
@@ -545,6 +545,18 @@ export function humanRecentlyResponded(
   return priorMessage.senderPlatformId !== currentSenderPlatformId;
 }
 
+/** True if THIS deployment sent ANY message within the given recent-context
+ *  window (not just the literal last one — see wasLastSpeaker for that
+ *  narrower signal) and that message is still within the recency window
+ *  (isRecentMessage). Drives ChatterCandidate.recentlyParticipated, which
+ *  feeds ambient reaction eligibility (chatter-coordinator.ts) — a
+ *  moderator that took part in the exchange a couple of turns ago, not only
+ *  the very last message, is still socially relevant to react to a human's
+ *  follow-up remark about it. */
+export function deploymentRecentlyParticipated(recentContext: ChatterContextMessage[], deploymentId: string, now: Date): boolean {
+  return recentContext.some((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId && isRecentMessage(m.createdAt, now));
+}
+
 /* -------------------------------------------------- trial reactive quota ---- */
 // Phase 4.M (B): 20 successfully-executed reactive conversational text
 // responses (CASUAL_CHAT/ANSWER/SHORT_ACK) per community per local
@@ -646,6 +658,7 @@ async function handleHumanMessage(
     // moderator's last message from hours ago doesn't mean it's "mid an
     // active exchange" just because it's the last row in history.
     wasLastSpeaker: priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessage.deploymentId === d.deploymentId && priorMessageIsRecent,
+    recentlyParticipated: deploymentRecentlyParticipated(recentContext, d.deploymentId, now),
     pacing: pacings[i],
   }));
 
@@ -681,18 +694,32 @@ async function handleHumanMessage(
 
   if (action.type === "REACT") {
     // Deterministic, zero Sonnet calls — a real Telegram reaction, never a
-    // standalone emoji text message, and never starts another bot-chain event.
-    const reactAction: CommunityAction = { kind: "REACT", emoji: action.emoji, targetDeploymentId: deployment.deploymentId, targetMessageId: event.messageId };
-    const result = await executeAction(admin, String(message.chat.id), reactAction);
-    if (!result.ok) {
-      // Previously silent -- Telegram rejecting the reaction (missing bot
-      // rights, or the chat restricting its allowed-reactions set) looked
-      // identical to a successful react from every log/observability angle.
-      console.error("[telegram/community] REACT failed", result.error);
-      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "REACT_FAILED", action.reasons.join(","), { reasons: action.reasons, emoji: action.emoji, error: result.error });
-      return;
+    // standalone emoji text message. Reactions never call generateChatterReply
+    // at all (lightweight ambient social content is handled by REACT/SILENCE,
+    // not a wasted DeepSeek call for something a reaction already covers) and
+    // never insert into community_messages, so — unlike a SEND_TEXT reply —
+    // they can never be re-observed by another bot's webhook and can never
+    // start a new bot-chain event, no matter how many reactors fire below.
+    await reactAsDeployment(admin, panelId, community.id, String(message.chat.id), event.messageId, deployment, action.emoji, action.reasons);
+
+    // Reactions are not turn-taking: this reactor's action does not consume
+    // the human's message. When the primary reaction came from an AMBIENT
+    // path (not a message literally directed at one specific moderator —
+    // that stays single-target, since it's that moderator's to answer),
+    // other currently-relevant moderators may independently react to the
+    // SAME message too, bounded by MAX_ADDITIONAL_REACTORS so a room with
+    // many deployed moderators never turns one "lol" into a pile-on.
+    if (!action.reasons.includes("directed_trivial_acknowledgement")) {
+      const additionalReactorIds = resolveAdditionalReactors(
+        { text: event.text, candidates, now, recentlyAnsweredByModerator, recentlyRespondedByHuman },
+        deployment.deploymentId
+      );
+      for (const id of additionalReactorIds) {
+        const additionalDeployment = deployments.find((d) => d.deploymentId === id);
+        if (!additionalDeployment) continue;
+        await reactAsDeployment(admin, panelId, community.id, String(message.chat.id), event.messageId, additionalDeployment, action.emoji, ["ambient_relevant_acknowledgement"]);
+      }
     }
-    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "REACT", action.reasons.join(","), { reasons: action.reasons, emoji: action.emoji });
     return;
   }
 
@@ -766,6 +793,37 @@ async function handleHumanMessage(
       }
     }
   }
+}
+
+/** Executes + logs ONE deployment's REACT to the current message. Extracted
+ *  so it can run once for the primary reactor and, independently, once per
+ *  additional relevant reactor (see the multi-reactor fan-out block above) --
+ *  the SAME zero-Sonnet, zero-community_messages-insert shape every time,
+ *  just scoped to a different deployment + its own persona-flavored emoji
+ *  (personaReactionEmoji, chatter-generate.ts) so two moderators reacting to
+ *  the same message don't have to use an identical one. */
+async function reactAsDeployment(
+  admin: SupabaseClient,
+  panelId: string,
+  communityId: string,
+  chatId: string,
+  targetMessageId: string,
+  deployment: ChatterDeployment,
+  baseEmoji: string,
+  reasons: string[]
+): Promise<void> {
+  const emoji = personaReactionEmoji(baseEmoji, deployment.persona);
+  const reactAction: CommunityAction = { kind: "REACT", emoji, targetDeploymentId: deployment.deploymentId, targetMessageId };
+  const result = await executeAction(admin, chatId, reactAction);
+  if (!result.ok) {
+    // Previously silent -- Telegram rejecting the reaction (missing bot
+    // rights, or the chat restricting its allowed-reactions set) looked
+    // identical to a successful react from every log/observability angle.
+    console.error("[telegram/community] REACT failed", result.error);
+    await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "REACT_FAILED", reasons.join(","), { reasons, emoji, error: result.error });
+    return;
+  }
+  await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "REACT", reasons.join(","), { reasons, emoji });
 }
 
 /** Generates (if needed), sends, and logs one moderator's response to the

@@ -4,6 +4,7 @@ import {
   selectChatterAction, resolveDirectedModerator, isConversationalOpener,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
   resolveMultiTargetAddress, MAX_ADDITIONAL_RESPONDERS,
+  resolveAdditionalReactors, MAX_ADDITIONAL_REACTORS,
   type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity,
 } from "./chatter-coordinator";
 
@@ -20,13 +21,14 @@ const DEPLOYMENT_A = "deployment-a";
 const DEPLOYMENT_B = "deployment-b";
 
 function candidate(id: string, over: Partial<ChatterCandidate> = {}): ChatterCandidate {
-  return { deploymentId: id, isDirectedAtBot: false, wasLastSpeaker: false, pacing: freshPacing, ...over };
+  return { deploymentId: id, isDirectedAtBot: false, wasLastSpeaker: false, recentlyParticipated: false, pacing: freshPacing, ...over };
 }
 
 function single(opts: {
   text: string;
   isDirectedAtBot?: boolean;
   wasLastSpeaker?: boolean;
+  recentlyParticipated?: boolean;
   pacing?: ChatterPacingState;
   now?: Date;
   recentlyAnsweredByModerator?: boolean;
@@ -38,6 +40,7 @@ function single(opts: {
       candidate(DEPLOYMENT_A, {
         isDirectedAtBot: opts.isDirectedAtBot ?? false,
         wasLastSpeaker: opts.wasLastSpeaker ?? false,
+        recentlyParticipated: opts.recentlyParticipated ?? false,
         pacing: opts.pacing ?? freshPacing,
       }),
     ],
@@ -725,12 +728,12 @@ test("a genuinely longer sentence that happens to mention a positive word mid-pa
 // check: strip agreement/approval/laughter/thanks/closing vocabulary +
 // neutral filler, and see whether any real content is left.
 
-test("REQUIRED (live bug repro): a long acknowledgement reacting to a moderator's joke resolves to SILENCE or REACT, never another generated reply", () => {
+test("REQUIRED (live bug repro, UPDATED for the ambient-reaction product decision): a long acknowledgement reacting to a moderator's OWN preceding joke -> REACT (that moderator is socially relevant, having just spoken), never a generated reply", () => {
   const result = single({ text: "prettyaccurate too. lol", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
   assert.notEqual(result.type, "CASUAL_CHAT");
   assert.notEqual(result.type, "ANSWER");
-  assert.equal(result.type, "SILENCE");
-  assert.deepEqual(result.reasons, ["already_handled_recent_reply"]);
+  assert.equal(result.type, "REACT");
+  assert.deepEqual(result.reasons, ["ambient_relevant_acknowledgement"]);
 });
 
 const LONG_TRIVIAL_ACKNOWLEDGEMENTS = [
@@ -743,14 +746,26 @@ const LONG_TRIVIAL_ACKNOWLEDGEMENTS = [
   "that's actually hilarious lol",
 ];
 
+// UPDATED for the explicit ambient-reaction product decision (was: always
+// SILENCE when not directed). A moderator no longer needs to be personally
+// addressed to react -- but genuine relevance (here: wasLastSpeaker, the
+// human is plausibly reacting to THIS moderator's own preceding message)
+// is still required, which is exactly what these fixtures set up.
 for (const text of LONG_TRIVIAL_ACKNOWLEDGEMENTS) {
-  test(`REQUIRED: long acknowledgement "${text}" is not treated as substantive -- resolves to SILENCE, never a generated reply`, () => {
+  test(`REQUIRED: long acknowledgement "${text}" right after this moderator's own message is not treated as substantive -- resolves to REACT (relevant ambient reaction), never a generated reply`, () => {
     const result = single({ text, wasLastSpeaker: true });
     assert.notEqual(result.type, "CASUAL_CHAT");
     assert.notEqual(result.type, "ANSWER");
-    assert.equal(result.type, "SILENCE");
+    assert.equal(result.type, "REACT");
   });
 }
+
+test("REQUIRED: the SAME long acknowledgements, with NO relevance at all (not directed, didn't just speak, didn't recently participate) -- still SILENCE, not a reaction pulled from nowhere", () => {
+  for (const text of LONG_TRIVIAL_ACKNOWLEDGEMENTS) {
+    const result = single({ text });
+    assert.equal(result.type, "SILENCE", `expected SILENCE with no relevance: "${text}"`);
+  }
+});
 
 test("a long acknowledgement DIRECTED at the bot still resolves to REACT, not a generated reply", () => {
   const result = single({ text: "haha okay fair enough, I get you now", isDirectedAtBot: true });
@@ -783,9 +798,9 @@ for (const text of ACKNOWLEDGEMENT_PLUS_NEW_QUESTION) {
   });
 }
 
-test("REQUIRED (context-sensitive closing, pure acknowledgement half): \"yeah that makes sense now, thanks\" right after a moderator reply -> TRIVIAL/SILENCE", () => {
+test("REQUIRED (context-sensitive closing, pure acknowledgement half, UPDATED): \"yeah that makes sense now, thanks\" right after THIS moderator's own reply -> TRIVIAL/REACT (relevant ambient reaction), not SILENCE and not a generated follow-up", () => {
   const result = single({ text: "yeah that makes sense now, thanks", wasLastSpeaker: true, recentlyAnsweredByModerator: true });
-  assert.equal(result.type, "SILENCE");
+  assert.equal(result.type, "REACT");
 });
 
 test('REQUIRED (context-sensitive closing, acknowledgement + new problem half): "yeah that makes sense, but I\'m still getting a 500" -> SUBSTANTIVE/CASUAL_CHAT, not silenced', () => {
@@ -1147,4 +1162,117 @@ test("MAX_ADDITIONAL_RESPONDERS is a small, explicit, socially-bounded cap", () 
 
 test("plain single-name mention with no comma/list stays single-target even for a name that is a substring of another (no false pile-on)", () => {
   assert.equal(resolveMultiTargetAddress("test, are you around?", [KWAN, TEST_MOD]), null);
+});
+
+/* ==================================== ambient reaction fan-out (product decision) ====
+   "Virtual Moderators may react to socially relevant ambient human messages
+   even when nobody was directly addressed. Direct targeting increases
+   relevance; it is not a prerequisite for social participation." A
+   moderator's own eligibility is unconditional and deterministic once its
+   relevance (wasLastSpeaker or recentlyParticipated) is established --
+   MULTIPLE relevant moderators can each independently react to the SAME
+   message, bounded by MAX_ADDITIONAL_REACTORS so a room with many active
+   moderators never turns one "lol" into a pile-on. Fixture names below
+   (Nova/Echo/Alice) are deliberately NOT Kwan/Test, to prove nothing here
+   is hardcoded to those two fixtures. */
+
+test("REQUIRED (ambient laugh after a moderator's own message): the exact live repro -- moderator says something strict, human reacts \"lol\" with no name/@mention/reply -- that moderator is still REACT-eligible", () => {
+  const result = single({ text: "woah that's strict lol", wasLastSpeaker: true });
+  assert.equal(result.type, "REACT");
+  assert.equal(result.type === "REACT" && result.emoji, "😂");
+  assert.equal(result.type === "REACT" && result.deploymentId, DEPLOYMENT_A);
+});
+
+test("REQUIRED (unrelated ambient noise): bare \"lol\" with NO meaningful recent context (no wasLastSpeaker, no recentlyParticipated) -- SILENCE remains appropriate", () => {
+  const result = single({ text: "lol" });
+  assert.equal(result.type, "SILENCE");
+});
+
+test("REQUIRED (directed laugh still works): a human replying directly to a moderator with \"lol\" -- that moderator is REACT-eligible, unaffected by the ambient-relevance changes", () => {
+  const result = single({ text: "lol", isDirectedAtBot: true });
+  assert.equal(result.type, "REACT");
+});
+
+test("recentlyParticipated (not just wasLastSpeaker) is enough relevance for an ambient reaction -- a moderator who took part in the exchange a couple of turns ago, not only the very last message", () => {
+  const result = single({ text: "haha that's wild", recentlyParticipated: true });
+  assert.equal(result.type, "REACT");
+});
+
+test("REQUIRED (two relevant moderators): both participated in the exchange -- primary reacts via selectChatterAction, and the OTHER relevant one is independently eligible via resolveAdditionalReactors", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = [
+    { deploymentId: "dep-nova", isDirectedAtBot: false, wasLastSpeaker: true, recentlyParticipated: true, pacing: freshPacing },
+    { deploymentId: "dep-echo", isDirectedAtBot: false, wasLastSpeaker: false, recentlyParticipated: true, pacing: freshPacing },
+  ];
+  const input = { text: "you two are hilarious lol", candidates, now };
+  const primary = selectChatterAction(input);
+  assert.equal(primary.type, "REACT");
+  assert.equal(primary.type === "REACT" && primary.deploymentId, "dep-nova"); // wasLastSpeaker wins primary selection
+
+  const additional = resolveAdditionalReactors(input, "dep-nova");
+  assert.deepEqual(additional, ["dep-echo"]);
+});
+
+test("REQUIRED (no pile-on): many active, equally-relevant moderators -- one ambient remark still bounds the ADDITIONAL reactor count to MAX_ADDITIONAL_REACTORS, not all of them", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = ["dep-1", "dep-2", "dep-3", "dep-4", "dep-5", "dep-6"].map((id, i) => ({
+    deploymentId: id,
+    isDirectedAtBot: false,
+    wasLastSpeaker: false,
+    recentlyParticipated: true,
+    // Spaced minutes apart (well outside MIN_REPLY_GAP_MS's 20s cooldown),
+    // not seconds -- a tight spacing would make candidateEligible's pacing
+    // cooldown itself exclude everyone, masking what this test is actually
+    // checking (the fan-out CAP, not the pacing cooldown).
+    pacing: { lastSpokeAt: new Date(now.getTime() - (i + 1) * 60_000).toISOString(), consecutiveMessages: 0 },
+  }));
+  const input = { text: "you guys are hilarious lol", candidates, now };
+  const additional = resolveAdditionalReactors(input, "dep-1");
+  assert.equal(additional.length, MAX_ADDITIONAL_REACTORS);
+  assert.ok(additional.length < candidates.length - 1, "must not fan out to every other candidate");
+});
+
+test("resolveAdditionalReactors excludes the primary reactor itself (dedup-safety)", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = [
+    { deploymentId: "dep-a", isDirectedAtBot: false, wasLastSpeaker: true, recentlyParticipated: true, pacing: freshPacing },
+  ];
+  const additional = resolveAdditionalReactors({ text: "lol", candidates, now }, "dep-a");
+  assert.deepEqual(additional, []);
+});
+
+test("resolveAdditionalReactors returns nothing for a non-TRIVIAL message (e.g. a real question) -- fan-out is scoped to ambient reactions only", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = [
+    { deploymentId: "dep-a", isDirectedAtBot: false, wasLastSpeaker: true, recentlyParticipated: true, pacing: freshPacing },
+    { deploymentId: "dep-b", isDirectedAtBot: false, wasLastSpeaker: false, recentlyParticipated: true, pacing: freshPacing },
+  ];
+  const additional = resolveAdditionalReactors({ text: "why is this happening?", candidates, now }, "dep-a");
+  assert.deepEqual(additional, []);
+});
+
+test("resolveAdditionalReactors requires genuine relevance too -- an eligible-but-irrelevant candidate is not swept in just because it exists", () => {
+  const now = new Date();
+  const candidates: ChatterCandidate[] = [
+    { deploymentId: "dep-a", isDirectedAtBot: false, wasLastSpeaker: true, recentlyParticipated: true, pacing: freshPacing },
+    { deploymentId: "dep-b", isDirectedAtBot: false, wasLastSpeaker: false, recentlyParticipated: false, pacing: freshPacing },
+  ];
+  const additional = resolveAdditionalReactors({ text: "lol", candidates, now }, "dep-a");
+  assert.deepEqual(additional, []);
+});
+
+test("MAX_ADDITIONAL_REACTORS is a small, explicit, socially-bounded cap", () => {
+  assert.equal(MAX_ADDITIONAL_REACTORS, 1);
+});
+
+test("REQUIRED (no generation waste, structural): every ambient-reaction outcome above is REACT, never CASUAL_CHAT/ANSWER -- REACT never reaches generateChatterReply at all (chatter-coordinator.ts stays AI-free by construction, see file header)", () => {
+  const examples = [
+    single({ text: "woah that's strict lol", wasLastSpeaker: true }),
+    single({ text: "haha nice one", recentlyParticipated: true }),
+    single({ text: "lol", isDirectedAtBot: true }),
+  ];
+  for (const r of examples) {
+    assert.notEqual(r.type, "CASUAL_CHAT");
+    assert.notEqual(r.type, "ANSWER");
+  }
 });

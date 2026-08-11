@@ -3265,6 +3265,70 @@ win over this):**
 >     branches, and persona isolation surviving the obligation context across two
 >     different presets). 484 tests pass, `tsc --noEmit` clean, production build clean.
 >     No migration.
+>   **Explicit product decision (v1.9.15): ambient (non-directed) reactions are now
+>   allowed — supersedes the v1.9.14-era "REACT requires direct targeting" design.**
+>   Live example: "woah, that's strict lol" (no @mention/reply/name) stayed SILENCE
+>   under the old rule — a human moderator would typically still smile/react to that,
+>   not go fully quiet, since it's clearly a reaction to something in the room. Per
+>   explicit instruction, the OLD "ambient trivial content always stays SILENCE" rule
+>   (encoded in 9 existing tests) was reviewed individually and updated rather than
+>   preserved as sacred — see each test's own comment for why.
+>   - **New relevance gate, not a blanket "always react."** `ChatterCandidate` gained
+>     `recentlyParticipated: boolean` (broader than the existing `wasLastSpeaker` —
+>     true if this deployment sent ANY message within the recent, bounded context
+>     window, not only the literal last one; computed by new
+>     `deploymentRecentlyParticipated()` in `community-runtime.ts`). New
+>     `pickRelevantReactor()` (`chatter-coordinator.ts`) requires a candidate to be
+>     `wasLastSpeaker` or `recentlyParticipated` before an ambient TRIVIAL message can
+>     REACT — a genuinely contextless "lol" with no relevant candidate still correctly
+>     stays `SILENCE` (`trivial_low_value`/`already_handled_recent_reply`, unchanged).
+>     Direct targeting still exists and is unaffected (`directed_trivial_acknowledgement`
+>     stays single-target, unfanned-out, by design — a message literally addressed at
+>     one moderator is that moderator's to answer).
+>   - **Multiple relevant moderators may independently react — reactions are not
+>     turn-taking.** New `resolveAdditionalReactors(input, primaryDeploymentId)` +
+>     `MAX_ADDITIONAL_REACTORS = 1` (2 reactors total, matching the product spec's own
+>     worked examples — chosen the same way `MAX_ADDITIONAL_RESPONDERS` was: an
+>     explicit, socially-bounded cap independent of Active Moderator Slot count, since
+>     a Pro-tier panel can have up to 20 deployed). Called from `community-runtime.ts`
+>     only when the primary REACT did NOT come from the directed path — reuses the
+>     SAME relevance bar as the primary (`wasLastSpeaker`/`recentlyParticipated`), never
+>     a coin flip on whether to react, only a deterministic tie-break (quietest-longest)
+>     for WHICH of several equally-relevant candidates fill the bounded slots.
+>   - **`selectChatterAction()`'s own return shape is unchanged** (still exactly one
+>     action/deploymentId) — multi-reactor fan-out is a strictly additional layer,
+>     mirroring the v1.9.13 multi-target-address architecture exactly.
+>   - **Persona-aware reaction expression, content-based eligibility stays persona-
+>     agnostic.** "The coordinator decides whether a reaction is warranted. The
+>     persona layer decides how that reaction is expressed." New
+>     `personaReactionEmoji(baseEmoji, persona, random?)` (`chatter-generate.ts`) —
+>     the coordinator still only ever suggests a neutral content-based default emoji
+>     (unchanged, e.g. 😂 for laughter); this maps it to a persona-appropriate
+>     variant (humor/teasing dials widen the laugh pool to 🤣/😆; formality narrows
+>     positive/agreement to 🙂/👍). A persona that strongly avoids emoji
+>     (`emojiFrequency < 15`) still reacts — a Telegram reaction IS an emoji, there's
+>     no text-less alternative — but gets the plainest option for the category rather
+>     than an exuberant one. Deterministic by default with an injectable `random`
+>     (mirrors `shortAckText`'s existing pattern) — randomness, when used, only picks
+>     among equally-valid expressions of the SAME category, never whether to react.
+>     Wired into `community-runtime.ts`'s new `reactAsDeployment()` helper (extracted
+>     from the old inline REACT branch, same zero-Sonnet/zero-`community_messages`-
+>     insert shape as before — reactions still never call `generateChatterReply` and
+>     still can never be re-observed by another bot's webhook, so no new loop-safety
+>     surface), called once for the primary reactor and once per additional one.
+>   - New tests: `chatter-coordinator.test.ts` (+16 — the exact live repro, unrelated
+>     ambient noise still SILENCE, directed laugh unaffected, `recentlyParticipated`
+>     alone is sufficient relevance, two-relevant-moderators bounded fan-out, no-pile-on
+>     cap with many equally-relevant candidates, `resolveAdditionalReactors` dedup-
+>     safety/non-TRIVIAL-exclusion/relevance-requirement, the `MAX_ADDITIONAL_REACTORS`
+>     constant, and a structural no-generation-waste check) plus 9 EXISTING tests
+>     reviewed and updated (SILENCE→REACT) with an explanatory comment on each, per
+>     explicit instruction not to blindly preserve tests that contradict the new
+>     product decision; `chatter-generate.test.ts` (+8 — persona-aware pool selection,
+>     the low-emoji-persona plain-option floor, determinism); `community-runtime.test.ts`
+>     (+4 — `deploymentRecentlyParticipated`'s broader-than-last-message window, staleness,
+>     and HUMAN-sender exclusion). 507 tests pass (up from 484), `tsc --noEmit` clean,
+>     production build clean. No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

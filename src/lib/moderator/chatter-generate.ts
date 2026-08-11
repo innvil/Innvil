@@ -391,6 +391,51 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
   }
 }
 
+/* --------------------------------------------------- persona-aware reactions ---- */
+// "The coordinator decides whether a reaction is warranted. The persona
+// layer decides how that reaction is expressed." chatter-coordinator.ts's
+// selectChatterAction/resolveAdditionalReactors are deliberately persona-
+// agnostic (pure content+context, no ModeratorPersona in scope) and only
+// ever suggest a neutral, content-based default emoji. This is where that
+// default gets flavored per moderator, so two different personas reacting
+// to the SAME message don't have to use an identical emoji.
+
+type ReactionCategory = "laugh" | "thanks" | "positive" | "agreement";
+
+function reactionCategoryFromEmoji(emoji: string): ReactionCategory {
+  if (emoji === "😂") return "laugh";
+  if (emoji === "🙏") return "thanks";
+  if (emoji === "😄" || emoji === "❤️") return "positive";
+  return "agreement"; // 👍, the coordinator's generic default
+}
+
+/** Picks the actual emoji ONE specific moderator sends for a reaction the
+ *  coordinator already decided is warranted. Deterministic by default
+ *  (injectable `random` for testability, mirroring shortAckText below) —
+ *  randomness here only ever chooses AMONG equally-valid expressions of the
+ *  SAME category (e.g. 😂 vs 🤣 for laughter), never whether to react at
+ *  all, which is entirely the coordinator's call and already made before
+ *  this function is ever reached. A persona that strongly avoids emoji
+ *  (emojiFrequency < 15, same threshold personaStyle uses) still reacts —
+ *  a Telegram reaction IS an emoji, there's no text-less alternative — but
+ *  gets the plainest, least-expressive option for the category instead of
+ *  a more exuberant one, so the dial still visibly matters without
+ *  suppressing participation entirely. */
+export function personaReactionEmoji(baseEmoji: string, persona: ModeratorPersona, random: () => number = Math.random): string {
+  const category = reactionCategoryFromEmoji(baseEmoji);
+  const plain: Record<ReactionCategory, string> = { laugh: "😄", thanks: "🙏", positive: "🙂", agreement: "👍" };
+  if (persona.emojiFrequency < 15) return plain[category];
+
+  const pools: Record<ReactionCategory, string[]> = {
+    laugh: persona.humor > 60 || persona.teasing > 60 ? ["🤣", "😂", "😆"] : ["😂", "😅"],
+    thanks: ["🙏"],
+    positive: persona.formality > 70 ? ["🙂", "👍"] : ["😄", "🔥", "🙌"],
+    agreement: persona.formality > 70 ? ["👍"] : ["👍", "🙌"],
+  };
+  const pool = pools[category];
+  return pool[Math.floor(random() * pool.length)];
+}
+
 const SHORT_ACK_PHRASES = ["yeah", "nice", "fair", "gotcha", "true", "ha, fair", "makes sense", "for sure"];
 
 /** SHORT_ACK is deterministic — no Sonnet call. A small varied pool avoids

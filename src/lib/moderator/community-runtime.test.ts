@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
-  raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds,
+  raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -394,4 +394,52 @@ test("an empty multi-target list yields no additional responders", () => {
 
 test("a single co-addressed moderator (no cap needed) still resolves correctly", () => {
   assert.deepEqual(resolveAdditionalResponderIds("dep-primary", ["dep-a"]), ["dep-a"]);
+});
+
+/* ========================================= deploymentRecentlyParticipated ====
+   Feeds ChatterCandidate.recentlyParticipated -- broader than "was the
+   literal last message" (that's wasLastSpeaker, computed separately): true
+   when this deployment sent ANY message within the recent, bounded
+   (isRecentMessage) window, so "both mods participated in the exchange" can
+   recognize a moderator who spoke a couple of turns ago. */
+
+function msg(over: Partial<{ senderType: "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT"; deploymentId: string | null; createdAt: string }> = {}) {
+  return {
+    senderType: "HUMAN" as const,
+    senderName: null,
+    text: "hi",
+    deploymentId: null,
+    createdAt: new Date().toISOString(),
+    senderPlatformId: null,
+    ...over,
+  };
+}
+
+test("REQUIRED: a deployment that spoke a couple of turns ago (not the literal last message) still counts as recently participated", () => {
+  const now = new Date();
+  const recentContext = [
+    msg({ senderType: "INNVIL_MODERATOR", deploymentId: "dep-a", createdAt: new Date(now.getTime() - 60_000).toISOString() }),
+    msg({ senderType: "HUMAN", createdAt: new Date(now.getTime() - 30_000).toISOString() }),
+    msg({ senderType: "INNVIL_MODERATOR", deploymentId: "dep-b", createdAt: new Date(now.getTime() - 10_000).toISOString() }),
+  ];
+  assert.equal(deploymentRecentlyParticipated(recentContext, "dep-a", now), true);
+  assert.equal(deploymentRecentlyParticipated(recentContext, "dep-b", now), true);
+});
+
+test("a deployment that never appears in the recent context did not recently participate", () => {
+  const now = new Date();
+  const recentContext = [msg({ senderType: "INNVIL_MODERATOR", deploymentId: "dep-a", createdAt: now.toISOString() })];
+  assert.equal(deploymentRecentlyParticipated(recentContext, "dep-c", now), false);
+});
+
+test("a stale message outside the recency window does not count, even from the right deployment", () => {
+  const now = new Date();
+  const recentContext = [msg({ senderType: "INNVIL_MODERATOR", deploymentId: "dep-a", createdAt: new Date(now.getTime() - 95 * 60_000).toISOString() })];
+  assert.equal(deploymentRecentlyParticipated(recentContext, "dep-a", now), false);
+});
+
+test("a HUMAN message from the same deployment id slot never counts (only INNVIL_MODERATOR senders do)", () => {
+  const now = new Date();
+  const recentContext = [msg({ senderType: "HUMAN", deploymentId: "dep-a", createdAt: now.toISOString() })];
+  assert.equal(deploymentRecentlyParticipated(recentContext, "dep-a", now), false);
 });
