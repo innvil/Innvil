@@ -522,6 +522,34 @@ export function resolveMultiTargetAddress(text: string, moderators: ModeratorIde
   return null;
 }
 
+/* ---------------------------------------------------- conversational-obligation semantics ----
+   Only meaningful once resolveMultiTargetAddress has already found 2+
+   addressed moderators -- distinguishes two genuinely different multi-target
+   asks:
+     - an IDENTITY/self-description request ("tell me about yourself",
+       "who are you", "introduce yourselves", "your persona") -- the
+       obligation is inherently PER-PERSON; one moderator answering does NOT
+       satisfy it for the other(s), who must still contribute their own
+       answer.
+     - everything else (a shared/collective question about the group, e.g.
+       "why are you two replying like that?", "are you both here?") -- one
+       sufficient answer generally satisfies the whole ask; an additional
+       addressed moderator does not need to independently regenerate the
+       same explanation and may legitimately add nothing, a short reaction,
+       or a brief distinct point instead.
+   Deliberately a narrow, bounded regex on the request's own grammatical
+   shape (self-referential "yourself/yourselves", "who are you", "your
+   persona/personality", "introduce yourself") -- not an attempt to fully
+   parse intent. A message this doesn't recognize defaults to "shared", which
+   is the safer default (a secondary responder staying brief/declining is
+   far less costly than one that's needlessly silent when it should have
+   introduced itself). */
+const IDENTITY_REQUEST_RE = /\byoursel(?:f|ves)\b|\bwho\s+are\s+you\b|\byour\s+(?:persona|personality)\b|\bintroduce\s+yoursel(?:f|ves)\b|\beach\s+of\s+you\b/i;
+
+export function requiresIndividualContribution(text: string): boolean {
+  return IDENTITY_REQUEST_RE.test(text.trim());
+}
+
 type MessageKind = "EMPTY" | "TOO_SHORT" | "COMMUNITY_OPENER" | "TRIVIAL" | "QUESTION" | "SUBSTANTIVE";
 
 /** Classification order is the actual architecture here, not an
@@ -681,6 +709,13 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     }
     const directed = eligible.find((c) => c.isDirectedAtBot);
     if (!directed) {
+      // Deliberate design (extensively tested elsewhere in this file): an
+      // AMBIENT trivial remark -- not directed at any specific moderator,
+      // even one carrying a laugh/thanks signal -- stays SILENCE. Reacting
+      // to every passing "lol" in the room that isn't addressed to anyone
+      // would make the bot read as reacting to everything; REACT for
+      // laugh/thanks is intentionally reserved for messages actually
+      // DIRECTED at a moderator (see below).
       if (!eligible.length) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
       return { type: "SILENCE", reasons: input.recentlyAnsweredByModerator ? ["already_handled_recent_reply"] : ["trivial_low_value"] };
     }

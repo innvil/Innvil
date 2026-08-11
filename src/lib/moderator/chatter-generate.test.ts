@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { __testables, shortAckText, classifyAmbientGreeting, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
-const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine } = __testables;
+const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines } = __testables;
 
 /**
  * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
@@ -685,4 +686,132 @@ test("a failed DeepSeek call surfaces as ok:false rather than throwing or escala
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+/* ============================== human group-chat behavior contract ==========
+   Virtual Moderators are participants, not assistants. Live bug: casual
+   meta-questions ("why are the two of you not answering one after the
+   other?") produced assistant-style over-explanation of internal mechanics
+   ("no secret turn system, we just reply when we see it" / "no coordination
+   going on"). These assert the actual prompt strings the model receives --
+   deterministic prompt assembly, not live model output (see file header). ==== */
+
+test("REQUIRED: the no-hidden-mechanics rule is present for CASUAL_CHAT", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  assert.match(prompt, /internal mechanics/i);
+  assert.match(prompt, /routing/i);
+  assert.match(prompt, /turn-taking/i);
+});
+
+test("REQUIRED: the no-hidden-mechanics rule is ALSO present for ANSWER -- casual meta-questions phrased as a literal question route to ANSWER, not just CASUAL_CHAT", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  assert.match(prompt, /internal mechanics/i);
+  assert.match(prompt, /the system picked me/i);
+});
+
+test('REQUIRED: the prompt explicitly bans the exact over-explaining phrasing pattern from the live bug ("there\'s no turn system", "we don\'t coordinate")', () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  assert.match(prompt, /there's no turn system/i);
+  assert.match(prompt, /we don't coordinate/i);
+});
+
+test("REQUIRED: the minimum-sufficient-response rule (shortest natural reply, don't restate the message) is present for CASUAL_CHAT and ANSWER", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /shortest natural reply/i);
+    assert.match(prompt, /don't restate or summarize the human's message/i);
+  }
+});
+
+/* ------------------------------------------ requiresIndividualContribution ---- */
+// Distinguishes an inherently PER-PERSON request ("tell me about yourself")
+// from a shared/collective one ("why are you two replying like that?") a
+// single sufficient answer typically already satisfies.
+
+test('REQUIRED: "can you both tell me about yourself?" (the live repro) requires individual contribution', () => {
+  assert.equal(requiresIndividualContribution("can you both tell me about yourself?"), true);
+});
+
+test('REQUIRED: "tell me about yourselves" requires individual contribution', () => {
+  assert.equal(requiresIndividualContribution("tell me about yourselves"), true);
+});
+
+test('REQUIRED: "introduce yourself" requires individual contribution', () => {
+  assert.equal(requiresIndividualContribution("introduce yourself"), true);
+});
+
+test('REQUIRED: "why are you two replying like that?" is a shared/collective question, not individual', () => {
+  assert.equal(requiresIndividualContribution("why are you two replying like that?"), false);
+});
+
+test('REQUIRED: "why are the two of you not answering one after the other?" (the live repro) is a shared/collective question', () => {
+  assert.equal(requiresIndividualContribution("why are the two of you not answering one after the other? like you are taking turns?"), false);
+});
+
+test('REQUIRED: "is the room quiet today?" is a shared/collective question', () => {
+  assert.equal(requiresIndividualContribution("is the room quiet today?"), false);
+});
+
+/* ------------------------------------------------ obligationContextLines ---- */
+// Grounds a secondary responder's "did someone already cover this?" in what
+// was actually said -- never invented -- and gives different instructions
+// depending on whether the request was individual or shared.
+
+test("obligationContextLines is null when there are no prior responses (primary responder, or any ordinary single-responder message)", () => {
+  assert.equal(obligationContextLines(baseInput({})), null);
+});
+
+test("REQUIRED: shared/collective obligation -- instructs the model that a sufficient prior reply may already cover it, offers NO_REPLY, and forbids repeating the explanation", () => {
+  const line = obligationContextLines(
+    baseInput({
+      priorResponsesToThisMessage: [{ moderatorName: "Kwan", text: "just timing lol" }],
+      individualContributionExpected: false,
+    })
+  );
+  assert.ok(line);
+  assert.match(line!, /Kwan/);
+  assert.match(line!, /just timing lol/);
+  assert.match(line!, /do not need to answer again/i);
+  assert.match(line!, /do not repeat or restate/i);
+  assert.match(line!, /NO_REPLY/);
+});
+
+test("REQUIRED: individual obligation -- instructs the model it must still give its OWN answer, not just repeat or describe the other moderator", () => {
+  const line = obligationContextLines(
+    baseInput({
+      priorResponsesToThisMessage: [{ moderatorName: "Test", text: "i'm test, meme-friendly but i get stuff done" }],
+      individualContributionExpected: true,
+    })
+  );
+  assert.ok(line);
+  assert.match(line!, /Test/);
+  assert.match(line!, /each of you individually/i);
+  assert.match(line!, /still give your own genuine answer/i);
+  assert.doesNotMatch(line!, /NO_REPLY/);
+});
+
+test("obligationContextLines is wired into the actual CASUAL_CHAT and ANSWER prompts when present", () => {
+  const input = baseInput({
+    action: "CASUAL_CHAT",
+    priorResponsesToThisMessage: [{ moderatorName: "Kwan", text: "just timing lol" }],
+    individualContributionExpected: false,
+  });
+  const casualPrompt = buildSystemPrompt(input);
+  assert.match(casualPrompt, /just timing lol/);
+  const answerPrompt = buildSystemPrompt({ ...input, action: "ANSWER" });
+  assert.match(answerPrompt, /just timing lol/);
+});
+
+test("REQUIRED: persona distinction survives the obligation context -- two different presets given the SAME prior-response context still each carry their own persona text, not each other's", () => {
+  const kwan = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  const test_ = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+  const priorResponsesToThisMessage = [{ moderatorName: "Kwan", text: "just timing lol" }];
+
+  const kwanPrompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona: kwan, priorResponsesToThisMessage, individualContributionExpected: false }));
+  const calmPrompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: test_, priorResponsesToThisMessage, individualContributionExpected: false }));
+
+  assert.match(kwanPrompt, new RegExp(kwan.description.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  assert.match(calmPrompt, new RegExp(test_.description.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  assert.notEqual(kwan.description, test_.description);
 });

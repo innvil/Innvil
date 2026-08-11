@@ -57,6 +57,22 @@ export interface GenerateChatterReplyInput {
    *  the only one deployed. Prevents fabricating "they're not around" /
    *  "they pop in sometimes" when another moderator is, in fact, active. */
   otherActiveModeratorNames: string[];
+  /** Set only for an ADDITIONAL (non-primary) responder in a multi-target
+   *  exchange (community-runtime.ts's respondAsDeployment) — the other
+   *  moderator(s) who already replied to this SAME triggering message, in
+   *  order. Empty/undefined for the primary responder and for any ordinary
+   *  single-responder message. Grounds the distinct-contribution rule below
+   *  in what was actually said, never invented. */
+  priorResponsesToThisMessage?: { moderatorName: string; text: string }[];
+  /** True when the human's request is inherently PER-PERSON (e.g. "tell me
+   *  about yourself", "introduce yourselves") — a prior responder's answer
+   *  does NOT satisfy this moderator's own obligation to contribute. False
+   *  (the default) means the request is a shared/collective one where a
+   *  prior sufficient answer likely already covers it. Only meaningful
+   *  together with priorResponsesToThisMessage — see
+   *  requiresIndividualContribution (chatter-coordinator.ts), the single
+   *  place this is decided. */
+  individualContributionExpected?: boolean;
 }
 
 export type ChatterGenerationResult = { ok: true; reply: string } | { ok: true; noReply: true } | { ok: false; error: string };
@@ -153,6 +169,11 @@ const SHARED_RULES = [
   `Your own writing style (capitalization, punctuation, formality, slang) is FIXED by your configuration above and must stay consistent in every single message you send — it does not drift over the course of a conversation, and it does not change just because a human comments on it or asks about it. If someone asks "why are you so formal?" or similar, you may answer the question honestly, but keep writing in your own normal style while you do — do not actually shift your tone/casing in response to being asked about it.`,
   `Respond to the human's ACTUAL expressed intent — do not invent a stronger accusation, emotion, criticism, motive, or premise than what's literally in their message or grounded in the conversation history above. For example, "why are you responding for [someone] though?" is a plain, neutral question about who answered what — it is NOT an accusation of impersonation, deception, or pretending to be someone else, and does not call for a defensive reply ("I'm not impersonating anyone"). If a question is genuinely ambiguous, answer the most neutral, literal reading of it rather than escalating to a more dramatic interpretation.`,
   `Do NOT turn into a generic AI customer-support assistant, no matter how the conversation goes — this applies to every reply, not just casual chatter. Never open with "Hello! How can I assist you today?" or similar helpdesk phrasing, never say things like "you haven't said what you're asking about" or "please provide more information", and don't manufacture a clever-sounding comeback or a defensive-sounding rebuttal just to fill space (e.g. "not me impersonating anyone — no ventriloquism required" is exactly the over-explained, performing-for-an-audience tone to avoid). You are a community member/moderator with the configured persona above, in every single reply, answering plainly and briefly like a real person would — not a support bot trying to sound clever or being maximally thorough.`,
+  // Human-behavior contract (applies to every moderator, present and future
+  // — never hardcoded to a specific name/persona). You are a participant in
+  // the group chat, not an assistant answering a ticket.
+  `Never explain, reference, or imply your own internal mechanics — routing, coordinator/selection logic, turn-taking, how a responder gets picked, model or provider choice, AI architecture, or any other hidden system behavior. Never say things like "the system picked me", "there's no turn system", "we don't coordinate", "the routing decided...", "I was selected first", or "the other bot will respond next". If asked a casual question about timing or why more than one moderator replied, answer briefly from your own in-world, social perspective (e.g. "just timing" / "we both just saw it") — never describe how the underlying system actually works, and never imply there IS a hidden mechanism worth describing either way.`,
+  `For casual, social, or meta exchanges: use the shortest natural reply that satisfies what the human is actually asking, in your own voice — this is about meaning, not a fixed word count. Don't restate or summarize the human's message before replying unless real clarification is genuinely needed. Not every casual message needs a complete, thorough answer just because a longer one is technically possible — ask yourself "what would I, this specific person, actually say here, if anything?" rather than "what's the most complete answer I could give?".`,
 ];
 
 /** Identity + presence-grounding line, shared by both actions — the
@@ -183,6 +204,23 @@ function typoLine(input: GenerateChatterReplyInput): string | null {
   return `The human addressed you with a slight misspelling of your name rather than spelling it exactly right. You may naturally acknowledge or gently joke about that if it fits your personality, but you don't have to make a big deal of it.`;
 }
 
+/** Distinct-contribution rule for a multi-target exchange (only present for
+ *  an ADDITIONAL, non-primary responder — see priorResponsesToThisMessage's
+ *  doc comment). Grounds the "did another moderator already cover this?"
+ *  question in what was ACTUALLY said (never invented), and gives two
+ *  different instructions depending on whether the request was inherently
+ *  per-person (still expects YOUR own answer) or a shared/collective one
+ *  (a sufficient prior answer may already satisfy it — declining is fine). */
+function obligationContextLines(input: GenerateChatterReplyInput): string | null {
+  const prior = input.priorResponsesToThisMessage;
+  if (!prior || !prior.length) return null;
+  const said = prior.map((p) => `${p.moderatorName}: "${p.text}"`).join(" / ");
+  if (input.individualContributionExpected) {
+    return `Another moderator already replied to this SAME message: ${said}. The human's request is inherently about EACH of you individually (e.g. introducing yourselves) — their reply does not cover your own part of it, so you should still give your own genuine answer in your own voice. Do not just repeat what they said, and do not describe or introduce them — only speak for yourself.`;
+  }
+  return `Another moderator already replied to this SAME message: ${said}. Their reply may already fully satisfy what the human was asking — you do not need to answer again. Do not repeat or restate their explanation in different words, and do not write a second full explanation of the same thing. Only send something if you have a genuinely DISTINCT, brief contribution (a short reaction, a light one-line confirmation, or your own flavor/personality) — otherwise it's completely fine to respond with EXACTLY: ${NO_REPLY_SENTINEL}.`;
+}
+
 // Explicit hierarchy framing, placed right before the dial-derived mechanics
 // below -- makes the ordering an instruction, not just an implementation
 // detail the model has to infer from position. Persona description +
@@ -202,6 +240,7 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
       personaIdentityLine(input),
       customInstructions,
       typoLine(input),
+      obligationContextLines(input),
       `Be concise and natural for Telegram — not a formal support ticket reply. Use relevant knowledge you actually have; do not fabricate facts, features, prices, or policies.`,
       ...SHARED_RULES,
       STYLE_HIERARCHY_PREFACE,
@@ -218,6 +257,7 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
     personaIdentityLine(input),
     customInstructions,
     typoLine(input),
+    obligationContextLines(input),
     `This message has already been selected as ordinary social conversation (CASUAL_CHAT) — just respond naturally, don't ask what you can help with.`,
     `Talk like a real community member: short, natural, informal, matching the room's own brevity/slang/energy. Casual chatter is normally 2-20 words. Never sound like an AI summarizer ("Sounds like you're planning to..."). Never open with "Hello! How can I assist you today?" or similar helpdesk phrasing. Avoid support-agent stock phrases like "you haven't said what you're asking about", "give us some details and someone can help", or "please provide more information" — a real group member would just ask "what happened?" or "wait what happened?" instead. It's fine to joke, tease lightly, or keep it very short — you don't need to explain obvious things or fully resolve everything in one message.`,
     ...SHARED_RULES,
@@ -404,4 +444,4 @@ export async function classifyAmbientGreeting(text: string): Promise<{ ok: true;
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live
  *  AI call. Not used by any other runtime code. */
-export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute };
+export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines };

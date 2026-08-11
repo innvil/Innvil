@@ -3184,6 +3184,87 @@ win over this):**
 >     --noEmit` clean, production build clean. No migration (no schema change —
 >     `moderator_activity_log` already supported multiple rows per source message with
 >     no uniqueness constraint, confirmed by inspection before implementation).
+>   **Thirteenth live issue (v1.9.14): human group-chat behavior contract — Virtual
+>   Moderators are participants, not assistants.** Live repro: "why are the two of you
+>   not answering one after the other? like you are taking turns?" got assistant-style
+>   over-explanations from BOTH moderators ("no secret turn system, we just reply when
+>   we see it" / "no coordination going on, we just both hop in whenever we see the
+>   message pop up") — mechanics-exposure AND redundant duplicate explanations in one
+>   message. **Diagnosis correction, found by tracing the live activity log before
+>   touching code:** this specific message actually routed through **ANSWER** (Sonnet),
+>   not CASUAL_CHAT — it ends in "?", so `classifyMessageKind` resolves it to QUESTION
+>   → ANSWER, per the existing, unchanged precedence order. The fix therefore applies
+>   the new rules to BOTH actions, not only CASUAL_CHAT as originally scoped, since a
+>   casual/social meta-question phrased as a literal question is still reachable via
+>   ANSWER today.
+>   - **New SHARED_RULES entries** (`chatter-generate.ts`, apply to every moderator
+>     present and future — nothing hardcoded to a specific name/persona): (1) never
+>     explain/reference/imply internal mechanics — routing, coordinator/selection
+>     logic, turn-taking, responder selection, model/provider choice, AI architecture,
+>     or any other hidden system behavior (explicitly bans phrasing like "the system
+>     picked me", "there's no turn system", "we don't coordinate", "I was selected
+>     first"); a casual question about timing/why multiple moderators replied gets a
+>     brief in-world social answer ("just timing", "we both just saw it"), never a
+>     description of how the underlying system works. (2) minimum-sufficient-response:
+>     for casual/social/meta exchanges, use the shortest natural reply that satisfies
+>     what's actually being asked, in the moderator's own voice — semantic brevity, not
+>     a character cap; don't restate/summarize the human's message first unless real
+>     clarification is needed; not every casual message needs a complete, thorough
+>     answer just because a longer one is technically possible ("what would I, this
+>     specific person, actually say here, if anything?" vs. "what's the most complete
+>     answer I could give?").
+>   - **Distinct-contribution / `conversationObligationSatisfied` for multi-responder
+>     exchanges.** Separated per the user's explicit instruction: coordinator/runtime
+>     decides WHETHER a second moderator's own obligation is still unmet; the generator
+>     contract makes any resulting reply minimally human, not assistant-like — deciding
+>     one thing with prompting and the other with a deterministic rule, not conflating
+>     them. New pure `requiresIndividualContribution(text)` (`chatter-coordinator.ts`,
+>     narrow structural regex on the request's own grammatical shape — "yourself/
+>     yourselves", "who are you", "your persona/personality", "introduce yourself(ves)",
+>     "each of you" — not an attempt to fully parse intent; defaults to `false` i.e.
+>     "shared" when unrecognized, the safer default). New
+>     `GenerateChatterReplyInput.priorResponsesToThisMessage` (other moderator(s) who
+>     already replied to this SAME message, grounded in what was ACTUALLY said, never
+>     invented) + `individualContributionExpected` (that boolean, computed once per
+>     message, not per responder — it's a property of the QUESTION). New
+>     `obligationContextLines()` injects one of two instructions into BOTH the
+>     ANSWER and CASUAL_CHAT prompts when prior responses exist: **individual**
+>     obligation ("can you both tell me about yourself?") → still must give its own
+>     genuine answer, never just repeat/describe the other moderator; **shared**
+>     obligation ("why are you two replying like that?") → the prior reply may already
+>     fully satisfy it, explicitly offered `NO_REPLY` as a completely fine outcome,
+>     forbidden from writing a second full explanation of the same thing — may still
+>     add a genuinely distinct short reaction/confirmation/flavor.
+>   - **`community-runtime.ts` wiring:** `respondAsDeployment` now returns
+>     `{replied: false} | {replied: true; text: string}` (was `void`) so
+>     `handleHumanMessage` can thread what the primary (and each successive additional)
+>     responder actually said into the NEXT additional responder's own
+>     `priorResponsesToThisMessage` — accumulating, so a third responder (second
+>     additional, within the existing `MAX_ADDITIONAL_RESPONDERS = 2` cap) sees BOTH
+>     prior replies. `individualContributionExpected` is computed once via
+>     `requiresIndividualContribution(event.text)` and passed to every additional
+>     responder alongside the accumulated `priorResponses`. Primary responder behavior
+>     is otherwise unchanged — `priorResponsesToThisMessage` is simply absent/empty for
+>     it, so `obligationContextLines()` returns `null` and the prompt is unaffected.
+>   - **Considered and explicitly rejected: extending REACT to ambient (non-directed)
+>     acknowledgements.** Investigated a separate live report ("woah, that's strict
+>     lol" got no response, not even a reaction) — traced via `moderator_activity_log`
+>     to `SILENCE`/`already_handled_recent_reply`, confirming REACT IS implemented,
+>     just deliberately scoped to messages actually DIRECTED at a moderator. A first
+>     attempt to extend REACT to ambient laugh/thanks content broke 10 existing,
+>     clearly intentional tests (e.g. `"prettyaccurate too. lol"`, `"yeah lol that's
+>     actually pretty accurate"` — all explicitly asserted to stay `SILENCE` even
+>     ambient-with-laughter) — reverted. This is confirmed existing product behavior,
+>     not a gap: reacting to every ambient "lol" not addressed to anyone would read as
+>     the bot reacting to everything in the room.
+>   - New tests: `chatter-generate.test.ts` (+15 — no-hidden-mechanics rule present in
+>     both ANSWER and CASUAL_CHAT prompts, the exact banned live phrasing, the
+>     minimum-sufficient-response rule in both prompts, `requiresIndividualContribution`
+>     across the live repro + collective-question cases, `obligationContextLines` null/
+>     individual/shared wording incl. the NO_REPLY offer, wiring into both prompt
+>     branches, and persona isolation surviving the obligation context across two
+>     different presets). 484 tests pass, `tsc --noEmit` clean, production build clean.
+>     No migration.
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

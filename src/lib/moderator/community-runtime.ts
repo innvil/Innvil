@@ -6,7 +6,8 @@ import { telegramApiCall } from "./telegram-client";
 import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
-  selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
+  selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, requiresIndividualContribution,
+  isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, type ChatterContextMessage } from "./chatter-generate";
@@ -695,7 +696,7 @@ async function handleHumanMessage(
     return;
   }
 
-  await respondAsDeployment({
+  const primaryResult = await respondAsDeployment({
     admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
     deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, now,
     recentContext,
@@ -726,10 +727,22 @@ async function handleHumanMessage(
     );
     if (multiTargets) {
       const additionalIds = resolveAdditionalResponderIds(deployment.deploymentId, multiTargets);
+      // Whether the human's request is inherently per-person ("tell me about
+      // yourself") vs. a shared/collective one a single sufficient answer
+      // already covers ("why are you two replying like that?") -- decided
+      // once per message, not per responder, since it's a property of the
+      // QUESTION, not of who's answering it.
+      const individualContributionExpected = requiresIndividualContribution(event.text);
+      // Accumulates every reply actually sent to THIS message so far, so a
+      // second additional responder (when the cap allows one) sees BOTH
+      // prior replies, not just the primary's.
+      const priorResponses: { moderatorName: string; text: string }[] = primaryResult.replied
+        ? [{ moderatorName: deployment.moderatorName, text: primaryResult.text }]
+        : [];
       for (const id of additionalIds) {
         const additionalDeployment = deployments.find((d) => d.deploymentId === id);
         if (!additionalDeployment) continue;
-        await respondAsDeployment({
+        const result = await respondAsDeployment({
           admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
           deployment: additionalDeployment, actionType: action.type, reasons: ["multi_target_address"], isTrialEntitlement, now,
           recentContext,
@@ -741,8 +754,15 @@ async function handleHumanMessage(
           isDirectedAtBot: true,
           addressedWithTypo: false,
           otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== additionalDeployment.deploymentId).map((d) => d.moderatorName),
+          // Distinct-contribution rule (chatter-generate.ts's
+          // obligationContextLines): grounds "did someone already cover
+          // this?" in what was actually said, and tells the model whether
+          // its own contribution is still individually required.
+          priorResponsesToThisMessage: priorResponses,
+          individualContributionExpected,
           timer,
         });
+        if (result.replied) priorResponses.push({ moderatorName: additionalDeployment.moderatorName, text: result.text });
       }
     }
   }
@@ -768,9 +788,16 @@ async function respondAsDeployment(params: {
   isDirectedAtBot: boolean;
   addressedWithTypo: boolean;
   otherActiveModeratorNames: string[];
+  /** Only meaningful for an additional (non-primary) responder — see
+   *  GenerateChatterReplyInput's doc comments for both fields. */
+  priorResponsesToThisMessage?: { moderatorName: string; text: string }[];
+  individualContributionExpected?: boolean;
   timer: RequestTimer;
-}): Promise<void> {
-  const { admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, now, recentContext, isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, timer } = params;
+}): Promise<{ replied: false } | { replied: true; text: string }> {
+  const {
+    admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, now, recentContext,
+    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, timer,
+  } = params;
 
   // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
   // (spec §17) -- SHORT_ACK/CASUAL_CHAT/ANSWER are all reactive conversational
@@ -782,7 +809,7 @@ async function respondAsDeployment(params: {
       reasons: ["trial_reactive_quota_exhausted"],
       attemptedAction: actionType,
     });
-    return;
+    return { replied: false };
   }
 
   let replyText: string;
@@ -820,6 +847,8 @@ async function respondAsDeployment(params: {
         // Grounds the "don't fabricate another moderator's presence" prompt
         // rule in actual deployment state, not the model's guess.
         otherActiveModeratorNames,
+        priorResponsesToThisMessage,
+        individualContributionExpected,
       }),
       CHATTER_TOTAL_BUDGET_MS
     );
@@ -836,18 +865,18 @@ async function respondAsDeployment(params: {
         reasons,
         budgetMs: CHATTER_TOTAL_BUDGET_MS,
       });
-      return;
+      return { replied: false };
     }
     const generation = genRace.value;
 
     if (!generation.ok) {
       console.error("[telegram/community] chatter generation failed", generation.error);
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "GENERATION_FAILED", reasons.join(","), { reasons });
-      return;
+      return { replied: false };
     }
     if ("noReply" in generation) {
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
-      return;
+      return { replied: false };
     }
     replyText = generation.reply;
   }
@@ -886,7 +915,9 @@ async function respondAsDeployment(params: {
       text: replyText,
       reply_to_platform_message_id: event.messageId,
     });
+    return { replied: true, text: replyText };
   }
+  return { replied: false };
 }
 
 /* ------------------------------------------------------------- entry point ---- */
