@@ -206,17 +206,44 @@ export function deepseekChatterProvider(): { provider: AiProvider; apiKey: strin
  */
 const AI_REQUEST_TIMEOUT_MS = 12_000;
 
-/** POST JSON for AI providers. */
-async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
+interface RawAiResponse {
+  ok: boolean;
+  status: number;
+  bodyText: string;
+}
+
+/**
+ * POST JSON for AI providers — fetches AND fully drains the response body as
+ * ONE deadline-bounded operation.
+ *
+ * Live incident: a Telegram webhook (30s platform maxDuration) was killed
+ * with zero trace after DeepSeek's headers arrived promptly but the body
+ * stalled. Root cause: the previous version cleared the abort timer as soon
+ * as `fetch()` itself resolved — which only means headers arrived, NOT that
+ * the body has been read — then callers read `res.json()` OUTSIDE the abort
+ * scope entirely, with no time bound at all. A slow/stalled body after fast
+ * headers hung indefinitely, past the "12s" timeout that looked like it
+ * should have protected this.
+ *
+ * Fix: read the body (`res.text()`) INSIDE this function, under the SAME
+ * AbortSignal used for `fetch()` — per the Fetch spec, aborting a signal
+ * also aborts an in-progress body read tied to it, so this genuinely bounds
+ * the full request lifecycle (connect + headers + body), not just the first
+ * phase. Callers get the already-fully-read text back and never touch the
+ * network layer's timing themselves.
+ */
+async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<RawAiResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    const bodyText = await res.text();
+    return { ok: res.ok, status: res.status, bodyText };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`AI provider request timed out after ${AI_REQUEST_TIMEOUT_MS}ms`);
@@ -249,10 +276,9 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
     messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`AI provider (anthropic) ${res.status}: ${body.slice(0, 300)}`);
+    throw new Error(`AI provider (anthropic) ${res.status}: ${res.bodyText.slice(0, 300)}`);
   }
-  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }>; usage?: AnthropicUsage };
+  const data = JSON.parse(res.bodyText) as { content?: Array<{ type: string; text?: string }>; usage?: AnthropicUsage };
   logAiUsage(opts, model, data.usage);
   return (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
 }
@@ -279,10 +305,9 @@ async function openaiComplete(baseUrl: string, key: string, model: string, opts:
     messages: [{ role: "system", content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.content }))],
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`AI provider (openai) ${res.status}: ${body.slice(0, 300)}`);
+    throw new Error(`AI provider (openai) ${res.status}: ${res.bodyText.slice(0, 300)}`);
   }
-  const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const data = JSON.parse(res.bodyText) as { choices?: Array<{ message?: { content?: string } }> };
   return (data.choices?.[0]?.message?.content ?? "").trim();
 }
 

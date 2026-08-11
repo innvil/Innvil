@@ -166,3 +166,81 @@ test("without disableThinking, no thinking field is sent on the OpenAI-compatibl
     assert.equal(body.thinking, undefined);
   });
 });
+
+/**
+ * Live incident fix: a Telegram webhook (30s platform maxDuration) was
+ * killed with ZERO trace after a provider sent response HEADERS promptly
+ * but the BODY stalled -- the previous implementation cleared the abort
+ * timer as soon as fetch() resolved (headers only), leaving the subsequent
+ * res.json()/res.text() call completely unprotected. postJson() now reads
+ * the body INSIDE the same abort scope, so a stalled body is aborted within
+ * the configured timeout instead of hanging indefinitely.
+ */
+
+async function flushMicrotasks(times = 5): Promise<void> {
+  for (let i = 0; i < times; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("REQUIRED (live incident fix): headers arrive instantly but the BODY never resolves -- still aborted within the configured timeout, not left hanging", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let bodyReadStarted = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    // Headers "arrive" immediately (fetch() resolves right away) -- only the
+    // BODY read hangs, exactly the live incident's failure shape.
+    return {
+      ok: true,
+      status: 200,
+      text: () =>
+        new Promise<string>((_resolve, reject) => {
+          bodyReadStarted = true;
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+          // Deliberately never resolves otherwise -- simulates a stalled body.
+        }),
+    } as unknown as Response;
+  }) as typeof fetch;
+
+  try {
+    const promise = aiComplete({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "deepseek-v4-flash",
+      providerOverride: { provider: "openai", apiKey: "sk-test", baseUrl: "https://api.deepseek.com" },
+    });
+    // Let the fetch()->text() chain actually start (attach the abort
+    // listener) before advancing the fake clock past it.
+    await flushMicrotasks();
+    assert.equal(bodyReadStarted, true, "test setup invalid -- body read never started");
+    // Advance past the configured AI request timeout (12s) -- fake timers
+    // make this instant, not a real 12-second wait.
+    t.mock.timers.tick(12_000);
+    await assert.rejects(promise, /timed out/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a fetch() that never even resolves headers is also aborted within the configured timeout (the original, already-working case)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+    })) as typeof fetch;
+
+  try {
+    const promise = aiComplete({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "deepseek-v4-flash",
+      providerOverride: { provider: "openai", apiKey: "sk-test", baseUrl: "https://api.deepseek.com" },
+    });
+    await flushMicrotasks();
+    t.mock.timers.tick(12_000);
+    await assert.rejects(promise, /timed out/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

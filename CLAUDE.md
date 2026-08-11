@@ -3013,6 +3013,91 @@ win over this):**
 >     **Run no migration** (new persona field defaults to `null` via
 >     `normalizeModeratorPersona`, so existing stored personas read back
 >     unaffected until re-materialized from a preset).
+>   **Eleventh live issue (v1.9.12): a Telegram webhook died at the platform's 30s
+>   timeout with ZERO diagnostic trace — root cause found and the whole pipeline
+>   hardened, opener classification untouched.** Live repro: "hey there again"
+>   correctly classified `COMMUNITY_OPENER` (verified by calling the actual deployed
+>   `isConversationalOpener`/`selectChatterAction` directly, not inferred from
+>   source) — but produced no reply and zero `moderator_activity_log` rows,
+>   even though the message itself was recorded in `community_messages`.
+>   `vercel logs` showed the real cause: `Vercel Runtime Timeout Error: Task timed
+>   out after 30 seconds` on the winning bot's webhook invocation (the losing
+>   bot's simultaneous delivery exited cleanly via the existing claim-race
+>   `!claimed` check — that part was never broken). A killed function never
+>   reaches its own `logActivity` calls, which is why the DB showed nothing.
+>   - **Actual root cause, found by inspection not guesswork:** `postJson()` in
+>     `src/lib/ai/client.ts` created an `AbortController` with a 12s timer, wired
+>     into `fetch()`'s `signal` — correctly. But the timer was cleared in a
+>     `finally` block that ran as soon as `fetch()` ITSELF resolved, which only
+>     means response HEADERS arrived, not that the body has been read.
+>     `anthropicComplete()`/`openaiComplete()` then called `res.json()` **outside**
+>     `postJson()`, completely outside the abort scope — a provider that sends
+>     headers promptly but stalls mid-body could hang past the "12s" timeout
+>     indefinitely, with no protection at all, right up to the platform's hard 30s
+>     kill.
+>   - **Fix:** `postJson()` now reads the full body (`res.text()`) INSIDE the same
+>     function, under the SAME `AbortSignal` used for `fetch()`. Per the Fetch spec,
+>     aborting that signal also aborts an in-progress body read tied to it, so the
+>     timeout now genuinely bounds the whole request lifecycle (connect + headers +
+>     body), not just the first phase. `anthropicComplete`/`openaiComplete` now
+>     `JSON.parse()` the already-fully-read text instead of calling `res.json()`
+>     unprotected. Verified with a `fetch` mock whose headers resolve instantly but
+>     whose `.text()` never resolves until the abort signal fires — proven via
+>     `node:test`'s fake timers (`t.mock.timers`), so the test proves the fix in
+>     milliseconds, not by waiting out a real 12-second timer.
+>   - **`telegram-client.ts`'s `telegramApiCall` had NO timeout at all** (plain
+>     `fetch`, no `AbortController`) — not the primary suspect in this incident
+>     (Telegram's API is normally fast), but hardened with the same pattern
+>     (10s bound, body read inside the same abort scope) as defense in depth,
+>     per explicit verification request.
+>   - **Retries/fallback confirmed NOT stacking:** `aiComplete`'s primary→
+>     `AI_FALLBACK_*` retry is structurally skipped entirely whenever
+>     `providerOverride` is set (`if (opts.providerOverride) return
+>     completeOnce(...)`, no wrapping) — confirmed by reading the code, not
+>     assumed. No second model call follows the first for CASUAL_CHAT/DeepSeek.
+>   - **Observability layer added, all in `community-runtime.ts`:** `GENERATION_STARTED`
+>     is now written to `moderator_activity_log` **before** the model call —
+>     specifically so a killed function still leaves a diagnostic DB trace even if
+>     some future bug escapes the client-level fix above. New `GENERATION_TIMEOUT`
+>     outcome (existing `GENERATION_FAILED`/`MODEL_DECLINED` unchanged) if the new
+>     total-budget safety net (`raceWithTimeout`, `CHATTER_TOTAL_BUDGET_MS = 20s` —
+>     `12s` model timeout < `20s` total budget < `30s` platform `maxDuration`,
+>     leaving ~10s headroom for DB/logging/Telegram-send) ever fires — in practice
+>     this should be redundant now that the client-level timeout is fixed, but
+>     guarantees the function returns and logs rather than hanging regardless.
+>     Same budget wrapper applied to the v1.9.10 `classifyAmbientGreeting` fallback
+>     call (`AMBIENT_CLASSIFY_BUDGET_MS = 15s`).
+>   - **Structured timing checkpoints** (`createRequestTimer`, tagged
+>     `[chatter-timing]` in Vercel logs) at every stage from `webhook_received`
+>     through `total_request_duration`: duplicate-update check, claim/dedup
+>     (`claim_won`/`claim_lost_duplicate` — the two-bot race is expected/normal,
+>     now distinguishable from a real failure), entitlement gate, deployment
+>     lookup, context loading, coordinator selection, generation start/end,
+>     Telegram send, activity logging. Each line logs both the delta since the
+>     previous checkpoint (which stage was slow) and total elapsed (approaching
+>     budget) — label + integrationId + timings only, never prompts/message
+>     content/secrets.
+>   - **DeepSeek routing re-verified, no changes needed:** confirmed via the
+>     existing v1.9.0/v1.9.1 fetch-spy tests (still passing, untouched) that
+>     CASUAL_CHAT sends `model: "deepseek-v4-flash"`, the configured
+>     `DEEPSEEK_BASE_URL`, and `thinking: {type: "disabled"}` — no accidental
+>     Sonnet fallback, wrong model, or wrong endpoint.
+>   - **Claim-race semantics unchanged** (per explicit instruction — no correctness
+>     bug found there): two bots receiving the same Telegram update is expected;
+>     first to claim in `recordCommunityMessage` proceeds, the loser exits via the
+>     pre-existing `!claimed` check. Only added trace logging around it.
+>   - New tests: `client.test.ts` (+2 — stalled-body-after-fast-headers is aborted
+>     within the timeout via fake timers; a fetch that never resolves headers at
+>     all was already correctly handled, kept as a regression guard) and
+>     `community-runtime.test.ts` (+8 — `raceWithTimeout`'s full contract:
+>     resolves-before-budget wins, never-resolves is bounded not left hanging, a
+>     stage far slower than budget still cuts off at the budget boundary, a
+>     rejecting promise propagates as a rejection rather than being swallowed,
+>     the timed-out branch structurally carries no provider/model info to
+>     silently fall back through, plus `createRequestTimer`'s structured-log
+>     shape and no-sensitive-content guarantee). 451 tests pass, `tsc --noEmit`
+>     clean, production build clean. No migration (no schema change; new
+>     activity-log decision VALUES only, same existing table/columns).
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

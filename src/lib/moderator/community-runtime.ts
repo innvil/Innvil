@@ -26,6 +26,71 @@ import { classifySender as classifySenderPure, type CommunityEvent, type Communi
  * context window both features need, and recording it is cheap.
  */
 
+/* ------------------------------------------------------- timing/budget ---- */
+// Live incident: a webhook invocation was killed at Vercel's 30s maxDuration
+// with ZERO trace -- the message was recorded (community_messages) but no
+// moderator_activity_log row existed anywhere, because the function died
+// mid-generation before reaching any logActivity call. Root cause (fixed
+// separately in src/lib/ai/client.ts's postJson) was a stalled DeepSeek
+// response BODY after fast headers, outside the old abort scope. This
+// section adds the observability/budget layer so a repeat of "died with no
+// trace" becomes structurally impossible even if some future call escapes
+// its own internal timeout: (1) structured elapsed-time checkpoints so a
+// Vercel log line makes it obvious which stage consumed time, (2) a
+// GENERATION_STARTED activity row written BEFORE the slow call so the DB
+// alone is diagnostic even without pulling function logs, (3) an outer
+// total-budget race around the generation call as defense in depth.
+
+/** model timeout (12s, see client.ts AI_REQUEST_TIMEOUT_MS) < this total
+ *  chatter budget < platform maxDuration (30s) -- leaves ~10s headroom for
+ *  DB reads/writes, activity logging, and the Telegram send around the
+ *  model call itself. */
+const CHATTER_TOTAL_BUDGET_MS = 20_000;
+/** classifyAmbientGreeting is a tiny classification call (5 output tokens),
+ *  not a full reply -- same model-timeout floor, smaller budget than a full
+ *  generation since there's much less work to do around it. */
+const AMBIENT_CLASSIFY_BUDGET_MS = 15_000;
+
+/** One elapsed-time tracker per webhook invocation, threaded from
+ *  handleCommunityUpdate down into handleHumanMessage so "total request
+ *  duration" is a single real number, not two disjoint per-function timers.
+ *  Each mark() logs both the delta since the PREVIOUS checkpoint (which
+ *  stage was slow) and the total elapsed since the request began (are we
+ *  approaching budget) -- structured JSON so it's grep-able in Vercel logs
+ *  without needing a new dashboard. Never logs prompts/secrets/message
+ *  content -- label + integrationId + timings only. */
+export function createRequestTimer(integrationId: string) {
+  const start = Date.now();
+  let last = start;
+  return {
+    mark(label: string, extra: Record<string, unknown> = {}) {
+      const now = Date.now();
+      console.log("[chatter-timing]", JSON.stringify({ integrationId, label, deltaMs: now - last, totalMs: now - start, ...extra }));
+      last = now;
+    },
+    totalMs(): number {
+      return Date.now() - start;
+    },
+  };
+}
+export type RequestTimer = ReturnType<typeof createRequestTimer>;
+
+/** Races `promise` against a plain timer (NOT true cancellation -- JS can't
+ *  force an in-flight promise to stop -- but it guarantees the CALLER never
+ *  waits past `ms`, which is what actually matters for staying under the
+ *  platform's hard kill: the underlying call's OWN internal timeout, fixed
+ *  separately in client.ts, is what actually tears down the network
+ *  request. This is the safety net for "what if that somehow doesn't fire." */
+export async function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false }> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<{ ok: false }>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false }), ms);
+  });
+  const result = await Promise.race([promise.then((value): { ok: true; value: T } => ({ ok: true, value })), timeout]);
+  clearTimeout(timer!);
+  return result;
+}
+
 type TelegramChat = { id: number; type?: string; title?: string; username?: string };
 type TelegramUser = { id: number; is_bot?: boolean; username?: string; first_name?: string };
 type TelegramMessage = {
@@ -518,9 +583,11 @@ async function handleHumanMessage(
   community: { id: string },
   message: TelegramMessage,
   event: CommunityEvent,
-  isTrialEntitlement: boolean
+  isTrialEntitlement: boolean,
+  timer: RequestTimer
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
+  timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
   if (!deployments.length) return; // no chatter-eligible deployment in this community
 
   const repliedToDeploymentId = await resolveRepliedToDeployment(admin, community.id, event.replyToMessageId);
@@ -542,6 +609,7 @@ async function handleHumanMessage(
   // RECENT (see isRecentMessage) -- who spoke last is meaningless on its own
   // after the room has gone quiet for a while; see RECENT_EXCHANGE_WINDOW_MS.
   const recentContext = await loadRecentContext(admin, community.id, 10);
+  timer.mark("context_history_loading", { recentContextCount: recentContext.length });
   const priorMessage = recentContext.length >= 2 ? recentContext[recentContext.length - 2] : null;
   const now = new Date();
   const priorMessageIsRecent = isRecentMessage(priorMessage?.createdAt, now);
@@ -571,6 +639,7 @@ async function handleHumanMessage(
   // CASUAL_CHAT/ANSWER) and AT MOST ONE responder across every eligible
   // deployment — deterministic, no probability roll anywhere.
   let action = selectChatterAction({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman });
+  timer.mark("coordinator_action_selected", { actionType: action.type });
 
   if (action.type === "SILENCE" && isAmbientOpenerFallbackCandidate(action, event.text)) {
     // Narrow, cheap fallback for messages that failed every deterministic
@@ -578,9 +647,12 @@ async function handleHumanMessage(
     // fallback") -- e.g. "waddup guys", a phonetic greeting spelling no
     // regex can connect to "what's up". A single DeepSeek Flash
     // classification call (5-token output, never Sonnet); on any failure
-    // the original deterministic SILENCE stands, no escalation.
-    const classified = await classifyAmbientGreeting(event.text);
-    if (classified.ok && classified.isGreeting) {
+    // the original deterministic SILENCE stands, no escalation. Budget-
+    // raced same as the main generation call below -- defense in depth on
+    // top of the model-level timeout fix in client.ts's postJson.
+    const classifyResult = await raceWithTimeout(classifyAmbientGreeting(event.text), AMBIENT_CLASSIFY_BUDGET_MS);
+    timer.mark("ambient_greeting_classification", { timedOut: !classifyResult.ok });
+    if (classifyResult.ok && classifyResult.value.ok && classifyResult.value.isGreeting) {
       action = resolveAmbientOpenerFallback({ text: event.text, candidates, now, recentlyAnsweredByModerator, recentlyRespondedByHuman });
     }
   }
@@ -628,22 +700,55 @@ async function handleHumanMessage(
     // Deterministic, zero Sonnet calls.
     replyText = shortAckText(deployment.persona);
   } else {
-    const generation = await generateChatterReply({
-      action: action.type,
-      selfDeploymentId: deployment.deploymentId,
-      moderatorName: deployment.moderatorName,
-      persona: deployment.persona,
-      recentContext,
-      triggerMessage: { senderName: event.sender.displayName, text: event.text },
-      isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
-      // Only true when THIS is the moderator the typo-tolerant match
-      // resolved to — lets it optionally play along with the misspelling
-      // without forcing every reply to comment on it.
-      addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
-      // Grounds the "don't fabricate another moderator's presence" prompt
-      // rule in actual deployment state, not the model's guess.
-      otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+    // GENERATION_STARTED is written BEFORE the model call specifically so a
+    // killed function still leaves a diagnostic trace in the DB alone -- the
+    // live incident this closes had a recorded community_messages row but
+    // ZERO moderator_activity_log rows, because the function died mid-
+    // generation before reaching any log call at all.
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "GENERATION_STARTED", action.reasons.join(","), {
+      reasons: action.reasons,
+      actionType: action.type,
+      // Mirrors resolveChatterRoute()'s own routing rule (chatter-generate.ts)
+      // -- CASUAL_CHAT -> DeepSeek Flash, ANSWER -> Sonnet 5 medium, always.
+      provider: action.type === "CASUAL_CHAT" ? "deepseek" : "anthropic",
     });
+    timer.mark("generation_start", { actionType: action.type });
+
+    const genRace = await raceWithTimeout(
+      generateChatterReply({
+        action: action.type,
+        selfDeploymentId: deployment.deploymentId,
+        moderatorName: deployment.moderatorName,
+        persona: deployment.persona,
+        recentContext,
+        triggerMessage: { senderName: event.sender.displayName, text: event.text },
+        isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
+        // Only true when THIS is the moderator the typo-tolerant match
+        // resolved to — lets it optionally play along with the misspelling
+        // without forcing every reply to comment on it.
+        addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
+        // Grounds the "don't fabricate another moderator's presence" prompt
+        // rule in actual deployment state, not the model's guess.
+        otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+      }),
+      CHATTER_TOTAL_BUDGET_MS
+    );
+    timer.mark("generation_end", { timedOut: !genRace.ok });
+
+    if (!genRace.ok) {
+      // Defense in depth: the model call's OWN internal timeout (client.ts's
+      // AI_REQUEST_TIMEOUT_MS, now correctly covering the full request incl.
+      // body read) should always fire well before this outer budget does.
+      // If it somehow doesn't, this still guarantees the function returns
+      // and logs instead of hanging until the platform kills it with no trace.
+      console.error("[telegram/community] chatter generation exceeded total budget", CHATTER_TOTAL_BUDGET_MS);
+      await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "GENERATION_TIMEOUT", action.reasons.join(","), {
+        reasons: action.reasons,
+        budgetMs: CHATTER_TOTAL_BUDGET_MS,
+      });
+      return;
+    }
+    const generation = genRace.value;
 
     if (!generation.ok) {
       console.error("[telegram/community] chatter generation failed", generation.error);
@@ -667,8 +772,10 @@ async function handleHumanMessage(
     causationMessageId: event.messageId,
   };
   const sent = await executeAction(admin, String(message.chat.id), sendAction);
+  timer.mark("telegram_send", { sent: !!sent.sentMessageId });
   await recordBotSpoke(admin, deployment.deploymentId, new Date());
   await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", action.type, action.reasons.join(","), { reasons: action.reasons });
+  timer.mark("activity_logging");
 
   // Only consumed after the send actually succeeded (spec §7) -- never for a
   // failed outbound send, a declined/failed generation (both already
@@ -696,9 +803,13 @@ async function handleHumanMessage(
 
 /** Entry point called by the per-bot webhook handler (telegram.ts). */
 export async function handleCommunityUpdate(integrationId: string, update: TelegramUpdate): Promise<void> {
+  const timer = createRequestTimer(integrationId);
+  timer.mark("webhook_received");
   const admin = createAdminClient();
 
-  if (await isDuplicateUpdate(admin, integrationId, update.update_id)) return;
+  const isDup = await isDuplicateUpdate(admin, integrationId, update.update_id);
+  timer.mark("duplicate_update_check", { isDuplicate: isDup });
+  if (isDup) return;
 
   const message = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
   if (!message?.from || !message.chat) return;
@@ -740,7 +851,14 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // another deployed bot's webhook already recorded this exact message,
   // this call is a redundant observation of the same real Telegram message —
   // stop here so bot-ack/chatter never runs (and never sends) twice for it.
+  // Telegram delivers the SAME update to EVERY bot that's a group member, so
+  // this race is expected/normal on every message with 2+ deployed
+  // moderators, never a bug on its own -- traced here (not persisted to
+  // moderator_activity_log, which stays reserved for real decisions) purely
+  // so a live incident can distinguish "this invocation never even entered
+  // the pipeline" from "it entered and then something went wrong downstream."
   const { claimed } = await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
+  timer.mark(claimed ? "claim_won" : "claim_lost_duplicate", { messageId: event.messageId });
   if (!claimed) return;
 
   if (sender.senderType === "INNVIL_MODERATOR" && sender.deploymentId) {
@@ -758,12 +876,15 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   }
 
   if (sender.senderType === "HUMAN") {
-    if (!virtualModNaturalChatterActive(settings)) return;
+    const chatterActive = virtualModNaturalChatterActive(settings);
+    timer.mark("natural_chatter_entitlement_gate", { active: chatterActive });
+    if (!chatterActive) return;
     // Phase 4.M (B): the 20/day reactive quota is trial-only (spec §2) --
     // paid tiers are unaffected and this patch does not change their
     // existing (unlimited) behavior.
     const isTrialEntitlement = moderatorEntitlementSource(settings) === "trial";
-    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement);
+    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer);
+    timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;
   }
 

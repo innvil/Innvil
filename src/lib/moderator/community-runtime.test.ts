@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
+  raceWithTimeout, createRequestTimer,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -260,4 +261,102 @@ test("REQUIRED: recordReactiveQuotaUse calls the atomic increment RPC with the r
   assert.equal(rpcCalls.length, 1);
   assert.equal(rpcCalls[0].name, "increment_community_reactive_quota");
   assert.deepEqual(rpcCalls[0].params, { p_panel_id: "panel-1", p_community_id: "community-1", p_quota_day: "2026-08-10" });
+});
+
+/* ================================== timeout/budget hardening (live incident) ==========
+   Live incident: a webhook was killed at the platform's 30s maxDuration with
+   ZERO trace -- the message was recorded but no activity_log row existed
+   anywhere, because the function died mid-generation before reaching any
+   log call. Root cause (fixed separately in src/lib/ai/client.ts) was a
+   stalled response BODY outside the old abort scope. raceWithTimeout is the
+   community-runtime-layer safety net wrapped around the generation call as
+   defense in depth -- these tests prove ITS contract in isolation, matching
+   this file's established convention of testing exported pure/async
+   utilities directly rather than the full DB-backed webhook flow. ================ */
+
+// Mirrors community-runtime.ts's own (private) CHATTER_TOTAL_BUDGET_MS --
+// 12s model timeout < this < 30s platform maxDuration.
+const CHATTER_TOTAL_BUDGET_MS_FOR_TEST = 20_000;
+
+test("REQUIRED: successful chatter -- a promise that resolves before the budget wins the race", async () => {
+  const result = await raceWithTimeout(Promise.resolve("real reply"), 5_000);
+  assert.deepEqual(result, { ok: true, value: "real reply" });
+});
+
+test("REQUIRED: slow/stalled provider -- a promise that never resolves is bounded by the budget, not left hanging", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const neverResolves = new Promise<string>(() => {});
+  const racePromise = raceWithTimeout(neverResolves, 20_000);
+  // Fake timers make this instant -- no real 20-second wait.
+  t.mock.timers.tick(20_000);
+  const result = await racePromise;
+  assert.deepEqual(result, { ok: false });
+});
+
+test("REQUIRED: total budget -- a stage far slower than the budget still resolves at the budget boundary, never past it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  // Simulates a stage (e.g. a stalled model call) that would take far
+  // longer than any reasonable budget if left unbounded.
+  const slowStage = new Promise<string>((resolve) => {
+    setTimeout(() => resolve("too slow"), 45_000);
+  });
+  const racePromise = raceWithTimeout(slowStage, CHATTER_TOTAL_BUDGET_MS_FOR_TEST);
+  t.mock.timers.tick(CHATTER_TOTAL_BUDGET_MS_FOR_TEST);
+  const result = await racePromise;
+  assert.deepEqual(result, { ok: false }, "must resolve as timed-out at the budget, not wait for the slower inner stage");
+});
+
+test("provider failure -- a promise that rejects propagates as a rejection, not swallowed as a silent timeout", async () => {
+  const failing = Promise.reject(new Error("provider 500"));
+  await assert.rejects(raceWithTimeout(failing, 5_000), /provider 500/);
+});
+
+test("REQUIRED: no Sonnet fallback on timeout -- raceWithTimeout itself carries no provider/model info to fall back through", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  // Structural proof: the timed-out branch carries no value/model/provider
+  // info at all -- there is nothing for a caller to silently "fall back"
+  // through even if it wanted to; it only ever gets {ok:false}.
+  const neverResolves = new Promise<string>(() => {});
+  const racePromise = raceWithTimeout(neverResolves, 1_000);
+  t.mock.timers.tick(1_000);
+  const result = await racePromise;
+  assert.deepEqual(Object.keys(result), ["ok"]);
+});
+
+test("createRequestTimer logs a structured checkpoint per mark(), including elapsed-since-start", () => {
+  const originalLog = console.log;
+  const logs: unknown[] = [];
+  console.log = (...args: unknown[]) => { logs.push(args); };
+  try {
+    const timer = createRequestTimer("integration-123");
+    timer.mark("webhook_received");
+    timer.mark("duplicate_update_check", { isDuplicate: false });
+    assert.equal(logs.length, 2);
+    const [tag1, payload1] = logs[0] as [string, string];
+    assert.equal(tag1, "[chatter-timing]");
+    const parsed1 = JSON.parse(payload1);
+    assert.equal(parsed1.integrationId, "integration-123");
+    assert.equal(parsed1.label, "webhook_received");
+    assert.equal(typeof parsed1.deltaMs, "number");
+    assert.equal(typeof parsed1.totalMs, "number");
+    const parsed2 = JSON.parse((logs[1] as [string, string])[1]);
+    assert.equal(parsed2.label, "duplicate_update_check");
+    assert.equal(parsed2.isDuplicate, false);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test("createRequestTimer never logs message text/prompt/secret content -- only label + timing + explicitly-passed small metadata", () => {
+  const originalLog = console.log;
+  const logs: unknown[] = [];
+  console.log = (...args: unknown[]) => { logs.push(args); };
+  try {
+    const timer = createRequestTimer("integration-123");
+    timer.mark("coordinator_action_selected", { actionType: "CASUAL_CHAT" });
+    const parsed = JSON.parse((logs[0] as [string, string])[1]);
+    assert.deepEqual(Object.keys(parsed).sort(), ["actionType", "deltaMs", "integrationId", "label", "totalMs"]);
+  } finally {
+    console.log = originalLog;
+  }
 });
