@@ -4,6 +4,7 @@ import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
+  classifySender,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -442,4 +443,95 @@ test("a HUMAN message from the same deployment id slot never counts (only INNVIL
   const now = new Date();
   const recentContext = [msg({ senderType: "HUMAN", deploymentId: "dep-a", createdAt: now.toISOString() })];
   assert.equal(deploymentRecentlyParticipated(recentContext, "dep-a", now), false);
+});
+
+/* ==================================================== classifySender: display name ====
+   THE actual source of the "@kwan_mod_bot in generated conversation" leak —
+   a recognized Innvil moderator's displayName must be its CONFIGURED name
+   (virtual_moderators.name, e.g. "Kwan"), never the Telegram bot username
+   (e.g. "kwan_mod_bot"), which craftAckText (coordinator.ts) puts directly
+   into generated acknowledgement text. */
+
+function fakeAdminForClassifySender(opts: {
+  integrations?: Array<{
+    id: string;
+    panel_id: string;
+    virtual_moderator_id: string;
+    username: string | null;
+    virtual_moderators: { name: string } | null;
+  }>;
+  deployment?: { id: string } | null;
+}) {
+  return {
+    from(table: string) {
+      if (table === "telegram_bot_integrations") {
+        const api = {
+          select() { return api; },
+          eq() { return api; },
+          async limit() { return { data: opts.integrations ?? [], error: null }; },
+        };
+        return api;
+      }
+      if (table === "moderator_deployments") {
+        const api = {
+          select() { return api; },
+          eq() { return api; },
+          async maybeSingle() { return { data: opts.deployment ?? null, error: null }; },
+        };
+        return api;
+      }
+      throw new Error(`unexpected table in fake admin: ${table}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    },
+  } as any;
+}
+
+test("REQUIRED (TEST 3): a recognized Innvil moderator's displayName is its CONFIGURED name, not the Telegram bot username", async () => {
+  const admin = fakeAdminForClassifySender({
+    integrations: [
+      { id: "integration-1", panel_id: "panel-1", virtual_moderator_id: "mod-kwan", username: "kwan_mod_bot", virtual_moderators: { name: "Kwan" } },
+    ],
+    deployment: { id: "deploy-kwan" },
+  });
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 555, is_bot: true, username: "kwan_mod_bot" });
+  assert.equal(sender.senderType, "INNVIL_MODERATOR");
+  assert.equal(sender.displayName, "Kwan");
+});
+
+test("REQUIRED (TEST 4): the Telegram bot username never appears as displayName for a recognized moderator, under any circumstances", async () => {
+  const admin = fakeAdminForClassifySender({
+    integrations: [
+      { id: "integration-1", panel_id: "panel-1", virtual_moderator_id: "mod-kwan", username: "kwan_mod_bot", virtual_moderators: { name: "Kwan" } },
+    ],
+    deployment: { id: "deploy-kwan" },
+  });
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 555, is_bot: true, username: "kwan_mod_bot" });
+  assert.notEqual(sender.displayName, "kwan_mod_bot");
+  assert.doesNotMatch(String(sender.displayName), /kwan_mod_bot/i);
+});
+
+test("REQUIRED (TEST 5): a recognized moderator with no configured name available falls back to null (safe), never the Telegram username", async () => {
+  const admin = fakeAdminForClassifySender({
+    integrations: [
+      { id: "integration-1", panel_id: "panel-1", virtual_moderator_id: "mod-kwan", username: "kwan_mod_bot", virtual_moderators: null },
+    ],
+    deployment: { id: "deploy-kwan" },
+  });
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 555, is_bot: true, username: "kwan_mod_bot" });
+  assert.equal(sender.senderType, "INNVIL_MODERATOR");
+  assert.equal(sender.displayName, null);
+});
+
+test("an EXTERNAL_BOT (not a recognized Innvil moderator) still falls back to its Telegram username -- that path never claims to be a moderator's configured name", async () => {
+  const admin = fakeAdminForClassifySender({ integrations: [], deployment: null });
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 999, is_bot: true, username: "some_other_bot" });
+  assert.equal(sender.senderType, "EXTERNAL_BOT");
+  assert.equal(sender.displayName, "some_other_bot");
+});
+
+test("a HUMAN sender is unaffected by this fix -- still uses first_name/username as before", async () => {
+  const admin = fakeAdminForClassifySender({});
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 111, is_bot: false, first_name: "K" });
+  assert.equal(sender.senderType, "HUMAN");
+  assert.equal(sender.displayName, "K");
 });

@@ -127,6 +127,44 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-11 — Bot-to-bot opening acknowledgement made deterministic + fixed @username leak (v1.12.1)
+- **Live test found two real bugs after confirming bot-to-bot Telegram delivery itself was finally
+  working** (Kwan's message reached Test's webhook, classified correctly as `INNVIL_MODERATOR`). The
+  Coordinator evaluated it and returned `IGNORE` — traced to `ACK_PROBABILITY = 0.35` in
+  `coordinator.ts` applying uniformly to EVERY bot-to-bot message, including genuine openers ("gm",
+  "hello", "hey everyone"), when an opening statement between two Innvil moderators should always be
+  acknowledged, not "occasionally."
+- **Root cause #1 (probability):** `decideBotAcknowledgement()`'s `ACK_PROBABILITY` roll didn't
+  distinguish an opening statement from ordinary bot-to-bot chatter. **Fix:** reuses the SAME semantic
+  opener classifier Natural Chatter already applies to human messages
+  (`chatter-coordinator.ts`'s `isConversationalOpener` — no new/duplicate greeting detector) to bypass
+  the probability roll ONLY for genuine openers; every other hard gate (sender type, `BOT_ACK` origin,
+  interaction depth, `botAckMode`, rate limits) still fully applies, and ordinary/non-opening bot
+  chatter keeps the exact same 35% "occasional" behavior as before — the fix is scoped to the specific
+  semantic event, not a global `0.35 → 1.0` change.
+- **Root cause #2 (naming leak):** `classifySender()`'s bot branch (`community-runtime.ts`) set
+  `displayName: from.username ?? from.first_name ?? null` — since Telegram bots always have a
+  username, a recognized Innvil moderator's `displayName` was ALWAYS its raw Telegram bot username
+  (`kwan_mod_bot`), which `coordinator.ts`'s `craftAckText()` puts directly into generated
+  acknowledgement text ("Morning kwan_mod_bot 👋" instead of "Morning Kwan 👋"). **Fix:** for a
+  `senderType === "INNVIL_MODERATOR"`, `displayName` now resolves from the moderator's CONFIGURED name
+  (`virtual_moderators.name`, fetched via a new `telegram_bot_integrations → virtual_moderators(name)`
+  embed — verified live against the DB to rule out the same `PGRST201` ambiguity that broke `/api/v2`
+  in the fix above) — never the Telegram username. A missing configured name safely falls through to
+  `null` (craftAckText's name-free template pool: "Got it 👍" / "Hey 👋"), never the raw handle.
+  `EXTERNAL_BOT`/`HUMAN` senders are unaffected (still use Telegram-provided naming, which never claims
+  to be a configured moderator's name).
+- **Files changed:** `coordinator.ts` (opener bypass + a couple more opener-flavored templates),
+  `community-runtime.ts` (`classifySender` name resolution, now exported for direct testing).
+- New tests: `coordinator.test.ts` (+11 — opener bypass across multiple phrasings, every other gate
+  still applies to openers, no-recursion via `BOT_ACK` origin, exactly-one-selected-moderator with
+  multiple eligible targets, name-safety in generated text, null-name fallback) plus one existing test
+  fixed (its default fixture text was accidentally an opener, which no longer proves what it was
+  testing — text changed to genuine non-opener chatter); `community-runtime.test.ts` (+5 — direct
+  `classifySender` tests proving configured-name resolution, no-username-leak, safe null fallback,
+  `EXTERNAL_BOT`/`HUMAN` paths unaffected). 603 tests pass (up from 588), `tsc --noEmit` clean,
+  production build clean. No migration.
+
 ### 2026-08-11 — Fix: customer API `panels(...)` embed became ambiguous after migration 0051 (v1.11.2)
 - **The actual root cause** of the "Invalid API key" incident above, found immediately after v1.11.1 shipped:
   once errors were surfaced instead of swallowed, `/api/v2` started returning `500 Server error validating

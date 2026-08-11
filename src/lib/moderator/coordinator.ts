@@ -19,6 +19,7 @@
    ========================================================= */
 
 import { MAX_BOT_INTERACTION_DEPTH, type CommunityAction, type CommunityEvent } from "./event-types";
+import { isConversationalOpener } from "./chatter-coordinator";
 
 export type BotAckMode = "off" | "reactions_only" | "acknowledgements" | "role_handoffs";
 
@@ -62,10 +63,16 @@ function isRateLimited(target: EligibleTarget, now: Date): boolean {
   return false;
 }
 
+/** `senderName` must already be the moderator's configured human-facing name
+ *  (e.g. "Kwan") — NEVER a Telegram bot username. That resolution happens
+ *  upstream in community-runtime.ts's classifySender(); this function only
+ *  ever templates whatever string it's given, so if a safe name genuinely
+ *  isn't available, the caller must pass null (falls back to the
+ *  name-free pool below) rather than a raw @handle. */
 function craftAckText(senderName: string | null, random: () => number): string {
   const templates: string[] = senderName
-    ? [`Got it 👍`, `Yep.`, `Morning ${senderName} 👋`, `Thanks ${senderName}.`]
-    : [`Got it 👍`, `Yep.`, `On it.`];
+    ? [`Got it 👍`, `Yep.`, `Morning ${senderName} 👋`, `Thanks ${senderName}.`, `GM ${senderName}`, `Hey ${senderName} 👋`]
+    : [`Got it 👍`, `Yep.`, `On it.`, `Hey 👋`];
   return templates[Math.min(templates.length - 1, Math.floor(random() * templates.length))];
 }
 
@@ -84,8 +91,21 @@ export function decideBotAcknowledgement(input: CoordinatorInput): CommunityActi
   const available = eligibleTargets.filter((t) => !isRateLimited(t, now));
   if (available.length === 0) return { kind: "IGNORE" };
 
-  // "Occasional" — most eligible moments still resolve to IGNORE (spec §17).
-  if (random() > ACK_PROBABILITY) return { kind: "IGNORE" };
+  // Deterministic opening-acknowledgement requirement: an eligible OPENING
+  // statement ("gm", "hello", "hey everyone", ...) from one Innvil moderator
+  // to another is ALWAYS acknowledged -- no probability roll. Reuses the
+  // SAME semantic opener classifier Natural Chatter already applies to human
+  // messages (chatter-coordinator.ts's isConversationalOpener), rather than
+  // inventing a second, duplicate greeting detector. Every OTHER hard gate
+  // above (sender type, BOT_ACK origin, interaction depth, mode, rate
+  // limits) still fully applies -- this only removes the "occasional"
+  // probability roll for the specific opener case; ordinary/non-opening
+  // bot-to-bot chatter below is completely unchanged.
+  const isOpeningStatement = isConversationalOpener(event.text);
+
+  // "Occasional" — most eligible NON-opening moments still resolve to
+  // IGNORE (spec §17). Openers skip this roll entirely (see above).
+  if (!isOpeningStatement && random() > ACK_PROBABILITY) return { kind: "IGNORE" };
 
   const target = available[Math.floor(random() * available.length) % available.length];
   const nextDepth = event.interactionDepth + 1;

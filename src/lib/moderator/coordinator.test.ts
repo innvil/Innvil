@@ -145,9 +145,16 @@ test("no eligible targets -> IGNORE", () => {
   assert.deepEqual(action, { kind: "IGNORE" });
 });
 
-test("probability gate: an RNG that never favors acknowledgement -> IGNORE ('occasional', not every message)", () => {
+// UPDATED: this test's fixture used to reuse baseEvent()'s default opener
+// text ("Good morning everyone 👋"). Openers are now a deterministic,
+// probability-EXEMPT path (see the "opening acknowledgement" suite below) --
+// reusing it here would no longer prove what this test is actually about
+// (ordinary, NON-opening bot chatter still being probability-gated). Text
+// changed to genuine non-opening chatter; the probability-gate behavior
+// itself is unchanged for that case.
+test("probability gate: an RNG that never favors acknowledgement -> IGNORE for ORDINARY (non-opening) bot chatter ('occasional', not every message)", () => {
   const action = decideBotAcknowledgement({
-    event: baseEvent(),
+    event: baseEvent({ text: "yeah that tracks, makes sense to me" }),
     botAckMode: "acknowledgements",
     eligibleTargets: [kaleb()],
     now: new Date(),
@@ -156,13 +163,175 @@ test("probability gate: an RNG that never favors acknowledgement -> IGNORE ('occ
   assert.deepEqual(action, { kind: "IGNORE" });
 });
 
+/* ============================================ deterministic opening acknowledgement ====
+   An eligible OPENING statement ("gm", "hello", "hey everyone", ...) from one
+   Innvil moderator to another is ALWAYS acknowledged -- no probability roll.
+   Ordinary/non-opening bot-to-bot chatter is UNCHANGED (still probability-
+   gated, see the updated "probability gate" test above). */
+
+test("REQUIRED (TEST 1/2): an eligible opening statement is acknowledged even with an RNG that would normally reject an optional acknowledgement", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "Good morning everyone 👋" }), // a genuine opener
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => 0.99, // above ACK_PROBABILITY -- would reject a NON-opener (see the updated test above)
+  });
+  assert.notEqual(action.kind, "IGNORE");
+});
+
+test("REQUIRED: the opener bypass generalizes beyond one literal phrase (semantic classifier, not a hardcoded string)", () => {
+  for (const text of ["gm", "hello", "hey everyone", "morning fam", "what's up", "evening guys"]) {
+    const action = decideBotAcknowledgement({
+      event: baseEvent({ text }),
+      botAckMode: "acknowledgements",
+      eligibleTargets: [kaleb()],
+      now: new Date(),
+      random: () => 0.99,
+    });
+    assert.notEqual(action.kind, "IGNORE", `expected an opener acknowledgement for: "${text}"`);
+  }
+});
+
+test("REQUIRED: every OTHER hard gate still fully applies to an opener -- BOT_ACK origin still forces IGNORE even for opener text", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "gm everyone", origin: "BOT_ACK" }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => 0.99,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("REQUIRED (TEST 6, no recursion): an opener's OWN acknowledgement reply is tagged origin=BOT_ACK -- feeding that back in must not force a second acknowledgement", () => {
+  // Simulates the acknowledgement reply itself being re-observed (Telegram
+  // delivers every bot's messages to every other bot's webhook) -- origin is
+  // BOT_ACK for that re-observation, which is an unconditional IGNORE gate
+  // regardless of opener classification or RNG.
+  const ackReplyReobserved = baseEvent({ text: "Morning Kwan 👋", origin: "BOT_ACK", interactionDepth: 1 });
+  const action = decideBotAcknowledgement({
+    event: ackReplyReobserved,
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => 0.01,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("botAckMode off still IGNOREs an opener -- the opener bypass only removes the probability roll, not the other gates", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "gm everyone" }),
+    botAckMode: "off",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => 0.01,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("a rate-limited target still means an opener IGNOREs -- the bypass only removes the probability roll, not rate limiting", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "gm everyone" }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb({ botAcksToday: 5, botAcksDay: new Date().toISOString().slice(0, 10) })],
+    now: new Date(),
+    random: () => 0.01,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("REQUIRED (TEST 9): with multiple eligible receiving deployments, an opener still selects exactly ONE -- never all of them", () => {
+  const targets: EligibleTarget[] = [kaleb(), { deploymentId: "deploy-alice", displayName: "Alice", lastBotAckAt: null, botAcksToday: 0, botAcksDay: null }];
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "gm everyone" }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: targets,
+    now: new Date(),
+    random: () => 0.99, // would reject a non-opener, must not matter for an opener
+  });
+  assert.notEqual(action.kind, "IGNORE");
+  // The action union structurally carries exactly one targetDeploymentId --
+  // there is no shape in which more than one deployment could be told to act.
+  if (action.kind !== "IGNORE") assert.ok(["deploy-kaleb", "deploy-alice"].includes(action.targetDeploymentId));
+});
+
+/* -------------------------------------------------------- name safety (craftAckText) ---- */
+// The name passed in here must already be safe (resolved upstream in
+// community-runtime.ts's classifySender -- see its own tests for the actual
+// username-vs-configured-name resolution). These tests prove the template
+// layer itself never introduces a leak and degrades safely when no name is
+// available, regardless of what upstream provides.
+
+test("REQUIRED (TEST 3): a SEND_TEXT opener acknowledgement uses the given human-facing name", () => {
+  let call = 0;
+  // Openers skip the probability-gate random() call entirely (short-
+  // circuited) -- only 2 calls remain: pick target 0, then land above
+  // REACT_PREFERENCE -> SEND_TEXT.
+  const seq = [0.0, 0.99];
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "gm everyone", sender: { ...baseEvent().sender, displayName: "Kwan" } }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => seq[Math.min(call++, seq.length - 1)],
+  });
+  assert.equal(action.kind, "SEND_TEXT");
+  if (action.kind === "SEND_TEXT") {
+    assert.match(action.text, /\bKwan\b/);
+  }
+});
+
+test("REQUIRED (TEST 4): the acknowledgement text never contains a Telegram-handle-shaped string, even if one were passed as the name", () => {
+  let call = 0;
+  const seq = [0.0, 0.99]; // openers skip the probability-gate call -- see TEST 3
+  // Defensive: even if something upstream ever regressed and passed the raw
+  // username through, prove what that would look like is never produced for
+  // the SAFE input this coordinator is actually given ("Kwan", not
+  // "kwan_mod_bot" or "@kwan_mod_bot") -- the real leak-prevention guarantee
+  // lives in classifySender's resolution (community-runtime.test.ts).
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "hello", sender: { ...baseEvent().sender, displayName: "Kwan" } }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => seq[Math.min(call++, seq.length - 1)],
+  });
+  if (action.kind === "SEND_TEXT") {
+    assert.doesNotMatch(action.text, /@\w+_bot\b/i);
+    assert.doesNotMatch(action.text, /kwan_mod_bot/i);
+  }
+});
+
+test("REQUIRED (TEST 5): a null sender name (safe upstream fallback) never produces a username-shaped acknowledgement -- uses the name-free template pool", () => {
+  let call = 0;
+  const seq = [0.0, 0.99]; // openers skip the probability-gate call -- see TEST 3
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ text: "hello", sender: { ...baseEvent().sender, displayName: null } }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => seq[Math.min(call++, seq.length - 1)],
+  });
+  assert.equal(action.kind, "SEND_TEXT");
+  if (action.kind === "SEND_TEXT") {
+    assert.doesNotMatch(action.text, /@/);
+    assert.ok(["Got it 👍", "Yep.", "On it.", "Hey 👋"].includes(action.text));
+  }
+});
+
 test("a produced SEND_TEXT acknowledgement is tagged origin=BOT_ACK with interactionDepth incremented by exactly 1", () => {
   // Force a SEND_TEXT deterministically: pass the probability gate, pick
   // target index 0, then land above REACT_PREFERENCE so REACT isn't chosen.
+  // Explicit NON-opener text -- openers now skip the probability-gate
+  // random() call entirely (see the opener suite above), which would shift
+  // this 3-call sequence; kept as ordinary bot chatter so this test still
+  // exercises the general (non-opener) SEND_TEXT/tagging path it's about.
   let call = 0;
   const seq = [0.01, 0.0, 0.99];
   const forced = decideBotAcknowledgement({
-    event: baseEvent({ interactionDepth: 0 }),
+    event: baseEvent({ text: "yeah for sure, appreciate it", interactionDepth: 0 }),
     botAckMode: "acknowledgements",
     eligibleTargets: [kaleb()],
     now: new Date(),

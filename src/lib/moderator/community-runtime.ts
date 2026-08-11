@@ -151,8 +151,12 @@ async function resolveCommunity(admin: SupabaseClient, panelId: string, chat: Te
   return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null };
 }
 
-/** Tenant-isolated sender classification (spec §2/§4/§5) — the DB lookups behind event-types.ts's pure decision. */
-async function classifySender(admin: SupabaseClient, panelId: string, communityId: string, from: TelegramUser): Promise<CommunityEvent["sender"]> {
+/** Tenant-isolated sender classification (spec §2/§4/§5) — the DB lookups behind event-types.ts's pure decision.
+ *  Exported for direct testing (community-runtime.test.ts) of the display-
+ *  name resolution fix — this is the ACTUAL source of the "@kwan_mod_bot in
+ *  generated conversation" leak, so it needs its own direct test, not just a
+ *  downstream one on the coordinator's template layer. */
+export async function classifySender(admin: SupabaseClient, panelId: string, communityId: string, from: TelegramUser): Promise<CommunityEvent["sender"]> {
   const platformUserId = String(from.id);
   if (!from.is_bot) {
     return { platformUserId, isBot: false, senderType: "HUMAN", displayName: from.first_name ?? from.username ?? null };
@@ -161,12 +165,20 @@ async function classifySender(admin: SupabaseClient, panelId: string, communityI
   // Never filter by panel here — deliberately fetch ALL integrations sharing
   // this numeric bot id, then require an EXACT match on THIS event's panel.
   // A bot id known to Innvil under a different tenant must never be trusted.
+  // Also pulls the moderator's own CONFIGURED name (virtual_moderators.name)
+  // -- required so a bot sender's displayName can be its human-facing name
+  // ("Kwan") rather than its Telegram bot username ("kwan_mod_bot"), which
+  // must never leak into generated conversational text (see below).
   const { data: candidates } = await admin
     .from("telegram_bot_integrations")
-    .select("id, panel_id, virtual_moderator_id, username")
+    .select("id, panel_id, virtual_moderator_id, username, virtual_moderators(name)")
     .eq("telegram_bot_id", from.id)
     .limit(5);
   const integration = (candidates ?? []).find((c) => c.panel_id === panelId) ?? null;
+  const integrationModerator = integration
+    ? (Array.isArray(integration.virtual_moderators) ? integration.virtual_moderators[0] : integration.virtual_moderators)
+    : null;
+  const moderatorConfiguredName = (integrationModerator as { name?: string } | null)?.name ?? null;
 
   const knownBot = integration
     ? {
@@ -187,11 +199,21 @@ async function classifySender(admin: SupabaseClient, panelId: string, communityI
   }
 
   const senderType = classifySenderPure(true, knownBot);
+  // CRITICAL: for a recognized Innvil moderator, displayName must be the
+  // moderator's CONFIGURED name ("Kwan"), never the Telegram bot username
+  // ("kwan_mod_bot") -- this is the name that flows straight into generated
+  // bot-to-bot acknowledgement text (coordinator.ts's craftAckText). Only an
+  // EXTERNAL_BOT (or a human) falls back to Telegram-provided naming, which
+  // is fine there since that path never claims to be "a moderator's name."
+  // A missing configured name (shouldn't happen for a real deployment, but
+  // never assumed) safely falls through to null -- craftAckText's name-free
+  // template pool -- rather than ever falling back to the raw username.
+  const displayName = senderType === "INNVIL_MODERATOR" ? moderatorConfiguredName : (from.username ?? from.first_name ?? null);
   return {
     platformUserId,
     isBot: true,
     senderType,
-    displayName: from.username ?? from.first_name ?? null,
+    displayName,
     innvilModeratorId: senderType === "INNVIL_MODERATOR" ? integration?.virtual_moderator_id : undefined,
     deploymentId: senderType === "INNVIL_MODERATOR" ? knownBot?.activeDeploymentInThisCommunity?.deploymentId : undefined,
   };
