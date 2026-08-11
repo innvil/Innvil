@@ -3329,6 +3329,89 @@ win over this):**
 >     (+4 — `deploymentRecentlyParticipated`'s broader-than-last-message window, staleness,
 >     and HUMAN-sender exclusion). 507 tests pass (up from 484), `tsc --noEmit` clean,
 >     production build clean. No migration.
+> - **(New capability, v1.10.0) Temporary conversational task state — "let's all count" now
+>   actually works.** Live failure: a human said "let us all count. I'll start with 1.
+>   Test goes 2, Kwan 3, then I do 4 until 20" — Test replied "1" immediately (before
+>   the human even started), later turns were improvised from local transcript context
+>   instead of executed, and "wait for me to start" did not pause anything. Root cause:
+>   normal chatter (chatter-coordinator.ts) is deliberately message-by-message with no
+>   memory of a multi-step SHARED activity — there was nothing to pause, because nothing
+>   was ever formally started. This is a NEW, separate mechanism, not a chatter-prompt
+>   fix — normal group chat stays turn-free; only an EXPLICIT ordered/shared activity
+>   temporarily overrides it, until completed/changed/cancelled/expired.
+>   - **New pure module `src/lib/moderator/task-state.ts`** — a `ConversationTask`
+>     discriminated union (only `SEQUENCE` implemented; a `type` field lets future task
+>     kinds, e.g. ordered Q&A, be added without reworking this shape or the runtime
+>     wiring around it). `SequenceTask` = ordered `TaskParticipant[]` (`HUMAN`, by
+>     platform id, or `MODERATOR`, by deploymentId — dynamically resolved from real
+>     deployments, never hardcoded to any fixture names), `currentIndex` (whose turn),
+>     `progression` (`NUMERIC {start,step,end}` — the driving example, sent with ZERO
+>     LLM calls since the runtime already knows the exact required value — or
+>     `FREEFORM`, which needs real generation since there's nothing deterministic to
+>     produce), `status` (`ACTIVE`/`PAUSED`/`COMPLETED`/`CANCELLED`/`EXPIRED`).
+>   - **Detection is structural, not a phrase dictionary**: `detectSequenceTaskIntent`
+>     requires a counting cue + an explicit end value ("until N"/"to N") + splits the
+>     setup message into clauses (period/comma/"then") and extracts (participant,
+>     number) pairs per clause — a known moderator name, or a first-person
+>     self-reference ("I"/"me") for the human — in the order they appear, deriving
+>     turn order + step from that. A message that doesn't match this shape (e.g. "tell
+>     me a joke", or numbers with no counting cue — "meet me at 3, Echo will be
+>     there") never creates a task; a task needs 2+ distinct participants assigned
+>     numbers, since a single-person "count" isn't a turn-taking activity.
+>   - **Control instructions** — `classifyTaskInstruction` (structural signals, not a
+>     giant fixed vocabulary): PAUSE (wait/hold on/don't start yet), RESUME (go/start/
+>     ready), RESET (start over/restart — same participants/order/progression, just
+>     restarts progress), CANCEL (never mind/stop/forget it — terminal). A narrow,
+>     bounded `applyReorderInstruction` handles "no, X goes after Y" by moving X in the
+>     turn order while preserving WHOSE turn is currently expected by identity (never
+>     silently skips/repeats a turn because of the reorder).
+>   - **Task-local state overrides ordinary routing entirely, not just for the expected
+>     participant.** New `routeConversationTask()` in `community-runtime.ts` is checked
+>     BEFORE `selectChatterAction` in `handleHumanMessage`; while a task governs a
+>     message (control instruction, a turn attempt — matching, mismatched, or
+>     irrelevant —, or a brand-new task just created by this message), ordinary
+>     quietest-longest/continuity/multi-responder/ambient-reaction selection never runs
+>     for it at all — "task-local state wins unless the user explicitly changes the
+>     task." A wrong value from the expected participant is `TASK_MISMATCH` (state
+>     unchanged, same participant gets another chance) — never silently advances; an
+>     off-turn message is silently ignored (`NO_MATCH`), never lets a different,
+>     more-eligible-by-ordinary-rules moderator jump in.
+>   - **Moderator turn cascade, same invocation.** New `runModeratorTaskCascade()` —
+>     since Telegram webhooks are one-shot, a chain of consecutive moderator turns
+>     (Test's "2" immediately unlocking Kwan's "3") is executed serially within the
+>     SAME webhook call that advanced the human's turn, stopping the instant the next
+>     expected participant is HUMAN (moderators WAIT — no generated "your turn"
+>     reminder) or the task `COMPLETED`s. NUMERIC turns are sent as the literal
+>     deterministic string, no `generateChatterReply` call; a FREEFORM turn does call
+>     it (`CASUAL_CHAT`, that moderator's own persona) since there's genuinely nothing
+>     deterministic to send — persona flavors HOW a freeform turn reads, it can never
+>     corrupt a NUMERIC one (that value is never model-generated at all).
+>   - **Persistence (migration `0052`, new `moderator_conversation_tasks` table)** —
+>     required because Telegram webhook invocations are stateless/serverless and a
+>     task spans several of them; NOT process memory. `state` is the full
+>     `ConversationTask` as JSONB (same pattern as `virtual_moderators.persona`).
+>     **Scoping: one ACTIVE/PAUSED task per COMMUNITY** (a "let's all count" is a room
+>     event, not a private one) — enforced by a partial unique index at the DB level,
+>     not just application code, so a second concurrent task-creation attempt simply
+>     can't insert (loses the race, existing task keeps governing — never silently
+>     merged). **TTL: 15 minutes** since the task's last advancement (checked on read,
+>     no cron) — long enough for natural human typing/thinking pauses in a live group
+>     activity, short enough that a forgotten game doesn't govern the room for hours;
+>     on expiry the task is marked `EXPIRED` and that message falls through to ordinary
+>     chatter. **Run migration `0052`.**
+>   - **Observability**: every lifecycle transition logs to the existing
+>     `moderator_activity_log` (event_type `conversation_task`) — `TASK_CREATED`,
+>     `TASK_ADVANCED`, `TASK_PAUSED`, `TASK_RESUMED`, `TASK_COMPLETED`, `TASK_CANCELLED`,
+>     `TASK_EXPIRED`, `TASK_MISMATCH`, `TASK_UPDATED` (reset/reorder) — with taskId +
+>     current step/participant metadata, no message content/secrets, same convention
+>     as every other decision this feature already logs.
+>   - New tests: `task-state.test.ts` (+32 — the exact live repro incl. dynamic
+>     non-Kwan/Test fixtures, the wait-instruction non-advance, the full 1→2→3→4
+>     sequence, task-local override proof, human-turn = wait/no-generation, mismatch
+>     leaves state untouched, reset/cancel/pause/resume, reorder preserving whose turn
+>     it is, completion, TTL boundaries, FREEFORM progression). 539 tests pass (up from
+>     507), `tsc --noEmit` clean, production build clean. **Run migration `0052`
+>     before this governs any live community.**
 > - **(C) Intelligent external-link moderation** — links classified by intent, not
 >   domain (`SAFE_RELEVANT_LINK` / `COLLABORATION_REQUEST` / `AMA_REQUEST` /
 >   `PARTNERSHIP_REQUEST` / `UNSOLICITED_PROMOTION` / `LINK_SPAM_OR_FLOOD` /

@@ -13,6 +13,11 @@ import {
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
+import {
+  detectSequenceTaskIntent, classifyTaskInstruction, pauseTask, resumeTask, cancelTask, resetSequenceTask,
+  applyReorderInstruction, advanceSequenceTask, isTaskExpired, expectedParticipant, expectedNumericValue,
+  type ConversationTask, type TaskModeratorIdentity,
+} from "./task-state";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -603,6 +608,231 @@ export function resolveAdditionalResponderIds(primaryDeploymentId: string, multi
   return multiTargets.filter((id) => id !== primaryDeploymentId).slice(0, MAX_ADDITIONAL_RESPONDERS);
 }
 
+/* ------------------------------------------------- conversational task state ---- */
+// Temporary, explicit multi-step shared activities ("let's all count, I'll
+// start with 1..."). Normal chatter above stays turn-free by design; this is
+// the SEPARATE mechanism for when a human establishes ordered/shared
+// structure that must be remembered and enforced across messages. See
+// task-state.ts for the pure state machine -- this section is purely
+// persistence + orchestration around it. Persisted (migration 0052), never
+// process memory, since a task spans multiple stateless webhook invocations.
+
+interface TaskRecord {
+  id: string;
+  task: ConversationTask;
+}
+
+async function loadActiveTask(admin: SupabaseClient, communityId: string): Promise<TaskRecord | null> {
+  const { data } = await admin
+    .from("moderator_conversation_tasks")
+    .select("id, state")
+    .eq("community_id", communityId)
+    .in("status", ["ACTIVE", "PAUSED"])
+    .maybeSingle();
+  if (!data) return null;
+  return { id: data.id as string, task: data.state as ConversationTask };
+}
+
+/** A race with another webhook invocation creating a task for the same
+ *  community at the same moment is resolved by the DB's OWN partial unique
+ *  index (migration 0052) -- whichever insert loses simply gets a 23505 and
+ *  is swallowed here; the winner's task is the community's one active task,
+ *  never two silently coexisting ones. */
+async function insertTask(admin: SupabaseClient, panelId: string, communityId: string, task: ConversationTask): Promise<void> {
+  const { error } = await admin.from("moderator_conversation_tasks").insert({
+    panel_id: panelId,
+    community_id: communityId,
+    status: task.status,
+    state: task,
+    created_from_message_id: task.createdFromMessageId,
+  });
+  if (error && error.code !== "23505") throw new Error(`insertTask failed: ${error.message}`);
+}
+
+async function persistTask(admin: SupabaseClient, id: string, task: ConversationTask): Promise<void> {
+  await admin.from("moderator_conversation_tasks").update({ status: task.status, state: task }).eq("id", id);
+}
+
+async function logTaskActivity(admin: SupabaseClient, panelId: string, communityId: string, deploymentId: string | null, decision: string, reasonCode: string, meta: Record<string, unknown> = {}) {
+  await logActivity(admin, panelId, communityId, deploymentId, "conversation_task", decision, reasonCode, meta);
+}
+
+/** Executes each consecutive MODERATOR turn the task now expects, in the
+ *  SAME invocation that just advanced it (webhooks are one-shot, so a
+ *  cascade of moderator turns -- e.g. Test's "2" immediately unlocking
+ *  Kwan's "3" -- has to run serially here rather than waiting for a new
+ *  inbound event that will never arrive on its own). Stops the moment the
+ *  next expected participant is HUMAN (moderators wait, no "your turn"
+ *  reminder is generated) or the task completes. NUMERIC turns are sent
+ *  with ZERO LLM calls (the runtime already knows the exact required
+ *  value); only FREEFORM turns call generateChatterReply, and even then
+ *  never for anything the task itself can determine deterministically. */
+async function runModeratorTaskCascade(
+  admin: SupabaseClient,
+  panelId: string,
+  communityId: string,
+  chatId: string,
+  deployments: ChatterDeployment[],
+  record: TaskRecord,
+  now: Date
+): Promise<void> {
+  let current = record;
+  let iterations = 0;
+  const safetyCap = current.task.participants.length + 2; // a full extra lap is never a legitimate cascade
+  while (current.task.status === "ACTIVE" && expectedParticipant(current.task).kind === "MODERATOR" && iterations < safetyCap) {
+    iterations++;
+    const expected = expectedParticipant(current.task);
+    const deployment = deployments.find((d) => d.deploymentId === expected.id);
+    if (!deployment) break; // the expected moderator is no longer deployed -- stop rather than guessing who should stand in
+
+    let outputText: string;
+    if (current.task.progression.kind === "NUMERIC") {
+      // Deterministic -- the runtime already knows the correct value, so it
+      // is sent directly. No DeepSeek/Sonnet call for this branch at all.
+      outputText = String(expectedNumericValue(current.task));
+    } else {
+      const generation = await generateChatterReply({
+        action: "CASUAL_CHAT",
+        selfDeploymentId: deployment.deploymentId,
+        moderatorName: deployment.moderatorName,
+        persona: deployment.persona,
+        recentContext: await loadRecentContext(admin, communityId, 10),
+        triggerMessage: { senderName: "the shared activity", text: "It's your turn in the group activity everyone agreed to." },
+        isDirectedAtBot: true,
+        addressedWithTypo: false,
+        otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+      });
+      if (!generation.ok || "noReply" in generation) break; // can't produce a turn right now -- leave the task exactly as-is, don't corrupt state
+      outputText = generation.reply;
+    }
+
+    const sendAction: CommunityAction = {
+      kind: "SEND_TEXT",
+      text: outputText,
+      targetDeploymentId: deployment.deploymentId,
+      replyToMessageId: null,
+      origin: "HUMAN",
+      interactionDepth: 0,
+      causationMessageId: null,
+    };
+    const sent = await executeAction(admin, chatId, sendAction);
+    if (!sent.sentMessageId) break;
+    await admin.from("community_messages").insert({
+      panel_id: panelId,
+      community_id: communityId,
+      platform_message_id: sent.sentMessageId,
+      sender_type: "INNVIL_MODERATOR",
+      sender_platform_id: null,
+      sender_display_name: deployment.moderatorName,
+      deployment_id: deployment.deploymentId,
+      text: outputText,
+    });
+
+    // The moderator's OWN just-sent output is what advances its own turn --
+    // for NUMERIC this can never mismatch (it's exactly what was computed),
+    // so this call effectively always returns ADVANCED or COMPLETED here.
+    const result = advanceSequenceTask(current.task, { kind: "MODERATOR", id: deployment.deploymentId }, outputText, now);
+    await persistTask(admin, current.id, result.task);
+    await logTaskActivity(admin, panelId, communityId, deployment.deploymentId, result.outcome === "COMPLETED" ? "TASK_COMPLETED" : "TASK_ADVANCED", "moderator_turn", { taskId: current.id });
+    current = { id: current.id, task: result.task };
+    if (result.outcome !== "ADVANCED") break;
+  }
+}
+
+/** Checked BEFORE ordinary chatter routing. Returns true when this human
+ *  message was fully owned by conversational-task handling (control
+ *  instruction, a turn contribution -- matching, mismatched, or
+ *  irrelevant --, or newly creating a task) and the caller must NOT also
+ *  run selectChatterAction for it: "task-local state wins unless the user
+ *  explicitly changes the task" (product invariant) means an active task
+ *  suppresses ordinary quietest-longest/continuity/multi-responder/ambient-
+ *  reaction selection entirely for the duration it governs, not just for
+ *  the specific participant whose turn it is. Returns false only when there
+ *  is genuinely no task governing this message (none exists and this
+ *  message didn't create one, or an existing one just expired), in which
+ *  case the caller proceeds with the existing chatter pipeline unchanged. */
+async function routeConversationTask(
+  admin: SupabaseClient,
+  panelId: string,
+  community: { id: string },
+  chatId: string,
+  event: CommunityEvent,
+  deployments: ChatterDeployment[],
+  now: Date
+): Promise<boolean> {
+  const communityId = community.id;
+  let record = await loadActiveTask(admin, communityId);
+
+  if (!record) {
+    const moderatorIdentities: TaskModeratorIdentity[] = deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName }));
+    const created = detectSequenceTaskIntent(event.text, moderatorIdentities, event.sender.platformUserId, now, event.messageId);
+    if (!created) return false; // an ordinary message -- proceed with normal chatter
+    await insertTask(admin, panelId, communityId, created);
+    const inserted = await loadActiveTask(admin, communityId);
+    if (!inserted) return true; // lost the creation race to a concurrent invocation -- the winner's task governs, not this message
+    await logTaskActivity(admin, panelId, communityId, null, "TASK_CREATED", "sequence_detected", {
+      taskId: inserted.id,
+      participantCount: inserted.task.participants.length,
+      end: inserted.task.progression.kind === "NUMERIC" ? inserted.task.progression.end : null,
+    });
+    // The SETUP message itself never counts as a turn contribution. If the
+    // human put themself first (the common case), the task simply now
+    // waits on them -- no reply to the setup message. If the first turn is
+    // a moderator's (an unusual but valid setup), run its cascade now.
+    if (expectedParticipant(inserted.task).kind === "MODERATOR") {
+      await runModeratorTaskCascade(admin, panelId, communityId, chatId, deployments, inserted, now);
+    }
+    return true;
+  }
+
+  if (isTaskExpired(record.task, now)) {
+    await persistTask(admin, record.id, { ...record.task, status: "EXPIRED" });
+    await logTaskActivity(admin, panelId, communityId, null, "TASK_EXPIRED", "inactivity_ttl", { taskId: record.id });
+    return false; // the task no longer governs -- fall through to ordinary chatter for this message
+  }
+
+  const instruction = classifyTaskInstruction(event.text);
+  if (instruction) {
+    let updated = record.task;
+    let decision = "TASK_UPDATED";
+    if (instruction === "CANCEL") { updated = cancelTask(record.task, now); decision = "TASK_CANCELLED"; }
+    else if (instruction === "RESET") { updated = resetSequenceTask(record.task, now); decision = "TASK_UPDATED"; }
+    else if (instruction === "PAUSE") { updated = pauseTask(record.task, now); decision = "TASK_PAUSED"; }
+    else if (instruction === "RESUME") { updated = resumeTask(record.task, now); decision = "TASK_RESUMED"; }
+    await persistTask(admin, record.id, updated);
+    await logTaskActivity(admin, panelId, communityId, null, decision, instruction.toLowerCase(), { taskId: record.id });
+    return true; // a control message is never ALSO evaluated as a turn contribution
+  }
+
+  const reordered = applyReorderInstruction(record.task, event.text);
+  if (reordered !== record.task) {
+    await persistTask(admin, record.id, reordered);
+    await logTaskActivity(admin, panelId, communityId, null, "TASK_UPDATED", "reorder", { taskId: record.id });
+    return true;
+  }
+
+  const result = advanceSequenceTask(record.task, { kind: "HUMAN", id: event.sender.platformUserId }, event.text, now);
+  await persistTask(admin, record.id, result.task);
+  if (result.outcome === "MISMATCH") {
+    await logTaskActivity(admin, panelId, communityId, null, "TASK_MISMATCH", "wrong_value", { taskId: record.id });
+    return true;
+  }
+  if (result.outcome === "NO_MATCH") {
+    // Not this participant's turn, or content that doesn't match the
+    // expected value/step -- silently ignored (e.g. "wait for me to start,
+    // lol" while the human's own turn is pending). The task keeps waiting;
+    // ordinary chatter is still suppressed (task-local state wins).
+    return true;
+  }
+  if (result.outcome === "COMPLETED") {
+    await logTaskActivity(admin, panelId, communityId, null, "TASK_COMPLETED", "end_reached", { taskId: record.id });
+    return true;
+  }
+  await logTaskActivity(admin, panelId, communityId, null, "TASK_ADVANCED", "human_turn", { taskId: record.id, currentIndex: result.task.currentIndex });
+  await runModeratorTaskCascade(admin, panelId, communityId, chatId, deployments, { id: record.id, task: result.task }, now);
+  return true;
+}
+
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string,
@@ -615,6 +845,14 @@ async function handleHumanMessage(
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
   if (!deployments.length) return; // no chatter-eligible deployment in this community
+
+  // Checked BEFORE any ordinary chatter routing -- an active/newly-created
+  // conversational task fully owns this message (see routeConversationTask's
+  // doc comment for why "task-local state wins" means suppressing ordinary
+  // selection entirely, not just for the participant whose turn it is).
+  const taskHandled = await routeConversationTask(admin, panelId, community, String(message.chat.id), event, deployments, new Date());
+  timer.mark("conversation_task_check", { handled: taskHandled });
+  if (taskHandled) return;
 
   const repliedToDeploymentId = await resolveRepliedToDeployment(admin, community.id, event.replyToMessageId);
 
