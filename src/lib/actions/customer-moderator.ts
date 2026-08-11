@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
-import { createAdminClient } from "@/src/lib/supabase/admin";
+import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { round4, MODERATOR_COMMISSION_SHARE, MODERATOR_PLAN_PERIOD_DAYS, moderatorPlanPrice, type ModeratorPlanTier } from "@/src/lib/money";
 import {
   resolveTrialQualification, trialAccessGranted, customerModeratorCapacity, customerModeratorMaxSavedModerators, sumNetOrderSpend,
@@ -10,6 +10,12 @@ import {
   type TrialQualificationSource, type PersistedTrialState,
 } from "@/src/lib/moderator/customer-entitlement";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib/moderator/domain";
+import { MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
+import type { BotAckMode } from "@/src/lib/moderator/coordinator";
+import {
+  buildManagedBotDeepLink, checkChatMembership, getManagerBotUsername, setIntegrationWebhook,
+  validateRequestedUsername, verifyBotToken,
+} from "@/src/lib/moderator/manager";
 import { createTicket } from "@/src/lib/actions/tickets";
 
 /* =========================================================
@@ -331,4 +337,438 @@ export async function createCustomerModerator(panelId: string, name: string): Pr
   if (error || !data) return { ok: false, error: error?.message ?? "Could not create moderator." };
 
   return { ok: true, data: { id: data.id, name: data.name, status: data.status, provisioningStatus: data.provisioning_status } };
+}
+
+/* ================================================================================
+   Self-serve Telegram provisioning (Phase 4.M.1 Phase 2).
+
+   Reuses the SAME Telegram-facing pipeline as the owner flow
+   (actions/moderator.ts) via the shared, auth-agnostic helpers in
+   moderator/manager.ts (deep-link building, username validation, bot-token
+   verification, webhook registration, chat-membership checks) — nothing
+   about how Innvil talks to Telegram is duplicated here.
+
+   What IS separate from the owner flow, deliberately: the ownership check
+   (customer_id, not panel owner_id) and the capacity/entitlement source
+   (customerModeratorCapacity(eligibility.entitlementSource) — this
+   customer's own trial/plan — never panels.settings, which governs the
+   OWNER's own unrelated legacy moderator entitlement). The owner-only
+   "start a trial on first deployment" step (startModeratorTrialIfEligible)
+   is intentionally NOT called here — a customer's trial is explicit
+   (startCustomerModeratorTrial), never silently auto-granted.
+   ================================================================================ */
+
+const PROVISIONING_ATTEMPT_TTL_MINUTES = 10;
+const DEPLOYABLE_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
+const RETRIABLE_PROVISIONING_STATUSES = new Set([
+  "draft", "requires_retry", "cancelled", "username_unavailable", "telegram_creation_failed", "credential_setup_failed", "expired",
+]);
+
+/** Customer-scoped equivalent of moderator.ts's ownedModerator() — verifies
+ *  the storefront session AND that this moderator belongs to THIS customer
+ *  (never another customer's, even within the same panel). */
+async function ctxModerator(panelId: string, moderatorId: string) {
+  const c = await ctx(panelId);
+  if (!c) return null;
+  const { data: moderator } = await c.admin
+    .from("virtual_moderators")
+    .select("id, name, provisioning_status, customer_id")
+    .eq("id", moderatorId)
+    .eq("panel_id", panelId)
+    .maybeSingle();
+  if (!moderator || moderator.customer_id !== c.account.id) return null;
+  return { ...c, moderator };
+}
+
+async function currentEntitlementSource(admin: SupabaseClient, panelId: string, customerId: string): Promise<"trial" | ModeratorPlanTier | null> {
+  const { data: ent } = await admin
+    .from("customer_moderator_entitlement")
+    .select("tier, lapsed, trial_started_at, trial_ends_at, trial_qualification_source")
+    .eq("panel_id", panelId).eq("customer_id", customerId).maybeSingle();
+  if (ent?.tier && !ent.lapsed) return ent.tier as ModeratorPlanTier;
+  if (ent?.trial_started_at && ent.trial_ends_at && ent.trial_qualification_source) {
+    const { data: account } = await admin.from("customer_accounts").select("balance").eq("id", customerId).maybeSingle();
+    const trial: PersistedTrialState = {
+      qualificationSource: ent.trial_qualification_source as TrialQualificationSource,
+      startedAt: ent.trial_started_at as string,
+      endsAt: ent.trial_ends_at as string,
+    };
+    if (trialAccessGranted(trial, round4(Number(account?.balance) || 0), new Date())) return "trial";
+  }
+  return null;
+}
+
+export interface CustomerTelegramCreationRequest {
+  deepLink: string;
+  requestedUsername: string;
+  expiresAt: string;
+}
+
+/** Primary "Innvil-first" path: reserve a username, hand back the Managed
+ *  Bots deep link to open — mirrors requestTelegramCreation (moderator.ts),
+ *  customer-owned-moderator scoped. */
+export async function requestCustomerTelegramCreation(
+  panelId: string,
+  moderatorId: string,
+  requestedUsername: string
+): Promise<Result<CustomerTelegramCreationRequest>> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return { ok: false, error: "Moderator not found." };
+  if (!RETRIABLE_PROVISIONING_STATUSES.has(c.moderator.provisioning_status)) {
+    return { ok: false, error: `Cannot request Telegram creation from status "${c.moderator.provisioning_status}".` };
+  }
+
+  const validated = validateRequestedUsername(requestedUsername);
+  if (!validated.ok) return { ok: false, error: validated.error };
+  const username = validated.username.toLowerCase();
+
+  let managerUsername: string;
+  try {
+    managerUsername = await getManagerBotUsername();
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Manager bot is not configured." };
+  }
+
+  await c.admin
+    .from("telegram_provisioning_attempts")
+    .update({ status: "expired" })
+    .eq("virtual_moderator_id", moderatorId)
+    .eq("status", "pending");
+
+  const expiresAt = new Date(Date.now() + PROVISIONING_ATTEMPT_TTL_MINUTES * 60_000).toISOString();
+  const { error: attemptError } = await c.admin.from("telegram_provisioning_attempts").insert({
+    panel_id: panelId,
+    virtual_moderator_id: moderatorId,
+    suggested_username: username,
+    status: "pending",
+    expires_at: expiresAt,
+  });
+  if (attemptError) return { ok: false, error: attemptError.message };
+
+  const { error: updateError } = await c.admin
+    .from("virtual_moderators")
+    .update({
+      provisioning_status: "telegram_confirmation_pending",
+      provisioning_draft: { ...DEFAULT_PROVISIONING_DRAFT, requestedUsername: username },
+      last_error: null,
+    })
+    .eq("id", moderatorId);
+  if (updateError) return { ok: false, error: updateError.message };
+
+  const deepLink = buildManagedBotDeepLink(managerUsername, username, c.moderator.name);
+  return { ok: true, data: { deepLink, requestedUsername: username, expiresAt } };
+}
+
+export interface CustomerModeratorProvisioningStatusInfo {
+  provisioningStatus: string;
+  telegramUsername: string | null;
+  lastError: string | null;
+}
+
+/** Poll target for the "waiting on Telegram confirmation" UI state — same
+ *  async-detection model as the owner flow (the Manager Bot's own webhook
+ *  detects success server-side, not a redirect back from Telegram). */
+export async function getCustomerModeratorProvisioning(panelId: string, moderatorId: string): Promise<CustomerModeratorProvisioningStatusInfo | null> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return null;
+  const { data } = await c.admin
+    .from("virtual_moderators")
+    .select("provisioning_status, last_error, telegram_bot_integrations(username)")
+    .eq("id", moderatorId)
+    .maybeSingle();
+  if (!data) return null;
+  const integration = data.telegram_bot_integrations as { username?: string | null } | Array<{ username?: string | null }> | null;
+  const username = Array.isArray(integration) ? integration[0]?.username ?? null : integration?.username ?? null;
+  return {
+    provisioningStatus: data.provisioning_status,
+    telegramUsername: username ?? null,
+    lastError: data.last_error ?? null,
+  };
+}
+
+export async function cancelCustomerTelegramProvisioning(panelId: string, moderatorId: string): Promise<Result<null>> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return { ok: false, error: "Moderator not found." };
+  await c.admin
+    .from("telegram_provisioning_attempts")
+    .update({ status: "cancelled" })
+    .eq("virtual_moderator_id", moderatorId)
+    .eq("status", "pending");
+  await c.admin.from("virtual_moderators").update({ provisioning_status: "draft", last_error: null }).eq("id", moderatorId);
+  return { ok: true, data: null };
+}
+
+/** Fallback path: connect an already-created bot by pasting its BotFather
+ *  token — mirrors connectExistingBotToken (moderator.ts). */
+export async function connectCustomerBotToken(panelId: string, moderatorId: string, token: string): Promise<Result<null>> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return { ok: false, error: "Moderator not found." };
+  const trimmedToken = token.trim();
+  if (!trimmedToken) return { ok: false, error: "Paste the bot token from BotFather." };
+
+  const verified = await verifyBotToken(trimmedToken);
+  if (!verified.ok || !verified.result?.is_bot) {
+    return { ok: false, error: verified.ok ? "That token doesn't belong to a bot." : `Telegram rejected the token: ${verified.error}` };
+  }
+
+  const admin = createAdminClient();
+  const { data: integration, error: integrationError } = await c.admin
+    .from("telegram_bot_integrations")
+    .upsert(
+      {
+        panel_id: panelId,
+        virtual_moderator_id: moderatorId,
+        telegram_bot_id: verified.result.id,
+        username: verified.result.username ?? null,
+        source: "botfather",
+        manager_relationship: "unknown",
+        last_verified_at: new Date().toISOString(),
+      },
+      { onConflict: "virtual_moderator_id" }
+    )
+    .select("id")
+    .single();
+  if (integrationError || !integration) return { ok: false, error: integrationError?.message ?? "Could not save the integration." };
+
+  const { error: keyError } = await admin.rpc("set_telegram_bot_key", {
+    p_row: integration.id,
+    p_key: trimmedToken,
+    p_secret: providerKeySecret(),
+  });
+  if (keyError) return { ok: false, error: keyError.message };
+
+  const webhookRes = await setIntegrationWebhook(trimmedToken, integration.id);
+
+  await c.admin
+    .from("virtual_moderators")
+    .update({
+      provisioning_status: "bot_ready",
+      last_error: webhookRes.ok ? null : `Bot ready, but webhook registration failed: ${webhookRes.error}`,
+    })
+    .eq("id", moderatorId);
+
+  return { ok: true, data: null };
+}
+
+export interface CustomerDeploymentHealthInfo {
+  present: boolean;
+  canSend: boolean;
+  canDelete: boolean;
+  canRestrict: boolean;
+  checkedAt: string | null;
+}
+
+export interface CustomerCommunityDeploymentRow {
+  deploymentId: string;
+  communityId: string;
+  chatId: string;
+  handle: string | null;
+  title: string | null;
+  chatType: string | null;
+  enabled: boolean;
+  health: CustomerDeploymentHealthInfo;
+  botAckMode: BotAckMode;
+}
+
+/** Connect a bot-ready moderator to a Telegram community — mirrors
+ *  connectCommunity (moderator.ts), but capacity/limits are checked against
+ *  THIS CUSTOMER's own entitlement (trial/plan), never the panel owner's. */
+export async function connectCustomerCommunity(panelId: string, moderatorId: string, chatIdOrHandle: string): Promise<Result<CustomerCommunityDeploymentRow>> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return { ok: false, error: "Moderator not found." };
+  if (!DEPLOYABLE_PROVISIONING_STATUSES.has(c.moderator.provisioning_status)) {
+    return { ok: false, error: "Connect this moderator's Telegram bot before adding a community." };
+  }
+  const trimmed = chatIdOrHandle.trim();
+  if (!trimmed) return { ok: false, error: "Enter a Telegram chat ID or @handle." };
+
+  const { data: integration } = await c.admin
+    .from("telegram_bot_integrations")
+    .select("id")
+    .eq("virtual_moderator_id", moderatorId)
+    .maybeSingle();
+  if (!integration) return { ok: false, error: "No Telegram bot connected for this moderator yet." };
+
+  const { data: tokenData, error: keyError } = await c.admin.rpc("get_telegram_bot_key", {
+    p_row: integration.id,
+    p_secret: providerKeySecret(),
+  });
+  const token = tokenData as string | null;
+  if (keyError || !token) return { ok: false, error: "Could not read this moderator's Telegram credential." };
+
+  const membership = await checkChatMembership(token, trimmed);
+  if (!membership.ok) return { ok: false, error: `Telegram couldn't verify that chat: ${membership.error}` };
+  if (!membership.result.present) return { ok: false, error: "This bot isn't a member of that chat yet — add it in Telegram first, then try again." };
+
+  const entitlementSource = await currentEntitlementSource(c.admin, panelId, c.account.id);
+  const capacity = customerModeratorCapacity(entitlementSource);
+
+  const { count: existingCommunityCount } = await c.admin
+    .from("communities")
+    .select("id", { count: "exact", head: true })
+    .eq("panel_id", panelId);
+  const { data: existingCommunity } = await c.admin
+    .from("communities")
+    .select("id")
+    .eq("panel_id", panelId)
+    .eq("platform", "telegram")
+    .eq("chat_id", String(membership.result.chat.id))
+    .maybeSingle();
+  if (!existingCommunity && (existingCommunityCount ?? 0) >= capacity.maxCommunities) {
+    return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
+  }
+
+  const { data: community, error: communityError } = await c.admin
+    .from("communities")
+    .upsert(
+      {
+        panel_id: panelId,
+        platform: "telegram",
+        chat_id: String(membership.result.chat.id),
+        handle: membership.result.chat.username ?? null,
+        title: membership.result.chat.title ?? null,
+        chat_type: membership.result.chat.type ?? null,
+      },
+      { onConflict: "panel_id,platform,chat_id" }
+    )
+    .select("id, chat_id, handle, title, chat_type, bot_ack_mode")
+    .single();
+  if (communityError || !community) return { ok: false, error: communityError?.message ?? "Could not save the community." };
+
+  const { count: activeSlotCount } = await c.admin
+    .from("moderator_deployments")
+    .select("id", { count: "exact", head: true })
+    .eq("panel_id", panelId)
+    .eq("enabled", true);
+  const { data: existingDeployment } = await c.admin
+    .from("moderator_deployments")
+    .select("id, enabled")
+    .eq("moderator_id", moderatorId)
+    .eq("community_id", community.id)
+    .maybeSingle();
+  if (!existingDeployment && (activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
+    return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
+  }
+
+  const { count: communityDeploymentCount } = await c.admin
+    .from("moderator_deployments")
+    .select("id", { count: "exact", head: true })
+    .eq("community_id", community.id)
+    .eq("enabled", true);
+  if (!existingDeployment && (communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
+    return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
+  }
+
+  const checkedAt = new Date().toISOString();
+  const health: CustomerDeploymentHealthInfo = {
+    present: membership.result.present,
+    canSend: membership.result.canSend,
+    canDelete: membership.result.canDelete,
+    canRestrict: membership.result.canRestrict,
+    checkedAt,
+  };
+
+  const { data: deployment, error: deploymentError } = await c.admin
+    .from("moderator_deployments")
+    .upsert(
+      { panel_id: panelId, moderator_id: moderatorId, community_id: community.id, enabled: true, health },
+      { onConflict: "moderator_id,community_id" }
+    )
+    .select("id")
+    .single();
+  if (deploymentError || !deployment) return { ok: false, error: deploymentError?.message ?? "Could not create the deployment." };
+
+  await c.admin.from("virtual_moderators").update({ provisioning_status: "active" }).eq("id", moderatorId);
+
+  return {
+    ok: true,
+    data: {
+      deploymentId: deployment.id,
+      communityId: community.id,
+      chatId: community.chat_id,
+      handle: community.handle,
+      title: community.title,
+      chatType: community.chat_type,
+      enabled: true,
+      health,
+      botAckMode: (community.bot_ack_mode as BotAckMode) ?? "off",
+    },
+  };
+}
+
+export async function listCustomerModeratorCommunities(panelId: string, moderatorId: string): Promise<CustomerCommunityDeploymentRow[]> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return [];
+  const { data } = await c.admin
+    .from("moderator_deployments")
+    .select("id, enabled, health, communities(id, chat_id, handle, title, chat_type, bot_ack_mode)")
+    .eq("moderator_id", moderatorId)
+    .order("created_at", { ascending: true });
+  return ((data as Array<Record<string, unknown>>) ?? []).map((row) => {
+    const community = (Array.isArray(row.communities) ? row.communities[0] : row.communities) as
+      | { id: string; chat_id: string; handle: string | null; title: string | null; chat_type: string | null; bot_ack_mode: string | null }
+      | null;
+    const health = (row.health as Partial<CustomerDeploymentHealthInfo>) ?? {};
+    return {
+      deploymentId: String(row.id),
+      communityId: community?.id ?? "",
+      chatId: community?.chat_id ?? "",
+      handle: community?.handle ?? null,
+      title: community?.title ?? null,
+      chatType: community?.chat_type ?? null,
+      enabled: row.enabled === true,
+      health: {
+        present: health.present ?? false,
+        canSend: health.canSend ?? false,
+        canDelete: health.canDelete ?? false,
+        canRestrict: health.canRestrict ?? false,
+        checkedAt: health.checkedAt ?? null,
+      },
+      // Read-only from the customer side -- bot-ack mode is a community-wide
+      // setting shared across every moderator deployed there (owner's and
+      // customer's alike), so changing it stays an owner-only control
+      // (setCommunityBotAckMode, moderator.ts) rather than duplicated here.
+      botAckMode: (community?.bot_ack_mode as BotAckMode) ?? "off",
+    };
+  });
+}
+
+/** Pause/resume a deployment — mirrors setDeploymentEnabled (moderator.ts),
+ *  customer-entitlement-capacity scoped. */
+export async function setCustomerDeploymentEnabled(panelId: string, moderatorId: string, deploymentId: string, enabled: boolean): Promise<Result<null>> {
+  const c = await ctxModerator(panelId, moderatorId);
+  if (!c) return { ok: false, error: "Moderator not found." };
+
+  if (enabled) {
+    const entitlementSource = await currentEntitlementSource(c.admin, panelId, c.account.id);
+    const capacity = customerModeratorCapacity(entitlementSource);
+    const { count: activeSlotCount } = await c.admin
+      .from("moderator_deployments")
+      .select("id", { count: "exact", head: true })
+      .eq("panel_id", panelId)
+      .eq("enabled", true);
+    if ((activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
+      return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
+    }
+
+    const { data: target } = await c.admin.from("moderator_deployments").select("community_id").eq("id", deploymentId).maybeSingle();
+    if (target?.community_id) {
+      const { count: communityDeploymentCount } = await c.admin
+        .from("moderator_deployments")
+        .select("id", { count: "exact", head: true })
+        .eq("community_id", target.community_id)
+        .eq("enabled", true);
+      if ((communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
+        return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
+      }
+    }
+  }
+
+  const { error } = await c.admin
+    .from("moderator_deployments")
+    .update({ enabled })
+    .eq("id", deploymentId)
+    .eq("moderator_id", moderatorId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
 }

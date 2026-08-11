@@ -3641,6 +3641,47 @@ win over this):**
 > action-level Supabase-integration tests were added for tenant isolation (no such
 > pattern exists for ANY server action in this codebase — enforcement is structural,
 > via the `ctx()` scoping pattern, consistent with every other customer-facing action).
+>
+> **Phase 2 IMPLEMENTED (v1.12.0) — self-serve Telegram provisioning in the storefront.**
+> Moved the Telegram bot-connection + community-linking flow into the customer surface,
+> reusing the SAME Telegram-facing pipeline as the owner flow (`moderator/manager.ts`'s
+> auth-agnostic helpers — deep-link building, username validation, bot-token
+> verification, webhook registration, chat-membership checks — nothing about how Innvil
+> talks to Telegram is duplicated). What's deliberately separate from the owner path:
+> the ownership check (`customer_id`, never `panel.owner_id`) and the capacity source
+> (`customerModeratorCapacity(entitlementSource)` — THIS customer's own trial/plan,
+> never `panels.settings`, which governs the owner's own unrelated legacy entitlement).
+> The owner-only "start a trial on first deployment" step is intentionally never called
+> here — a customer's trial is explicit (`startCustomerModeratorTrial`), never silently
+> auto-granted by connecting Telegram.
+> - New in `actions/customer-moderator.ts`: `ctxModerator()` (customer-session +
+>   `customer_id` ownership check, mirrors `moderator.ts`'s `ownedModerator`),
+>   `requestCustomerTelegramCreation`/`getCustomerModeratorProvisioning`/
+>   `cancelCustomerTelegramProvisioning`/`connectCustomerBotToken` (BotFather fallback)/
+>   `connectCustomerCommunity`/`listCustomerModeratorCommunities`/
+>   `setCustomerDeploymentEnabled` — each mirrors its owner-facing counterpart 1:1 in
+>   Telegram-interaction logic, differing only in auth/capacity source. Bot-ack mode is
+>   surfaced READ-ONLY on the customer side (`listCustomerModeratorCommunities`) —
+>   changing it stays an owner-only control (`setCommunityBotAckMode`), since it's a
+>   community-wide setting shared across every moderator deployed there.
+> - New `ModeratorTelegramCard` in `AiModeratorSurface.tsx` — per-moderator connect flow
+>   (managed-bot deep link + BotFather token fallback + polling, mirroring
+>   `TelegramConnectRow`'s UX from `AdminTabs.tsx`) and, once deployable, a community
+>   connect input + connected-communities list. **The whole `AiModeratorSurface` entry
+>   point stays gated behind `aiModeratorComingSoon` (hardcoded `true` in
+>   `Storefront.tsx`) per explicit instruction — this component is built and verified,
+>   not yet visible to real customers.**
+> - **Proactive shared-system-risk check** (per explicit new standing instruction, see
+>   the `/api/v2` incident above): before shipping, verified via direct PostgREST
+>   introspection that neither new implicit embed this pass added
+>   (`moderator_deployments→communities`, `virtual_moderators→telegram_bot_integrations`)
+>   has become ambiguous — both still resolve to exactly one relationship. No new FK was
+>   added in this pass, so no new risk was actually introduced, but checked anyway.
+> `tsc --noEmit` clean, 588 tests pass (unchanged — no dedicated action-level tests
+> added, consistent with this codebase's established convention for server actions),
+> production build clean. No migration (reuses existing `virtual_moderators.customer_id`
+> from migration 0051 + the existing `telegram_provisioning_attempts`/
+> `telegram_bot_integrations`/`communities`/`moderator_deployments` tables).
 
 ### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (NOTED, not built)
 

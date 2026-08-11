@@ -1,21 +1,226 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Bot, Sparkles, Wallet, CheckCircle2, AlertTriangle, Clock, ShieldCheck, LifeBuoy } from "lucide-react";
+import { Bot, Sparkles, Wallet, CheckCircle2, AlertTriangle, Clock, LifeBuoy, Send, Link2 } from "lucide-react";
 import { formatMoney } from "@/src/lib/money";
 import {
   getModeratorEligibility, startCustomerModeratorTrial, subscribeCustomerModeratorPlan, cancelCustomerModeratorPlan,
   contactEnterpriseModeratorSales, listCustomerModerators, createCustomerModerator,
-  type ModeratorEligibilityInfo, type CustomerModeratorRow,
+  requestCustomerTelegramCreation, getCustomerModeratorProvisioning, cancelCustomerTelegramProvisioning, connectCustomerBotToken,
+  connectCustomerCommunity, listCustomerModeratorCommunities,
+  type ModeratorEligibilityInfo, type CustomerModeratorRow, type CustomerCommunityDeploymentRow,
 } from "@/src/lib/actions/customer-moderator";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 /* Storefront AI Moderator surface — the real customer-facing product (see
    CLAUDE.md Phase 4.M product-placement correction). Customer discovers
-   eligibility, starts the free trial or subscribes, and manages their own
-   saved moderators. Telegram connection (bot creation, community linking)
-   reuses the existing owner-side provisioning pipeline and is a documented
-   follow-up, not built in this pass — see the release note. */
+   eligibility, starts the free trial or subscribes, manages their own saved
+   moderators, and self-serves Telegram connection (bot creation + community
+   linking) — reuses the same Telegram-facing pipeline as the owner flow via
+   moderator/manager.ts (see actions/customer-moderator.ts). NOTE: this whole
+   surface is currently gated behind a "coming soon" card in
+   CustomerDashboard.tsx (aiModeratorComingSoon, hardcoded true in
+   Storefront.tsx) — do not touch that gate; this component is built and
+   ready for when it's switched on. */
+
+const RETRIABLE_PROVISIONING_STATUSES = new Set(["draft", "requires_retry", "cancelled", "username_unavailable", "telegram_creation_failed", "credential_setup_failed", "expired"]);
+const DEPLOYABLE_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
+const CONNECTED_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
+
+function ModeratorTelegramCard({ panelId, moderator, onChanged }: { panelId: string; moderator: CustomerModeratorRow; onChanged: () => void | Promise<void> }) {
+  const [status, setStatus] = useState(moderator.provisioningStatus);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const [telegramUsername, setTelegramUsername] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [showTokenFallback, setShowTokenFallback] = useState(false);
+  const [requestedUsername, setRequestedUsername] = useState(() => `${moderator.name.toLowerCase().replace(/[^a-z0-9_]/g, "")}_mod_bot`);
+  const [botToken, setBotToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [rowMsg, setRowMsg] = useState<{ text: string; error?: boolean } | null>(null);
+
+  const [communities, setCommunities] = useState<CustomerCommunityDeploymentRow[] | null>(null);
+  const [chatInput, setChatInput] = useState("");
+
+  const refreshCommunities = async () => {
+    setCommunities(await listCustomerModeratorCommunities(panelId, moderator.id));
+  };
+
+  useEffect(() => {
+    if (DEPLOYABLE_PROVISIONING_STATUSES.has(status)) void refreshCommunities();
+  }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll while waiting on Telegram confirmation — same async-detection model as the owner flow.
+  useEffect(() => {
+    if (status !== "telegram_confirmation_pending") return;
+    const interval = setInterval(async () => {
+      const next = await getCustomerModeratorProvisioning(panelId, moderator.id);
+      if (!next) return;
+      if (next.provisioningStatus !== status) {
+        setStatus(next.provisioningStatus);
+        setTelegramUsername(next.telegramUsername);
+        setLastError(next.lastError);
+        setRowMsg(
+          CONNECTED_PROVISIONING_STATUSES.has(next.provisioningStatus)
+            ? { text: next.telegramUsername ? `Telegram connected — @${next.telegramUsername}.` : "Telegram connected." }
+            : null
+        );
+        await onChanged();
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [status, panelId, moderator.id, onChanged]);
+
+  const startConnect = async () => {
+    setBusy(true); setRowMsg(null);
+    const res = await requestCustomerTelegramCreation(panelId, moderator.id, requestedUsername);
+    setBusy(false);
+    if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
+    setStatus("telegram_confirmation_pending");
+    setExpanded(false);
+    window.open(res.data.deepLink, "_blank", "noopener,noreferrer");
+    setRowMsg({ text: `Opened Telegram for @${res.data.requestedUsername} — confirm creation there, then come back here.` });
+  };
+
+  const connectToken = async () => {
+    if (!botToken.trim()) return;
+    setBusy(true); setRowMsg(null);
+    const res = await connectCustomerBotToken(panelId, moderator.id, botToken);
+    setBusy(false);
+    if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
+    setBotToken("");
+    setShowTokenFallback(false);
+    setExpanded(false);
+    setStatus("bot_ready");
+    setRowMsg({ text: "Bot connected." });
+    await onChanged();
+  };
+
+  const cancel = async () => {
+    setBusy(true); setRowMsg(null);
+    const res = await cancelCustomerTelegramProvisioning(panelId, moderator.id);
+    setBusy(false);
+    if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
+    setStatus("draft");
+    setLastError(null);
+    await onChanged();
+  };
+
+  const connectCommunity = async () => {
+    if (!chatInput.trim()) return;
+    setBusy(true); setRowMsg(null);
+    const res = await connectCustomerCommunity(panelId, moderator.id, chatInput);
+    setBusy(false);
+    if (!res.ok) { setRowMsg({ text: res.error, error: true }); return; }
+    setChatInput("");
+    setStatus("active");
+    setRowMsg({ text: `Connected to ${res.data.title ?? res.data.handle ?? res.data.chatId}.` });
+    await refreshCommunities();
+    await onChanged();
+  };
+
+  return (
+    <div className="fp-panel-raised border fp-line-soft rounded-lg p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-sm">{moderator.name}</p>
+          <p className="text-[11px] fp-text-faint">
+            {telegramUsername ? `@${telegramUsername}` : "No Telegram identity yet"} &middot; {status.replaceAll("_", " ")}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {CONNECTED_PROVISIONING_STATUSES.has(status) && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full fp-gold-soft-bg fp-gold">Telegram connected</span>
+          )}
+          {status === "telegram_confirmation_pending" && (
+            <button onClick={cancel} disabled={busy} className="text-[11px] px-2 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-60">
+              Cancel
+            </button>
+          )}
+          {RETRIABLE_PROVISIONING_STATUSES.has(status) && !expanded && (
+            <button onClick={() => setExpanded(true)} className="text-[11px] px-2 py-1 rounded-lg fp-btn-primary font-semibold flex items-center gap-1">
+              <Send size={12} /> {status === "draft" ? "Connect Telegram" : "Retry"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {lastError && <p className="text-[11px] text-red-400 mt-1.5">{lastError}</p>}
+      {rowMsg && <p className={`text-[11px] mt-1.5 ${rowMsg.error ? "text-red-400" : "fp-safe"}`}>{rowMsg.text}</p>}
+
+      {expanded && (
+        <div className="mt-2 pt-2 border-t fp-line-soft space-y-2">
+          {!showTokenFallback ? (
+            <>
+              <div className="flex items-center gap-2">
+                <input
+                  value={requestedUsername}
+                  onChange={(e) => setRequestedUsername(e.target.value)}
+                  placeholder="requested_bot_username"
+                  className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs fp-text outline-none focus:fp-gold-border"
+                />
+                <button onClick={startConnect} disabled={busy || !requestedUsername.trim()} className="fp-btn-primary text-xs font-semibold px-2.5 py-1.5 rounded-lg disabled:opacity-60">
+                  {busy ? "Connecting…" : "Connect via Telegram"}
+                </button>
+              </div>
+              <p className="text-[11px] fp-text-faint">This creates a brand-new Telegram bot for your moderator — you'll confirm it in Telegram.</p>
+              <button onClick={() => setShowTokenFallback(true)} className="text-[11px] fp-text-dim hover:fp-text underline">
+                Already have a bot? Paste its token instead.
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <input
+                  value={botToken}
+                  onChange={(e) => setBotToken(e.target.value)}
+                  placeholder="Bot token from @BotFather"
+                  className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs fp-text outline-none focus:fp-gold-border"
+                />
+                <button onClick={connectToken} disabled={busy || !botToken.trim()} className="fp-btn-primary text-xs font-semibold px-2.5 py-1.5 rounded-lg disabled:opacity-60">
+                  {busy ? "Connecting…" : "Connect"}
+                </button>
+              </div>
+              <button onClick={() => setShowTokenFallback(false)} className="text-[11px] fp-text-dim hover:fp-text underline">
+                Back
+              </button>
+            </>
+          )}
+          <button onClick={() => setExpanded(false)} className="text-[11px] fp-text-dim hover:fp-text underline block">Cancel</button>
+        </div>
+      )}
+
+      {DEPLOYABLE_PROVISIONING_STATUSES.has(status) && (
+        <div className="mt-2 pt-2 border-t fp-line-soft">
+          <p className="text-[11px] fp-text-faint mb-1.5 flex items-center gap-1"><Link2 size={11} /> Communities</p>
+          <div className="flex items-center gap-2">
+            <input
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder="@channel or -1001234567890"
+              className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs fp-text outline-none focus:fp-gold-border"
+            />
+            <button onClick={connectCommunity} disabled={busy || !chatInput.trim()} className="fp-btn-primary text-xs font-semibold px-2.5 py-1.5 rounded-lg disabled:opacity-60">
+              Connect
+            </button>
+          </div>
+          <p className="text-[10px] fp-text-faint mt-1">The bot must already be added to that Telegram group/channel first.</p>
+          {communities && communities.length > 0 && (
+            <div className="mt-2 space-y-1.5">
+              {communities.map((c) => (
+                <div key={c.deploymentId} className="flex items-center justify-between fp-panel-raised border fp-line-soft rounded-lg px-2 py-1">
+                  <p className="text-[11px]">{c.title ?? c.handle ?? c.chatId}</p>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.enabled ? "fp-gold-soft-bg fp-gold" : "fp-line-soft fp-text-faint"}`}>
+                    {c.enabled ? "Active" : "Paused"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const TIERS: Array<{ tier: ModeratorPlanTier; label: string; price: number; slots: number }> = [
   { tier: "basic", label: "Basic", price: 49.99, slots: 2 },
@@ -224,14 +429,8 @@ export function AiModeratorSurface({ panelId }: { panelId?: string }) {
           ) : (
             <div className="space-y-2">
               {moderators.map((m) => (
-                <div key={m.id} className="fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-center justify-between">
-                  <p className="text-sm">{m.name}</p>
-                  <span className="text-[11px] fp-text-faint">{m.provisioningStatus.replaceAll("_", " ")}</span>
-                </div>
+                <ModeratorTelegramCard key={m.id} panelId={panelId!} moderator={m} onChanged={load} />
               ))}
-              <p className="text-[11px] fp-text-faint flex items-center gap-1 mt-1">
-                <ShieldCheck size={12} /> Telegram connection is coming soon to this dashboard — contact support to connect a moderator today.
-              </p>
             </div>
           )}
         </div>
