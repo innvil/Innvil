@@ -111,9 +111,16 @@ type LoadUserByKeyResult = { ok: true; user: ApiUser | null } | { ok: false };
 async function loadUserByKey(key: string): Promise<LoadUserByKeyResult> {
   const admin = createAdminClient();
   const keyHash = hashApiKey(key);
+  // Explicit FK hint required: migration 0051 (customer_moderator_entitlement,
+  // with FKs to both customer_accounts and panels) added a SECOND valid join
+  // path between these two tables, so PostgREST can no longer resolve the
+  // bare `panels(...)` embed unambiguously (PGRST201, "more than one
+  // relationship was found") -- confirmed live via a direct PostgREST query
+  // showing both candidate relationships. Pin it to the actual FK this route
+  // has always meant: customer_accounts.panel_id -> panels.id.
   const { data, error } = await admin
     .from("customer_accounts")
-    .select("id, panel_id, status, balance, panels(status, settings)")
+    .select("id, panel_id, status, balance, panels!customer_accounts_panel_id_fkey(status, settings)")
     .eq("api_key_hash", keyHash)
     .maybeSingle();
   if (error) {

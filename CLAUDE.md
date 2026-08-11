@@ -127,6 +127,26 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-11 — Fix: customer API `panels(...)` embed became ambiguous after migration 0051 (v1.11.2)
+- **The actual root cause** of the "Invalid API key" incident above, found immediately after v1.11.1 shipped:
+  once errors were surfaced instead of swallowed, `/api/v2` started returning `500 Server error validating
+  API key` for EVERY request, including a deliberately-invalid test key — proving the query itself was
+  failing, not just "no row found." Vercel logs showed `PGRST201: Could not embed because more than one
+  relationship was found for 'customer_accounts' and 'panels'`.
+- **Root cause**: migration `0051_customer_moderator_entitlement.sql` (earlier this session, Phase 4.M.1)
+  added `customer_moderator_entitlement` with FKs to BOTH `customer_accounts` and `panels` — a second valid
+  join path between those two tables. PostgREST can no longer resolve `loadUserByKey`'s implicit
+  `panels(status, settings)` embed unambiguously (confirmed live via a direct PostgREST query reproducing the
+  `PGRST201` with both candidate relationships listed). Grepped the rest of the codebase — this was the ONLY
+  place using an implicit `customer_accounts → panels(...)` embed; every other call site queries `panels`
+  separately, unaffected.
+- **Fix**: pin the embed to the actual FK, `panels!customer_accounts_panel_id_fkey(status, settings)` — exactly
+  the disambiguation PostgREST's own error `hint` suggested. Verified directly against the live database
+  (200, resolves correctly) before shipping. `tsc --noEmit` clean, production build clean.
+- **Correction to the "not the root cause" note in v1.11.1 below**: it WAS caused by this session's own earlier
+  work, just migration `0051` (Aug 11, customer AI-moderator entitlement) — not anything in the later Virtual
+  Moderator chatter/moderation work the user originally suspected.
+
 ### 2026-08-11 — Fix: customer API `loadUserByKey` silently swallowed real DB errors as "Invalid API key" (v1.11.1)
 - **Live incident**: an external integration (customer's own SMM automator, hitting `/api/v2?action=balance`)
   started failing with `401 Invalid API key` even for a freshly generated key — diagnosed live: the key's hash
