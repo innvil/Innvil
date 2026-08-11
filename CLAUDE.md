@@ -127,6 +127,28 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-11 — Fix: customer API `loadUserByKey` silently swallowed real DB errors as "Invalid API key" (v1.11.1)
+- **Live incident**: an external integration (customer's own SMM automator, hitting `/api/v2?action=balance`)
+  started failing with `401 Invalid API key` even for a freshly generated key — diagnosed live: the key's hash
+  was confirmed written to `customer_accounts.api_key_hash` and read back as an exact match, yet the deployed
+  endpoint still rejected it. Root cause: `loadUserByKey` (`app/api/v2/route.ts`) destructured only `{ data }`
+  from the Supabase query, never checking `error` — `.maybeSingle()` returns `{data:null, error:null}` for a
+  genuine "no matching row," but ALSO `{data:null, error:{...}}` for a real query failure (bad/rotated
+  service-role credentials, connection issue, etc.), and both collapsed into the same `!data` → `401 Invalid
+  API key` response, making a real backend failure indistinguishable from an actually-wrong key.
+- **Fix**: `loadUserByKey` now returns `{ok:false}` on a genuine query error (logged via `console.error` with
+  the Supabase error code/message, never silently swallowed) vs. `{ok:true, user:null}` for a real "no match."
+  `process()` now returns `500 "Server error validating API key"` for the former, `401 "Invalid API key"` only
+  for the latter — so the next occurrence is diagnosable from Vercel function logs instead of looking identical
+  to a customer typo. Confirmed via `tsc --noEmit` + production build; no existing tests cover this route.
+- **Not the root cause of the original 401** (that's environment/credentials-side, outside this session's
+  branch — verified this session's preview-alias deploys never reached the `trendtitan.xyz` production domain,
+  and the live production Supabase project ref matches `.env.local`'s), but this fix means the REAL underlying
+  error will now surface in logs on the next occurrence instead of being masked.
+- **Same `{data} = await ...` pattern (destructuring without checking `error`) still exists elsewhere in this
+  file** (services/orders lookups) — lower severity there (empty results vs. a misleading auth rejection), not
+  fixed in this pass; worth a follow-up sweep.
+
 ### 2026-07-25 — Collage mockup: single-platform tile on a focused panel (v1.1.44)
 - Finishes the platform-focus visual pass. On a platform-focused panel, the Agency design's `mockup:"collage"`
   platform card now shows **ONE big "Built for [platform]" tile** (large `PlatformGlyph` + capitalized name) instead

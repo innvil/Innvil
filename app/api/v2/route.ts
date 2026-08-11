@@ -91,28 +91,52 @@ async function parseParams(req: NextRequest): Promise<Record<string, string>> {
   return out;
 }
 
-async function loadUserByKey(key: string): Promise<ApiUser | null> {
+type LoadUserByKeyResult = { ok: true; user: ApiUser | null } | { ok: false };
+
+/**
+ * `.maybeSingle()` returns `{data: null, error: null}` when zero rows match
+ * (a genuinely invalid key) -- but any REAL query failure (bad/rotated
+ * service-role credentials, a transient connection issue, an RLS/schema
+ * problem) ALSO used to collapse into a bare `data == null` here, which the
+ * caller then reported to the customer as "Invalid API key" -- identical
+ * wording to a real invalid key, making the two cases undiagnosable from
+ * the outside. A live incident proved this: a freshly generated key was
+ * hashed, stored, and read back as matching directly against the database,
+ * yet the deployed endpoint still returned "Invalid API key" -- i.e. the
+ * lookup itself was failing, not finding zero rows. The query's `error` is
+ * now checked explicitly and logged (never a silent swallow), so a real
+ * backend failure surfaces as a genuine 500 instead of impersonating an
+ * auth rejection.
+ */
+async function loadUserByKey(key: string): Promise<LoadUserByKeyResult> {
   const admin = createAdminClient();
   const keyHash = hashApiKey(key);
-  const { data } = await admin
+  const { data, error } = await admin
     .from("customer_accounts")
     .select("id, panel_id, status, balance, panels(status, settings)")
     .eq("api_key_hash", keyHash)
     .maybeSingle();
-  if (!data) return null;
+  if (error) {
+    console.error("[api/v2] loadUserByKey query failed", error.code, error.message);
+    return { ok: false };
+  }
+  if (!data) return { ok: true, user: null };
 
   const panelObj = Array.isArray(data.panels) ? data.panels[0] : data.panels;
   const panelStatus = (panelObj?.status as string | undefined) ?? "draft";
   const settings = panelObj?.settings;
 
   return {
-    accountId: data.id as string,
-    panelId: data.panel_id as string,
-    balance: Number(data.balance ?? 0),
-    accountStatus: (data.status as string) ?? "active",
-    panelStatus,
-    panelCurrency: panelCurrency(settings),
-    apiEnabled: panelApiEnabled(settings),
+    ok: true,
+    user: {
+      accountId: data.id as string,
+      panelId: data.panel_id as string,
+      balance: Number(data.balance ?? 0),
+      accountStatus: (data.status as string) ?? "active",
+      panelStatus,
+      panelCurrency: panelCurrency(settings),
+      apiEnabled: panelApiEnabled(settings),
+    },
   };
 }
 
@@ -544,7 +568,9 @@ async function process(req: NextRequest) {
   if (!key) return NextResponse.json({ error: "API key is required" }, { status: 400 });
   if (!action) return NextResponse.json({ error: "action is required" }, { status: 400 });
 
-  const u = await loadUserByKey(key);
+  const lookup = await loadUserByKey(key);
+  if (!lookup.ok) return NextResponse.json({ error: "Server error validating API key" }, { status: 500 });
+  const u = lookup.user;
   if (!u) return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
   if (!u.apiEnabled) return NextResponse.json({ error: "Customer API is disabled for this panel" }, { status: 403 });
   if (u.accountStatus !== "active") return NextResponse.json({ error: "Account cannot use API right now" }, { status: 403 });
