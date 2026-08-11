@@ -59,10 +59,10 @@ import { getPanelBranding, updatePanelBranding, getPanelStatusHistory, type Land
 import {
   listPanelOrdersPage, getPanelOverview, getPanelCurrency,
   resendOrder, requestRefill, requestCancel, markOrderCompleted, refundOrder,
-  cancelAndRefundOrder, bulkCancelAndRefund, bulkResendOrders, refreshProviderBalancesAndRetryHeldOrders,
+  cancelAndRefundOrder, bulkCancelAndRefund, bulkResendOrders,
+  refreshPendingOrders, resendPendingHeldOrders, syncProcessingAndInProgressOrdersNow,
   type AdminOrderVM, type PanelOverview,
 } from "@/src/lib/actions/admin-orders";
-import { syncOrdersNow } from "@/src/lib/actions/orders";
 import {
   getDomainInfo, setCustomDomain, removeCustomDomain, type DomainInfo,
 } from "@/src/lib/actions/custom-domain";
@@ -1884,7 +1884,8 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [retryingHeld, setRetryingHeld] = useState(false);
+  const [refreshingPending, setRefreshingPending] = useState(false);
+  const [resendingHeld, setResendingHeld] = useState(false);
   const [currency, setCurrency] = useState("USD");
   const [hasNextPage, setHasNextPage] = useState(false);
   // null = not loaded yet (show a neutral placeholder), never coerced to 0 —
@@ -1954,11 +1955,11 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     if (!realPanel) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
-      if (syncing || retryingHeld || busyId) return;
+      if (syncing || refreshingPending || resendingHeld || busyId) return;
       void load();
     }, ORDERS_AUTO_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [busyId, load, realPanel, retryingHeld, syncing]);
+  }, [busyId, load, realPanel, refreshingPending, resendingHeld, syncing]);
 
   const fmt = (n: number) => formatMoney(n, currency);
 
@@ -2008,16 +2009,31 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
 
   const syncNow = async () => {
     setSyncing(true); setMsg(null);
-    const res = await syncOrdersNow(panelId);
+    const res = await syncProcessingAndInProgressOrdersNow(panelId);
     if (!res.ok) setMsg({ text: res.error, error: true });
-    else { setMsg({ text: `Synced ${res.checked} order(s), ${res.updated} updated.` }); await load(); }
+    else { setMsg({ text: `Synced processing/in-progress ${res.checked} order(s), ${res.updated} updated.` }); await load(); }
     setSyncing(false);
   };
 
-  const retryHeldNow = async () => {
-    setRetryingHeld(true); setMsg(null);
+  const refreshPendingNow = async () => {
+    setRefreshingPending(true); setMsg(null);
     try {
-      const res = await refreshProviderBalancesAndRetryHeldOrders(panelId);
+      const res = await refreshPendingOrders(panelId);
+      if (!res.ok) {
+        setMsg({ text: res.error, error: true });
+        return;
+      }
+      await load();
+      setMsg({ text: `Refreshed pending ${res.checked} order(s), ${res.updated} updated.` });
+    } finally {
+      setRefreshingPending(false);
+    }
+  };
+
+  const resendHeldNow = async () => {
+    setResendingHeld(true); setMsg(null);
+    try {
+      const res = await resendPendingHeldOrders(panelId);
       if (!res.ok) {
         setMsg({ text: res.error, error: true });
         return;
@@ -2030,14 +2046,14 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       }
       await load();
       if (res.heldFound === 0) {
-        setMsg({ text: "No held orders are waiting on provider balance." });
+        setMsg({ text: "No pending on-hold orders found." });
       } else if (res.providersFunded === 0 || res.retried === 0) {
-        setMsg({ text: `Checked ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; none of the held orders have enough refreshed provider balance yet.` });
+        setMsg({ text: `Checked ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; none of the pending on-hold orders have enough provider balance yet.` });
       } else {
-        setMsg({ text: `Refreshed ${res.providersChecked} provider${res.providersChecked === 1 ? "" : "s"}; retried ${res.retried} held order${res.retried === 1 ? "" : "s"}, ${res.resent} resent${res.failed ? `, ${res.failed} still pending` : ""}.` });
+        setMsg({ text: `Retried ${res.retried} pending on-hold order${res.retried === 1 ? "" : "s"}, ${res.resent} resent${res.failed ? `, ${res.failed} still pending` : ""}.` });
       }
     } finally {
-      setRetryingHeld(false);
+      setResendingHeld(false);
     }
   };
 
@@ -2205,11 +2221,14 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
       icon={ListOrdered}
       right={
         <div className="flex items-center gap-2">
-          <button onClick={retryHeldNow} disabled={syncing || retryingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
-            <RefreshCw size={12} className={retryingHeld ? "animate-spin" : ""} /> {retryingHeld ? "Refreshing…" : "Refresh & Resend"}
+          <button onClick={refreshPendingNow} disabled={syncing || refreshingPending || resendingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
+            <RefreshCw size={12} className={refreshingPending ? "animate-spin" : ""} /> {refreshingPending ? "Refreshing…" : "Refresh"}
           </button>
-          <button onClick={syncNow} disabled={syncing || retryingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
-            <RefreshCw size={12} className={syncing ? "animate-spin" : ""} /> {syncing ? "Syncing…" : "Sync statuses"}
+          <button onClick={resendHeldNow} disabled={syncing || refreshingPending || resendingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
+            <RefreshCw size={12} className={resendingHeld ? "animate-spin" : ""} /> {resendingHeld ? "Resending…" : "Resend"}
+          </button>
+          <button onClick={syncNow} disabled={syncing || refreshingPending || resendingHeld} className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
+            <RefreshCw size={12} className={syncing ? "animate-spin" : ""} /> {syncing ? "Syncing…" : "Sync"}
           </button>
         </div>
       }
@@ -2265,7 +2284,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
                 aria-label="Selected actions"
                 aria-expanded={bulkMenuOpen}
                 onClick={() => setBulkMenuOpen((v) => !v)}
-                disabled={syncing || retryingHeld || busyId !== null}
+                disabled={syncing || refreshingPending || resendingHeld || busyId !== null}
                 className="h-8 w-8 inline-flex items-center justify-center rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text disabled:opacity-50"
               >
                 <Menu size={15} />
@@ -2469,14 +2488,14 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
             <div className="flex items-center gap-2">
               <button
                 onClick={previousPage}
-                disabled={page === 0 || syncing || retryingHeld || busyId !== null}
+                disabled={page === 0 || syncing || refreshingPending || resendingHeld || busyId !== null}
                 className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text disabled:opacity-50"
               >
                 Previous
               </button>
               <button
                 onClick={nextPage}
-                disabled={!hasNextPage || syncing || retryingHeld || busyId !== null}
+                disabled={!hasNextPage || syncing || refreshingPending || resendingHeld || busyId !== null}
                 className="fp-panel-raised border fp-line-soft text-xs px-3 py-1.5 rounded-lg fp-text-dim hover:fp-text disabled:opacity-50"
               >
                 Next

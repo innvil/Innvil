@@ -38,7 +38,7 @@ test("CASE 4: historical pending row with provider_order_id is still eligible (n
   assert.equal(out.nextStatus, "completed");
 });
 
-test("CASE 5: local completed is not selected by pending-only reconciliation", () => {
+test("CASE 5: local completed is not selected for provider status polling", () => {
   const eligible = isOrderEligibleForProviderStatusSync({
     status: "completed",
     provider_order_id: "12345",
@@ -47,22 +47,22 @@ test("CASE 5: local completed is not selected by pending-only reconciliation", (
   assert.equal(eligible, false);
 });
 
-test("CASE 6: local processing is not selected by pending-only reconciliation", () => {
+test("CASE 6: local processing is selected for provider status polling", () => {
   const eligible = isOrderEligibleForProviderStatusSync({
     status: "processing",
     provider_order_id: "12345",
     provider_response: null,
   });
-  assert.equal(eligible, false);
+  assert.equal(eligible, true);
 });
 
-test("CASE 7: local partial is not selected by pending-only reconciliation", () => {
+test("CASE 7: local partial is selected for provider status polling", () => {
   const eligible = isOrderEligibleForProviderStatusSync({
     status: "partial",
     provider_order_id: "12345",
     provider_response: null,
   });
-  assert.equal(eligible, false);
+  assert.equal(eligible, true);
 });
 
 test("CASE 8: local failed is not selected by pending-only reconciliation", () => {

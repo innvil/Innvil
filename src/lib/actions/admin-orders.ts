@@ -6,7 +6,7 @@ import {
   getProviderCredentials, addOrder, refillOrder, cancelOrders, getBalance, ProviderError,
 } from "@/src/lib/providers";
 import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
-import { syncPanelOrders } from "@/src/lib/orders/sync";
+import { syncPanelOrders, syncPendingOrders, syncProcessingInProgressOrders } from "@/src/lib/orders/sync";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -911,6 +911,164 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
     resent,
     failed,
   };
+}
+
+/**
+ * Pending-only refresh: poll provider statuses only for provider-bound pending rows.
+ * This is meant to recover stuck pending orders without touching processing/in-progress.
+ */
+export async function refreshPendingOrders(
+  panelId: string
+): Promise<{ ok: true; checked: number; updated: number } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!(await ownsPanel(admin, user.id, panelId))) return { ok: false, error: "Not authorized for this panel" };
+
+  const out = await syncPendingOrders(admin, panelId);
+  return { ok: true, checked: out.checked, updated: out.updated };
+}
+
+/**
+ * Resend only ON-HOLD pending orders caused by provider balance shortage.
+ * Scope is intentionally strict: pending + held + reason=provider_balance + not yet provider-bound.
+ */
+export async function resendPendingHeldOrders(
+  panelId: string
+): Promise<
+  | {
+      ok: true;
+      heldFound: number;
+      providersChecked: number;
+      providersFunded: number;
+      retried: number;
+      resent: number;
+      failed: number;
+    }
+  | { ok: false; error: string }
+> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!(await ownsPanel(admin, user.id, panelId))) return { ok: false, error: "Not authorized for this panel" };
+
+  const { data } = await admin
+    .from("orders")
+    .select("id, service_id, provider_id, provider_order_id, link, quantity, provider_cost, status, created_at, provider_payload, provider_response")
+    .eq("panel_id", panelId)
+    .eq("status", "pending");
+
+  const heldOrders = ((data as Array<{
+    id: string;
+    service_id: string | null;
+    provider_id: string | null;
+    provider_order_id: string | null;
+    link: string | null;
+    quantity: number | null;
+    provider_cost: number | null;
+    status: OrderStatus;
+    created_at: string;
+    provider_payload: unknown;
+    provider_response: { held?: boolean; reason?: string | null; error?: string | null } | null;
+  }> | null) ?? []).filter((order) => (
+    !order.provider_order_id &&
+    order.status === "pending" &&
+    !!order.service_id &&
+    order.provider_response?.held === true &&
+    order.provider_response?.reason === "provider_balance"
+  ));
+
+  if (heldOrders.length === 0) {
+    return { ok: true, heldFound: 0, providersChecked: 0, providersFunded: 0, retried: 0, resent: 0, failed: 0 };
+  }
+
+  const providerIds = [...new Set(heldOrders.map((order) => order.provider_id as string))];
+  const { data: providers } = await admin
+    .from("providers")
+    .select("id, api_url, balance")
+    .in("id", providerIds);
+
+  const providerRows = (providers as Array<{ id: string; api_url: string; balance: number | null }> | null) ?? [];
+  const refreshedBalances = new Map<string, number>();
+  const providersChecked = providerRows.length;
+
+  await Promise.all(providerRows.map(async (provider) => {
+    try {
+      const creds = await getProviderCredentials(provider.id, provider.api_url);
+      const balance = await getBalance(creds);
+      if ("error" in balance) return;
+
+      const latest = Number(balance.balance);
+      if (!Number.isFinite(latest)) return;
+
+      await admin
+        .from("providers")
+        .update({
+          balance: latest,
+          currency: balance.currency,
+          last_balance_sync: new Date().toISOString(),
+        })
+        .eq("id", provider.id);
+      refreshedBalances.set(provider.id, latest);
+    } catch {
+      // skip this provider this run
+    }
+  }));
+
+  const retryableOrders: typeof heldOrders = [];
+  const fundedProviderIds = new Set<string>();
+  const remainingByProvider = new Map<string, number>();
+
+  for (const order of [...heldOrders].sort((a, b) => a.created_at.localeCompare(b.created_at))) {
+    const providerId = order.provider_id as string;
+    const currentBalance = refreshedBalances.get(providerId);
+    const providerCost = Number(order.provider_cost ?? 0);
+    if (!Number.isFinite(currentBalance as number)) continue;
+    if (!Number.isFinite(providerCost) || providerCost <= 0) continue;
+
+    const remaining = remainingByProvider.get(providerId) ?? (currentBalance as number);
+    if (remaining + 0.000001 < providerCost) continue;
+
+    remainingByProvider.set(providerId, remaining - providerCost);
+    fundedProviderIds.add(providerId);
+    retryableOrders.push(order);
+  }
+
+  let resent = 0;
+  let failed = 0;
+
+  const BATCH = 5;
+  for (let i = 0; i < retryableOrders.length; i += BATCH) {
+    const results = await Promise.all(
+      retryableOrders.slice(i, i + BATCH).map((order) =>
+        submitPendingOrderToProvider(admin, order, "Resent pending on-hold order after balance refresh"),
+      ),
+    );
+    for (const r of results) { if (r.ok) resent++; else failed++; }
+  }
+
+  return {
+    ok: true,
+    heldFound: heldOrders.length,
+    providersChecked,
+    providersFunded: fundedProviderIds.size,
+    retried: retryableOrders.length,
+    resent,
+    failed,
+  };
+}
+
+/**
+ * Sync only processing/in-progress orders against provider statuses.
+ * Includes historical provider-bound rows, not only newly placed orders.
+ */
+export async function syncProcessingAndInProgressOrdersNow(
+  panelId: string
+): Promise<{ ok: true; checked: number; updated: number } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!(await ownsPanel(admin, user.id, panelId))) return { ok: false, error: "Not authorized for this panel" };
+
+  const out = await syncProcessingInProgressOrders(admin, panelId);
+  return { ok: true, checked: out.checked, updated: out.updated };
 }
 
 /** Ask the provider to refill a completed/partial order. */

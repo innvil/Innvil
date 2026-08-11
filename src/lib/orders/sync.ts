@@ -14,9 +14,8 @@ import type { OrderStatus } from "@/src/types/db";
    Server-only; runs under the service role (cron or owner-triggered).
    ========================================================= */
 
-// Pending-only reconciliation candidates for this patch.
-const PENDING_RECONCILE_STATUS: OrderStatus = "pending";
-
+// Provider status polling candidates: provider-bound non-terminal orders.
+const SYNC_POLL_STATUSES: OrderStatus[] = ["pending", "processing", "in_progress", "partial"];
 const ACTIVE_STATUSES: OrderStatus[] = ["pending", "processing", "in_progress", "partial", "completed"];
 const TERMINAL_STATUSES: OrderStatus[] = ["canceled", "failed", "refunded"];
 
@@ -74,7 +73,7 @@ export function isOrderEligibleForProviderStatusSync(order: {
   provider_order_id: string | null | undefined;
   provider_response?: { held?: boolean } | null;
 }): boolean {
-  if (order.status !== PENDING_RECONCILE_STATUS) return false;
+  if (!SYNC_POLL_STATUSES.includes(order.status)) return false;
   const providerOrderId = String(order.provider_order_id ?? "").trim();
   if (!providerOrderId) return false;
   return true;
@@ -599,10 +598,10 @@ async function settlePanelCommission(admin: SupabaseClient, panelId: string): Pr
   return settled;
 }
 
-/** Sync all open orders for one panel. Returns how many were checked/updated. */
-export async function syncPanelOrders(
+async function syncPanelOrdersByStatuses(
   admin: SupabaseClient,
-  panelId: string
+  panelId: string,
+  pollStatuses: OrderStatus[]
 ): Promise<{ checked: number; updated: number }> {
   console.info("[dup-debug][sync:start]", { panelId });
   // Pre-passes are independent (different order subsets) — run them concurrently.
@@ -618,7 +617,7 @@ export async function syncPanelOrders(
     .from("orders")
     .select("id, service_id, provider_id, provider_order_id, status, quantity, charge, provider_cost, customer_id, remains, provider_response")
     .eq("panel_id", panelId)
-    .eq("status", PENDING_RECONCILE_STATUS)
+    .in("status", pollStatuses)
     .not("provider_order_id", "is", null);
 
   const rawList = ((orders as SyncCandidateOrder[] | null) ?? [])
@@ -878,6 +877,39 @@ export async function syncPanelOrders(
   return { checked: list.length, updated: totalUpdated };
 }
 
+/**
+ * Sync provider statuses for active provider-bound orders on one panel.
+ * Scope: pending + processing + in_progress + partial.
+ */
+export async function syncPanelOrders(
+  admin: SupabaseClient,
+  panelId: string
+): Promise<{ checked: number; updated: number }> {
+  return syncPanelOrdersByStatuses(admin, panelId, SYNC_POLL_STATUSES);
+}
+
+/**
+ * Pending-only status refresh.
+ * Intended for recovering stuck pending rows without touching processing/in_progress.
+ */
+export async function syncPendingOrders(
+  admin: SupabaseClient,
+  panelId: string
+): Promise<{ checked: number; updated: number }> {
+  return syncPanelOrdersByStatuses(admin, panelId, ["pending"]);
+}
+
+/**
+ * Processing/in_progress-only status sync.
+ * Intended for reconciling long-running rows against provider APIs.
+ */
+export async function syncProcessingInProgressOrders(
+  admin: SupabaseClient,
+  panelId: string
+): Promise<{ checked: number; updated: number }> {
+  return syncPanelOrdersByStatuses(admin, panelId, ["processing", "in_progress"]);
+}
+
 /** Sync open orders across every panel that has any. Used by the cron. */
 export async function syncAllOpenOrders(): Promise<{ panels: number; checked: number; updated: number }> {
   const admin = createAdminClient();
@@ -887,7 +919,7 @@ export async function syncAllOpenOrders(): Promise<{ panels: number; checked: nu
     .from("orders")
     .select("panel_id")
     .not("provider_order_id", "is", null)
-    .not("provider_id", "is", null);
+    .in("status", SYNC_POLL_STATUSES);
 
   const panelIds = [...new Set((data ?? []).map((o) => o.panel_id as string))];
   let checked = 0;

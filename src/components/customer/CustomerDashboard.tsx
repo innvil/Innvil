@@ -493,12 +493,13 @@ export function CustomerDashboard({
     window.location.href = res.url; // hosted checkout
   };
   const pageStorageKey = `innvil-customer:${panelId ?? "preview"}:page`;
+  const visibleNav = aiModeratorComingSoon ? NAV.filter((n) => n.k !== "moderator") : NAV;
   const readSavedPage = (): CustomerPage => {
     if (typeof window === "undefined") return "dashboard";
     try {
       const raw = window.sessionStorage.getItem(pageStorageKey) ?? window.localStorage.getItem(pageStorageKey);
       if (!raw) return "dashboard";
-      return (NAV.some((n) => n.k === raw) ? raw : "dashboard") as CustomerPage;
+      return (visibleNav.some((n) => n.k === raw) ? raw : "dashboard") as CustomerPage;
     } catch {
       return "dashboard";
     }
@@ -526,7 +527,13 @@ export function CustomerDashboard({
   useEffect(() => {
     setPage(readSavedPage());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageStorageKey]);
+  }, [pageStorageKey, aiModeratorComingSoon]);
+
+  useEffect(() => {
+    if (aiModeratorComingSoon && page === "moderator") {
+      setPage("dashboard");
+    }
+  }, [aiModeratorComingSoon, page]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -744,7 +751,7 @@ export function CustomerDashboard({
           </div>
 
           <nav className="hidden md:flex items-center gap-1">
-            {NAV.map((n) => (
+            {visibleNav.map((n) => (
               <button
                 key={n.k}
                 onClick={() => go(n.k)}
@@ -774,7 +781,7 @@ export function CustomerDashboard({
         {/* Mobile hamburger menu */}
         {menuOpen && (
           <nav className="md:hidden border-t fp-line-soft bg-[#0D0F14] px-4 py-3 space-y-1">
-            {NAV.map((n) => (
+            {visibleNav.map((n) => (
               <button
                 key={n.k}
                 onClick={() => go(n.k)}
@@ -909,20 +916,7 @@ export function CustomerDashboard({
         )}
 
         {/* ---------- AI MODERATOR ---------- */}
-        {page === "moderator" && (
-          aiModeratorComingSoon ? (
-            <div className="fp-panel border fp-line rounded-2xl p-6 text-center">
-              <span className="w-10 h-10 rounded-xl fp-violet-soft-bg fp-violet grid place-items-center mx-auto mb-3">
-                <Bot size={18} />
-              </span>
-              <p className="fp-display text-xl mb-2">AI Moderator</p>
-              <p className="fp-text-dim text-sm mb-4">Coming soon for storefront customers.</p>
-              <p className="fp-text-faint text-xs">We&apos;re finishing the customer-facing setup flow.</p>
-            </div>
-          ) : (
-            <AiModeratorSurface panelId={panelId} />
-          )
-        )}
+        {!aiModeratorComingSoon && page === "moderator" && <AiModeratorSurface panelId={panelId} />}
 
         {/* ---------- ORDERS ---------- */}
         {page === "orders" && (
