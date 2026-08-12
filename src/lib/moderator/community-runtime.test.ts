@@ -572,16 +572,36 @@ test("a HUMAN sender is unaffected by this fix -- still uses first_name/username
 // real query shape, not just the pure retrieval math already covered by
 // knowledge.test.ts.
 
-function fakeAdminForKnowledge(rows: Array<{ id: string; panel_id: string; scope_type: "PROJECT" | "COMMUNITY"; community_id: string | null; kind: string; title: string; content: string; active: boolean }>) {
+interface FakeKnowledgeRow {
+  id: string; panel_id: string; scope_type: "ORGANIZATION" | "PROJECT" | "COMMUNITY";
+  project_id: string | null; community_id: string | null; kind: string; title: string; content: string; active: boolean;
+}
+
+/** `communityProjects` resolves the Panel -> Project -> Community hierarchy
+ *  (communities.project_id) the real loadRelevantKnowledge depends on before
+ *  it can even query PROJECT-scope rows. */
+function fakeAdminForKnowledge(rows: FakeKnowledgeRow[], communityProjects: Record<string, string> = {}) {
   return {
     from(table: string) {
+      if (table === "communities") {
+        const filters: Record<string, unknown> = {};
+        const api = {
+          select() { return api; },
+          eq(col: string, val: unknown) { filters[col] = val; return api; },
+          async maybeSingle() {
+            const id = filters.id as string;
+            return { data: communityProjects[id] ? { project_id: communityProjects[id] } : null, error: null };
+          },
+        };
+        return api;
+      }
       if (table !== "knowledge_sources") throw new Error(`unexpected table: ${table}`);
       const filters: Record<string, unknown> = {};
       const api = {
         select() { return api; },
         eq(col: string, val: unknown) { filters[col] = val; return api; },
         then(resolve: (r: { data: typeof rows; error: null }) => void) {
-          const data = rows.filter((r) => Object.entries(filters).every(([k, v]) => (r as Record<string, unknown>)[k] === v));
+          const data = rows.filter((r) => Object.entries(filters).every(([k, v]) => (r as unknown as Record<string, unknown>)[k] === v));
           resolve({ data, error: null });
         },
       };
@@ -590,52 +610,104 @@ function fakeAdminForKnowledge(rows: Array<{ id: string; panel_id: string; scope
   } as any;
 }
 
-test("REQUIRED (spec test 1 shape): a question retrieves the panel's own project knowledge", async () => {
-  const admin = fakeAdminForKnowledge([
-    { id: "p1", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "overview", title: "Supported chains", content: "Ethereum and Polygon.", active: true },
-  ]);
+test("REQUIRED (spec test 1 shape): a question retrieves this community's own project knowledge", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "p1", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "overview", title: "Supported chains", content: "Ethereum and Polygon.", active: true }],
+    { "community-1": "project-litho" }
+  );
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "what chains do you support?");
   assert.ok(result);
   assert.equal(result![0].title, "Supported chains");
 });
 
 test("REQUIRED (spec test 4/§8): community 1 knowledge never appears when answering inside community 2", async () => {
-  const admin = fakeAdminForKnowledge([
-    { id: "c1", panel_id: "panel-1", scope_type: "COMMUNITY", community_id: "community-1", kind: "fact", title: "About this community", content: "This community is focused on Project Alpha.", active: true },
-  ]);
+  const admin = fakeAdminForKnowledge(
+    [{ id: "c1", panel_id: "panel-1", scope_type: "COMMUNITY", project_id: null, community_id: "community-1", kind: "fact", title: "About this community", content: "This community is focused on Project Alpha.", active: true }],
+    { "community-1": "project-a", "community-2": "project-b" }
+  );
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-2", "what is this community about?");
   assert.equal(result, undefined);
 });
 
-test("REQUIRED (spec §7/§24): a conflicting community fact is listed BEFORE the generic project fact", async () => {
-  const admin = fakeAdminForKnowledge([
-    { id: "proj", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "fact", title: "Support contact", content: "@global_support", active: true },
-    { id: "comm", panel_id: "panel-1", scope_type: "COMMUNITY", community_id: "community-2", kind: "fact", title: "Support contact", content: "@comm2_admin", active: true },
-  ]);
-  const result = await loadRelevantKnowledge(admin, "panel-1", "community-2", "who should I message for support?");
+test("REQUIRED (user-reported TEST 1 -- project isolation): two projects under the same panel, community 2's question only ever retrieves project 2's own fact, never project 1's", async () => {
+  const admin = fakeAdminForKnowledge(
+    [
+      { id: "litho-support", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "fact", title: "Support contact", content: "@litho_support", active: true },
+      { id: "thanos-support", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-thanos", community_id: null, kind: "fact", title: "Support contact", content: "@thanos_support", active: true },
+    ],
+    { "litho-community": "project-litho", "thanos-community": "project-thanos" }
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "thanos-community", "who do I contact for support?");
   assert.ok(result);
-  assert.equal(result![0].content, "@comm2_admin");
-  assert.equal(result![1].content, "@global_support");
+  assert.equal(result!.length, 1);
+  assert.equal(result![0].content, "@thanos_support");
+  assert.ok(!result!.some((r) => r.content === "@litho_support"));
 });
 
-test("REQUIRED (spec test 2): a question not covered by either scope returns undefined, never a fabricated fallback", async () => {
-  const admin = fakeAdminForKnowledge([
-    { id: "p1", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "fact", title: "Supported chains", content: "Ethereum and Polygon.", active: true },
-  ]);
+test("REQUIRED (user spec TEST 5 -- no cross-project fallback): community belongs to project A; only project B has the matching fact -> not used", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "b-fact", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-b", community_id: null, kind: "fact", title: "Launch date", content: "March 2027", active: true }],
+    { "community-a": "project-a" }
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-a", "when is the launch date?");
+  assert.equal(result, undefined);
+});
+
+test("REQUIRED (spec §7/§24): community knowledge is listed BEFORE its own project's fact when they conflict", async () => {
+  const admin = fakeAdminForKnowledge(
+    [
+      { id: "proj", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "fact", title: "Support contact", content: "@litho_support", active: true },
+      { id: "comm", panel_id: "panel-1", scope_type: "COMMUNITY", project_id: null, community_id: "community-2", kind: "fact", title: "Support contact", content: "@litho_vietnam_support", active: true },
+    ],
+    { "community-2": "project-litho" }
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-2", "who should I message for support?");
+  assert.ok(result);
+  assert.equal(result![0].content, "@litho_vietnam_support");
+  assert.equal(result![1].content, "@litho_support");
+});
+
+test("REQUIRED (user spec TEST 4 -- organization fallback): neither community nor project has the answer, organization does", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "org", panel_id: "panel-1", scope_type: "ORGANIZATION", project_id: null, community_id: null, kind: "fact", title: "Legal contact", content: "legal@kajlabs.com", active: true }],
+    { "community-1": "project-litho" }
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "who is the legal contact?");
+  assert.ok(result);
+  assert.equal(result![0].content, "legal@kajlabs.com");
+});
+
+test("REQUIRED (user spec TEST 6 -- multiple communities, same project): both communities under project Litho retrieve the same Project Knowledge", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "litho-chains", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "fact", title: "Chains", content: "Ethereum, Polygon", active: true }],
+    { "litho-main": "project-litho", "litho-regional": "project-litho" }
+  );
+  const main = await loadRelevantKnowledge(admin, "panel-1", "litho-main", "what chains do you support?");
+  const regional = await loadRelevantKnowledge(admin, "panel-1", "litho-regional", "what chains do you support?");
+  assert.equal(main![0].content, "Ethereum, Polygon");
+  assert.equal(regional![0].content, "Ethereum, Polygon");
+});
+
+test("REQUIRED (spec test 2): a question not covered by any scope returns undefined, never a fabricated fallback", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "p1", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "fact", title: "Supported chains", content: "Ethereum and Polygon.", active: true }],
+    { "community-1": "project-litho" }
+  );
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "what's the current token price?");
   assert.equal(result, undefined);
 });
 
-test("inactive rows in either scope are never retrieved", async () => {
-  const admin = fakeAdminForKnowledge([
-    { id: "stale", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "fact", title: "Old roadmap", content: "roadmap info", active: false },
-  ]);
+test("inactive rows in any scope are never retrieved", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "stale", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "fact", title: "Old roadmap", content: "roadmap info", active: false }],
+    { "community-1": "project-litho" }
+  );
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "roadmap info");
   assert.equal(result, undefined);
 });
 
-test("no rows at all in either scope -> undefined, no query result mishandling", async () => {
-  const admin = fakeAdminForKnowledge([]);
+test("no rows at all in any scope -> undefined, no query result mishandling", async () => {
+  const admin = fakeAdminForKnowledge([], { "community-1": "project-litho" });
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "anything");
   assert.equal(result, undefined);
 });

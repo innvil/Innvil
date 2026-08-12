@@ -1,20 +1,31 @@
 /* =========================================================
-   Project Knowledge — shared, tenant-scoped source of truth (Phase 4.N,
-   docs/moderator/project-knowledge-autoposting-spec.md §1-§5). Powers BOTH
-   Virtual Moderator Q&A grounding (wired this pass) and, later, AI
-   Auto-Posting content generation (NOT built this pass — see CLAUDE.md).
+   Knowledge — shared source of truth for the Panel -> Project -> Community
+   hierarchy (Phase 4.N, docs/moderator/project-knowledge-autoposting-spec.md
+   §1-§5, corrected per the follow-up "Panel -> Project -> Community"
+   architecture revision). Powers Virtual Moderator Q&A grounding and AI
+   Auto-Posting content generation.
 
    Pure module: types + retrieval scoring only, no I/O. The DB-facing CRUD
    lives in src/lib/actions/knowledge.ts.
 
-   Scope field (§ "COMMUNITY-SPECIFIC KNOWLEDGE"): every row already carries
-   `scopeType` ("PROJECT" | "COMMUNITY") + an optional `communityId`, per the
-   spec's own explicit instruction to build the shared schema with a scope
-   field from day one rather than retrofitting it later. Only PROJECT-scope
-   rows are written/retrieved this pass — COMMUNITY-scope is schema-ready but
-   not yet wired into any action or the runtime retrieval call (that's the
-   separate Community Knowledge feature, itself blocked on this pipeline
-   existing first per the spec's own phasing).
+   THREE knowledge scopes, in strict retrieval precedence order:
+     COMMUNITY    -- belongs to ONE community (communityId set). Narrow
+                     override/addition layer, e.g. "AMA every Friday".
+     PROJECT      -- belongs to ONE project (projectId set). The bulk of a
+                     project's facts (support contact, chains, docs, ...).
+                     NEVER retrieved for a different project's community,
+                     even under the same panel.
+     ORGANIZATION -- panel-wide, shared across every project the panel owns
+                     (projectId AND communityId both null). Truly global
+                     facts only (company info, legal, shared policy).
+
+   A community belongs to exactly one project (communities.project_id); a
+   panel may own many projects, each with one or more communities. This
+   replaces the earlier (incorrect) model where "PROJECT" scope was
+   accidentally panel-wide — see CLAUDE.md's Phase 4.N entry for the
+   corrected invariant and the migration (0057) that reclassified the old
+   panel-wide rows to ORGANIZATION rather than guessing which project they
+   belonged to.
 
    Retrieval (§5 "retrieval, not full-document prompt stuffing"): this
    codebase has no existing vector/embedding infrastructure (checked before
@@ -26,15 +37,19 @@
    actually matches, rather than forcing irrelevant context into the
    prompt). Swappable for real embeddings later without changing the calling
    contract (retrieveRelevantKnowledge's signature doesn't depend on how
-   scoring works internally). */
+   scoring works internally). Isolation between projects/communities is
+   enforced by the CALLER's DB query filters (community-runtime.ts), never
+   by this function or by prompting alone — this module never receives rows
+   outside the scope it was asked to score. */
 
 export type KnowledgeSourceKind = "overview" | "faq" | "fact" | "link" | "note";
-export type KnowledgeScopeType = "PROJECT" | "COMMUNITY";
+export type KnowledgeScopeType = "ORGANIZATION" | "PROJECT" | "COMMUNITY";
 
 export interface KnowledgeSource {
   id: string;
   panelId: string;
   scopeType: KnowledgeScopeType;
+  projectId: string | null;
   communityId: string | null;
   kind: KnowledgeSourceKind;
   title: string;
@@ -93,17 +108,19 @@ export function retrieveRelevantKnowledge(query: string, sources: KnowledgeSourc
     .map((r) => r.s);
 }
 
-/** COMMUNITY-SPECIFIC KNOWLEDGE (spec §6-§8/§24) — merges a community's own
- *  retrieval results with the tenant-wide PROJECT results, COMMUNITY first.
- *  Ordering IS the precedence signal: "explicit Community Knowledge should
- *  override generic/shared Project Knowledge where they conflict" is
- *  satisfied by listing the more specific facts first in the prompt (see
- *  chatter-generate.ts's projectKnowledgeContextLines, which states this
- *  explicitly) rather than attempting semantic conflict detection, which
- *  this v1 keyword-overlap retrieval has no basis to do reliably. Callers
- *  must pass ALREADY-SCOPED results (communityResults already filtered to
- *  ONE community, projectResults to PROJECT scope only) — this function
- *  performs no isolation itself, it only orders and caps. */
-export function combineKnowledgeRetrieval(communityResults: KnowledgeSource[], projectResults: KnowledgeSource[], limit = 4): KnowledgeSource[] {
-  return [...communityResults, ...projectResults].slice(0, limit);
+/** Merges the three independently-retrieved scope results into one
+ *  precedence-ordered list: COMMUNITY > PROJECT > ORGANIZATION. Ordering IS
+ *  the precedence signal: "a more specific fact should override a more
+ *  generic one when they conflict" is satisfied by listing the more
+ *  specific facts first in the prompt (see chatter-generate.ts's
+ *  projectKnowledgeContextLines, which states this explicitly) rather than
+ *  attempting semantic conflict detection, which this v1 keyword-overlap
+ *  retrieval has no basis to do reliably. Callers must pass
+ *  ALREADY-SCOPED-AND-ISOLATED results (communityResults already filtered
+ *  to ONE community, projectResults to ONE project, organizationResults to
+ *  the panel) — this function performs no isolation itself, it only orders
+ *  and caps. `organizationResults` defaults to empty so existing two-scope
+ *  callers/tests don't need updating for a scope they don't use. */
+export function combineKnowledgeRetrieval(communityResults: KnowledgeSource[], projectResults: KnowledgeSource[], organizationResults: KnowledgeSource[] = [], limit = 4): KnowledgeSource[] {
+  return [...communityResults, ...projectResults, ...organizationResults].slice(0, limit);
 }

@@ -2,6 +2,7 @@ import "server-only";
 
 import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
+import type { KnowledgeScopeType } from "./knowledge";
 
 /* =========================================================
    AI Telegram Auto-Posting — content generation (Phase 4.N part B). Task-
@@ -17,11 +18,12 @@ const MAX_POST_CHARS = 1000; // well under Telegram's 4096 hard limit -- a post 
 export interface GenerateAutoPostInput {
   moderatorName: string;
   persona: ModeratorPersona;
-  /** ALREADY-RETRIEVED knowledge (project + community, community first) —
-   *  same shape/precedence contract as chatter-generate.ts's
-   *  GenerateChatterReplyInput.projectKnowledge. The ONLY source of factual
-   *  claims this post may make. */
-  knowledge: { title: string; content: string }[];
+  /** ALREADY-RETRIEVED, scope-labeled knowledge (community > project >
+   *  organization, community first) — same shape/precedence contract as
+   *  chatter-generate.ts's GenerateChatterReplyInput.projectKnowledge. The
+   *  ONLY source of factual claims this post may make. Never a different
+   *  project's knowledge, even under the same panel. */
+  knowledge: { scope: KnowledgeScopeType; title: string; content: string }[];
   /** Recent post titles/excerpts from THIS community (across every
    *  moderator, spec §21) so the model can naturally pick a different angle
    *  instead of relying solely on the caller's own similarity check. */
@@ -33,9 +35,16 @@ export type GenerateAutoPostResult =
   | { ok: true; insufficientKnowledge: true }
   | { ok: false; error: string };
 
+const AUTOPOST_SCOPE_LABELS: Record<KnowledgeScopeType, string> = {
+  COMMUNITY: "community-specific", PROJECT: "project-specific", ORGANIZATION: "organization-wide",
+};
+
 function buildSystemPrompt(input: GenerateAutoPostInput): string {
   const knowledgeBlock = input.knowledge.length
-    ? `Project/community knowledge (the ONLY source of factual claims you may make — never state a fact beyond what's here):\n${input.knowledge.map((k) => (k.title ? `- ${k.title}: ${k.content}` : `- ${k.content}`)).join("\n")}`
+    ? `Knowledge (the ONLY source of factual claims you may make — never state a fact beyond what's here):\n${input.knowledge.map((k) => {
+        const label = AUTOPOST_SCOPE_LABELS[k.scope];
+        return k.title ? `- [${label}] ${k.title}: ${k.content}` : `- [${label}] ${k.content}`;
+      }).join("\n")}`
     : null;
   const recentBlock = input.recentPostSummaries.length
     ? `Recent posts already published in this community (from you or another moderator here) — do not repeat the same angle/topic, pick something different:\n${input.recentPostSummaries.map((s) => `- ${s}`).join("\n")}`

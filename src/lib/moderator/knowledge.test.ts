@@ -4,7 +4,7 @@ import { scoreKnowledgeRelevance, retrieveRelevantKnowledge, combineKnowledgeRet
 
 function source(overrides: Partial<KnowledgeSource> = {}): KnowledgeSource {
   return {
-    id: "src-1", panelId: "panel-1", scopeType: "PROJECT", communityId: null,
+    id: "src-1", panelId: "panel-1", scopeType: "PROJECT", projectId: "project-1", communityId: null,
     kind: "fact", title: "", content: "", active: true,
     ...overrides,
   };
@@ -95,7 +95,7 @@ test("REQUIRED (spec §7/§24): combineKnowledgeRetrieval lists community result
 test("combineKnowledgeRetrieval respects the limit across both sets combined", () => {
   const community = [source({ id: "c1" }), source({ id: "c2" })];
   const project = [source({ id: "p1" }), source({ id: "p2" })];
-  const combined = combineKnowledgeRetrieval(community, project, 3);
+  const combined = combineKnowledgeRetrieval(community, project, [], 3);
   assert.deepEqual(combined.map((s) => s.id), ["c1", "c2", "p1"]);
 });
 
@@ -107,6 +107,39 @@ test("combineKnowledgeRetrieval with no community results falls back to project-
 test("combineKnowledgeRetrieval with only community results (no project match) still works", () => {
   const community = [source({ id: "c1", scopeType: "COMMUNITY", communityId: "c1" })];
   assert.deepEqual(combineKnowledgeRetrieval(community, []).map((s) => s.id), ["c1"]);
+});
+
+/* ============================== Panel -> Project -> Community hierarchy (correction) ==== */
+
+test("REQUIRED (user spec TEST 4 -- organization fallback): community > project > organization, all three represented", () => {
+  const community = [source({ id: "comm", scopeType: "COMMUNITY", communityId: "c1", title: "AMA", content: "Fridays 3pm UTC" })];
+  const project = [source({ id: "proj", scopeType: "PROJECT", projectId: "project-litho", title: "Chains", content: "Ethereum, Polygon" })];
+  const organization = [source({ id: "org", scopeType: "ORGANIZATION", projectId: null, title: "Legal", content: "KaJ Labs Inc." })];
+  const combined = combineKnowledgeRetrieval(community, project, organization);
+  assert.deepEqual(combined.map((s) => s.id), ["comm", "proj", "org"]);
+});
+
+test("organization results only surface when community and project have nothing", () => {
+  const organization = [source({ id: "org", scopeType: "ORGANIZATION", projectId: null, title: "Legal", content: "KaJ Labs Inc." })];
+  assert.deepEqual(combineKnowledgeRetrieval([], [], organization).map((s) => s.id), ["org"]);
+});
+
+test("REQUIRED (user spec TEST 1 -- project isolation): retrieval scoped to project Litho never includes project Thanos's rows, since the caller only ever passes Litho's own list", () => {
+  const lithoProjectSources = [source({ id: "litho-support", scopeType: "PROJECT", projectId: "project-litho", title: "Support contact", content: "@litho_support" })];
+  // A caller that queried project-litho's OWN scope never even has
+  // project-thanos's row in hand -- this proves the pure function has no
+  // way to leak it even if asked, matching the DB-level isolation the real
+  // loadRelevantKnowledge enforces via .eq("project_id", ...).
+  const results = retrieveRelevantKnowledge("who do I contact for support?", lithoProjectSources);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].content, "@litho_support");
+});
+
+test("REQUIRED (user spec TEST 3 -- project fallback): community has no match, project does -> project result used", () => {
+  const community = retrieveRelevantKnowledge("what chains do you support?", []); // nothing in community scope
+  const project = retrieveRelevantKnowledge("what chains do you support?", [source({ id: "chains", scopeType: "PROJECT", projectId: "project-litho", title: "Chains", content: "Ethereum, Polygon" })]);
+  const combined = combineKnowledgeRetrieval(community, project);
+  assert.deepEqual(combined.map((s) => s.id), ["chains"]);
 });
 
 test("REQUIRED (spec test 1 shape): same query against two different communities' own knowledge retrieves each community's own answer", () => {

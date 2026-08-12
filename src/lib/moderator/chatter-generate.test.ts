@@ -925,26 +925,26 @@ test("projectKnowledgeContextLines is null when nothing was retrieved", () => {
 });
 
 test("REQUIRED: projectKnowledgeContextLines surfaces the exact retrieved title/content, verbatim", () => {
-  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ title: "Supported chains", content: "Ethereum and Polygon." }] }));
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "PROJECT", title: "Supported chains", content: "Ethereum and Polygon." }] }));
   assert.ok(line);
   assert.match(line!, /Supported chains/);
   assert.match(line!, /Ethereum and Polygon\./);
 });
 
 test("REQUIRED: instructs the moderator this is the ONLY source of factual project claims -- never invent beyond it", () => {
-  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ title: "X", content: "Y" }] }));
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "PROJECT", title: "X", content: "Y" }] }));
   assert.match(line!, /ONLY source of factual claims/i);
   assert.match(line!, /don't have that information|never state a fact beyond/i);
 });
 
 test("REQUIRED: projectKnowledge is wired into the ANSWER prompt", () => {
-  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [{ title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [{ scope: "PROJECT", title: "Roadmap", content: "Q3 launch of feature X." }] }));
   assert.match(prompt, /Roadmap/);
   assert.match(prompt, /Q3 launch of feature X\./);
 });
 
 test("REQUIRED: projectKnowledge is NOT wired into CASUAL_CHAT -- casual chatter never cites facts", () => {
-  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: [{ title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: [{ scope: "PROJECT", title: "Roadmap", content: "Q3 launch of feature X." }] }));
   assert.doesNotMatch(prompt, /Q3 launch of feature X\./);
 });
 
@@ -953,8 +953,8 @@ test("multiple retrieved entries all appear in the prompt, each on its own line"
     baseInput({
       action: "ANSWER",
       projectKnowledge: [
-        { title: "Chains", content: "Ethereum, Polygon." },
-        { title: "Support", content: "support@example.com" },
+        { scope: "PROJECT", title: "Chains", content: "Ethereum, Polygon." },
+        { scope: "COMMUNITY", title: "Support", content: "support@example.com" },
       ],
     })
   );
@@ -965,6 +965,31 @@ test("multiple retrieved entries all appear in the prompt, each on its own line"
 });
 
 test("a title-less entry still renders its content without a dangling label", () => {
-  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ title: "", content: "Support hours are 9am-5pm UTC." }] }));
-  assert.match(line!, /- Support hours are 9am-5pm UTC\./);
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "ORGANIZATION", title: "", content: "Support hours are 9am-5pm UTC." }] }));
+  assert.match(line!, /Support hours are 9am-5pm UTC\./);
+});
+
+/* ---------------------------------------- scope labeling (architecture correction) ----
+   "Do not label organization-wide knowledge as Project Knowledge" -- each
+   entry must be labeled by its OWN scope, never a single generic header. */
+
+test("REQUIRED: COMMUNITY, PROJECT, and ORGANIZATION entries are each labeled by their own scope, never conflated", () => {
+  const line = projectKnowledgeContextLines(
+    baseInput({
+      projectKnowledge: [
+        { scope: "COMMUNITY", title: "AMA", content: "Fridays 3pm UTC" },
+        { scope: "PROJECT", title: "Chains", content: "Ethereum, Polygon" },
+        { scope: "ORGANIZATION", title: "Legal", content: "KaJ Labs Inc." },
+      ],
+    })
+  );
+  assert.match(line!, /community.*specific to this community/i);
+  assert.match(line!, /project.*specific to this project/i);
+  assert.match(line!, /organization.*shared across every project/i);
+});
+
+test("an organization-wide entry is never labeled as project knowledge", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "ORGANIZATION", title: "Legal", content: "KaJ Labs Inc." }] }));
+  assert.doesNotMatch(line!, /\[Project knowledge/);
+  assert.match(line!, /\[Organization knowledge/);
 });

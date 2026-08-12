@@ -127,6 +127,69 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Phase 4.N architecture correction: Panel -> Project -> Community hierarchy (v1.18.0)
+- **Live bug report:** a Community Knowledge entry saved for "Innvil Test Community" was retrieved when a
+  question was asked in a totally different community ("new community") on the same panel — traced to the
+  literal root cause, not just the wrong-community save: `knowledge_sources`' "PROJECT" scope only ever carried
+  `panel_id` (never a project distinction), so it was accidentally PANEL-wide since v1.15.0. That's wrong once
+  one panel owns multiple distinct projects (e.g. one KaJ Labs panel running Litho / Thanos Wallet / Ignite DEX,
+  each with its own Telegram community) — a community in one project must never retrieve another project's facts.
+- **New first-class `projects` entity** (migration `0057`) sits between panel and community:
+  `Panel -> Project -> Community`. `communities.project_id` (NOT NULL) is the new ownership link — every
+  community belongs to exactly one project; a project may have one or more communities (kept deliberately
+  NOT hard-1:1, per explicit instruction — "Litho" could have a Main + Regional Telegram, both inheriting the
+  same Project Knowledge).
+- **`knowledge_sources` gained a third scope, `ORGANIZATION`** (was `PROJECT`/`COMMUNITY` only) — truly
+  panel-wide facts shared across every project (company info, legal, shared policy). `PROJECT` now requires a
+  real `project_id` (never panel-wide again); `COMMUNITY` unchanged. New three-way check constraint enforces
+  the exact field combination each scope requires.
+- **Conservative, non-lossy migration** for existing data (per explicit "do not silently merge/duplicate
+  ambiguous data" instruction): every EXISTING community gets its own NEW project (1 project per community,
+  named after the community) — this never merges two communities that might be different projects, which would
+  be unsafe for a panel with multiple communities. The OLD panel-wide `PROJECT` rows are reclassified to
+  `ORGANIZATION` (they never had a community/project distinction to begin with, so assigning them to one
+  arbitrary project would have been an unjustified guess) rather than being duplicated or dropped. **Run
+  migration `0057`** — nothing is deleted; every existing community connection and knowledge entry is preserved.
+- **Retrieval now resolves the community's project first, then queries all three scopes independently**
+  (`community-runtime.ts`'s `loadRelevantKnowledge`/`autopost-runtime.ts`'s `loadKnowledgeForWindow`) — PROJECT
+  is filtered strictly by `project_id = <this community's resolved project>`, so a different project's rows are
+  never even fetched, let alone retrieved (isolation enforced in the DB query, never by prompting alone).
+  Precedence unchanged in spirit, extended to three levels: **community > project > organization** — earlier
+  entries in the merged list win when facts conflict (`combineKnowledgeRetrieval`, now takes three ordered
+  result sets).
+- **Prompt now labels every entry by its own scope** (`chatter-generate.ts`'s `projectKnowledgeContextLines`,
+  `autopost-generate.ts`'s prompt) — "Community knowledge (specific to this community)" / "Project knowledge
+  (specific to this project)" / "Organization knowledge (shared across every project this panel owns)" — never
+  a single generic "Project Knowledge" header that could mislabel an organization-wide fact.
+- **`connectCommunity`** (`actions/moderator.ts`) now establishes a project on every NEW community connection
+  — reuses the existing project unchanged on a reconnect (never silently reassigns it), and creates a new
+  project (named after the Telegram chat, same convention the migration used) for a genuinely new community,
+  since this action has no project-selector UI yet to ask the owner explicitly (documented follow-up).
+- **Owner-facing CRUD split correctly** (`actions/knowledge.ts`): `listPanelProjects`/`createProject`,
+  `listProjectKnowledge`/`create`/`update`/`delete` now all REQUIRE a `projectId` (never panel-wide again),
+  new `listOrganizationKnowledge`/`create`/`update`/`delete` (panel-scoped, for genuinely global facts),
+  `listPanelCommunities` now also returns each community's resolved project name. Every write validates the
+  full ownership chain (panel owner → owns project → project owns community) via query filters, never a
+  trusted client-supplied id.
+- **UI fixes the exact reported gap**: `ProjectKnowledgeCard` now has an explicit project selector (+ "create
+  project") instead of being silently panel-wide; `CommunityKnowledgeCard` now starts with **no community
+  selected** ("— Choose a community —") instead of silently defaulting to the oldest community, and shows the
+  selected community's resolved project name right below the picker so the scope is never ambiguous; new
+  `OrganizationKnowledgeCard` for panel-wide facts. Shared `KnowledgeEntryList`/`KnowledgeAddForm` components
+  factor out the now-3x-duplicated list/add-form UI.
+- New/updated tests: `knowledge.test.ts` (+5 — 3-way `combineKnowledgeRetrieval` incl. organization-only
+  fallback, project-isolation shape, project-fallback shape), `community-runtime.test.ts` (rewrote
+  `fakeAdminForKnowledge` to also resolve `communities.project_id`, +6 new tests incl. the exact user-reported
+  cross-project-leakage scenario as a regression test, project-fallback, organization-fallback, and
+  multi-community-same-project), `chatter-generate.test.ts` (+2 — scope labeling correctness, organization
+  never mislabeled as project). 725 tests pass (up from 715), `tsc --noEmit` clean, production build clean.
+- **Deliberately deferred, documented (not hidden):** a UI for reassigning an existing community to a
+  different/existing project (today only "auto-create a new project per new community connection" exists) —
+  the 1-project-per-community migration default is safe and non-lossy on its own; consolidating communities
+  under one project is a manual DB operation until that UI is built. No vector/embedding filtering section
+  needed (still no such infrastructure exists in this codebase, confirmed again this pass) — the DB query
+  filters (`project_id`/`community_id`/`panel_id`) are the isolation mechanism.
+
 ### 2026-08-12 — Phase 4.N (Part B): AI Telegram Auto-Posting — per-moderator posting windows (v1.17.0)
 - **Implemented from `docs/moderator/project-knowledge-autoposting-spec.md`'s "AUTO-POSTING UPDATE — Per-
   Moderator Posting Windows" section** (supersedes the base spec's earlier §13-15/§24 — read and implemented
@@ -4064,7 +4127,14 @@ win over this):**
 > from migration 0051 + the existing `telegram_provisioning_attempts`/
 > `telegram_bot_integrations`/`communities`/`moderator_deployments` tables).
 
-### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (DONE v1.15.0/v1.16.0/v1.17.0 — Moderator Q&A grounding incl. Community Knowledge, AND per-moderator AI Telegram Auto-Posting. Gated OFF in production behind AUTO_POSTING_ENABLED until live-verified.)
+### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (DONE v1.15.0/v1.16.0/v1.17.0, hierarchy corrected v1.18.0 — Moderator Q&A grounding incl. Community Knowledge, AND per-moderator AI Telegram Auto-Posting. Gated OFF in production behind AUTO_POSTING_ENABLED until live-verified.)
+
+> **FINAL INVARIANT (v1.18.0):** Knowledge follows the hierarchy Panel -> Project -> Community.
+> Project Knowledge belongs to a specific project and is inherited by every community attached to
+> that project. Community Knowledge belongs only to the specific community and overrides/supplements
+> Project Knowledge. Organization/Panel Knowledge is the only scope shared across every project a
+> panel owns. A community may never retrieve Project Knowledge belonging to another project under the
+> same panel, even though both projects share a panel.
 
 > Extends Phase 4.M. Adds a shared, tenant-scoped **Project Knowledge Base** (project
 > overview, website, whitepaper, docs, FAQs, roadmap, official links, brand voice,

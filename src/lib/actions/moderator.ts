@@ -520,13 +520,31 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
     .eq("panel_id", panelId);
   const { data: existingCommunity } = await ctx.admin
     .from("communities")
-    .select("id")
+    .select("id, project_id")
     .eq("panel_id", panelId)
     .eq("platform", "telegram")
     .eq("chat_id", String(membership.result.chat.id))
     .maybeSingle();
   if (!existingCommunity && (existingCommunityCount ?? 0) >= capacity.maxCommunities) {
     return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
+  }
+
+  // Panel -> Project -> Community: every community belongs to exactly one
+  // project (communities.project_id is NOT NULL, migration 0057). Reuse the
+  // EXISTING community's project unchanged (never silently reassign it on a
+  // reconnect); a genuinely new community gets its own new project, named
+  // after the Telegram chat itself -- the same conservative "one project per
+  // community" default the migration used for existing data, since this
+  // action has no project-selector UI yet to ask the owner explicitly.
+  let projectId = existingCommunity?.project_id ?? null;
+  if (!projectId) {
+    const { data: project, error: projectError } = await ctx.admin
+      .from("projects")
+      .insert({ panel_id: panelId, name: membership.result.chat.title ?? membership.result.chat.username ?? "Project" })
+      .select("id")
+      .single();
+    if (projectError || !project) return { ok: false, error: projectError?.message ?? "Could not create a project for this community." };
+    projectId = project.id;
   }
 
   const { data: community, error: communityError } = await ctx.admin
@@ -539,6 +557,7 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
         handle: membership.result.chat.username ?? null,
         title: membership.result.chat.title ?? null,
         chat_type: membership.result.chat.type ?? null,
+        project_id: projectId,
       },
       { onConflict: "panel_id,platform,chat_id" }
     )

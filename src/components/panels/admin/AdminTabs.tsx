@@ -22,9 +22,11 @@ import {
 import { MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS } from "@/src/lib/moderator/presets";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
+  listPanelProjects, createProject,
   listProjectKnowledge, createProjectKnowledgeEntry, updateProjectKnowledgeEntry, deleteProjectKnowledgeEntry,
+  listOrganizationKnowledge, createOrganizationKnowledgeEntry, updateOrganizationKnowledgeEntry, deleteOrganizationKnowledgeEntry,
   listPanelCommunities, listCommunityKnowledge, createCommunityKnowledgeEntry, updateCommunityKnowledgeEntry, deleteCommunityKnowledgeEntry,
-  type PanelCommunityOption,
+  type PanelProjectOption, type PanelCommunityOption,
 } from "@/src/lib/actions/knowledge";
 import { KNOWLEDGE_KINDS, type KnowledgeSource, type KnowledgeSourceKind } from "@/src/lib/moderator/knowledge";
 import {
@@ -4110,6 +4112,7 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
 
       <ProjectKnowledgeCard panelId={panelId} />
       <CommunityKnowledgeCard panelId={panelId} />
+      <OrganizationKnowledgeCard panelId={panelId} />
       {AUTO_POSTING_ENABLED && <AutoPostingCard panelId={panelId} />}
     </div>
   );
@@ -4119,241 +4122,267 @@ const KNOWLEDGE_KIND_LABELS: Record<KnowledgeSourceKind, string> = {
   overview: "Overview", faq: "FAQ", fact: "Fact", link: "Link", note: "Note",
 };
 
-/** Phase 4.N (Project Knowledge, part A) — owner enters project facts once;
- *  every deployed moderator draws on the SAME knowledge when answering a
- *  substantive question (chatter-generate.ts's "Project knowledge" prompt
- *  block, ANSWER only). Deliberately minimal (title + content + kind, no
- *  file/URL ingestion yet) per the spec's own "don't overbuild UI" note. */
-function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
-  const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
+/** Shared read-only render for a list of knowledge entries — used by all
+ *  three cards below (Organization/Project/Community) so their list UI stays
+ *  identical; only the CRUD calls differ per scope. */
+function KnowledgeEntryList({ entries, onToggle, onDelete }: { entries: KnowledgeSource[] | null; onToggle: (e: KnowledgeSource) => void; onDelete: (id: string) => void }) {
+  if (entries === null) return <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>;
+  if (entries.length === 0) return <p className="text-xs fp-text-faint">No entries yet.</p>;
+  return (
+    <div className="space-y-2">
+      {entries.map((e) => (
+        <div key={e.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-start justify-between gap-3 ${!e.active ? "opacity-50" : ""}`}>
+          <div className="min-w-0">
+            <p className="text-[10px] fp-mono uppercase fp-text-faint">{KNOWLEDGE_KIND_LABELS[e.kind]}{!e.active ? " · inactive" : ""}</p>
+            {e.title && <p className="text-sm font-semibold fp-text truncate">{e.title}</p>}
+            <p className="text-xs fp-text-dim break-words">{e.content}</p>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => onToggle(e)} className="text-[11px] fp-text-faint hover:fp-text px-2 py-1 rounded-md fp-panel-raised border fp-line-soft">
+              {e.active ? "Deactivate" : "Activate"}
+            </button>
+            <button onClick={() => onDelete(e.id)} className="p-1.5 rounded-md fp-panel-raised border fp-line-soft text-red-400 hover:text-red-300">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Shared add-entry form (kind + title + content) — used by all three cards. */
+function KnowledgeAddForm({ onAdd, saving, msg, titlePlaceholder, contentPlaceholder }: {
+  onAdd: (input: { kind: KnowledgeSourceKind; title: string; content: string }) => Promise<void>;
+  saving: boolean;
+  msg: { text: string; error?: boolean } | null;
+  titlePlaceholder: string;
+  contentPlaceholder: string;
+}) {
   const [kind, setKind] = React.useState<KnowledgeSourceKind>("fact");
   const [title, setTitle] = React.useState("");
   const [content, setContent] = React.useState("");
+  const submit = async () => {
+    await onAdd({ kind, title, content });
+    setTitle(""); setContent("");
+  };
+  return (
+    <div className="space-y-2 mb-4">
+      <div className="flex items-center gap-2">
+        <select value={kind} onChange={(e) => setKind(e.target.value as KnowledgeSourceKind)} className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none">
+          {KNOWLEDGE_KINDS.map((k) => <option key={k} value={k}>{KNOWLEDGE_KIND_LABELS[k]}</option>)}
+        </select>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={titlePlaceholder} className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border" />
+      </div>
+      <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder={contentPlaceholder} rows={2} className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border resize-none" />
+      <button onClick={submit} disabled={saving || !content.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+        {saving ? "Saving…" : "Add entry"}
+      </button>
+      {msg && <p className={`text-xs ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+    </div>
+  );
+}
+
+/** Phase 4.N (Project Knowledge, corrected to Panel -> Project -> Community)
+ *  — owner picks WHICH project they're editing (never panel-wide); every
+ *  community attached to that project inherits the same knowledge. A panel
+ *  with only one project still shows the selector so the scope is always
+ *  explicit, never assumed. */
+function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
+  const [projects, setProjects] = React.useState<PanelProjectOption[] | null>(null);
+  const [projectId, setProjectId] = React.useState<string>("");
+  const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+  const [newProjectName, setNewProjectName] = React.useState("");
+
+  const refreshProjects = React.useCallback(async () => {
+    const res = await listPanelProjects(panelId);
+    if (res.ok) {
+      setProjects(res.data);
+      setProjectId((prev) => (prev && res.data.some((p) => p.id === prev) ? prev : res.data[0]?.id ?? ""));
+    }
+  }, [panelId]);
+
+  React.useEffect(() => { refreshProjects(); }, [refreshProjects]);
 
   const refresh = React.useCallback(async () => {
-    const res = await listProjectKnowledge(panelId);
+    if (!projectId) { setEntries([]); return; }
+    const res = await listProjectKnowledge(panelId, projectId);
     if (res.ok) setEntries(res.data);
-  }, [panelId]);
+  }, [panelId, projectId]);
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
-  const add = async () => {
-    if (!content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
+  const addProject = async () => {
+    if (!newProjectName.trim()) return;
+    const res = await createProject(panelId, newProjectName);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setNewProjectName("");
+    await refreshProjects();
+    setProjectId(res.data.id);
+  };
+
+  const add = async (input: { kind: KnowledgeSourceKind; title: string; content: string }) => {
+    if (!projectId) return;
+    if (!input.content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
     setSaving(true); setMsg(null);
-    const res = await createProjectKnowledgeEntry(panelId, { kind, title, content });
+    const res = await createProjectKnowledgeEntry(panelId, projectId, input);
     setSaving(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
-    setTitle(""); setContent("");
     await refresh();
   };
 
-  const toggleActive = async (e: KnowledgeSource) => {
-    await updateProjectKnowledgeEntry(panelId, e.id, { active: !e.active });
-    await refresh();
-  };
+  const toggleActive = async (e: KnowledgeSource) => { await updateProjectKnowledgeEntry(panelId, projectId, e.id, { active: !e.active }); await refresh(); };
+  const remove = async (id: string) => { await deleteProjectKnowledgeEntry(panelId, projectId, id); await refresh(); };
 
-  const remove = async (id: string) => {
-    await deleteProjectKnowledgeEntry(panelId, id);
-    await refresh();
-  };
+  if (projects === null) return null;
 
   return (
     <Card title="Project Knowledge" icon={FileText}>
       <p className="fp-text-dim text-sm mb-4 leading-relaxed">
-        Teach every deployed moderator about your project once — overview, FAQs, official links, key facts.
-        A moderator only cites what&apos;s entered here when answering a genuine question; it never invents
-        project facts beyond it.
+        Facts specific to ONE project — website, chains, support contact, docs. Every community attached to
+        this project inherits it; a different project&apos;s community never sees it, even under the same panel.
       </p>
 
-      <div className="space-y-2 mb-4">
-        <div className="flex items-center gap-2">
-          <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value as KnowledgeSourceKind)}
-            className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none"
-          >
-            {KNOWLEDGE_KINDS.map((k) => (
-              <option key={k} value={k}>{KNOWLEDGE_KIND_LABELS[k]}</option>
-            ))}
+      {projects.length === 0 ? (
+        <p className="text-xs fp-text-faint mb-3">No projects yet — connecting a Telegram community creates one automatically.</p>
+      ) : (
+        <div className="mb-3">
+          <p className="text-[11px] fp-mono uppercase fp-text-faint mb-1">Project</p>
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none">
+            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Title (e.g. Supported chains, Website)"
-            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
-          />
         </div>
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder="Content — the actual fact/answer/URL a moderator can cite."
-          rows={2}
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border resize-none"
-        />
-        <button onClick={add} disabled={saving || !content.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
-          {saving ? "Saving…" : "Add entry"}
-        </button>
-        {msg && <p className={`text-xs ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+      )}
+
+      <div className="flex items-center gap-2 mb-4">
+        <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="New project name" className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-xs fp-text outline-none" />
+        <button onClick={addProject} disabled={!newProjectName.trim()} className="text-xs fp-text-faint hover:fp-text px-3 py-2 rounded-md fp-panel-raised border fp-line-soft disabled:opacity-40">Create project</button>
       </div>
 
-      <div className="space-y-2">
-        {entries === null ? (
-          <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>
-        ) : entries.length === 0 ? (
-          <p className="text-xs fp-text-faint">No project knowledge yet — moderators will say they don&apos;t know rather than guess.</p>
-        ) : entries.map((e) => (
-          <div key={e.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-start justify-between gap-3 ${!e.active ? "opacity-50" : ""}`}>
-            <div className="min-w-0">
-              <p className="text-[10px] fp-mono uppercase fp-text-faint">{KNOWLEDGE_KIND_LABELS[e.kind]}{!e.active ? " · inactive" : ""}</p>
-              {e.title && <p className="text-sm font-semibold fp-text truncate">{e.title}</p>}
-              <p className="text-xs fp-text-dim break-words">{e.content}</p>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button onClick={() => toggleActive(e)} className="text-[11px] fp-text-faint hover:fp-text px-2 py-1 rounded-md fp-panel-raised border fp-line-soft">
-                {e.active ? "Deactivate" : "Activate"}
-              </button>
-              <button onClick={() => remove(e.id)} className="p-1.5 rounded-md fp-panel-raised border fp-line-soft text-red-400 hover:text-red-300">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      {projectId && (
+        <>
+          <KnowledgeAddForm onAdd={add} saving={saving} msg={msg} titlePlaceholder="Title (e.g. Supported chains, Website)" contentPlaceholder="Content — the actual fact/answer/URL a moderator can cite." />
+          <KnowledgeEntryList entries={entries} onToggle={toggleActive} onDelete={remove} />
+        </>
+      )}
     </Card>
   );
 }
 
-/** Phase 4.N part C (Community Knowledge) — belongs to ONE Community, not to
- *  any moderator/bot; every active moderator deployed there automatically
- *  uses it (see knowledge.ts's loadRelevantKnowledge — no per-bot manual
- *  linking exists or is needed). Same minimal editor pattern as
- *  ProjectKnowledgeCard, scoped by a community selector. */
+/** Phase 4.N part C (Community Knowledge) — belongs to ONE Community; every
+ *  active moderator deployed there automatically uses it. Shows the
+ *  community's resolved project alongside it so it's never ambiguous which
+ *  project a community belongs to. No silent default selection — starts
+ *  unselected ("choose a community") so an entry can never be saved to an
+ *  unintended community by accident. */
 function CommunityKnowledgeCard({ panelId }: { panelId: string }) {
   const [communities, setCommunities] = React.useState<PanelCommunityOption[] | null>(null);
   const [communityId, setCommunityId] = React.useState<string>("");
   const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
-  const [kind, setKind] = React.useState<KnowledgeSourceKind>("fact");
-  const [title, setTitle] = React.useState("");
-  const [content, setContent] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
 
   React.useEffect(() => {
     (async () => {
       const res = await listPanelCommunities(panelId);
-      if (res.ok) {
-        setCommunities(res.data);
-        if (res.data.length > 0) setCommunityId((prev) => prev || res.data[0].id);
-      }
+      if (res.ok) setCommunities(res.data);
     })();
   }, [panelId]);
 
   const refresh = React.useCallback(async () => {
-    if (!communityId) { setEntries([]); return; }
+    if (!communityId) { setEntries(null); return; }
     const res = await listCommunityKnowledge(panelId, communityId);
     if (res.ok) setEntries(res.data);
   }, [panelId, communityId]);
 
   React.useEffect(() => { refresh(); }, [refresh]);
 
-  const add = async () => {
+  const add = async (input: { kind: KnowledgeSourceKind; title: string; content: string }) => {
     if (!communityId) return;
-    if (!content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
+    if (!input.content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
     setSaving(true); setMsg(null);
-    const res = await createCommunityKnowledgeEntry(panelId, communityId, { kind, title, content });
+    const res = await createCommunityKnowledgeEntry(panelId, communityId, input);
     setSaving(false);
     if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
-    setTitle(""); setContent("");
     await refresh();
   };
 
-  const toggleActive = async (e: KnowledgeSource) => {
-    await updateCommunityKnowledgeEntry(panelId, communityId, e.id, { active: !e.active });
-    await refresh();
-  };
+  const toggleActive = async (e: KnowledgeSource) => { await updateCommunityKnowledgeEntry(panelId, communityId, e.id, { active: !e.active }); await refresh(); };
+  const remove = async (id: string) => { await deleteCommunityKnowledgeEntry(panelId, communityId, id); await refresh(); };
 
-  const remove = async (id: string) => {
-    await deleteCommunityKnowledgeEntry(panelId, communityId, id);
-    await refresh();
-  };
+  if (communities === null || communities.length === 0) return null; // nothing to scope this editor to yet
 
-  if (communities === null) return null; // no flash of an empty card before we know whether any community exists
-  if (communities.length === 0) return null; // nothing to scope this editor to yet
+  const selected = communities.find((c) => c.id === communityId) ?? null;
 
   return (
     <Card title="Community Knowledge" icon={Users}>
       <p className="fp-text-dim text-sm mb-4 leading-relaxed">
-        Facts specific to ONE community — local rules, admins, local FAQs. Automatically available to every
-        active moderator deployed there; never leaks into another community, and takes precedence over
-        general Project Knowledge when the two conflict.
+        Narrow overrides/additions specific to ONE community — local rules, AMA times, a local contact.
+        Automatically available to every active moderator deployed there; takes precedence over Project
+        Knowledge when the two conflict. This is NOT a substitute for Project Knowledge.
       </p>
 
+      <p className="text-[11px] fp-mono uppercase fp-text-faint mb-1">Community</p>
       <select
         value={communityId}
         onChange={(e) => setCommunityId(e.target.value)}
-        className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none mb-4"
+        className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none mb-1"
       >
+        <option value="">— Choose a community —</option>
         {communities.map((c) => (
-          <option key={c.id} value={c.id}>{c.title || c.handle || c.chatId}</option>
+          <option key={c.id} value={c.id}>{c.title || c.handle || c.chatId} ({c.projectName})</option>
         ))}
       </select>
+      {selected && <p className="text-xs fp-text-faint mb-4">Project: {selected.projectName}</p>}
+      {!selected && <p className="text-xs fp-text-faint mb-4">Select a community to edit or view its knowledge.</p>}
 
-      <div className="space-y-2 mb-4">
-        <div className="flex items-center gap-2">
-          <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value as KnowledgeSourceKind)}
-            className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none"
-          >
-            {KNOWLEDGE_KINDS.map((k) => (
-              <option key={k} value={k}>{KNOWLEDGE_KIND_LABELS[k]}</option>
-            ))}
-          </select>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Title (e.g. Local rules, Support contact)"
-            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
-          />
-        </div>
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          placeholder="Content — specific to this community only."
-          rows={2}
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border resize-none"
-        />
-        <button onClick={add} disabled={saving || !content.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
-          {saving ? "Saving…" : "Add entry"}
-        </button>
-        {msg && <p className={`text-xs ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
-      </div>
+      {communityId && (
+        <>
+          <KnowledgeAddForm onAdd={add} saving={saving} msg={msg} titlePlaceholder="Title (e.g. Local rules, AMA schedule)" contentPlaceholder="Content — specific to this community only." />
+          <KnowledgeEntryList entries={entries} onToggle={toggleActive} onDelete={remove} />
+        </>
+      )}
+    </Card>
+  );
+}
 
-      <div className="space-y-2">
-        {entries === null ? (
-          <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>
-        ) : entries.length === 0 ? (
-          <p className="text-xs fp-text-faint">No knowledge specific to this community yet.</p>
-        ) : entries.map((e) => (
-          <div key={e.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-start justify-between gap-3 ${!e.active ? "opacity-50" : ""}`}>
-            <div className="min-w-0">
-              <p className="text-[10px] fp-mono uppercase fp-text-faint">{KNOWLEDGE_KIND_LABELS[e.kind]}{!e.active ? " · inactive" : ""}</p>
-              {e.title && <p className="text-sm font-semibold fp-text truncate">{e.title}</p>}
-              <p className="text-xs fp-text-dim break-words">{e.content}</p>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button onClick={() => toggleActive(e)} className="text-[11px] fp-text-faint hover:fp-text px-2 py-1 rounded-md fp-panel-raised border fp-line-soft">
-                {e.active ? "Deactivate" : "Activate"}
-              </button>
-              <button onClick={() => remove(e.id)} className="p-1.5 rounded-md fp-panel-raised border fp-line-soft text-red-400 hover:text-red-300">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+/** Panel-wide, shared across every project the panel owns — truly global
+ *  facts only (company info, legal, shared policy). Never project-specific
+ *  information — that belongs in Project Knowledge instead. */
+function OrganizationKnowledgeCard({ panelId }: { panelId: string }) {
+  const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const refresh = React.useCallback(async () => {
+    const res = await listOrganizationKnowledge(panelId);
+    if (res.ok) setEntries(res.data);
+  }, [panelId]);
+
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const add = async (input: { kind: KnowledgeSourceKind; title: string; content: string }) => {
+    if (!input.content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
+    setSaving(true); setMsg(null);
+    const res = await createOrganizationKnowledgeEntry(panelId, input);
+    setSaving(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    await refresh();
+  };
+
+  const toggleActive = async (e: KnowledgeSource) => { await updateOrganizationKnowledgeEntry(panelId, e.id, { active: !e.active }); await refresh(); };
+  const remove = async (id: string) => { await deleteOrganizationKnowledgeEntry(panelId, id); await refresh(); };
+
+  return (
+    <Card title="Organization Knowledge" icon={Globe}>
+      <p className="fp-text-dim text-sm mb-4 leading-relaxed">
+        Truly global information shared across every project you own — company info, legal/contact info, shared
+        policies. Do not put project-specific facts here; use Project Knowledge for those instead.
+      </p>
+      <KnowledgeAddForm onAdd={add} saving={saving} msg={msg} titlePlaceholder="Title (e.g. Company website, Legal contact)" contentPlaceholder="Content — shared across every project." />
+      <KnowledgeEntryList entries={entries} onToggle={toggleActive} onDelete={remove} />
     </Card>
   );
 }

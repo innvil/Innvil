@@ -473,39 +473,64 @@ async function logBotAckDecision(admin: SupabaseClient, panelId: string, communi
 
 /* -------------------------------------------------------- natural chatter ---- */
 
+const KNOWLEDGE_SELECT = "id, panel_id, scope_type, project_id, community_id, kind, title, content, active";
+
 function toKnowledgeSources(rows: Array<Record<string, unknown>> | null): KnowledgeSource[] {
   return (rows ?? []).map((r) => ({
     id: r.id as string, panelId: r.panel_id as string, scopeType: r.scope_type as KnowledgeSource["scopeType"],
-    communityId: (r.community_id as string) ?? null, kind: r.kind as KnowledgeSource["kind"],
+    projectId: (r.project_id as string) ?? null, communityId: (r.community_id as string) ?? null, kind: r.kind as KnowledgeSource["kind"],
     title: (r.title as string) ?? "", content: (r.content as string) ?? "", active: r.active !== false,
   }));
 }
 
-/** Phase 4.N (parts A + C) — fetches BOTH the panel's tenant-wide
- *  PROJECT-scope knowledge and this specific community's own COMMUNITY-scope
- *  knowledge, relevance-ranks each set independently, then merges with
- *  community results FIRST (moderator/knowledge.ts's combineKnowledgeRetrieval
- *  — ordering is the "community facts take precedence when they conflict"
- *  signal, spec §7/§24). Isolation is enforced by the query filters
- *  themselves (`.eq("community_id", communityId)`), never by prompting alone
- *  (spec §8) — auto-linking (spec §2/§9) falls out of this filter for free:
- *  any active deployment answering in this community automatically sees
- *  this community's knowledge, no per-bot manual link required. Returns
- *  undefined (not an empty array) when nothing relevant is found from
- *  either scope, so the caller can omit the prompt block entirely. */
-export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string, communityId: string, query: string): Promise<{ title: string; content: string }[] | undefined> {
-  const [projectRes, communityRes] = await Promise.all([
-    admin.from("knowledge_sources").select("id, panel_id, scope_type, community_id, kind, title, content, active").eq("panel_id", panelId).eq("scope_type", "PROJECT").eq("active", true),
-    admin.from("knowledge_sources").select("id, panel_id, scope_type, community_id, kind, title, content, active").eq("community_id", communityId).eq("scope_type", "COMMUNITY").eq("active", true),
+/** Resolves which PROJECT a community belongs to — never trusts a
+ *  client-supplied project id; always derived from the community itself
+ *  (Panel -> Project -> Community hierarchy). Every community has exactly
+ *  one project (communities.project_id is NOT NULL, migration 0057). */
+async function resolveCommunityProjectId(admin: SupabaseClient, communityId: string): Promise<string | null> {
+  const { data } = await admin.from("communities").select("project_id").eq("id", communityId).maybeSingle();
+  return data?.project_id ?? null;
+}
+
+/** Phase 4.N (parts A + C, corrected to Panel -> Project -> Community) —
+ *  fetches all THREE knowledge scopes for this specific community's context:
+ *  its own COMMUNITY-scope knowledge, its resolved PROJECT's PROJECT-scope
+ *  knowledge, and the panel's ORGANIZATION-scope knowledge. Each scope is
+ *  relevance-ranked INDEPENDENTLY (never a cross-project blend — the PROJECT
+ *  query filters strictly by `project_id = <this community's project>`, so a
+ *  different project's facts under the same panel are never even fetched,
+ *  let alone retrieved), then merged COMMUNITY > PROJECT > ORGANIZATION via
+ *  moderator/knowledge.ts's combineKnowledgeRetrieval (ordering is the
+ *  precedence signal — spec §7/§24, and the follow-up project-isolation
+ *  correction). Isolation is enforced by the query filters themselves, never
+ *  by prompting alone (spec §8). Auto-linking (spec §2/§9) falls out of
+ *  these filters for free: any active deployment answering in this
+ *  community automatically sees its community's + its project's knowledge,
+ *  no per-bot manual link required. Returns undefined (not an empty array)
+ *  when nothing relevant is found from any scope, so the caller can omit
+ *  the prompt block entirely. */
+export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string, communityId: string, query: string): Promise<{ scope: KnowledgeSource["scopeType"]; title: string; content: string }[] | undefined> {
+  const projectId = await resolveCommunityProjectId(admin, communityId);
+
+  const [communityRes, projectRes, organizationRes] = await Promise.all([
+    admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("community_id", communityId).eq("scope_type", "COMMUNITY").eq("active", true),
+    projectId
+      ? admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("project_id", projectId).eq("scope_type", "PROJECT").eq("active", true)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
+    admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true),
   ]);
-  const projectSources = toKnowledgeSources(projectRes.data);
+
   const communitySources = toKnowledgeSources(communityRes.data);
-  if (projectSources.length === 0 && communitySources.length === 0) return undefined;
-  const relevantProject = retrieveRelevantKnowledge(query, projectSources);
+  const projectSources = toKnowledgeSources(projectRes.data);
+  const organizationSources = toKnowledgeSources(organizationRes.data);
+  if (communitySources.length === 0 && projectSources.length === 0 && organizationSources.length === 0) return undefined;
+
   const relevantCommunity = retrieveRelevantKnowledge(query, communitySources);
-  const combined = combineKnowledgeRetrieval(relevantCommunity, relevantProject);
+  const relevantProject = retrieveRelevantKnowledge(query, projectSources);
+  const relevantOrganization = retrieveRelevantKnowledge(query, organizationSources);
+  const combined = combineKnowledgeRetrieval(relevantCommunity, relevantProject, relevantOrganization);
   if (combined.length === 0) return undefined;
-  return combined.map((s) => ({ title: s.title, content: s.content }));
+  return combined.map((s) => ({ scope: s.scopeType, title: s.title, content: s.content }));
 }
 
 interface ChatterDeployment {
@@ -1392,10 +1417,10 @@ async function respondAsDeployment(params: {
    *  community has a configured contact. See GenerateChatterReplyInput's
    *  doc comment. */
   collabContact?: string | null;
-  /** Phase 4.N — already-retrieved, relevance-ranked project knowledge for
-   *  THIS triggering message (see GenerateChatterReplyInput's doc comment).
-   *  Only ever set for ANSWER. */
-  projectKnowledge?: { title: string; content: string }[];
+  /** Phase 4.N — already-retrieved, relevance-ranked, scope-labeled
+   *  knowledge for THIS triggering message (see GenerateChatterReplyInput's
+   *  doc comment). Only ever set for ANSWER. */
+  projectKnowledge?: { scope: KnowledgeSource["scopeType"]; title: string; content: string }[];
   timer: RequestTimer;
 }): Promise<{ replied: false } | { replied: true; text: string }> {
   const {
