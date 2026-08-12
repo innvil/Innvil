@@ -615,6 +615,18 @@ function classifyMessageKind(trimmed: string): MessageKind {
   return "SUBSTANTIVE";
 }
 
+/** Reuses the SAME canonical TRIVIAL-classification checks `classifyMessageKind`
+ *  applies to human messages, exported for coordinator.ts's bot-to-bot
+ *  COMMUNITY_HANDOFF decision (bot-ack-social-behavior-spec.md TEST 4): a
+ *  simple closing acknowledgement ("nice one", "thanks") already feels
+ *  socially complete on its own -- no forced handoff -- while a genuinely
+ *  open-ended exchange ("good, you?") is handoff-eligible. Not a new
+ *  classifier, just named for its call site. */
+export function isSimpleClosingAcknowledgement(text: string): boolean {
+  const trimmed = text.trim();
+  return CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed);
+}
+
 export interface ChatterCandidate {
   deploymentId: string;
   /** True if this message replies to THIS deployment's own previous message, or @mentions it. */

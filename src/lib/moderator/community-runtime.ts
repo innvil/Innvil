@@ -285,17 +285,21 @@ export async function resolveEventOrigin(admin: SupabaseClient, communityId: str
   return { origin: data.origin as CommunityEvent["origin"], interactionDepth: data.interaction_depth ?? 0 };
 }
 
-/** Persists the provenance of a bot-ack SEND_TEXT reply so resolveEventOrigin
- *  can recognize it when another bot's webhook re-classifies this same
- *  message. REACT actions never call this — a reaction isn't delivered as a
- *  new "message" update, so there's nothing for another webhook to
- *  re-classify and no loop risk to guard against. */
+/** Persists the provenance of a bot-ack SEND_TEXT or COMMUNITY_HANDOFF reply
+ *  so resolveEventOrigin can recognize it when another bot's webhook
+ *  re-classifies this same message. REACT actions never call this — a
+ *  reaction isn't delivered as a new "message" update, so there's nothing
+ *  for another webhook to re-classify and no loop risk to guard against.
+ *  A COMMUNITY_HANDOFF action carries no `origin` field of its own (its
+ *  kind IS the signal — see event-types.ts) — recorded as origin
+ *  "COMMUNITY_HANDOFF" so the NEXT event's resolveEventOrigin correctly
+ *  hits coordinator.ts's hard "no bot response to a handoff" gate. */
 async function recordBotAckReply(
   admin: SupabaseClient,
   panelId: string,
   communityId: string,
   sentMessageId: string,
-  action: Extract<CommunityAction, { kind: "SEND_TEXT" }>
+  action: Extract<CommunityAction, { kind: "SEND_TEXT" | "COMMUNITY_HANDOFF" }>
 ) {
   await admin.from("community_messages").insert({
     panel_id: panelId,
@@ -307,7 +311,7 @@ async function recordBotAckReply(
     deployment_id: action.targetDeploymentId,
     text: action.text,
     reply_to_platform_message_id: action.replyToMessageId ?? null,
-    origin: action.origin,
+    origin: action.kind === "COMMUNITY_HANDOFF" ? "COMMUNITY_HANDOFF" : action.origin,
     interaction_depth: action.interactionDepth,
   });
 }
@@ -412,7 +416,7 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
     return { sentMessageId: null, ok: false, error: res.error };
   }
 
-  if (action.kind === "SEND_TEXT") {
+  if (action.kind === "SEND_TEXT" || action.kind === "COMMUNITY_HANDOFF") {
     const res = await telegramApiCall<{ message_id: number }>(token, "sendMessage", {
       chat_id: chatId,
       text: action.text,
@@ -1557,7 +1561,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // Only counts against the target's pacing/rate-limit budget once the
     // action actually landed -- a failed send must never consume it.
     await recordBotAck(admin, action.targetDeploymentId, new Date());
-    if (action.kind === "SEND_TEXT" && sent.sentMessageId) {
+    if ((action.kind === "SEND_TEXT" || action.kind === "COMMUNITY_HANDOFF") && sent.sentMessageId) {
       await recordBotAckReply(admin, integration.panel_id, community.id, sent.sentMessageId, action);
     }
     return;

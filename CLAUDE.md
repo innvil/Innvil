@@ -127,6 +127,58 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Phase 4.P: bot-ack Community Handoff + depth-2 social chain (v1.14.0)
+- **Implemented from `docs/moderator/bot-ack-social-behavior-spec.md`** (verbatim source of truth — see Phase
+  4.P in the roadmap). The hard "a BOT_ACK may never trigger anything else" rule made bot-to-bot exchanges cut
+  off abruptly instead of resolving naturally. New depth/origin model (`coordinator.ts`): depth 0
+  (HUMAN/PROACTIVE origin) may produce a `BOT_ACK` (unchanged, deterministic-opener bypass from v1.12.1 still
+  applies); a depth-1 (`origin: "BOT_ACK"`) event may produce AT MOST a new **`COMMUNITY_HANDOFF`** action
+  (depth becomes 2), never another acknowledgement; a depth-2 (`origin: "COMMUNITY_HANDOFF"`) event always
+  `IGNORE`s — a hard dead end, no exceptions (spec §12: "Bot 1 must not answer"). New `MAX_BOT_HANDOFF_DEPTH = 2`
+  in `event-types.ts` (existing `MAX_BOT_INTERACTION_DEPTH = 1` kept, now only documents the plain-ack step).
+- **`role_handoffs` bot-ack mode now actually differs from `acknowledgements`** — both existed as selectable
+  UI options already (`AdminTabs.tsx`'s "Role handoffs" label), but the coordinator previously treated them
+  identically. `role_handoffs` is now what actually enables the depth-1→2 escalation; `acknowledgements` (and
+  `reactions_only`) stop at a plain ack, same as before. No schema/UI change needed.
+- **`COMMUNITY_HANDOFF` is a new `CommunityAction` kind** (`event-types.ts`) — deliberately NOT mandatory
+  (`HANDOFF_PROBABILITY = 0.4`, lower than `ACK_PROBABILITY` — escalating an already-completed exchange should
+  be rarer than the initial ack) and NOT forced onto a bare closing acknowledgement ("nice one", "thanks") —
+  reuses the existing Natural Chatter closing-acknowledgement detection via a new export
+  `isSimpleClosingAcknowledgement` (`chatter-coordinator.ts`, wraps the already-existing `CLOSING_ACK_RE`/
+  `isPositiveClosing`/`isAcknowledgementOnly` checks rather than duplicating them) instead of forcing a handoff
+  onto text that already feels socially complete (spec TEST 4).
+- **Handoff text is generic "open the floor" phrasing only** (spec §9 option A/D — "Anyone here got anything
+  new today?"), deliberately NEVER referencing a specific recent topic or Project/Community Knowledge (option
+  B/C) since that grounding pipeline doesn't exist yet (Phase 4.N, still NOTED/not built) — fabricating a
+  grounded-sounding reference without real grounding would violate the spec's own anti-fabrication rule, so
+  this stays generic and deterministic (zero AI cost, matching the file's existing "no AI calls" design) until
+  that pipeline exists. Never addressed to the other moderator by name (spec §4 — addressed to the room only).
+- **`community-runtime.ts`**: `executeAction`'s `SEND_TEXT` branch now also handles `COMMUNITY_HANDOFF` (both
+  send via Telegram `sendMessage`); `recordBotAckReply` (which persists the provenance so another bot's webhook
+  correctly re-classifies this message's origin) now accepts either kind, writing `origin: "COMMUNITY_HANDOFF"`
+  for a handoff so the hard dead-end gate above is actually reachable on the next event.
+- **Already satisfied, no changes needed (verified, not assumed):** "REACT means a real Telegram reaction, not
+  a text message" (spec's own first REACT section) — `executeAction`'s REACT branch already calls
+  `setMessageReaction` (and gained a REACTION_INVALID retry-fallback in v1.12.3); reactions never insert a
+  `community_messages` row so they structurally can't start a bot chain (spec §13); bot-ack's own daily/gap
+  rate limiting (`DAILY_CAP`/`MIN_GAP_MS`, pre-existing) is already a dedicated allowance fully separate from
+  the human-facing `TRIAL_REACTIVE_DAILY_LIMIT`/quota system (spec §14/§17); `bot_message` vs `human_message`
+  event types already separate bot-ack/handoff activity from human engagement in analytics (spec §15/§22).
+- New tests (`coordinator.test.ts`, +12): a depth-1 event under `role_handoffs` producing a `COMMUNITY_HANDOFF`
+  (spec TEST 1 shape), never addressed by name (§4), a `COMMUNITY_HANDOFF`-origin event always `IGNORE`s (spec
+  TEST 2), a bare closing ack doesn't force one (spec TEST 4), a handoff isn't mandatory even when eligible
+  (spec TEST 5), `acknowledgements` mode never escalates, rate-limited targets still block a handoff, and
+  `EXTERNAL_BOT` senders never get this treatment; two pre-existing tests updated for the new depth semantics
+  (the old blanket "any nonzero depth → IGNORE" test didn't distinguish origin, which the new model requires —
+  replaced with origin-precise equivalents). 656 tests pass (up from 647), `tsc --noEmit` clean, production
+  build clean. No migration (new action kind is in-code only; `community_messages.origin` already accepted
+  arbitrary text).
+- **Deliberately not built this pass** (per the spec's own reaction-pacing sections, §10/§11 of the REACT
+  half): those already have a close analog in the EXISTING Natural Chatter ambient-reaction fan-out
+  (`resolveAdditionalReactors`/`MAX_ADDITIONAL_REACTORS`, v1.9.15) for human-directed reactions — the bot-ack
+  REACT path here already only ever selects a single target (`available[...]`), which already satisfies "zero
+  or one Innvil reaction is usually enough" for the bot-to-bot case without needing new pacing code.
+
 ### 2026-08-12 — Room-wide address ("everyone") now scales additional-responder count with community size (v1.13.1)
 - **Live report:** "gm everyone" only ever got one reply, regardless of how many moderators were deployed in
   the community. Root cause: `resolveMultiTargetAddress`'s `PLURAL_ADDRESS_RE` never matched "everyone"/
@@ -3963,7 +4015,7 @@ win over this):**
   rows for the panel — only `moderatorMaxSavedModerators`'s per-tier table needed
   the real numbers. No-entitlement now correctly returns 0 (was silently unlimited).
 
-### Phase 4.P: Bot-ack social behavior — Community Handoff + real Telegram Reactions (NOTED, not built)
+### Phase 4.P: Bot-ack social behavior — Community Handoff + real Telegram Reactions (DONE v1.14.0)
 
 > Refines the already-built, loop-fixed (v1.1.80) bot-ack feature. Two problems with
 > today's hard "a BOT_ACK may never trigger anything else" rule: (1) it can cut a

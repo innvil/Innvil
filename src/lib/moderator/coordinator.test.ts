@@ -45,7 +45,7 @@ test("Case 7: Mika message + one eligible target (Kaleb) -> exactly one acknowle
   if (action.kind !== "IGNORE") assert.equal(action.targetDeploymentId, "deploy-kaleb");
 });
 
-test("Case 8: event.origin BOT_ACK -> hard IGNORE regardless of everything else (loop terminates)", () => {
+test('Case 8: event.origin BOT_ACK under "acknowledgements" mode -> hard IGNORE (stops at depth 1, no escalation to a handoff)', () => {
   const action = decideBotAcknowledgement({
     event: baseEvent({ origin: "BOT_ACK" }),
     botAckMode: "acknowledgements",
@@ -56,10 +56,21 @@ test("Case 8: event.origin BOT_ACK -> hard IGNORE regardless of everything else 
   assert.deepEqual(action, { kind: "IGNORE" });
 });
 
-test("interactionDepth at MAX_BOT_INTERACTION_DEPTH -> IGNORE (loop prevention)", () => {
+test('event.origin BOT_ACK under "reactions_only" mode -> also hard IGNORE (only "role_handoffs" ever escalates)', () => {
   const action = decideBotAcknowledgement({
-    event: baseEvent({ interactionDepth: 1 }),
-    botAckMode: "acknowledgements",
+    event: baseEvent({ origin: "BOT_ACK" }),
+    botAckMode: "reactions_only",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: ALWAYS_ACK,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("interactionDepth at MAX_BOT_HANDOFF_DEPTH (2) -> IGNORE regardless of origin/mode (hard chain-length ceiling)", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 2 }),
+    botAckMode: "role_handoffs",
     eligibleTargets: [kaleb()],
     now: new Date(),
     random: ALWAYS_ACK,
@@ -343,4 +354,110 @@ test("a produced SEND_TEXT acknowledgement is tagged origin=BOT_ACK with interac
     assert.equal(forced.interactionDepth, 1);
     assert.equal(forced.causationMessageId, "msg-100");
   }
+});
+
+/* ============================================ COMMUNITY_HANDOFF (spec tests) ==== */
+// bot-ack-social-behavior-spec.md -- a depth-1 (origin BOT_ACK) event under
+// "role_handoffs" mode may produce AT MOST one COMMUNITY_HANDOFF, addressed
+// to the room, never another plain acknowledgement.
+
+const ALWAYS_HANDOFF = () => 0.01; // below HANDOFF_PROBABILITY, picks target index 0
+
+test("REQUIRED (spec TEST 1 shape): a depth-1 BOT_ACK event under role_handoffs mode MAY produce a COMMUNITY_HANDOFF", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "good, you?" }),
+    botAckMode: "role_handoffs",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: ALWAYS_HANDOFF,
+  });
+  assert.equal(action.kind, "COMMUNITY_HANDOFF");
+  if (action.kind === "COMMUNITY_HANDOFF") {
+    assert.equal(action.interactionDepth, 2);
+    assert.equal(action.targetDeploymentId, "deploy-kaleb");
+    assert.equal(action.causationMessageId, "msg-100");
+  }
+});
+
+test("REQUIRED (spec §4): a COMMUNITY_HANDOFF is never addressed to the other moderator by name", () => {
+  for (let i = 0; i < 20; i++) {
+    const action = decideBotAcknowledgement({
+      event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "good, you?" }),
+      botAckMode: "role_handoffs",
+      eligibleTargets: [kaleb()],
+      now: new Date(),
+      random: () => (i % 2 === 0 ? 0.01 : 0.3),
+    });
+    if (action.kind === "COMMUNITY_HANDOFF") {
+      assert.doesNotMatch(action.text, /kaleb|mika/i);
+      assert.doesNotMatch(action.text, /@/);
+    }
+  }
+});
+
+test("REQUIRED (spec TEST 2): a COMMUNITY_HANDOFF-origin event always IGNOREs -- no bot may ever respond to one", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "COMMUNITY_HANDOFF", interactionDepth: 2, text: "never better — anyone here got anything new?" }),
+    botAckMode: "role_handoffs",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: ALWAYS_HANDOFF, // even with an RNG that would otherwise always fire
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("REQUIRED (spec TEST 4): a bare closing acknowledgement (\"nice one\") does not force a handoff", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "nice one" }),
+    botAckMode: "role_handoffs",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: ALWAYS_HANDOFF,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("REQUIRED (spec TEST 5): a handoff is not mandatory even when eligible -- silence remains a valid outcome", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "good, you?" }),
+    botAckMode: "role_handoffs",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: () => 0.99, // above HANDOFF_PROBABILITY
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test('"acknowledgements" mode never escalates to a handoff, even for an open-ended depth-1 exchange', () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "good, you?" }),
+    botAckMode: "acknowledgements",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: ALWAYS_HANDOFF,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("a depth-1 handoff still respects target rate limits (no eligible/available target -> IGNORE)", () => {
+  const rateLimited = kaleb({ botAcksToday: 5, botAcksDay: new Date().toISOString().slice(0, 10) }); // DAILY_CAP
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "good, you?" }),
+    botAckMode: "role_handoffs",
+    eligibleTargets: [rateLimited],
+    now: new Date(),
+    random: ALWAYS_HANDOFF,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
+});
+
+test("a depth-1 handoff still requires senderType INNVIL_MODERATOR (external bots never get this treatment)", () => {
+  const action = decideBotAcknowledgement({
+    event: baseEvent({ origin: "BOT_ACK", interactionDepth: 1, text: "good, you?", sender: { platformUserId: "999", isBot: true, senderType: "EXTERNAL_BOT", displayName: "OtherBot" } }),
+    botAckMode: "role_handoffs",
+    eligibleTargets: [kaleb()],
+    now: new Date(),
+    random: ALWAYS_HANDOFF,
+  });
+  assert.deepEqual(action, { kind: "IGNORE" });
 });

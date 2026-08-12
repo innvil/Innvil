@@ -7,9 +7,12 @@
 
 export type SenderType = "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT";
 
-/** Why this event exists — critical for loop prevention (spec §8/§9). A
- *  BOT_ACK-origin event must never itself produce another acknowledgement. */
-export type EventOrigin = "HUMAN" | "PROACTIVE" | "BOT_ACK";
+/** Why this event exists — critical for loop prevention (spec §8/§9, extended
+ *  by bot-ack-social-behavior-spec.md §5/§6). A BOT_ACK-origin event may
+ *  produce AT MOST a COMMUNITY_HANDOFF (never another acknowledgement); a
+ *  COMMUNITY_HANDOFF-origin event must never itself produce any bot action
+ *  at all (§12 — only a human reply restarts normal Coordinator logic). */
+export type EventOrigin = "HUMAN" | "PROACTIVE" | "BOT_ACK" | "COMMUNITY_HANDOFF";
 
 export interface CommunitySender {
   platformUserId: string;
@@ -41,7 +44,15 @@ export interface CommunityEvent {
   causationMessageId: string | null;
 }
 
+/** Depth at which a plain acknowledgement (BOT_ACK) may still fire — a
+ *  depth-0 (HUMAN/PROACTIVE) event may produce one. */
 export const MAX_BOT_INTERACTION_DEPTH = 1;
+/** Hard ceiling on the whole bot-generated social chain
+ *  (bot-ack-social-behavior-spec.md §6): depth 0 = original event, depth 1 =
+ *  optional BOT_ACK, depth 2 = optional COMMUNITY_HANDOFF, then STOP — no
+ *  further bot-generated social action may ever follow, regardless of mode
+ *  or rate limits. */
+export const MAX_BOT_HANDOFF_DEPTH = 2;
 
 /* ------------------------------------------------------------- actions ---- */
 
@@ -54,6 +65,22 @@ export type CommunityAction =
       targetDeploymentId: string;
       replyToMessageId: string | null;
       origin: EventOrigin;
+      interactionDepth: number;
+      causationMessageId: string | null;
+    }
+  /** bot-ack-social-behavior-spec.md — closes a bot-to-bot exchange by
+   *  redirecting attention to the human community rather than continuing the
+   *  bot-to-bot back-and-forth (never addressed at the other moderator by
+   *  name). Only ever produced from a depth-1 (origin BOT_ACK) event; its own
+   *  resulting message is recorded with origin COMMUNITY_HANDOFF, which is a
+   *  hard dead end — no bot may ever respond to it (§12). Distinct from
+   *  SEND_TEXT so the runtime never confuses "this is itself an
+   *  acknowledgement another bot might ack" with "this closes the chain". */
+  | {
+      kind: "COMMUNITY_HANDOFF";
+      text: string;
+      targetDeploymentId: string;
+      replyToMessageId: string | null;
       interactionDepth: number;
       causationMessageId: string | null;
     }
