@@ -5,7 +5,7 @@ import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
-const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine } = __testables;
+const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine, projectKnowledgeContextLines } = __testables;
 
 /**
  * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
@@ -910,4 +910,61 @@ test("collabContactLine is wired into both the ANSWER and CASUAL_CHAT prompts wh
   const input = baseInput({ collabContact: "@project_admin" });
   assert.match(buildSystemPrompt({ ...input, action: "CASUAL_CHAT" }), /@project_admin/);
   assert.match(buildSystemPrompt({ ...input, action: "ANSWER" }), /@project_admin/);
+});
+
+/* ==================================== Phase 4.N: project knowledge grounding ====
+   Only the ALREADY-RETRIEVED, relevance-ranked subset is ever visible to the
+   model (retrieval itself happens in community-runtime.ts, not here) -- this
+   layer just verifies the grounded content reaches the prompt, the
+   never-fabricate-beyond-it instruction is present, and it's scoped to
+   ANSWER only (never CASUAL_CHAT, per spec: substantive Q&A uses ANSWER). */
+
+test("projectKnowledgeContextLines is null when nothing was retrieved", () => {
+  assert.equal(projectKnowledgeContextLines(baseInput({})), null);
+  assert.equal(projectKnowledgeContextLines(baseInput({ projectKnowledge: [] })), null);
+});
+
+test("REQUIRED: projectKnowledgeContextLines surfaces the exact retrieved title/content, verbatim", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ title: "Supported chains", content: "Ethereum and Polygon." }] }));
+  assert.ok(line);
+  assert.match(line!, /Supported chains/);
+  assert.match(line!, /Ethereum and Polygon\./);
+});
+
+test("REQUIRED: instructs the moderator this is the ONLY source of factual project claims -- never invent beyond it", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ title: "X", content: "Y" }] }));
+  assert.match(line!, /ONLY source of factual claims/i);
+  assert.match(line!, /don't have that information|never state a fact beyond/i);
+});
+
+test("REQUIRED: projectKnowledge is wired into the ANSWER prompt", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [{ title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  assert.match(prompt, /Roadmap/);
+  assert.match(prompt, /Q3 launch of feature X\./);
+});
+
+test("REQUIRED: projectKnowledge is NOT wired into CASUAL_CHAT -- casual chatter never cites facts", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: [{ title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  assert.doesNotMatch(prompt, /Q3 launch of feature X\./);
+});
+
+test("multiple retrieved entries all appear in the prompt, each on its own line", () => {
+  const prompt = buildSystemPrompt(
+    baseInput({
+      action: "ANSWER",
+      projectKnowledge: [
+        { title: "Chains", content: "Ethereum, Polygon." },
+        { title: "Support", content: "support@example.com" },
+      ],
+    })
+  );
+  assert.match(prompt, /Chains/);
+  assert.match(prompt, /Ethereum, Polygon\./);
+  assert.match(prompt, /Support/);
+  assert.match(prompt, /support@example\.com/);
+});
+
+test("a title-less entry still renders its content without a dangling label", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ title: "", content: "Support hours are 9am-5pm UTC." }] }));
+  assert.match(line!, /- Support hours are 9am-5pm UTC\./);
 });

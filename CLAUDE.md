@@ -127,6 +127,54 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Phase 4.N (Part A): Project Knowledge grounds Moderator Q&A (v1.15.0)
+- **Implemented from `docs/moderator/project-knowledge-autoposting-spec.md`** (verbatim source of truth — see
+  Phase 4.N in the roadmap). Full spec covers three deliverables: (A) shared Project Knowledge powering Q&A,
+  (B) the SAME knowledge powering AI Telegram Auto-Posting, (C) a second Community Knowledge scope. **Only (A)
+  is built this pass** — (B) needs a whole scheduling/publishing engine (per-moderator posting windows,
+  persisted random occurrence times, idempotent cron execution) that doesn't exist and would be a second,
+  separate deliverable even with the knowledge layer in place; (C) is explicitly stated in the spec itself as
+  blocked on (A) existing first. Scoped and flagged rather than half-building either.
+- **Inspected before writing any code** (per the spec's own required process, §40): confirmed no vector/
+  embedding/RAG infrastructure exists anywhere in this codebase (no pgvector, no embedding client, no
+  `openai`/`langchain`/similar dependency) — building one from scratch for "the smallest safe, extensible
+  patch" would be over-scoped. **v1 retrieval is a bounded, deterministic keyword-overlap scorer** instead
+  (`src/lib/moderator/knowledge.ts` `scoreKnowledgeRelevance`/`retrieveRelevantKnowledge` — title matches
+  weighted 2x over content matches, returns nothing when nothing scores above 0 rather than ever falling back
+  to the whole knowledge base). Swappable for real embeddings later without changing the calling contract.
+- **Migration `0054_project_knowledge.sql`** (NEW) — `knowledge_sources` (panel_id, `scope_type` "PROJECT" |
+  "COMMUNITY", `community_id` nullable, `kind` overview/faq/fact/link/note, title, content, active). The scope
+  field exists from day one per the spec's own explicit instruction ("build the shared retrieval layer with an
+  explicit scope field from the start rather than retrofitting it later") — only PROJECT-scope rows are ever
+  written this pass; COMMUNITY-scope is schema-ready but unused until the separate Community Knowledge feature
+  is built. Service-role only (no RLS policies), same pattern as every other moderator config table. **Run
+  migration `0054`.**
+- **Owner-facing CRUD** (`src/lib/actions/knowledge.ts`, panel-scoped — a panel is one project/brand, so both
+  the legacy owner-created and the newer customer-owned moderators (migration 0051) share the same project
+  knowledge): `listProjectKnowledge`/`createProjectKnowledgeEntry`/`updateProjectKnowledgeEntry`/
+  `deleteProjectKnowledgeEntry`. Deliberately minimal (title + content + kind dropdown, no file/URL ingestion
+  yet — per the spec's own "don't force everything into one giant text field" but also "don't overbuild UI if
+  the current phase only needs minimal configuration").
+- **New "Project Knowledge" card** in the owner's Virtual Moderator tab (`AdminTabs.tsx` `ProjectKnowledgeCard`)
+  — add/list/deactivate/delete entries, mounted below the moderator list.
+- **Wired into Moderator Q&A, ANSWER only** (never CASUAL_CHAT — substantive facts belong to substantive Q&A,
+  matching the spec's own model-routing table). `community-runtime.ts`'s `handleHumanMessage` retrieves once
+  per triggering message (`loadRelevantProjectKnowledge`, not per-responder) when `action.type === "ANSWER"`,
+  threaded through both the primary and any additional (multi-target) responder via a new
+  `GenerateChatterReplyInput.projectKnowledge` field. `chatter-generate.ts`'s new `projectKnowledgeContextLines`
+  renders only the ALREADY-RETRIEVED subset (never the whole KB) with an explicit "this is the ONLY source of
+  factual project claims" instruction, and is omitted entirely (not an empty block) when nothing relevant was
+  found. Also softened `SHARED_RULES`' blanket "you do not have access to... business records" line, since
+  that's now sometimes untrue — it now explicitly gates factual claims to what's in the Project Knowledge block
+  when present.
+- New tests: `knowledge.test.ts` (+10 — spec test 1 "what chains do you support?" retrieves the right entry,
+  spec test 2 an uncovered question retrieves nothing, spec test 4's cross-tenant shape, inactive sources never
+  retrieved, title-match ranking, limit/ordering, empty-list safety, title-less entries), `chatter-generate.ts`
+  test additions (+7 — null when nothing retrieved, verbatim content surfacing, the never-fabricate-beyond-it
+  instruction, wired into ANSWER, explicitly NOT wired into CASUAL_CHAT, multiple entries, title-less
+  rendering). 672 tests pass (up from 656), `tsc --noEmit` clean, production build clean. **Run migration
+  `0054`** before this has anything to retrieve.
+
 ### 2026-08-12 — Phase 4.P: bot-ack Community Handoff + depth-2 social chain (v1.14.0)
 - **Implemented from `docs/moderator/bot-ack-social-behavior-spec.md`** (verbatim source of truth — see Phase
   4.P in the roadmap). The hard "a BOT_ACK may never trigger anything else" rule made bot-to-bot exchanges cut
@@ -3895,7 +3943,7 @@ win over this):**
 > from migration 0051 + the existing `telegram_provisioning_attempts`/
 > `telegram_bot_integrations`/`communities`/`moderator_deployments` tables).
 
-### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (NOTED, not built)
+### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (Part A DONE v1.15.0 — Moderator Q&A grounding; Auto-Posting + Community Knowledge still NOTED, not built)
 
 > Extends Phase 4.M. Adds a shared, tenant-scoped **Project Knowledge Base** (project
 > overview, website, whitepaper, docs, FAQs, roadmap, official links, brand voice,

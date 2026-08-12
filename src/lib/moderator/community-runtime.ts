@@ -13,6 +13,7 @@ import {
 } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
+import { retrieveRelevantKnowledge, type KnowledgeSource } from "./knowledge";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 import {
   detectSequenceTaskIntent, classifyTaskInstruction, pauseTask, resumeTask, cancelTask, resetSequenceTask,
@@ -471,6 +472,30 @@ async function logBotAckDecision(admin: SupabaseClient, panelId: string, communi
 }
 
 /* -------------------------------------------------------- natural chatter ---- */
+
+/** Phase 4.N — fetches the panel's ACTIVE PROJECT-scope knowledge and
+ *  relevance-ranks it against the triggering question (moderator/knowledge.ts's
+ *  retrieveRelevantKnowledge — bounded, deterministic keyword-overlap
+ *  scoring, never the whole KB sent blindly). Returns undefined (not an
+ *  empty array) when nothing relevant is found, so the caller can tell
+ *  "no project knowledge at all" apart from "some exists but the DB is
+ *  briefly unreachable" the same way — either way, the prompt omits the
+ *  block entirely rather than injecting an empty one. */
+async function loadRelevantProjectKnowledge(admin: SupabaseClient, panelId: string, query: string): Promise<{ title: string; content: string }[] | undefined> {
+  const { data } = await admin
+    .from("knowledge_sources")
+    .select("id, panel_id, scope_type, community_id, kind, title, content, active")
+    .eq("panel_id", panelId)
+    .eq("scope_type", "PROJECT")
+    .eq("active", true);
+  if (!data || data.length === 0) return undefined;
+  const sources: KnowledgeSource[] = data.map((r) => ({
+    id: r.id, panelId: r.panel_id, scopeType: r.scope_type, communityId: r.community_id, kind: r.kind, title: r.title ?? "", content: r.content ?? "", active: r.active !== false,
+  }));
+  const relevant = retrieveRelevantKnowledge(query, sources);
+  if (relevant.length === 0) return undefined;
+  return relevant.map((s) => ({ title: s.title, content: s.content }));
+}
 
 interface ChatterDeployment {
   deploymentId: string;
@@ -1205,6 +1230,13 @@ async function handleHumanMessage(
     return;
   }
 
+  // Phase 4.N — retrieved ONCE per triggering message (not per responder),
+  // only for ANSWER (substantive Q&A never grounds casual chatter in
+  // project facts). Empty when nothing relevant matches -- passed through
+  // as undefined so generateChatterReply's prompt correctly omits the
+  // "Project knowledge" block entirely rather than injecting an empty one.
+  const projectKnowledge = action.type === "ANSWER" ? await loadRelevantProjectKnowledge(admin, panelId, event.text) : undefined;
+
   const primaryResult = await respondAsDeployment({
     admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
     deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, now,
@@ -1213,6 +1245,7 @@ async function handleHumanMessage(
     addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
     otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
     collabContact,
+    projectKnowledge,
     timer,
   });
 
@@ -1279,6 +1312,7 @@ async function handleHumanMessage(
           priorResponsesToThisMessage: priorResponses,
           individualContributionExpected,
           collabContact,
+          projectKnowledge,
           timer,
         });
         if (result.replied) priorResponses.push({ moderatorName: additionalDeployment.moderatorName, text: result.text });
@@ -1347,11 +1381,15 @@ async function respondAsDeployment(params: {
    *  community has a configured contact. See GenerateChatterReplyInput's
    *  doc comment. */
   collabContact?: string | null;
+  /** Phase 4.N — already-retrieved, relevance-ranked project knowledge for
+   *  THIS triggering message (see GenerateChatterReplyInput's doc comment).
+   *  Only ever set for ANSWER. */
+  projectKnowledge?: { title: string; content: string }[];
   timer: RequestTimer;
 }): Promise<{ replied: false } | { replied: true; text: string }> {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, now, recentContext,
-    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, timer,
+    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
   } = params;
 
   // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
@@ -1405,6 +1443,7 @@ async function respondAsDeployment(params: {
         priorResponsesToThisMessage,
         individualContributionExpected,
         collabContact,
+        projectKnowledge,
       }),
       CHATTER_TOTAL_BUDGET_MS
     );

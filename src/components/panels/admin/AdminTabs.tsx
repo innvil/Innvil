@@ -22,6 +22,10 @@ import {
 import { MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS } from "@/src/lib/moderator/presets";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
+  listProjectKnowledge, createProjectKnowledgeEntry, updateProjectKnowledgeEntry, deleteProjectKnowledgeEntry,
+} from "@/src/lib/actions/knowledge";
+import { KNOWLEDGE_KINDS, type KnowledgeSource, type KnowledgeSourceKind } from "@/src/lib/moderator/knowledge";
+import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
 import {
@@ -4095,7 +4099,119 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
           ))}
         </div>
       </Card>
+
+      <ProjectKnowledgeCard panelId={panelId} />
     </div>
+  );
+}
+
+const KNOWLEDGE_KIND_LABELS: Record<KnowledgeSourceKind, string> = {
+  overview: "Overview", faq: "FAQ", fact: "Fact", link: "Link", note: "Note",
+};
+
+/** Phase 4.N (Project Knowledge, part A) — owner enters project facts once;
+ *  every deployed moderator draws on the SAME knowledge when answering a
+ *  substantive question (chatter-generate.ts's "Project knowledge" prompt
+ *  block, ANSWER only). Deliberately minimal (title + content + kind, no
+ *  file/URL ingestion yet) per the spec's own "don't overbuild UI" note. */
+function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
+  const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
+  const [kind, setKind] = React.useState<KnowledgeSourceKind>("fact");
+  const [title, setTitle] = React.useState("");
+  const [content, setContent] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  const refresh = React.useCallback(async () => {
+    const res = await listProjectKnowledge(panelId);
+    if (res.ok) setEntries(res.data);
+  }, [panelId]);
+
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const add = async () => {
+    if (!content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
+    setSaving(true); setMsg(null);
+    const res = await createProjectKnowledgeEntry(panelId, { kind, title, content });
+    setSaving(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setTitle(""); setContent("");
+    await refresh();
+  };
+
+  const toggleActive = async (e: KnowledgeSource) => {
+    await updateProjectKnowledgeEntry(panelId, e.id, { active: !e.active });
+    await refresh();
+  };
+
+  const remove = async (id: string) => {
+    await deleteProjectKnowledgeEntry(panelId, id);
+    await refresh();
+  };
+
+  return (
+    <Card title="Project Knowledge" icon={FileText}>
+      <p className="fp-text-dim text-sm mb-4 leading-relaxed">
+        Teach every deployed moderator about your project once — overview, FAQs, official links, key facts.
+        A moderator only cites what&apos;s entered here when answering a genuine question; it never invents
+        project facts beyond it.
+      </p>
+
+      <div className="space-y-2 mb-4">
+        <div className="flex items-center gap-2">
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as KnowledgeSourceKind)}
+            className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none"
+          >
+            {KNOWLEDGE_KINDS.map((k) => (
+              <option key={k} value={k}>{KNOWLEDGE_KIND_LABELS[k]}</option>
+            ))}
+          </select>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Title (e.g. Supported chains, Website)"
+            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+          />
+        </div>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="Content — the actual fact/answer/URL a moderator can cite."
+          rows={2}
+          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border resize-none"
+        />
+        <button onClick={add} disabled={saving || !content.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+          {saving ? "Saving…" : "Add entry"}
+        </button>
+        {msg && <p className={`text-xs ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+      </div>
+
+      <div className="space-y-2">
+        {entries === null ? (
+          <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>
+        ) : entries.length === 0 ? (
+          <p className="text-xs fp-text-faint">No project knowledge yet — moderators will say they don&apos;t know rather than guess.</p>
+        ) : entries.map((e) => (
+          <div key={e.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-start justify-between gap-3 ${!e.active ? "opacity-50" : ""}`}>
+            <div className="min-w-0">
+              <p className="text-[10px] fp-mono uppercase fp-text-faint">{KNOWLEDGE_KIND_LABELS[e.kind]}{!e.active ? " · inactive" : ""}</p>
+              {e.title && <p className="text-sm font-semibold fp-text truncate">{e.title}</p>}
+              <p className="text-xs fp-text-dim break-words">{e.content}</p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={() => toggleActive(e)} className="text-[11px] fp-text-faint hover:fp-text px-2 py-1 rounded-md fp-panel-raised border fp-line-soft">
+                {e.active ? "Deactivate" : "Activate"}
+              </button>
+              <button onClick={() => remove(e.id)} className="p-1.5 rounded-md fp-panel-raised border fp-line-soft text-red-400 hover:text-red-300">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
