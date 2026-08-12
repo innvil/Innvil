@@ -127,6 +127,68 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — AI Moderator pricing/entitlement model revision — canonical source only (v1.13.0)
+- **Full pricing/entitlement rework per approved spec.** Per explicit instruction, updated the CANONICAL source
+  (`src/lib/money.ts` + `src/lib/moderator/plan.ts`/`customer-entitlement.ts`) first, and made dependent
+  UI/actions derive from it rather than duplicating numbers — audited every file referencing the old constants
+  (`AiModeratorSurface.tsx`, `customer-moderator.ts`, `customer-entitlement.ts`, `plan.ts`, `money.test.ts`)
+  before changing anything.
+- **New core pricing** (`money.ts`): Basic $49.99 (unchanged) / Standard **$114.99** (was $99.99) / Premium
+  **$209.99** (was $179.99) / Pro **$359.99** (was $299.99). Slot counts (2/5/10/20) and community counts
+  (1/2/3/5) were already correct from earlier work — no change needed there.
+- **Direct-mode commission dropped from a flat 20% to the approved 5%** (`MODERATOR_COMMISSION_SHARE`) — the
+  customer pays Innvil directly, the owner is credited this share to their Innvil wallet.
+  `subscribeCustomerModeratorPlan` already read this constant, so the rate correction flows through with zero
+  code change beyond the constant itself.
+- **New `MODERATOR_RENTAL_DISCOUNT` (10%)** for the Rental/wholesale commercial mode (owner buys capacity from
+  Innvil below list, resells to their own customer at their own price, keeps 100%, no additional commission).
+  `plan.ts` already had an unfinished `commercialMode: "commission" | "rental"` type stub with a doc comment
+  referencing this constant — the constant now actually exists, but **Rental mode's billing path is NOT wired
+  up**: it needs an owner-side wholesale-subscribe action and a customer-facing resale-price charge (the
+  customer pays the OWNER, not Innvil — structurally different from `subscribeCustomerModeratorPlan`, which is
+  Direct-mode only). Documented inline; flagged to the user as a separate follow-up rather than half-building it.
+- **New Enterprise slot-pricing formula** — `moderatorEnterpriseSlotPrice(totalSlots)`: starts from the Pro base
+  (20 slots/$359.99), +$15/slot for slots 21–50, +$13/slot above 50. Live-verified against both spec worked
+  examples (50 slots → $809.99, 75 slots → $1,134.99). `moderatorEnterpriseIncludedCommunities(totalSlots)`:
+  Pro's 5 included, +2 (→7) for +10..+29 extra slots above Pro, +3 (→8) for +30 or more. Enterprise stays a
+  direct-contact/direct-Innvil sale with no panel-owner commission/rental split (unchanged from before).
+- **New community-entitlement model** — communities are a separate axis from Active Moderator Slots (a
+  purchased community never grants extra slots). `MODERATOR_COMMUNITY_CAPACITY`: Basic/Standard hard-capped (1/2,
+  no expansion), Premium expandable 3→5, Pro expandable 5→10. `plan.ts`'s `CAPACITY.maxCommunities` and
+  `customer-entitlement.ts`'s `customerModeratorCapacity()` now both READ the included count from this single
+  `money.ts` table instead of a second hardcoded copy. New `moderatorCommunityExpansionCeiling()` (both files)
+  exposes the paid-expansion ceiling for a future purchase flow.
+- **New additional-community/auto-post pricing constants** — `MODERATOR_ADDITIONAL_COMMUNITY_PRICE` ($9.99,
+  access only) / `MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE` ($14.99, access + 1 post/day);
+  `moderatorAutopostFrequencyAddonPrice(postsPerDay)` for extra daily frequency in an already-autoposting
+  community (2/day = +$9.99, 3/day = +$19.98, capped at `MODERATOR_AUTOPOST_MAX_PER_DAY` = 3). Customer-facing
+  wording must always be daily-frequency-per-community, never a monthly quota (per spec).
+- **New pooled monthly AI-conversational-response allowance** — `MODERATOR_AI_RESPONSE_POOL` (Basic 1200 /
+  Standard 2400 / Premium 4200 / Pro 7200), `customerModeratorAiResponsePool()`. Explicitly does NOT apply to
+  the trial (which keeps its own, already-enforced, separate daily reactive quota — `TRIAL_REACTIVE_DAILY_LIMIT`,
+  v1.7.0 — returning 0 here rather than double-counting against a different mechanism). SILENCE/REACT/
+  deterministic SHORT_ACK/GM-GN template sends/no-generation moderation actions were already zero-AI-call paths
+  (v1.9.0+) and continue to never consume this pool once metering is built.
+- **Storefront UI** (`AiModeratorSurface.tsx`): the `TIERS` display array is now COMPUTED from the canonical
+  constants (`moderatorPlanPrice`, `MODERATOR_CAPACITY`, `MODERATOR_COMMUNITY_CAPACITY`) instead of a third
+  hardcoded copy of the same numbers; tier cards now also show included/expandable community counts. Still
+  gated behind the existing `aiModeratorComingSoon` flag (Storefront.tsx) — not un-gated, per standing
+  instruction.
+- **Scope note (deliberately NOT built this pass, to avoid half-finished money code):** the actual
+  purchase/consumption flows for Rental mode, additional-community purchases, auto-post-frequency purchases,
+  and AI-response-pool metering. These all depend on either a feature that isn't built yet (auto-posting itself
+  is Phase 4.N, still NOTED/not built) or a materially separate billing pathway (Rental) — the canonical pricing
+  FUNCTIONS all exist and are tested, but nothing calls them from a purchase action yet. AI routing (DeepSeek for
+  casual chat, Sonnet 5 medium for substantive Q&A/scheduled auto-post generation, zero-call for SILENCE/REACT/
+  SHORT_ACK) was already correct per the spec's own preservation instruction — no change needed there.
+- New/updated tests: `money.test.ts` (+24 — full pricing table, commission/rental rate separation, Enterprise
+  formula incl. both spec worked examples and the band-51 boundary, community capacity/expansion, additional-
+  community pricing, autopost frequency pricing incl. the 3/day cap, AI response pool), `plan.test.ts` (+6 —
+  community expansion ceiling per tier incl. trial and no-entitlement), `customer-entitlement.test.ts` (+8 —
+  same ceiling function via the customer-facing entitlement source, AI response pool incl. the trial
+  non-double-counting case). 636 tests pass (up from 603), `tsc --noEmit` clean, production build clean. No
+  migration (all changes are in-code constants/pure functions; no new DB columns needed for what's wired up).
+
 ### 2026-08-12 — Bot-ack REACT was silently failing: invalid emoji + swallowed Telegram errors (v1.12.3)
 - **Live test of the v1.12.1 opener-acknowledgement fix showed no reaction on Kwan's "gm everyone"** despite
   `moderator_activity_log` showing a clean `bot_message -> REACT` decision — the log was lying. Diagnosed by

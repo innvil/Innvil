@@ -195,7 +195,19 @@ export async function startCustomerModeratorTrial(panelId: string): Promise<Resu
 
 /** Subscribe (or renew a lapsed sub) to a paid tier — charges the customer's
  *  wallet in full via the atomic RPC (migration 0051): debit customer,
- *  credit the owner's commission share, both-or-neither. */
+ *  credit the owner's commission share, both-or-neither.
+ *
+ *  This is DIRECT/RESELL mode only (money.ts MODERATOR_COMMISSION_SHARE, 5%)
+ *  — the customer always pays Innvil directly here, and the owner is
+ *  credited the commission share to their Innvil wallet. Rental/wholesale
+ *  mode (owner buys capacity from Innvil at MODERATOR_RENTAL_DISCOUNT below
+ *  list price, then resells to their own customer at their own price,
+ *  keeping 100%) is a structurally different money flow — the OWNER pays
+ *  Innvil and the CUSTOMER pays the OWNER, not Innvil — and is not
+ *  implemented by this function or anywhere else yet; it needs its own
+ *  owner-side wholesale-subscribe action and customer-facing resale-price
+ *  billing path before it can be offered. plan.ts's `commercialMode` field
+ *  exists as a schema placeholder for it but nothing branches on it today. */
 export async function subscribeCustomerModeratorPlan(panelId: string, tier: ModeratorPlanTier): Promise<Result<ModeratorEligibilityInfo>> {
   const c = await ctx(panelId);
   if (!c) return { ok: false, error: "Please log in." };

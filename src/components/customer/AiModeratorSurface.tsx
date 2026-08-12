@@ -2,7 +2,8 @@
 
 import React, { useEffect, useState } from "react";
 import { Bot, Sparkles, Wallet, CheckCircle2, AlertTriangle, Clock, LifeBuoy, Send, Link2 } from "lucide-react";
-import { formatMoney } from "@/src/lib/money";
+import { formatMoney, moderatorPlanPrice, MODERATOR_COMMUNITY_CAPACITY, type ModeratorPlanTier } from "@/src/lib/money";
+import { CAPACITY as MODERATOR_CAPACITY } from "@/src/lib/moderator/plan";
 import {
   getModeratorEligibility, startCustomerModeratorTrial, subscribeCustomerModeratorPlan, cancelCustomerModeratorPlan,
   contactEnterpriseModeratorSales, listCustomerModerators, createCustomerModerator,
@@ -10,7 +11,6 @@ import {
   connectCustomerCommunity, listCustomerModeratorCommunities,
   type ModeratorEligibilityInfo, type CustomerModeratorRow, type CustomerCommunityDeploymentRow,
 } from "@/src/lib/actions/customer-moderator";
-import type { ModeratorPlanTier } from "@/src/lib/money";
 
 /* Storefront AI Moderator surface — the real customer-facing product (see
    CLAUDE.md Phase 4.M product-placement correction). Customer discovers
@@ -222,12 +222,20 @@ function ModeratorTelegramCard({ panelId, moderator, onChanged }: { panelId: str
   );
 }
 
-const TIERS: Array<{ tier: ModeratorPlanTier; label: string; price: number; slots: number }> = [
-  { tier: "basic", label: "Basic", price: 49.99, slots: 2 },
-  { tier: "standard", label: "Standard", price: 99.99, slots: 5 },
-  { tier: "premium", label: "Premium", price: 179.99, slots: 10 },
-  { tier: "pro", label: "Pro", price: 299.99, slots: 20 },
-];
+const TIER_LABELS: Record<ModeratorPlanTier, string> = { basic: "Basic", standard: "Standard", premium: "Premium", pro: "Pro" };
+
+// Derived from the canonical source (money.ts + moderator/plan.ts) rather than
+// duplicated literals -- a pricing/capacity change only has to happen there.
+const TIERS: Array<{ tier: ModeratorPlanTier; label: string; price: number; slots: number; communities: number; communityCeiling: number }> = (
+  ["basic", "standard", "premium", "pro"] as ModeratorPlanTier[]
+).map((tier) => ({
+  tier,
+  label: TIER_LABELS[tier],
+  price: moderatorPlanPrice(tier),
+  slots: MODERATOR_CAPACITY[tier].maxActiveSlots,
+  communities: MODERATOR_COMMUNITY_CAPACITY[tier].included,
+  communityCeiling: MODERATOR_COMMUNITY_CAPACITY[tier].maxWithAddons,
+}));
 
 function eligibilityCopy(info: ModeratorEligibilityInfo): string {
   if (info.wouldQualifyVia === "ESTABLISHED") {
@@ -252,6 +260,10 @@ function TierCard({ t, current, onSubscribe, busy }: { t: (typeof TIERS)[number]
       </div>
       <p className="text-2xl font-bold mt-1">{formatMoney(t.price)}<span className="text-xs fp-text-faint font-normal">/mo</span></p>
       <p className="text-xs fp-text-dim mt-1">{t.slots} Active Moderator Slots</p>
+      <p className="text-xs fp-text-dim">
+        {t.communities} {t.communities === 1 ? "community" : "communities"} included
+        {t.communityCeiling > t.communities ? ` · expandable to ${t.communityCeiling}` : ""}
+      </p>
       <button
         onClick={() => onSubscribe(t.tier)}
         disabled={busy || active}

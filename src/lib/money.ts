@@ -40,18 +40,34 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
  *  ModeratorCapacity table in moderator/plan.ts (CAPACITY) exactly — same tier
  *  names, same numbers, reused rather than duplicated. */
 export const MODERATOR_BASIC_PRICE = 49.99;
-export const MODERATOR_STANDARD_PRICE = 99.99;
-export const MODERATOR_PREMIUM_PRICE = 179.99;
-export const MODERATOR_PRO_PRICE = 299.99;
+export const MODERATOR_STANDARD_PRICE = 114.99;
+export const MODERATOR_PREMIUM_PRICE = 209.99;
+export const MODERATOR_PRO_PRICE = 359.99;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
-/** Innvil-processed commission: panel owner's share of Innvil-collected customer
- *  revenue, credited to the panel's own Innvil balance per charge (§ "Ownership /
- *  revenue architecture" — customer pays the full price; the owner is credited
- *  this share, not the full amount; the remainder is Innvil's revenue). */
-export const MODERATOR_COMMISSION_SHARE = 0.2;
+
+/** Direct/resell mode ONLY (see ModeratorCommercialMode in moderator/plan.ts):
+ *  the customer pays Innvil directly; the panel owner is credited this share
+ *  to their own Innvil wallet (never cash, stays inside the Innvil ecosystem).
+ *  Rental/wholesale mode uses MODERATOR_RENTAL_DISCOUNT instead, never this —
+ *  the two commercial modes are mutually exclusive per transaction. */
+export const MODERATOR_COMMISSION_SHARE = 0.05;
+/** Rental/wholesale mode ONLY: the panel owner buys Moderator capacity from
+ *  Innvil at this discount below standard list price, then resells to their
+ *  OWN customer at whatever price they choose, keeping 100% of that resale —
+ *  no MODERATOR_COMMISSION_SHARE on top in this mode. */
+export const MODERATOR_RENTAL_DISCOUNT = 0.10;
+
 /** More than this many Active Moderator Slots is Enterprise -- contact-only, no
  *  self-serve price or tier constant; see moderator/customer-entitlement.ts. */
 export const MODERATOR_ENTERPRISE_MIN_SLOTS = 21;
+/** Enterprise slot pricing starts from the Pro base (this many slots included
+ *  in MODERATOR_PRO_PRICE) and adds per-slot bands above it. */
+const MODERATOR_ENTERPRISE_BASE_SLOTS = 20;
+/** Slots 21-50 above the Pro base. */
+export const MODERATOR_ENTERPRISE_BAND_1_MAX_SLOTS = 50;
+export const MODERATOR_ENTERPRISE_BAND_1_PRICE_PER_SLOT = 15;
+/** Slots 51+. */
+export const MODERATOR_ENTERPRISE_BAND_2_PRICE_PER_SLOT = 13;
 
 export type ModeratorPlanTier = "basic" | "standard" | "premium" | "pro";
 export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
@@ -60,6 +76,85 @@ export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
   if (tier === "standard") return MODERATOR_STANDARD_PRICE;
   return MODERATOR_BASIC_PRICE;
 }
+
+/** Enterprise (21+ Active Moderator Slots) monthly price. Direct-contact/
+ *  direct-Innvil sale only -- Enterprise revenue is 100% Innvil's, no
+ *  panel-owner commission/rental split ever applies to it.
+ *  Worked examples (from spec): 50 slots -> 359.99 + 30*15 = 809.99;
+ *  75 slots -> 359.99 + 30*15 + 25*13 = 1134.99. */
+export function moderatorEnterpriseSlotPrice(totalSlots: number): number {
+  const slots = Math.max(MODERATOR_ENTERPRISE_MIN_SLOTS, Math.round(totalSlots));
+  const extra = slots - MODERATOR_ENTERPRISE_BASE_SLOTS;
+  const band1 = Math.min(extra, MODERATOR_ENTERPRISE_BAND_1_MAX_SLOTS - MODERATOR_ENTERPRISE_BASE_SLOTS);
+  const band2 = Math.max(0, extra - band1);
+  return round4(
+    MODERATOR_PRO_PRICE + band1 * MODERATOR_ENTERPRISE_BAND_1_PRICE_PER_SLOT + band2 * MODERATOR_ENTERPRISE_BAND_2_PRICE_PER_SLOT
+  );
+}
+
+/** Enterprise included-community bonus -- starts from Pro's 5 included
+ *  communities, plus a bump based on how many slots were purchased ABOVE the
+ *  Pro base (not the Enterprise minimum). +10..+29 extra slots -> 7 total;
+ *  +30 or more -> 8 total. */
+export function moderatorEnterpriseIncludedCommunities(totalSlots: number): number {
+  const extra = Math.max(0, Math.round(totalSlots) - MODERATOR_ENTERPRISE_BASE_SLOTS);
+  if (extra >= 30) return 8;
+  if (extra >= 10) return 7;
+  return 5;
+}
+
+/** Community entitlement is a SEPARATE axis from Active Moderator Slots (a
+ *  purchased community never grants extra slots; deploying into it still
+ *  needs an available slot). `included` is what the tier ships with;
+ *  `maxWithAddons` is the ceiling paid additional-community purchases may
+ *  reach -- Basic/Standard are hard-capped (included === maxWithAddons). */
+export interface ModeratorCommunityCapacity {
+  included: number;
+  maxWithAddons: number;
+}
+export const MODERATOR_COMMUNITY_CAPACITY: Record<ModeratorPlanTier, ModeratorCommunityCapacity> = {
+  basic: { included: 1, maxWithAddons: 1 },
+  standard: { included: 2, maxWithAddons: 2 },
+  premium: { included: 3, maxWithAddons: 5 },
+  pro: { included: 5, maxWithAddons: 10 },
+};
+
+/** Additional-community pricing (non-Enterprise tiers, within maxWithAddons
+ *  above). Buying the plain $9.99 community does NOT enable auto-posting
+ *  there -- that's the separate $14.99 option (access + 1 auto-post/day). */
+export const MODERATOR_ADDITIONAL_COMMUNITY_PRICE = 9.99;
+export const MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE = 14.99;
+
+/** Auto-posting: every community with it enabled gets this many AI-generated
+ *  posts/day included; extra daily frequency is priced per additional
+ *  post/day, up to the normal-plan cap. Customer-facing copy must always be
+ *  DAILY frequency per community, never a monthly quota. */
+export const MODERATOR_AUTOPOST_INCLUDED_PER_DAY = 1;
+export const MODERATOR_AUTOPOST_MAX_PER_DAY = 3;
+export const MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE = 9.99;
+
+/** Monthly add-on price for N auto-posts/day in ONE community (beyond the
+ *  included 1/day) -- e.g. 2/day = +$9.99, 3/day = +$19.98. Extra frequency
+ *  never adds a community and never consumes an Active Moderator Slot. */
+export function moderatorAutopostFrequencyAddonPrice(postsPerDay: number): number {
+  const capped = Math.max(0, Math.min(Math.round(postsPerDay), MODERATOR_AUTOPOST_MAX_PER_DAY));
+  const extra = Math.max(0, capped - MODERATOR_AUTOPOST_INCLUDED_PER_DAY);
+  return round4(extra * MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE);
+}
+
+/** Pooled monthly AI-generated CONVERSATIONAL response allowance --
+ *  CASUAL_CHAT/ANSWER generations only. SILENCE, REACT, deterministic
+ *  SHORT_ACK, GM/GN template sends, and no-generation moderation actions
+ *  never consume it (no model call happens for any of them). Pooled across
+ *  the whole subscription, not divided per moderator. Not yet enforced (no
+ *  usage counter exists) -- defined now so metering doesn't have to retrofit
+ *  the number later. Enterprise is custom, no fixed pool. */
+export const MODERATOR_AI_RESPONSE_POOL: Record<ModeratorPlanTier, number> = {
+  basic: 1200,
+  standard: 2400,
+  premium: 4200,
+  pro: 7200,
+};
 
 /** Suggested default for the customer-facing automator subscription. Owners can override
  *  the price + run a promo (see automation/pricing.ts — the Business+ default is $9.99).

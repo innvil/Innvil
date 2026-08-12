@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   resolveTrialQualification, isTrialCurrentlyAccessible, trialAccessGranted, sumNetOrderSpend,
+  customerModeratorCommunityExpansionCeiling, customerModeratorAiResponsePool,
   TRIAL_ESTABLISHED_MIN_AGE_DAYS, TRIAL_ESTABLISHED_MIN_SPEND, TRIAL_HIGH_VALUE_MIN_SPEND, TRIAL_WALLET_MIN_BALANCE,
   CUSTOMER_TRIAL_DURATION_DAYS,
   type TrialEligibilityInput,
@@ -210,4 +211,39 @@ test("boundary: net spend of exactly $50.00 from multiple orders clears the ESTA
 
 test("never goes negative even in a theoretical over-refund edge case", () => {
   assert.equal(sumNetOrderSpend([{ amount: -20 }, { amount: 20 }, { amount: 5 }]), 0);
+});
+
+/* ------------------------------------------- community expansion / AI pool ---- */
+
+test("basic/standard community ceiling is hard-capped -- no expansion", () => {
+  assert.equal(customerModeratorCommunityExpansionCeiling("basic"), 1);
+  assert.equal(customerModeratorCommunityExpansionCeiling("standard"), 2);
+});
+
+test("premium expands to 5, pro expands to 10", () => {
+  assert.equal(customerModeratorCommunityExpansionCeiling("premium"), 5);
+  assert.equal(customerModeratorCommunityExpansionCeiling("pro"), 10);
+});
+
+test("trial community ceiling matches TRIAL_CAPACITY, not a paid tier's table", () => {
+  assert.equal(customerModeratorCommunityExpansionCeiling("trial"), 1);
+});
+
+test("no entitlement: zero community expansion ceiling", () => {
+  assert.equal(customerModeratorCommunityExpansionCeiling(null), 0);
+});
+
+test("REQUIRED: pooled AI conversational response allowance matches the approved table per paid tier", () => {
+  assert.equal(customerModeratorAiResponsePool("basic"), 1200);
+  assert.equal(customerModeratorAiResponsePool("standard"), 2400);
+  assert.equal(customerModeratorAiResponsePool("premium"), 4200);
+  assert.equal(customerModeratorAiResponsePool("pro"), 7200);
+});
+
+test("trial has no monthly AI response pool -- it uses its own separate daily reactive quota instead, never double-counted", () => {
+  assert.equal(customerModeratorAiResponsePool("trial"), 0);
+});
+
+test("no entitlement: zero AI response pool", () => {
+  assert.equal(customerModeratorAiResponsePool(null), 0);
 });

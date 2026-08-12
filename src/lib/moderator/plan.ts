@@ -22,7 +22,7 @@
  *     can't get a fresh trial by spinning up another panel.
  */
 
-import type { ModeratorPlanTier } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, type ModeratorPlanTier } from "@/src/lib/money";
 
 /** Master switch — OFF (in production) while the foundation (domain model,
  *  Manager Bot provisioning, adapter, coordinator, runtime) is still being
@@ -150,12 +150,16 @@ export interface ModeratorCapacity {
  *  can reuse the exact same tier->slots numbers rather than duplicating them —
  *  the tier names and Active Moderator Slot counts are shared between the
  *  legacy owner-facing model and the storefront customer product; only WHO
- *  holds the entitlement and WHO pays differs. */
+ *  holds the entitlement and WHO pays differs. maxCommunities here is the
+ *  INCLUDED count (money.ts's MODERATOR_COMMUNITY_CAPACITY[tier].included) —
+ *  single source, not duplicated. The separate paid-expansion ceiling
+ *  (Premium up to 5, Pro up to 10) lives in moderatorCommunityExpansionCeiling
+ *  below, reading the same money.ts table. */
 export const CAPACITY: Record<ModeratorPlanTier, ModeratorCapacity> = {
-  basic: { maxCommunities: 1, maxActiveSlots: 2 },
-  standard: { maxCommunities: 2, maxActiveSlots: 5 },
-  premium: { maxCommunities: 3, maxActiveSlots: 10 },
-  pro: { maxCommunities: 5, maxActiveSlots: 20 },
+  basic: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.basic.included, maxActiveSlots: 2 },
+  standard: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.standard.included, maxActiveSlots: 5 },
+  premium: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.premium.included, maxActiveSlots: 10 },
+  pro: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.pro.included, maxActiveSlots: 20 },
 };
 
 /** §37/§50: trial capacity is fixed and separate from any paid tier's table. */
@@ -178,6 +182,19 @@ export function moderatorCapacity(settings: unknown): ModeratorCapacity {
   if (source === "trial") return TRIAL_CAPACITY;
   if (source) return CAPACITY[source];
   return { maxCommunities: 0, maxActiveSlots: 0 };
+}
+
+/** The ceiling paid additional-community purchases may reach for the current
+ *  entitlement source (Basic/Standard: hard-capped, no expansion; Premium: up
+ *  to 5; Pro: up to 10; trial: fixed at TRIAL_CAPACITY). Purchasing the
+ *  add-on itself is not yet wired to an action (Phase 4.N auto-posting isn't
+ *  built) — this only defines the ceiling the future purchase flow must
+ *  respect, from the single money.ts source. */
+export function moderatorCommunityExpansionCeiling(settings: unknown): number {
+  const source = moderatorEntitlementSource(settings);
+  if (source === "trial") return TRIAL_CAPACITY.maxCommunities;
+  if (source) return MODERATOR_COMMUNITY_CAPACITY[source].maxWithAddons;
+  return 0;
 }
 
 /** Max saved VirtualModerator identities (distinct from active deployment

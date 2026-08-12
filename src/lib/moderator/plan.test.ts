@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -65,6 +65,33 @@ test("standard: max 5 saved moderators", () => {
 
 test("premium: max 10 saved moderators", () => {
   assert.equal(moderatorMaxSavedModerators({ addons: { moderator: { tier: "premium" } } }), 10);
+});
+
+/* Community expansion ceiling — a separate axis from Active Mod Slots
+ * (moderatorCommunityExpansionCeiling). Basic/Standard are hard-capped (no
+ * expansion); Premium up to 5; Pro up to 10. Not yet wired to a purchase
+ * action (Phase 4.N auto-posting isn't built) — pins the ceiling only. */
+
+test("basic/standard community ceiling equals their included count -- hard-capped, no expansion", () => {
+  assert.equal(moderatorCommunityExpansionCeiling({ addons: { moderator: { tier: "basic" } } }), 1);
+  assert.equal(moderatorCommunityExpansionCeiling({ addons: { moderator: { tier: "standard" } } }), 2);
+});
+
+test("premium community ceiling is 5 (expandable from 3 included)", () => {
+  assert.equal(moderatorCommunityExpansionCeiling({ addons: { moderator: { tier: "premium" } } }), 5);
+});
+
+test("pro community ceiling is 10 (expandable from 5 included)", () => {
+  assert.equal(moderatorCommunityExpansionCeiling({ addons: { moderator: { tier: "pro" } } }), 10);
+});
+
+test("trial community ceiling is fixed at TRIAL_CAPACITY (1), independent of the paid table", () => {
+  const activeTrial = { addons: { moderator: { trial: { endsAt: new Date(Date.now() + 60_000).toISOString() } } } };
+  assert.equal(moderatorCommunityExpansionCeiling(activeTrial), 1);
+});
+
+test("no entitlement: zero community expansion ceiling", () => {
+  assert.equal(moderatorCommunityExpansionCeiling({}), 0);
 });
 
 test("pro: max 20 saved moderators", () => {

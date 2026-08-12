@@ -31,7 +31,7 @@
    prevents any "dip below $20 to extend the trial" exploit.
    ========================================================= */
 
-import type { ModeratorPlanTier } from "@/src/lib/money";
+import { MODERATOR_AI_RESPONSE_POOL, MODERATOR_COMMUNITY_CAPACITY, type ModeratorPlanTier } from "@/src/lib/money";
 import { CAPACITY, TRIAL_CAPACITY, type ModeratorCapacity } from "./plan";
 
 export const TRIAL_ESTABLISHED_MIN_AGE_DAYS = 30;
@@ -127,6 +127,29 @@ export function customerModeratorCapacity(source: "trial" | ModeratorPlanTier | 
  *  never deploy isn't worth letting them save either. */
 export function customerModeratorMaxSavedModerators(source: "trial" | ModeratorPlanTier | null): number {
   return customerModeratorCapacity(source).maxActiveSlots;
+}
+
+/** The ceiling paid additional-community purchases may reach — same
+ *  single-source rule as moderator/plan.ts's moderatorCommunityExpansionCeiling,
+ *  just keyed by an already-resolved entitlement source instead of raw
+ *  panel settings (the customer entitlement lives in its own table, not
+ *  panels.settings). Not yet wired to a purchase action (Phase 4.N
+ *  auto-posting isn't built) — defines the ceiling only. */
+export function customerModeratorCommunityExpansionCeiling(source: "trial" | ModeratorPlanTier | null): number {
+  if (source === "trial") return TRIAL_CAPACITY.maxCommunities;
+  if (source) return MODERATOR_COMMUNITY_CAPACITY[source].maxWithAddons;
+  return 0;
+}
+
+/** Pooled monthly AI-generated CONVERSATIONAL response allowance for a paid
+ *  tier (see money.ts MODERATOR_AI_RESPONSE_POOL). The trial uses its own,
+ *  separate, already-enforced daily quota (plan.ts TRIAL_REACTIVE_DAILY_LIMIT)
+ *  instead of a monthly pool, so this returns 0 for "trial" rather than a
+ *  number that would double-count against a different mechanism. Not yet
+ *  metered against real usage (no counter exists) — the number only. */
+export function customerModeratorAiResponsePool(source: "trial" | ModeratorPlanTier | null): number {
+  if (!source || source === "trial") return 0;
+  return MODERATOR_AI_RESPONSE_POOL[source];
 }
 
 export type ModeratorPricingTier = { tier: ModeratorPlanTier; price: number; slots: number };
