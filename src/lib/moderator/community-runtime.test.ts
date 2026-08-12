@@ -610,6 +610,33 @@ function fakeAdminForKnowledge(rows: FakeKnowledgeRow[], communityProjects: Reco
   } as any;
 }
 
+test("REQUIRED (security invariant): loadRelevantKnowledge has no project_id parameter at all -- project scoping is ALWAYS derived server-side from communities.project_id, never accepted from a caller", async () => {
+  // Structural proof, not just behavioral: loadRelevantKnowledge's own
+  // signature is (admin, panelId, communityId, query) -- there is no fifth
+  // "projectId" argument a caller could supply to redirect retrieval at a
+  // project the community doesn't actually belong to. Combined with the
+  // isolation tests below (which prove the DB-resolved project_id is what
+  // actually gates the query), this closes the loop: no code path, client
+  // or otherwise, can inject an arbitrary project_id into retrieval.
+  assert.equal(loadRelevantKnowledge.length, 4);
+
+  // Behavioral half: even with OTHER projects' knowledge present in the
+  // fake DB, a community only ever gets what its OWN resolved project_id
+  // (from the communities table lookup) is entitled to -- never a
+  // differently-labeled row that happens to share a title/keyword.
+  const admin = fakeAdminForKnowledge(
+    [
+      { id: "real", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-real", community_id: null, kind: "fact", title: "Support", content: "@real_support", active: true },
+      { id: "spoofed", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-attacker-controlled", community_id: null, kind: "fact", title: "Support", content: "@attacker_support", active: true },
+    ],
+    { "victim-community": "project-real" } // the ONLY thing that determines scope -- a server-side DB fact
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "victim-community", "who do I contact for support?");
+  assert.ok(result);
+  assert.equal(result!.length, 1);
+  assert.equal(result![0].content, "@real_support");
+});
+
 test("REQUIRED (spec test 1 shape): a question retrieves this community's own project knowledge", async () => {
   const admin = fakeAdminForKnowledge(
     [{ id: "p1", panel_id: "panel-1", scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "overview", title: "Supported chains", content: "Ethereum and Polygon.", active: true }],

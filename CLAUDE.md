@@ -127,6 +127,23 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Verified + locked in: project_id for retrieval is never client-suppliable (v1.18.2)
+- **Explicit security requirement checked, not assumed**: audited both retrieval paths
+  (`community-runtime.ts`'s `loadRelevantKnowledge`, `autopost-runtime.ts`'s `loadKnowledgeForWindow`) —
+  confirmed neither function accepts a `projectId` parameter at all; both take only `communityId` and resolve
+  the project exclusively via a server-side `communities.project_id` DB lookup before any `knowledge_sources`
+  query runs. No code path (Telegram webhook, cron, or otherwise) can inject an arbitrary `project_id` into
+  retrieval. This is structurally distinct from the owner-facing WRITE actions
+  (`createProjectKnowledgeEntry(panelId, projectId, ...)` etc.), which DO accept an explicit `projectId` — but
+  that's the authenticated owner picking among their OWN projects from the dashboard, gated by `ownedProject()`
+  ownership verification, not a retrieval-time trust boundary.
+- New regression test (`community-runtime.test.ts`) pins both halves: a structural check that
+  `loadRelevantKnowledge.length === 4` (no fifth `projectId` argument exists to add), and a behavioral check
+  that even with an "attacker-controlled" project's knowledge present in the same fake DB, a community only
+  ever retrieves what its own DB-resolved `project_id` is entitled to. 726 tests pass (up from 725), `tsc
+  --noEmit` clean, production build clean. No code changes were needed — this pass only verified and locked in
+  an invariant that already held.
+
 ### 2026-08-12 — Fix: migration 0057 constraint-ordering bug (v1.18.1)
 - **Live migration run failed**: `update knowledge_sources set scope_type = 'ORGANIZATION' ...` ran while the
   OLD check constraint (from migration 0054, which only allowed `'PROJECT'`/`'COMMUNITY'`) was still in effect,
