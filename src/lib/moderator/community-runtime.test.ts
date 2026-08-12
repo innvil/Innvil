@@ -397,6 +397,34 @@ test("a single co-addressed moderator (no cap needed) still resolves correctly",
   assert.deepEqual(resolveAdditionalResponderIds("dep-primary", ["dep-a"]), ["dep-a"]);
 });
 
+/* -------------------------------------------- scaled cap (room-wide address) ---- */
+// Live report: "gm everyone" only got one reply regardless of how many
+// moderators were deployed. A room-wide address now passes an explicit
+// scaled cap instead of relying on the default MAX_ADDITIONAL_RESPONDERS.
+
+test("REQUIRED: an explicit scaled cap overrides the default MAX_ADDITIONAL_RESPONDERS -- 5 deployed (4 non-primary) room-wide -> 2 additional (3 total incl. primary)", () => {
+  const many = ["dep-primary", "dep-1", "dep-2", "dep-3", "dep-4"]; // 5 deployed total
+  const result = resolveAdditionalResponderIds("dep-primary", many, 2); // roomWideResponderCount(5) - 1 = 2
+  assert.deepEqual(result, ["dep-1", "dep-2"]);
+});
+
+test("REQUIRED: 10 deployed room-wide -> 4 additional (5 total incl. primary)", () => {
+  const many = Array.from({ length: 10 }, (_, i) => `dep-${i}`);
+  const result = resolveAdditionalResponderIds("dep-0", many, 4); // roomWideResponderCount(10) - 1 = 4
+  assert.equal(result.length, 4);
+  assert.deepEqual(result, ["dep-1", "dep-2", "dep-3", "dep-4"]);
+});
+
+test("omitting the cap still falls back to the default MAX_ADDITIONAL_RESPONDERS (small explicit plural, unaffected by the room-wide change)", () => {
+  const many = ["dep-1", "dep-2", "dep-3", "dep-4", "dep-5", "dep-6"];
+  assert.deepEqual(resolveAdditionalResponderIds("dep-primary", many), ["dep-1", "dep-2"]);
+  assert.deepEqual(resolveAdditionalResponderIds("dep-primary", many, undefined), ["dep-1", "dep-2"]);
+});
+
+test("a cap of 0 (2 deployed, room-wide -> only the primary responds) yields no additional responders", () => {
+  assert.deepEqual(resolveAdditionalResponderIds("dep-primary", ["dep-a"], 0), []);
+});
+
 /* ========================================= deploymentRecentlyParticipated ====
    Feeds ChatterCandidate.recentlyParticipated -- broader than "was the
    literal last message" (that's wasLastSpeaker, computed separately): true

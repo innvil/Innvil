@@ -7,6 +7,7 @@ import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderator
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
   selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, requiresIndividualContribution,
+  isRoomWideAddress, roomWideResponderCount,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback, resolveAdditionalReactors,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
@@ -651,13 +652,16 @@ export async function recordReactiveQuotaUse(admin: SupabaseClient, panelId: str
  *  of ADDITIONAL responders that should independently reply alongside the
  *  primary. Excludes the primary (already answering — dedup-safety: the
  *  primary must never also run as an "additional" responder against itself)
- *  and caps at MAX_ADDITIONAL_RESPONDERS regardless of how many the address
- *  resolved to (no-pile-on safety — a "you all" in a 20-slot Pro panel must
- *  never fan out to 20 replies). Order-preserving (deployments closest to
- *  the front of resolveMultiTargetAddress's result — e.g. a named list's own
- *  order — are kept over ones the cap would otherwise drop). */
-export function resolveAdditionalResponderIds(primaryDeploymentId: string, multiTargets: string[]): string[] {
-  return multiTargets.filter((id) => id !== primaryDeploymentId).slice(0, MAX_ADDITIONAL_RESPONDERS);
+ *  and caps at `maxAdditional` (default MAX_ADDITIONAL_RESPONDERS) regardless
+ *  of how many the address resolved to (no-pile-on safety — a "you both" in a
+ *  20-slot Pro panel must never fan out to 20 replies). The caller passes a
+ *  SCALED cap instead for a genuine room-wide address ("everyone") — see
+ *  roomWideResponderCount in chatter-coordinator.ts — since that invites the
+ *  whole team, not a fixed small group. Order-preserving (deployments
+ *  closest to the front of resolveMultiTargetAddress's result — e.g. a named
+ *  list's own order — are kept over ones the cap would otherwise drop). */
+export function resolveAdditionalResponderIds(primaryDeploymentId: string, multiTargets: string[], maxAdditional: number = MAX_ADDITIONAL_RESPONDERS): string[] {
+  return multiTargets.filter((id) => id !== primaryDeploymentId).slice(0, Math.max(0, maxAdditional));
 }
 
 /* ------------------------------------------------- conversational task state ---- */
@@ -1228,7 +1232,15 @@ async function handleHumanMessage(
       deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername }))
     );
     if (multiTargets) {
-      const additionalIds = resolveAdditionalResponderIds(deployment.deploymentId, multiTargets);
+      // A genuine room-wide address ("everyone"/"everybody") scales the
+      // additional-responder cap with how many moderators are actually
+      // deployed here, instead of the fixed small-group cap -- see
+      // roomWideResponderCount's doc comment for the worked examples this
+      // matches (2 deployed -> 1 responds, 5 -> 3, 10 -> 5).
+      const additionalCap = isRoomWideAddress(event.text)
+        ? Math.max(0, roomWideResponderCount(deployments.length) - 1)
+        : undefined;
+      const additionalIds = resolveAdditionalResponderIds(deployment.deploymentId, multiTargets, additionalCap);
       // Whether the human's request is inherently per-person ("tell me about
       // yourself") vs. a shared/collective one a single sufficient answer
       // already covers ("why are you two replying like that?") -- decided

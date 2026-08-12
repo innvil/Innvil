@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   selectChatterAction, resolveDirectedModerator, isConversationalOpener,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
-  resolveMultiTargetAddress, MAX_ADDITIONAL_RESPONDERS,
+  resolveMultiTargetAddress, MAX_ADDITIONAL_RESPONDERS, isRoomWideAddress, roomWideResponderCount,
   resolveAdditionalReactors, MAX_ADDITIONAL_REACTORS,
   type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity,
 } from "./chatter-coordinator";
@@ -1162,6 +1162,50 @@ test("MAX_ADDITIONAL_RESPONDERS is a small, explicit, socially-bounded cap", () 
 
 test("plain single-name mention with no comma/list stays single-target even for a name that is a substring of another (no false pile-on)", () => {
   assert.equal(resolveMultiTargetAddress("test, are you around?", [KWAN, TEST_MOD]), null);
+});
+
+/* ============================================== room-wide address scaling ==== */
+// Live report: "gm everyone" in a 2-mod community got exactly one reply,
+// which is fine -- but the user wants LARGER communities to scale: 5 deployed
+// -> at least 3 should reply, 10 deployed -> at least 5. "everyone"/
+// "everybody" is a genuine room-wide address (unlike "you both"/"you guys",
+// which name a small, roughly fixed-size group regardless of room size), so
+// it gets its own scaled cap instead of the fixed MAX_ADDITIONAL_RESPONDERS.
+
+test('REQUIRED: "everyone" is recognized as a room-wide address -- the exact live repro', () => {
+  assert.equal(isRoomWideAddress("gm everyone"), true);
+  assert.equal(isRoomWideAddress("gm everyone 🎉"), true);
+});
+
+test('"everybody" is the same category as "everyone"', () => {
+  assert.equal(isRoomWideAddress("morning everybody"), true);
+});
+
+test("an ordinary message with no room-wide cue is not treated as one", () => {
+  assert.equal(isRoomWideAddress("gm"), false);
+  assert.equal(isRoomWideAddress("what do you think?"), false);
+});
+
+test('"everyone" now resolves via resolveMultiTargetAddress like the other plural signals (targets every deployed moderator)', () => {
+  const targets = resolveMultiTargetAddress("gm everyone", [KWAN, TEST_MOD, THIRD_MOD]);
+  assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test", "dep-third"]));
+});
+
+test("REQUIRED: roomWideResponderCount matches the exact product examples -- 2 deployed -> 1, 5 -> 3, 10 -> 5", () => {
+  assert.equal(roomWideResponderCount(2), 1);
+  assert.equal(roomWideResponderCount(5), 3);
+  assert.equal(roomWideResponderCount(10), 5);
+});
+
+test("roomWideResponderCount rounds up and never drops below 1", () => {
+  assert.equal(roomWideResponderCount(1), 1);
+  assert.equal(roomWideResponderCount(3), 2);
+  assert.equal(roomWideResponderCount(4), 2);
+  assert.equal(roomWideResponderCount(7), 4);
+});
+
+test("a small explicit plural (\"you both\") still uses the fixed MAX_ADDITIONAL_RESPONDERS cap, not the room-wide scale -- unaffected by this change", () => {
+  assert.equal(MAX_ADDITIONAL_RESPONDERS, 2);
 });
 
 /* ==================================== ambient reaction fan-out (product decision) ====

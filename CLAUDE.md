@@ -127,6 +127,34 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Room-wide address ("everyone") now scales additional-responder count with community size (v1.13.1)
+- **Live report:** "gm everyone" only ever got one reply, regardless of how many moderators were deployed in
+  the community. Root cause: `resolveMultiTargetAddress`'s `PLURAL_ADDRESS_RE` never matched "everyone"/
+  "everybody" at all (only "you both"/"you two"/"you guys"/"you all"/"both of you"/"both mods") — so "gm
+  everyone" was never treated as a multi-target address in the first place, and fell through to the ordinary
+  single-primary COMMUNITY_OPENER path (quietest-longest picks exactly one responder).
+- **Product decision (explicit, from the user):** for a 2-moderator community, one reply to "gm everyone" is
+  fine as-is. For larger communities it should scale: 5 deployed → at least 3 reply, 10 deployed → at least 5.
+- **New `ROOM_WIDE_ADDRESS_RE`** (`chatter-coordinator.ts`, matches "everyone"/"everybody") is a DISTINCT
+  category from the existing small explicit plural ("you both"/"you guys") — the small-plural group names a
+  roughly fixed-size group regardless of room size and keeps the existing fixed `MAX_ADDITIONAL_RESPONDERS`
+  (2 additional / 3 total) cap unchanged; "everyone" invites the whole deployed team and now scales instead.
+  `isRoomWideAddress()` + `roomWideResponderCount(activeModeratorCount)` = `max(1, ceil(n/2))` — matches the
+  exact worked examples given: 2→1, 5→3, 10→5. `resolveMultiTargetAddress` now also matches
+  `ROOM_WIDE_ADDRESS_RE` (same as the existing plural-address branch, returning every deployed moderator) —
+  the SCALING itself is applied downstream, not inside this function.
+- **`resolveAdditionalResponderIds`** (`community-runtime.ts`) gained an optional third `maxAdditional`
+  parameter (defaults to `MAX_ADDITIONAL_RESPONDERS`, so every existing call site/behavior for a small explicit
+  plural is unchanged). The one real call site (`handleHumanMessage`'s multi-target fan-out) now checks
+  `isRoomWideAddress(event.text)` and, when true, passes `roomWideResponderCount(deployments.length) - 1` (minus
+  the primary, already counted) instead of the fixed cap.
+- New tests: `chatter-coordinator.test.ts` (+8 — "everyone"/"everybody" detection, an ordinary message correctly
+  not triggering it, "everyone" resolving via `resolveMultiTargetAddress`, the exact 2→1/5→3/10→5 worked
+  examples, rounding-up behavior, confirming the small-plural cap is unaffected), `community-runtime.test.ts`
+  (+4 — the scaled cap actually overriding the default at both the 5- and 10-deployed worked examples, omitting
+  the cap still falling back to the default, a cap of 0 correctly yielding zero additional responders). 647
+  tests pass (up from 636), `tsc --noEmit` clean, production build clean. No migration.
+
 ### 2026-08-12 — AI Moderator pricing/entitlement model revision — canonical source only (v1.13.0)
 - **Full pricing/entitlement rework per approved spec.** Per explicit instruction, updated the CANONICAL source
   (`src/lib/money.ts` + `src/lib/moderator/plan.ts`/`customer-entitlement.ts`) first, and made dependent

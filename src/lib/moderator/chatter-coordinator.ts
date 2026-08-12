@@ -475,6 +475,31 @@ export const MAX_ADDITIONAL_RESPONDERS = 2;
 const PLURAL_ADDRESS_RE =
   /\byou\s+(?:both|two|guys|all)\b|\bboth\s+of\s+you\b|\bthe\s+two\s+of\s+you\b|\bboth\s+mods?\b|\bboth\s+moderators?\b/i;
 
+/** A ROOM-WIDE address ("everyone", "everybody") is a distinct category from
+ *  the small explicit plural above -- it invites the WHOLE deployed team, not
+ *  just a couple of people ("you both"/"you guys" name a small, roughly
+ *  fixed-size group regardless of how many moderators exist; "everyone"
+ *  scales with the room). Live example: "gm everyone" in a 2-mod community
+ *  getting one reply reads fine; the same message in a 5- or 10-mod community
+ *  getting only one reply reads like most of the team ignored a room-wide
+ *  greeting. community-runtime.ts's roomWideResponderCount() uses this signal
+ *  to scale the additional-responder count with total deployed moderators
+ *  instead of the fixed MAX_ADDITIONAL_RESPONDERS cap used for a small,
+ *  explicit plural address. */
+const ROOM_WIDE_ADDRESS_RE = /\beveryone\b|\beverybody\b/i;
+
+export function isRoomWideAddress(text: string): boolean {
+  return ROOM_WIDE_ADDRESS_RE.test(text.trim());
+}
+
+/** How many moderators (including the primary) should independently respond
+ *  to a genuine room-wide address, given how many are actively deployed in
+ *  the community. Roughly half, rounded up, with a floor of 1 -- matches the
+ *  explicit product examples: 2 deployed -> 1 responds, 5 -> 3, 10 -> 5. */
+export function roomWideResponderCount(activeModeratorCount: number): number {
+  return Math.max(1, Math.ceil(activeModeratorCount / 2));
+}
+
 /** A LEADING vocative list of 2+ distinct moderators joined by "and"/commas
  *  at the very START of the message ("Kwan and Test, thoughts?", "Kwan,
  *  Test, what's up") -- a positional/structural pattern (name-list at the
@@ -518,7 +543,7 @@ export function resolveMultiTargetAddress(text: string, moderators: ModeratorIde
   const trimmed = text.trim();
   const named = leadingNameListTargets(trimmed, moderators);
   if (named.length >= 2) return named;
-  if (PLURAL_ADDRESS_RE.test(trimmed)) return moderators.map((m) => m.deploymentId);
+  if (PLURAL_ADDRESS_RE.test(trimmed) || ROOM_WIDE_ADDRESS_RE.test(trimmed)) return moderators.map((m) => m.deploymentId);
   return null;
 }
 
