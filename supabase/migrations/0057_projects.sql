@@ -65,16 +65,22 @@ alter table communities alter column project_id set not null;
 
 alter table knowledge_sources add column if not exists project_id uuid references projects (id) on delete cascade;
 
+-- Drop BOTH old constraints (the inline column check from migration 0054,
+-- auto-named knowledge_sources_scope_type_check, and the named
+-- knowledge_sources_scope_check) BEFORE reclassifying any rows -- doing the
+-- UPDATE first would violate the old constraint, which doesn't know about
+-- 'ORGANIZATION' yet.
+alter table knowledge_sources drop constraint if exists knowledge_sources_scope_type_check;
+alter table knowledge_sources drop constraint if exists knowledge_sources_scope_check;
+
 -- Reclassify the old panel-wide "PROJECT" rows as ORGANIZATION -- see header.
 update knowledge_sources set scope_type = 'ORGANIZATION' where scope_type = 'PROJECT';
 
-alter table knowledge_sources drop constraint if exists knowledge_sources_scope_check;
 alter table knowledge_sources add constraint knowledge_sources_scope_check check (
   (scope_type = 'ORGANIZATION' and project_id is null and community_id is null) or
   (scope_type = 'PROJECT' and project_id is not null and community_id is null) or
   (scope_type = 'COMMUNITY' and community_id is not null)
 );
-alter table knowledge_sources drop constraint if exists knowledge_sources_scope_type_check;
 alter table knowledge_sources add constraint knowledge_sources_scope_type_check check (scope_type in ('ORGANIZATION', 'PROJECT', 'COMMUNITY'));
 
 create index if not exists idx_knowledge_sources_project on knowledge_sources (project_id) where active and scope_type = 'PROJECT';

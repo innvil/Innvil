@@ -127,6 +127,14 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Fix: migration 0057 constraint-ordering bug (v1.18.1)
+- **Live migration run failed**: `update knowledge_sources set scope_type = 'ORGANIZATION' ...` ran while the
+  OLD check constraint (from migration 0054, which only allowed `'PROJECT'`/`'COMMUNITY'`) was still in effect,
+  so the reclassification itself violated it. Fixed the ordering in `0057_projects.sql` — both old constraints
+  (the inline column check and the named `knowledge_sources_scope_check`) are now dropped BEFORE the data
+  UPDATE, with the new three-scope constraint added after. The whole migration is wrapped in `begin`/`commit`,
+  so the failed attempt was fully rolled back — nothing was left half-applied. **Re-run `0057_projects.sql`.**
+
 ### 2026-08-12 — Phase 4.N architecture correction: Panel -> Project -> Community hierarchy (v1.18.0)
 - **Live bug report:** a Community Knowledge entry saved for "Innvil Test Community" was retrieved when a
   question was asked in a totally different community ("new community") on the same panel — traced to the
