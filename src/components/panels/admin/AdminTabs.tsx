@@ -28,6 +28,12 @@ import {
 } from "@/src/lib/actions/knowledge";
 import { KNOWLEDGE_KINDS, type KnowledgeSource, type KnowledgeSourceKind } from "@/src/lib/moderator/knowledge";
 import {
+  getCommunityTimezone, setCommunityTimezone, listCommunityDeployments, listAutoPostWindows,
+  createAutoPostWindow, setAutoPostWindowEnabled, deleteAutoPostWindow, listRecentAutoPosts,
+  type CommunityDeploymentOption, type AutoPostWindowRow, type AutoPostOccurrenceRow,
+} from "@/src/lib/actions/autopost";
+import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
+import {
   Card, StatCard, FloorLedger, StatusBadge, StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
 import {
@@ -4104,6 +4110,7 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
 
       <ProjectKnowledgeCard panelId={panelId} />
       <CommunityKnowledgeCard panelId={panelId} />
+      {AUTO_POSTING_ENABLED && <AutoPostingCard panelId={panelId} />}
     </div>
   );
 }
@@ -4347,6 +4354,169 @@ function CommunityKnowledgeCard({ panelId }: { panelId: string }) {
           </div>
         ))}
       </div>
+    </Card>
+  );
+}
+
+const OCCURRENCE_STATUS_LABELS: Record<AutoPostOccurrenceRow["status"], string> = {
+  scheduled: "Scheduled", generating: "Generating", generated: "Generated", publishing: "Publishing",
+  published: "Published", publish_failed: "Publish failed", failed: "Failed", missed: "Missed", cancelled: "Cancelled",
+};
+
+/** Phase 4.N part B (AI Telegram Auto-Posting) — configure per-moderator
+ *  posting windows for a community; each moderator publishes AT MOST one
+ *  AI-generated post per day, at a random time inside its own window, using
+ *  its OWN managed-bot credential. Gated behind AUTO_POSTING_ENABLED
+ *  (rollout kill-switch, same pattern as VIRTUAL_MODERATOR_ENABLED) — the
+ *  owner-facing entitlement gate (paid tier, not trial) is enforced
+ *  server-side in createAutoPostWindow regardless. */
+function AutoPostingCard({ panelId }: { panelId: string }) {
+  const [communities, setCommunities] = React.useState<PanelCommunityOption[] | null>(null);
+  const [communityId, setCommunityId] = React.useState<string>("");
+  const [timezone, setTimezone] = React.useState("UTC");
+  const [deployments, setDeployments] = React.useState<CommunityDeploymentOption[]>([]);
+  const [windows, setWindows] = React.useState<AutoPostWindowRow[] | null>(null);
+  const [recent, setRecent] = React.useState<AutoPostOccurrenceRow[]>([]);
+  const [deploymentId, setDeploymentId] = React.useState("");
+  const [start, setStart] = React.useState("09:00");
+  const [end, setEnd] = React.useState("17:00");
+  const [saving, setSaving] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  React.useEffect(() => {
+    (async () => {
+      const res = await listPanelCommunities(panelId);
+      if (res.ok) {
+        setCommunities(res.data);
+        if (res.data.length > 0) setCommunityId((prev) => prev || res.data[0].id);
+      }
+    })();
+  }, [panelId]);
+
+  const refresh = React.useCallback(async () => {
+    if (!communityId) { setWindows([]); setDeployments([]); return; }
+    const [tz, deps, wins, occs] = await Promise.all([
+      getCommunityTimezone(panelId, communityId),
+      listCommunityDeployments(panelId, communityId),
+      listAutoPostWindows(panelId, communityId),
+      listRecentAutoPosts(panelId, communityId, 10),
+    ]);
+    if (tz.ok) setTimezone(tz.data);
+    if (deps.ok) { setDeployments(deps.data); setDeploymentId((prev) => prev || deps.data[0]?.deploymentId || ""); }
+    if (wins.ok) setWindows(wins.data);
+    if (occs.ok) setRecent(occs.data);
+  }, [panelId, communityId]);
+
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const saveTimezone = async () => {
+    const res = await setCommunityTimezone(panelId, communityId, timezone);
+    setMsg(res.ok ? { text: "Timezone saved." } : { text: res.error, error: true });
+  };
+
+  const addWindow = async () => {
+    if (!deploymentId) { setMsg({ text: "No moderator deployed in this community yet.", error: true }); return; }
+    setSaving(true); setMsg(null);
+    const res = await createAutoPostWindow(panelId, communityId, deploymentId, start, end);
+    setSaving(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    await refresh();
+  };
+
+  const toggleWindow = async (w: AutoPostWindowRow) => {
+    await setAutoPostWindowEnabled(panelId, w.id, !w.enabled);
+    await refresh();
+  };
+
+  const removeWindow = async (id: string) => {
+    await deleteAutoPostWindow(panelId, id);
+    await refresh();
+  };
+
+  if (communities === null || communities.length === 0) return null;
+
+  return (
+    <Card title="Auto-Posting" icon={Bot}>
+      <p className="fp-text-dim text-sm mb-4 leading-relaxed">
+        Each assigned moderator publishes AT MOST one AI-generated post per day, at a random time inside its own
+        window, grounded only in your Project/Community Knowledge — never a fixed schedule, never fabricated facts.
+      </p>
+
+      <select
+        value={communityId}
+        onChange={(e) => setCommunityId(e.target.value)}
+        className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none mb-3"
+      >
+        {communities.map((c) => (
+          <option key={c.id} value={c.id}>{c.title || c.handle || c.chatId}</option>
+        ))}
+      </select>
+
+      <div className="flex items-center gap-2 mb-4">
+        <input
+          value={timezone}
+          onChange={(e) => setTimezone(e.target.value)}
+          placeholder="Timezone, e.g. Asia/Manila"
+          className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+        />
+        <button onClick={saveTimezone} className="text-xs fp-text-faint hover:fp-text px-3 py-2 rounded-md fp-panel-raised border fp-line-soft">Save</button>
+      </div>
+
+      {deployments.length === 0 ? (
+        <p className="text-xs fp-text-faint mb-4">No moderators deployed in this community yet.</p>
+      ) : (
+        <div className="space-y-2 mb-4">
+          <div className="flex items-center gap-2">
+            <select value={deploymentId} onChange={(e) => setDeploymentId(e.target.value)} className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none">
+              {deployments.map((d) => <option key={d.deploymentId} value={d.deploymentId}>{d.moderatorName}</option>)}
+            </select>
+            <input type="text" value={start} onChange={(e) => setStart(e.target.value)} placeholder="09:00" className="w-20 fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none" />
+            <span className="fp-text-faint text-xs">to</span>
+            <input type="text" value={end} onChange={(e) => setEnd(e.target.value)} placeholder="17:00" className="w-20 fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none" />
+            <button onClick={addWindow} disabled={saving} className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60">
+              {saving ? "Adding…" : "Add window"}
+            </button>
+          </div>
+          {msg && <p className={`text-xs ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+        </div>
+      )}
+
+      <div className="space-y-2 mb-4">
+        {windows === null ? (
+          <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>
+        ) : windows.length === 0 ? (
+          <p className="text-xs fp-text-faint">No posting windows configured yet.</p>
+        ) : windows.map((w) => (
+          <div key={w.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-center justify-between gap-3 ${!w.enabled ? "opacity-50" : ""}`}>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold fp-text">{w.moderatorName}</p>
+              <p className="text-xs fp-text-dim">{w.startLocalTime}–{w.endLocalTime} · 1 post/day{!w.enabled ? " · disabled" : ""}</p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={() => toggleWindow(w)} className="text-[11px] fp-text-faint hover:fp-text px-2 py-1 rounded-md fp-panel-raised border fp-line-soft">
+                {w.enabled ? "Disable" : "Enable"}
+              </button>
+              <button onClick={() => removeWindow(w.id)} className="p-1.5 rounded-md fp-panel-raised border fp-line-soft text-red-400 hover:text-red-300">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {recent.length > 0 && (
+        <div>
+          <p className="text-[11px] fp-mono uppercase fp-text-faint mb-2">Recent posts</p>
+          <div className="space-y-1.5">
+            {recent.map((o) => (
+              <div key={o.id} className="text-xs fp-text-dim flex items-center justify-between gap-2">
+                <span className="truncate">{o.generatedTitle || o.localDate}</span>
+                <span className="fp-text-faint shrink-0">{OCCURRENCE_STATUS_LABELS[o.status]}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

@@ -252,11 +252,23 @@ export function virtualModAnalytics(settings: unknown): boolean {
   return hasVirtualModerator(settings);
 }
 
-/** Content generation / autoposting / scheduled publishing — NOT built yet on any tier. Defined now so
- *  the future Content phase reads entitlement from here; trial must stay excluded even once this ships (§37). */
-export function virtualModContentGeneration(_settings: unknown): boolean {
-  return false;
+/** Content generation / autoposting / scheduled publishing (Phase 4.N part B) —
+ *  any active PAID tier (Basic and up); the trial explicitly stays excluded
+ *  even though it exposes most other capabilities (spec §26 of
+ *  project-knowledge-autoposting-spec.md: "the previously approved trial
+ *  currently excludes AI content generation for campaigns, autoposting,
+ *  scheduled content publishing"). Master rollout switch is
+ *  AUTO_POSTING_ENABLED below, same env-driven pattern as the other
+ *  Virtual Moderator feature flags. */
+export function virtualModContentGeneration(settings: unknown): boolean {
+  return AUTO_POSTING_ENABLED && !!moderatorTier(settings);
 }
+
+/** Master switch for AI Telegram Auto-Posting — OFF in production until the
+ *  scheduling/generation/publishing pipeline is live-verified. Same
+ *  env-driven pattern as VIRTUAL_MODERATOR_ENABLED/BOT_ACKNOWLEDGEMENT_ENABLED/
+ *  NATURAL_CHATTER_ENABLED. */
+export const AUTO_POSTING_ENABLED = process.env.NEXT_PUBLIC_AUTO_POSTING_ENABLED === "true";
 
 /** Master switch for "Innvil Moderator Acknowledgement" (bot-to-bot ack between
  *  Innvil moderators in the same community) — OFF in production until Telegram's

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -92,6 +92,24 @@ test("trial community ceiling is fixed at TRIAL_CAPACITY (1), independent of the
 
 test("no entitlement: zero community expansion ceiling", () => {
   assert.equal(moderatorCommunityExpansionCeiling({}), 0);
+});
+
+/* Auto-Posting content generation entitlement (Phase 4.N part B) -- the test
+ * runner has no NEXT_PUBLIC_AUTO_POSTING_ENABLED set, so AUTO_POSTING_ENABLED
+ * is false here, same "master switch off" pattern as the bot-ack Case 15
+ * tests above. */
+
+test("content generation is OFF when the master switch is off, even with an active PAID tier", () => {
+  assert.equal(virtualModContentGeneration({ addons: { moderator: { tier: "pro" } } }), false);
+});
+
+test("content generation is OFF for a trial entitlement regardless of the master switch (spec §26)", () => {
+  const activeTrial = { addons: { moderator: { trial: { endsAt: new Date(Date.now() + 60_000).toISOString() } } } };
+  assert.equal(virtualModContentGeneration(activeTrial), false);
+});
+
+test("content generation is OFF with no entitlement at all", () => {
+  assert.equal(virtualModContentGeneration({}), false);
 });
 
 test("pro: max 20 saved moderators", () => {

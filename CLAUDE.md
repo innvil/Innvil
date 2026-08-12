@@ -127,6 +127,91 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Phase 4.N (Part B): AI Telegram Auto-Posting — per-moderator posting windows (v1.17.0)
+- **Implemented from `docs/moderator/project-knowledge-autoposting-spec.md`'s "AUTO-POSTING UPDATE — Per-
+  Moderator Posting Windows" section** (supersedes the base spec's earlier §13-15/§24 — read and implemented
+  from THAT section, not the superseded one). Core rule: **each Virtual Moderator IS the visible Telegram
+  publisher for its own assigned window — there is no generic Innvil publishing bot.** Publishing always uses
+  the assigned moderator's own managed-bot credential, never `TELEGRAM_MANAGER_BOT_TOKEN` (spec §14/§20).
+- **Real per-community timezone added** (`communities.timezone`, migration `0055`, IANA name, default `UTC`) —
+  no per-community timezone field existed anywhere in the schema before this (the v1.7.0 reactive-quota system
+  uses UTC-calendar-day as a stand-in specifically because nothing better existed). Auto-posting windows are
+  meaningless without real local hour-of-day semantics, so this is a genuine schema addition, not a reuse of
+  that stand-in. `src/lib/moderator/autopost.ts`'s `zonedTimeToUtc`/`localDateKeyInTimezone` implement the
+  wall-clock↔UTC conversion by hand (no timezone library dependency added) — a standard "format a UTC guess in
+  the target zone, correct by the offset" technique; not exact across a DST transition INSTANT itself
+  (documented v1 simplification, acceptable since posting is "sometime in this window", not a precision-
+  critical instant).
+- **Overnight windows (e.g. 22:00–02:00) are explicitly REJECTED at validation** (`validateWindow`), per the
+  spec's own sanctioned fallback (§8: "if the existing scheduler cannot safely support this yet, reject rather
+  than implementing ambiguous behavior") — not implemented as ambiguous/incorrect behavior.
+- **Random scheduled time, generated once, persisted, never re-rolled** (spec §4/§5, the section's own
+  "CRITICAL" warning) — `auto_post_occurrences` has a `unique(auto_post_window_id, local_date)` constraint,
+  which both enforces "at most one occurrence per window per day" (spec §3) at the DB level and is the
+  idempotency backbone: every state transition (`scheduled → generating → generated → publishing → published`,
+  or `→ publish_failed`/`failed`/`missed`/`cancelled`) is a CONDITIONAL update keyed on the row's current
+  status (`claimStatus` in `autopost-runtime.ts`), so two concurrent cron sweeps can't double-generate or
+  double-publish the same occurrence (spec §6/§35/§36 — publish failure retries the SAME stored content, never
+  regenerates a different post).
+- **Missed-window handling** (spec §16): if the sweep only reaches a scheduled-but-never-executed occurrence
+  after its window's local END has already passed, it's marked `missed` — never posted late, never dumped all
+  at once after downtime.
+- **Community-wide duplicate-content prevention** (spec §21 base spec / §12 update — Kaleb shouldn't repeat
+  what Mika already posted, not just what Kaleb posted): `loadRecentPostSummaries` pulls recent PUBLISHED posts
+  across every window in the community; both fed into the generation prompt directly AND checked via a
+  keyword-overlap heuristic (`isTooSimilarToRecent`, same reasoning as `knowledge.ts`'s retrieval scoring — no
+  embedding infra exists in this codebase) with one bounded regeneration attempt before giving up and marking
+  the slot `missed` rather than posting a near-duplicate.
+- **Collision spacing** (spec §9 — Mika 10:51 / Kaleb 10:58 shouldn't both fire seven minutes apart):
+  `scheduleWithSpacing` does a bounded re-roll (up to 5 attempts, 10-minute minimum gap) against other windows'
+  occurrences already scheduled the same day in the same community — a deliberately simple policy, not a full
+  collision-resolution optimizer (documented limitation for a very packed day).
+- **Source-grounded generation, task-routed to Sonnet 5 medium** (spec §12 — same substantive-generation tier
+  as Q&A, via the existing hard `getInnvilModelConfig()`/`INNVIL_REQUIRED_MODEL` invariant, never the
+  CASUAL_CHAT DeepSeek carve-out). `src/lib/moderator/autopost-generate.ts`'s prompt explicitly bans fabricated
+  partnerships/prices/APYs/listings/roadmap-milestones/audits/dates/announcements/integrations/giveaways/
+  promotions/statistics unless explicitly present in the SAME retrieved Project + Community Knowledge the Q&A
+  path uses (community first = precedence, reusing `combineKnowledgeRetrieval` from Part A/C — one shared
+  knowledge pipeline, never a second disconnected one per the spec's own core product rule). An
+  `INSUFFICIENT_KNOWLEDGE` sentinel lets the model decline rather than hallucinate a post when the knowledge
+  base is too thin (spec §33/§8 base spec) — the occurrence is marked `missed`, not force-published.
+- **Human-safe output validation before publish** (spec §19): `validateGeneratedPost` — non-empty, within
+  Telegram's length limit, no placeholder text, no leaked internal formatting/sentinel text, no secret-shaped
+  strings. Fails closed (marks `failed`, never publishes) rather than best-effort sending.
+- **Entitlement wired for real** (`plan.ts`'s `virtualModContentGeneration`, previously a hardcoded `false`
+  stub) — any active PAID tier, trial explicitly excluded (spec §26/§27, the same distinction already used for
+  the trial's separate 20/day reactive quota — this is a different, additional exclusion, not a reuse of that
+  mechanism). Gated behind a new master rollout switch `AUTO_POSTING_ENABLED`
+  (`NEXT_PUBLIC_AUTO_POSTING_ENABLED`), OFF in production until live-verified, same pattern as
+  `VIRTUAL_MODERATOR_ENABLED`/`BOT_ACKNOWLEDGEMENT_ENABLED`/`NATURAL_CHATTER_ENABLED`.
+- **Migrations `0055_autopost.sql`** (`communities.timezone`, `auto_post_windows`, `auto_post_occurrences`,
+  service-role only) **+ `0056_supabase_autopost_cron.sql`** (pg_cron every 5 minutes, mirrors the
+  order-sync/blog/bill-addons/binance-sync cron pattern exactly — shared vault `app_url`/`cron_secret`). Cron
+  route `app/api/cron/autopost`. **Run migrations `0055` and `0056`.**
+- **Owner-facing CRUD** (`src/lib/actions/autopost.ts`): `getCommunityTimezone`/`setCommunityTimezone`,
+  `listCommunityDeployments` (only moderators actually deployed in that community are assignable, spec §27),
+  `listAutoPostWindows`/`createAutoPostWindow`/`setAutoPostWindowEnabled`/`deleteAutoPostWindow`,
+  `listRecentAutoPosts` (spec §26's "optional preview", kept minimal per the spec's own "don't overbuild" note).
+  New **"Auto-Posting" card** in the owner's Virtual Moderator tab — community selector, timezone field,
+  window creation (moderator + start/end time), window list with enable/disable/delete, and a recent-posts
+  status list. Hidden entirely unless `AUTO_POSTING_ENABLED`.
+- **Deliberately simplified/deferred this pass** (documented, not hidden): DRAFT/review mode (auto-publish
+  only — the occurrence status model already has room for a future draft state without a schema change, per
+  spec §25's own "don't make the data model impossible to extend"); true semantic-similarity duplicate
+  detection (keyword-overlap heuristic instead, no embedding infra exists); sophisticated collision-spacing
+  optimization (simple bounded re-roll instead); a failed GENERATION (not publish) does not currently
+  auto-retry on the next sweep — it's marked `failed` terminally, requiring the owner to notice via the
+  recent-posts list (bounded retry-with-backoff bookkeeping was judged more infrastructure than this pass
+  needs; publish failures DO retry automatically, since that's the spec's own explicit requirement).
+- New tests: `autopost.test.ts` (+28, all new — window validation incl. the overnight-rejection case, timezone
+  conversion round-trips for both UTC and a real non-UTC zone incl. spec's own DST-adjacent boundary example,
+  spec TEST 1's "scheduled time lies inside the window" across multiple random sources, missed-window
+  detection, collision spacing incl. a forced-collision re-roll, the duplicate-content heuristic, every §19
+  output-validation case incl. the secret-shaped-string check), `plan.test.ts` (+3 — content-generation
+  entitlement OFF under the master switch even with a paid tier, OFF for trial regardless of the switch, OFF
+  with no entitlement). 715 tests pass (up from 684), `tsc --noEmit` clean, production build clean (confirmed
+  `/api/cron/autopost` appears in the build output).
+
 ### 2026-08-12 — Phase 4.N (Part C): Community Knowledge — a second, community-scoped knowledge layer (v1.16.0)
 - **Implemented from `docs/moderator/project-knowledge-autoposting-spec.md`'s "COMMUNITY-SPECIFIC KNOWLEDGE"
   section** — a second knowledge scope, specific to ONE Telegram community rather than the whole panel/project,
@@ -3979,7 +4064,7 @@ win over this):**
 > from migration 0051 + the existing `telegram_provisioning_attempts`/
 > `telegram_bot_integrations`/`communities`/`moderator_deployments` tables).
 
-### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (Parts A + C DONE v1.15.0/v1.16.0 — Moderator Q&A grounding, incl. Community Knowledge; Auto-Posting still NOTED, not built)
+### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (DONE v1.15.0/v1.16.0/v1.17.0 — Moderator Q&A grounding incl. Community Knowledge, AND per-moderator AI Telegram Auto-Posting. Gated OFF in production behind AUTO_POSTING_ENABLED until live-verified.)
 
 > Extends Phase 4.M. Adds a shared, tenant-scoped **Project Knowledge Base** (project
 > overview, website, whitepaper, docs, FAQs, roadmap, official links, brand voice,
