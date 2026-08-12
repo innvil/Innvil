@@ -13,7 +13,7 @@ import {
 } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
-import { retrieveRelevantKnowledge, type KnowledgeSource } from "./knowledge";
+import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource } from "./knowledge";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 import {
   detectSequenceTaskIntent, classifyTaskInstruction, pauseTask, resumeTask, cancelTask, resetSequenceTask,
@@ -473,28 +473,39 @@ async function logBotAckDecision(admin: SupabaseClient, panelId: string, communi
 
 /* -------------------------------------------------------- natural chatter ---- */
 
-/** Phase 4.N — fetches the panel's ACTIVE PROJECT-scope knowledge and
- *  relevance-ranks it against the triggering question (moderator/knowledge.ts's
- *  retrieveRelevantKnowledge — bounded, deterministic keyword-overlap
- *  scoring, never the whole KB sent blindly). Returns undefined (not an
- *  empty array) when nothing relevant is found, so the caller can tell
- *  "no project knowledge at all" apart from "some exists but the DB is
- *  briefly unreachable" the same way — either way, the prompt omits the
- *  block entirely rather than injecting an empty one. */
-async function loadRelevantProjectKnowledge(admin: SupabaseClient, panelId: string, query: string): Promise<{ title: string; content: string }[] | undefined> {
-  const { data } = await admin
-    .from("knowledge_sources")
-    .select("id, panel_id, scope_type, community_id, kind, title, content, active")
-    .eq("panel_id", panelId)
-    .eq("scope_type", "PROJECT")
-    .eq("active", true);
-  if (!data || data.length === 0) return undefined;
-  const sources: KnowledgeSource[] = data.map((r) => ({
-    id: r.id, panelId: r.panel_id, scopeType: r.scope_type, communityId: r.community_id, kind: r.kind, title: r.title ?? "", content: r.content ?? "", active: r.active !== false,
+function toKnowledgeSources(rows: Array<Record<string, unknown>> | null): KnowledgeSource[] {
+  return (rows ?? []).map((r) => ({
+    id: r.id as string, panelId: r.panel_id as string, scopeType: r.scope_type as KnowledgeSource["scopeType"],
+    communityId: (r.community_id as string) ?? null, kind: r.kind as KnowledgeSource["kind"],
+    title: (r.title as string) ?? "", content: (r.content as string) ?? "", active: r.active !== false,
   }));
-  const relevant = retrieveRelevantKnowledge(query, sources);
-  if (relevant.length === 0) return undefined;
-  return relevant.map((s) => ({ title: s.title, content: s.content }));
+}
+
+/** Phase 4.N (parts A + C) — fetches BOTH the panel's tenant-wide
+ *  PROJECT-scope knowledge and this specific community's own COMMUNITY-scope
+ *  knowledge, relevance-ranks each set independently, then merges with
+ *  community results FIRST (moderator/knowledge.ts's combineKnowledgeRetrieval
+ *  — ordering is the "community facts take precedence when they conflict"
+ *  signal, spec §7/§24). Isolation is enforced by the query filters
+ *  themselves (`.eq("community_id", communityId)`), never by prompting alone
+ *  (spec §8) — auto-linking (spec §2/§9) falls out of this filter for free:
+ *  any active deployment answering in this community automatically sees
+ *  this community's knowledge, no per-bot manual link required. Returns
+ *  undefined (not an empty array) when nothing relevant is found from
+ *  either scope, so the caller can omit the prompt block entirely. */
+export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string, communityId: string, query: string): Promise<{ title: string; content: string }[] | undefined> {
+  const [projectRes, communityRes] = await Promise.all([
+    admin.from("knowledge_sources").select("id, panel_id, scope_type, community_id, kind, title, content, active").eq("panel_id", panelId).eq("scope_type", "PROJECT").eq("active", true),
+    admin.from("knowledge_sources").select("id, panel_id, scope_type, community_id, kind, title, content, active").eq("community_id", communityId).eq("scope_type", "COMMUNITY").eq("active", true),
+  ]);
+  const projectSources = toKnowledgeSources(projectRes.data);
+  const communitySources = toKnowledgeSources(communityRes.data);
+  if (projectSources.length === 0 && communitySources.length === 0) return undefined;
+  const relevantProject = retrieveRelevantKnowledge(query, projectSources);
+  const relevantCommunity = retrieveRelevantKnowledge(query, communitySources);
+  const combined = combineKnowledgeRetrieval(relevantCommunity, relevantProject);
+  if (combined.length === 0) return undefined;
+  return combined.map((s) => ({ title: s.title, content: s.content }));
 }
 
 interface ChatterDeployment {
@@ -1235,7 +1246,7 @@ async function handleHumanMessage(
   // project facts). Empty when nothing relevant matches -- passed through
   // as undefined so generateChatterReply's prompt correctly omits the
   // "Project knowledge" block entirely rather than injecting an empty one.
-  const projectKnowledge = action.type === "ANSWER" ? await loadRelevantProjectKnowledge(admin, panelId, event.text) : undefined;
+  const projectKnowledge = action.type === "ANSWER" ? await loadRelevantKnowledge(admin, panelId, community.id, event.text) : undefined;
 
   const primaryResult = await respondAsDeployment({
     admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,

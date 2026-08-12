@@ -92,3 +92,18 @@ export function retrieveRelevantKnowledge(query: string, sources: KnowledgeSourc
     .slice(0, limit)
     .map((r) => r.s);
 }
+
+/** COMMUNITY-SPECIFIC KNOWLEDGE (spec §6-§8/§24) — merges a community's own
+ *  retrieval results with the tenant-wide PROJECT results, COMMUNITY first.
+ *  Ordering IS the precedence signal: "explicit Community Knowledge should
+ *  override generic/shared Project Knowledge where they conflict" is
+ *  satisfied by listing the more specific facts first in the prompt (see
+ *  chatter-generate.ts's projectKnowledgeContextLines, which states this
+ *  explicitly) rather than attempting semantic conflict detection, which
+ *  this v1 keyword-overlap retrieval has no basis to do reliably. Callers
+ *  must pass ALREADY-SCOPED results (communityResults already filtered to
+ *  ONE community, projectResults to PROJECT scope only) — this function
+ *  performs no isolation itself, it only orders and caps. */
+export function combineKnowledgeRetrieval(communityResults: KnowledgeSource[], projectResults: KnowledgeSource[], limit = 4): KnowledgeSource[] {
+  return [...communityResults, ...projectResults].slice(0, limit);
+}

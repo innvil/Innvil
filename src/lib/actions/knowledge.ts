@@ -1,12 +1,18 @@
 "use server";
 
 /**
- * Project Knowledge — owner-facing CRUD (Phase 4.N, part A). Panel-scoped
- * (a panel is one project/brand — both legacy owner-created and the newer
- * customer-owned moderators, migration 0051, share the SAME project
- * knowledge, since "what the project is" doesn't vary by which moderator is
- * answering). Only ever writes PROJECT-scope rows (community_id null) — see
- * src/lib/moderator/knowledge.ts's file header for the scope-field rationale.
+ * Project + Community Knowledge — owner-facing CRUD (Phase 4.N, parts A + C).
+ * Project Knowledge is panel-scoped (a panel is one project/brand — both
+ * legacy owner-created and the newer customer-owned moderators, migration
+ * 0051, share the SAME project knowledge, since "what the project is"
+ * doesn't vary by which moderator is answering). Community Knowledge
+ * (spec's "COMMUNITY-SPECIFIC KNOWLEDGE" section) belongs to ONE Community
+ * instead — auto-available to every active moderator deployed there via the
+ * deployment→community relationship, no manual per-bot linking (the runtime
+ * retrieval query in community-runtime.ts just filters by the message's own
+ * community_id — the "auto-link" the spec asks for falls out of that filter
+ * for free, no join table needed). See src/lib/moderator/knowledge.ts's file
+ * header for the scope-field rationale.
  */
 
 import { getAuthedAdmin } from "@/src/lib/auth";
@@ -20,6 +26,17 @@ async function ownedPanel(panelId: string) {
   const { data: panel } = await admin.from("panels").select("id, owner_id").eq("id", panelId).maybeSingle();
   if (!panel || panel.owner_id !== user.id) return null;
   return { user, admin };
+}
+
+/** Community must both exist AND belong to a panel this user owns — never
+ *  trusts a client-supplied communityId without this check (spec §8: strict
+ *  isolation enforced in data queries, never by prompting alone). */
+async function ownedCommunity(panelId: string, communityId: string) {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return null;
+  const { data: community } = await ctx.admin.from("communities").select("id, panel_id, title, handle, chat_id").eq("id", communityId).eq("panel_id", panelId).maybeSingle();
+  if (!community) return null;
+  return { ...ctx, community };
 }
 
 function toRow(r: Record<string, unknown>): KnowledgeSource {
@@ -92,6 +109,89 @@ export async function deleteProjectKnowledgeEntry(panelId: string, id: string): 
   const ctx = await ownedPanel(panelId);
   if (!ctx) return { ok: false, error: "Not authorized." };
   const { error } = await ctx.admin.from("knowledge_sources").delete().eq("id", id).eq("panel_id", panelId).eq("scope_type", "PROJECT");
+  if (error) return { ok: false, error: "Couldn't delete that entry." };
+  return { ok: true, data: null };
+}
+
+/* ---------------------------------------------------- community knowledge ---- */
+
+export interface PanelCommunityOption {
+  id: string;
+  title: string | null;
+  handle: string | null;
+  chatId: string;
+}
+
+/** Every community connected to this panel — powers the community selector
+ *  in the Community Knowledge editor. Not scoped to one moderator (a
+ *  community's knowledge belongs to the Community, not to any one bot). */
+export async function listPanelCommunities(panelId: string): Promise<Result<PanelCommunityOption[]>> {
+  const ctx = await ownedPanel(panelId);
+  if (!ctx) return { ok: false, error: "Not authorized." };
+  const { data, error } = await ctx.admin.from("communities").select("id, title, handle, chat_id").eq("panel_id", panelId).order("created_at", { ascending: true });
+  if (error) return { ok: false, error: "Couldn't load communities." };
+  return { ok: true, data: (data ?? []).map((r) => ({ id: r.id, title: r.title, handle: r.handle, chatId: r.chat_id })) };
+}
+
+export async function listCommunityKnowledge(panelId: string, communityId: string): Promise<Result<KnowledgeSource[]>> {
+  const ctx = await ownedCommunity(panelId, communityId);
+  if (!ctx) return { ok: false, error: "Not authorized." };
+  const { data, error } = await ctx.admin
+    .from("knowledge_sources")
+    .select("id, panel_id, scope_type, community_id, kind, title, content, active")
+    .eq("community_id", communityId)
+    .eq("scope_type", "COMMUNITY")
+    .order("created_at", { ascending: true });
+  if (error) return { ok: false, error: "Couldn't load community knowledge." };
+  return { ok: true, data: (data ?? []).map(toRow) };
+}
+
+export async function createCommunityKnowledgeEntry(
+  panelId: string,
+  communityId: string,
+  input: { kind: KnowledgeSourceKind; title: string; content: string }
+): Promise<Result<KnowledgeSource>> {
+  const ctx = await ownedCommunity(panelId, communityId);
+  if (!ctx) return { ok: false, error: "Not authorized." };
+  if (!KNOWLEDGE_KINDS.includes(input.kind)) return { ok: false, error: "Invalid knowledge kind." };
+  const title = input.title.trim().slice(0, 200);
+  const content = input.content.trim().slice(0, 4000);
+  if (!content) return { ok: false, error: "Content can't be empty." };
+  const { data, error } = await ctx.admin
+    .from("knowledge_sources")
+    .insert({ panel_id: panelId, scope_type: "COMMUNITY", community_id: communityId, kind: input.kind, title, content, active: true })
+    .select("id, panel_id, scope_type, community_id, kind, title, content, active")
+    .single();
+  if (error || !data) return { ok: false, error: "Couldn't save that entry." };
+  return { ok: true, data: toRow(data) };
+}
+
+export async function updateCommunityKnowledgeEntry(
+  panelId: string,
+  communityId: string,
+  id: string,
+  input: { title?: string; content?: string; active?: boolean }
+): Promise<Result<null>> {
+  const ctx = await ownedCommunity(panelId, communityId);
+  if (!ctx) return { ok: false, error: "Not authorized." };
+  const patch: Record<string, unknown> = {};
+  if (input.title !== undefined) patch.title = input.title.trim().slice(0, 200);
+  if (input.content !== undefined) {
+    const content = input.content.trim().slice(0, 4000);
+    if (!content) return { ok: false, error: "Content can't be empty." };
+    patch.content = content;
+  }
+  if (input.active !== undefined) patch.active = input.active;
+  if (Object.keys(patch).length === 0) return { ok: true, data: null };
+  const { error } = await ctx.admin.from("knowledge_sources").update(patch).eq("id", id).eq("community_id", communityId).eq("scope_type", "COMMUNITY");
+  if (error) return { ok: false, error: "Couldn't update that entry." };
+  return { ok: true, data: null };
+}
+
+export async function deleteCommunityKnowledgeEntry(panelId: string, communityId: string, id: string): Promise<Result<null>> {
+  const ctx = await ownedCommunity(panelId, communityId);
+  if (!ctx) return { ok: false, error: "Not authorized." };
+  const { error } = await ctx.admin.from("knowledge_sources").delete().eq("id", id).eq("community_id", communityId).eq("scope_type", "COMMUNITY");
   if (error) return { ok: false, error: "Couldn't delete that entry." };
   return { ok: true, data: null };
 }

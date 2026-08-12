@@ -4,7 +4,7 @@ import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
-  classifySender,
+  classifySender, loadRelevantKnowledge,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -562,4 +562,80 @@ test("a HUMAN sender is unaffected by this fix -- still uses first_name/username
   const sender = await classifySender(admin, "panel-1", "community-1", { id: 111, is_bot: false, first_name: "K" });
   assert.equal(sender.senderType, "HUMAN");
   assert.equal(sender.displayName, "K");
+});
+
+/* ================================== Phase 4.N: loadRelevantKnowledge (parts A + C) ==== */
+// Only the DB query filters enforce isolation (spec §8) -- this fake admin
+// holds two independently-scoped in-memory tables (PROJECT rows with no
+// community_id, COMMUNITY rows tagged to one specific community_id) and
+// records which filters were actually applied, so these tests prove the
+// real query shape, not just the pure retrieval math already covered by
+// knowledge.test.ts.
+
+function fakeAdminForKnowledge(rows: Array<{ id: string; panel_id: string; scope_type: "PROJECT" | "COMMUNITY"; community_id: string | null; kind: string; title: string; content: string; active: boolean }>) {
+  return {
+    from(table: string) {
+      if (table !== "knowledge_sources") throw new Error(`unexpected table: ${table}`);
+      const filters: Record<string, unknown> = {};
+      const api = {
+        select() { return api; },
+        eq(col: string, val: unknown) { filters[col] = val; return api; },
+        then(resolve: (r: { data: typeof rows; error: null }) => void) {
+          const data = rows.filter((r) => Object.entries(filters).every(([k, v]) => (r as Record<string, unknown>)[k] === v));
+          resolve({ data, error: null });
+        },
+      };
+      return api;
+    },
+  } as any;
+}
+
+test("REQUIRED (spec test 1 shape): a question retrieves the panel's own project knowledge", async () => {
+  const admin = fakeAdminForKnowledge([
+    { id: "p1", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "overview", title: "Supported chains", content: "Ethereum and Polygon.", active: true },
+  ]);
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "what chains do you support?");
+  assert.ok(result);
+  assert.equal(result![0].title, "Supported chains");
+});
+
+test("REQUIRED (spec test 4/§8): community 1 knowledge never appears when answering inside community 2", async () => {
+  const admin = fakeAdminForKnowledge([
+    { id: "c1", panel_id: "panel-1", scope_type: "COMMUNITY", community_id: "community-1", kind: "fact", title: "About this community", content: "This community is focused on Project Alpha.", active: true },
+  ]);
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-2", "what is this community about?");
+  assert.equal(result, undefined);
+});
+
+test("REQUIRED (spec §7/§24): a conflicting community fact is listed BEFORE the generic project fact", async () => {
+  const admin = fakeAdminForKnowledge([
+    { id: "proj", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "fact", title: "Support contact", content: "@global_support", active: true },
+    { id: "comm", panel_id: "panel-1", scope_type: "COMMUNITY", community_id: "community-2", kind: "fact", title: "Support contact", content: "@comm2_admin", active: true },
+  ]);
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-2", "who should I message for support?");
+  assert.ok(result);
+  assert.equal(result![0].content, "@comm2_admin");
+  assert.equal(result![1].content, "@global_support");
+});
+
+test("REQUIRED (spec test 2): a question not covered by either scope returns undefined, never a fabricated fallback", async () => {
+  const admin = fakeAdminForKnowledge([
+    { id: "p1", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "fact", title: "Supported chains", content: "Ethereum and Polygon.", active: true },
+  ]);
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "what's the current token price?");
+  assert.equal(result, undefined);
+});
+
+test("inactive rows in either scope are never retrieved", async () => {
+  const admin = fakeAdminForKnowledge([
+    { id: "stale", panel_id: "panel-1", scope_type: "PROJECT", community_id: null, kind: "fact", title: "Old roadmap", content: "roadmap info", active: false },
+  ]);
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "roadmap info");
+  assert.equal(result, undefined);
+});
+
+test("no rows at all in either scope -> undefined, no query result mishandling", async () => {
+  const admin = fakeAdminForKnowledge([]);
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "anything");
+  assert.equal(result, undefined);
 });

@@ -127,6 +127,42 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-12 — Phase 4.N (Part C): Community Knowledge — a second, community-scoped knowledge layer (v1.16.0)
+- **Implemented from `docs/moderator/project-knowledge-autoposting-spec.md`'s "COMMUNITY-SPECIFIC KNOWLEDGE"
+  section** — a second knowledge scope, specific to ONE Telegram community rather than the whole panel/project,
+  now unblocked since Part A's retrieval pipeline (v1.15.0) exists to build on. `knowledge_sources` already had
+  the `scope_type`/`community_id` columns from day one (migration 0054), so this needed no new migration.
+- **Auto-linking via deployment→community falls out of the existing query filter for free** (spec §2/§9 — "no
+  per-bot manual linking required"): `community-runtime.ts`'s retrieval now filters COMMUNITY-scope rows by
+  the message's own `community_id`, so any active moderator answering in a community automatically sees that
+  community's knowledge with zero extra join table or per-moderator config.
+- **Precedence when facts conflict (spec §7/§24)**: `combineKnowledgeRetrieval()` (`knowledge.ts`) merges a
+  community's own relevant results with the tenant-wide PROJECT results, COMMUNITY entries listed FIRST —
+  ordering IS the precedence signal (the prompt now explicitly states "if an earlier entry conflicts with a
+  later one, the earlier one is more specific to this community and takes precedence"), rather than attempting
+  semantic conflict detection the v1 keyword-overlap retrieval has no basis to do reliably.
+- **Strict isolation enforced in the DB query, never by prompting alone** (spec §8): `loadRelevantKnowledge`
+  (renamed from `loadRelevantProjectKnowledge`, now `export`ed for direct testing) fetches PROJECT and
+  COMMUNITY rows via two separately-scoped queries (`.eq("panel_id", panelId)` vs.
+  `.eq("community_id", communityId)`) run in parallel, and merges only after both are independently
+  relevance-ranked.
+- **Owner-facing CRUD** (`src/lib/actions/knowledge.ts`): `listPanelCommunities`/`listCommunityKnowledge`/
+  `createCommunityKnowledgeEntry`/`updateCommunityKnowledgeEntry`/`deleteCommunityKnowledgeEntry`, gated by a
+  new `ownedCommunity()` check (community must both exist and belong to a panel this user owns — never trusts
+  a client-supplied `communityId`). New **"Community Knowledge" card** in the owner's Virtual Moderator tab
+  (`AdminTabs.tsx` `CommunityKnowledgeCard`) — a community selector + the same minimal add/list/deactivate/
+  delete editor pattern as the Project Knowledge card, mounted right below it. Hidden entirely (no empty-state
+  flash) when the panel has no connected communities yet.
+- New tests: `knowledge.test.ts` (+6 — `combineKnowledgeRetrieval`'s community-first precedence ordering,
+  limit handling, project-only/community-only fallbacks, cross-community isolation shape), `community-runtime.test.ts`
+  (+6, new `fakeAdminForKnowledge` mock proving the REAL two-query shape — not just the pure retrieval math —
+  incl. the exact spec test-4 cross-community isolation case and the spec §7/§24 conflicting-fact precedence
+  case). 684 tests pass (up from 672), `tsc --noEmit` clean, production build clean. No migration (reuses
+  migration 0054's scope field, built exactly for this).
+- **Still not built** (per the spec's own phasing): AI Auto-Posting (needs a separate per-moderator posting-
+  window scheduling/publishing engine) — both knowledge scopes are meant to feed it once it exists, per spec
+  §11/§16 of the auto-posting section.
+
 ### 2026-08-12 — Phase 4.N (Part A): Project Knowledge grounds Moderator Q&A (v1.15.0)
 - **Implemented from `docs/moderator/project-knowledge-autoposting-spec.md`** (verbatim source of truth — see
   Phase 4.N in the roadmap). Full spec covers three deliverables: (A) shared Project Knowledge powering Q&A,
@@ -3943,7 +3979,7 @@ win over this):**
 > from migration 0051 + the existing `telegram_provisioning_attempts`/
 > `telegram_bot_integrations`/`communities`/`moderator_deployments` tables).
 
-### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (Part A DONE v1.15.0 — Moderator Q&A grounding; Auto-Posting + Community Knowledge still NOTED, not built)
+### Phase 4.N: Project Knowledge + AI Auto-Posting for Virtual Moderator (Parts A + C DONE v1.15.0/v1.16.0 — Moderator Q&A grounding, incl. Community Knowledge; Auto-Posting still NOTED, not built)
 
 > Extends Phase 4.M. Adds a shared, tenant-scoped **Project Knowledge Base** (project
 > overview, website, whitepaper, docs, FAQs, roadmap, official links, brand voice,

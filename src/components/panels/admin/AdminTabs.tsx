@@ -23,6 +23,8 @@ import { MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS } from "@/src/li
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
   listProjectKnowledge, createProjectKnowledgeEntry, updateProjectKnowledgeEntry, deleteProjectKnowledgeEntry,
+  listPanelCommunities, listCommunityKnowledge, createCommunityKnowledgeEntry, updateCommunityKnowledgeEntry, deleteCommunityKnowledgeEntry,
+  type PanelCommunityOption,
 } from "@/src/lib/actions/knowledge";
 import { KNOWLEDGE_KINDS, type KnowledgeSource, type KnowledgeSourceKind } from "@/src/lib/moderator/knowledge";
 import {
@@ -4101,6 +4103,7 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
       </Card>
 
       <ProjectKnowledgeCard panelId={panelId} />
+      <CommunityKnowledgeCard panelId={panelId} />
     </div>
   );
 }
@@ -4193,6 +4196,139 @@ function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
           <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>
         ) : entries.length === 0 ? (
           <p className="text-xs fp-text-faint">No project knowledge yet — moderators will say they don&apos;t know rather than guess.</p>
+        ) : entries.map((e) => (
+          <div key={e.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-start justify-between gap-3 ${!e.active ? "opacity-50" : ""}`}>
+            <div className="min-w-0">
+              <p className="text-[10px] fp-mono uppercase fp-text-faint">{KNOWLEDGE_KIND_LABELS[e.kind]}{!e.active ? " · inactive" : ""}</p>
+              {e.title && <p className="text-sm font-semibold fp-text truncate">{e.title}</p>}
+              <p className="text-xs fp-text-dim break-words">{e.content}</p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={() => toggleActive(e)} className="text-[11px] fp-text-faint hover:fp-text px-2 py-1 rounded-md fp-panel-raised border fp-line-soft">
+                {e.active ? "Deactivate" : "Activate"}
+              </button>
+              <button onClick={() => remove(e.id)} className="p-1.5 rounded-md fp-panel-raised border fp-line-soft text-red-400 hover:text-red-300">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/** Phase 4.N part C (Community Knowledge) — belongs to ONE Community, not to
+ *  any moderator/bot; every active moderator deployed there automatically
+ *  uses it (see knowledge.ts's loadRelevantKnowledge — no per-bot manual
+ *  linking exists or is needed). Same minimal editor pattern as
+ *  ProjectKnowledgeCard, scoped by a community selector. */
+function CommunityKnowledgeCard({ panelId }: { panelId: string }) {
+  const [communities, setCommunities] = React.useState<PanelCommunityOption[] | null>(null);
+  const [communityId, setCommunityId] = React.useState<string>("");
+  const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
+  const [kind, setKind] = React.useState<KnowledgeSourceKind>("fact");
+  const [title, setTitle] = React.useState("");
+  const [content, setContent] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
+  React.useEffect(() => {
+    (async () => {
+      const res = await listPanelCommunities(panelId);
+      if (res.ok) {
+        setCommunities(res.data);
+        if (res.data.length > 0) setCommunityId((prev) => prev || res.data[0].id);
+      }
+    })();
+  }, [panelId]);
+
+  const refresh = React.useCallback(async () => {
+    if (!communityId) { setEntries([]); return; }
+    const res = await listCommunityKnowledge(panelId, communityId);
+    if (res.ok) setEntries(res.data);
+  }, [panelId, communityId]);
+
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const add = async () => {
+    if (!communityId) return;
+    if (!content.trim()) { setMsg({ text: "Content can't be empty.", error: true }); return; }
+    setSaving(true); setMsg(null);
+    const res = await createCommunityKnowledgeEntry(panelId, communityId, { kind, title, content });
+    setSaving(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    setTitle(""); setContent("");
+    await refresh();
+  };
+
+  const toggleActive = async (e: KnowledgeSource) => {
+    await updateCommunityKnowledgeEntry(panelId, communityId, e.id, { active: !e.active });
+    await refresh();
+  };
+
+  const remove = async (id: string) => {
+    await deleteCommunityKnowledgeEntry(panelId, communityId, id);
+    await refresh();
+  };
+
+  if (communities === null) return null; // no flash of an empty card before we know whether any community exists
+  if (communities.length === 0) return null; // nothing to scope this editor to yet
+
+  return (
+    <Card title="Community Knowledge" icon={Users}>
+      <p className="fp-text-dim text-sm mb-4 leading-relaxed">
+        Facts specific to ONE community — local rules, admins, local FAQs. Automatically available to every
+        active moderator deployed there; never leaks into another community, and takes precedence over
+        general Project Knowledge when the two conflict.
+      </p>
+
+      <select
+        value={communityId}
+        onChange={(e) => setCommunityId(e.target.value)}
+        className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none mb-4"
+      >
+        {communities.map((c) => (
+          <option key={c.id} value={c.id}>{c.title || c.handle || c.chatId}</option>
+        ))}
+      </select>
+
+      <div className="space-y-2 mb-4">
+        <div className="flex items-center gap-2">
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as KnowledgeSourceKind)}
+            className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-2 text-sm fp-text outline-none"
+          >
+            {KNOWLEDGE_KINDS.map((k) => (
+              <option key={k} value={k}>{KNOWLEDGE_KIND_LABELS[k]}</option>
+            ))}
+          </select>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Title (e.g. Local rules, Support contact)"
+            className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+          />
+        </div>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="Content — specific to this community only."
+          rows={2}
+          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border resize-none"
+        />
+        <button onClick={add} disabled={saving || !content.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+          {saving ? "Saving…" : "Add entry"}
+        </button>
+        {msg && <p className={`text-xs ${msg.error ? "text-red-400" : "fp-safe"}`}>{msg.text}</p>}
+      </div>
+
+      <div className="space-y-2">
+        {entries === null ? (
+          <p className="fp-text-faint text-sm py-2 text-center">Loading…</p>
+        ) : entries.length === 0 ? (
+          <p className="text-xs fp-text-faint">No knowledge specific to this community yet.</p>
         ) : entries.map((e) => (
           <div key={e.id} className={`fp-panel-raised border fp-line-soft rounded-lg p-3 flex items-start justify-between gap-3 ${!e.active ? "opacity-50" : ""}`}>
             <div className="min-w-0">
