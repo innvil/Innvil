@@ -503,15 +503,6 @@ async function loadProjectProfileRow(admin: SupabaseClient, projectId: string): 
   return { name: data.name ?? "", overview: data.overview ?? "", contacts: (data.contacts as ProjectContacts) ?? {} };
 }
 
-/** Resolves which PROJECT a community belongs to — never trusts a
- *  client-supplied project id; always derived from the community itself
- *  (Panel -> Project -> Community hierarchy). Every community has exactly
- *  one project (communities.project_id is NOT NULL, migration 0057). */
-async function resolveCommunityProjectId(admin: SupabaseClient, communityId: string): Promise<string | null> {
-  const { data } = await admin.from("communities").select("project_id").eq("id", communityId).maybeSingle();
-  return data?.project_id ?? null;
-}
-
 /** Phase 4.N, simplified to a single Project Profile a community inherits
  *  (name, overview, structured contact presets) plus small optional
  *  Community-specific context and legacy Organization Knowledge as a
