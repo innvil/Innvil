@@ -163,6 +163,32 @@ test("creditMatch submits both order_id and transaction_id to the claim RPC", as
   assert.equal(rpcArgs?.["p_bonus_amount"], "0");
 });
 
+test("creditMatch applies tier bonus on top of exact received amount", async () => {
+  let rpcArgs: Record<string, unknown> | null = null;
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      rpcArgs = args;
+      return { data: "OK", error: null };
+    },
+  } as any;
+
+  const out = await creditMatch(
+    fakeAdmin,
+    makeIntent({ amount: "100.0000", binance_payable: "100.0000" }),
+    makeTx({ amount: "100.0000" }),
+    { discountPct: "0" },
+    { discountPct: 1 }
+  );
+
+  assert.equal(out.ok, true);
+  assert.equal(rpcArgs?.["p_bonus_amount"], "1");
+  assert.equal(rpcArgs?.["p_credit_amount"], "101");
+  if (out.ok) {
+    assert.equal(out.received, 100);
+    assert.equal(out.credited, 101);
+  }
+});
+
 test("exact increment arithmetic: requested 10.000 + increment 0.001 = total 10.001", () => {
   const breakdown = getBinanceDepositBreakdown("10.000", "10.001", 4);
   assert.equal(breakdown.base, "10");

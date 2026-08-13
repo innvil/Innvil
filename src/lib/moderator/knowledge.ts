@@ -124,3 +124,19 @@ export function retrieveRelevantKnowledge(query: string, sources: KnowledgeSourc
 export function combineKnowledgeRetrieval(communityResults: KnowledgeSource[], projectResults: KnowledgeSource[], organizationResults: KnowledgeSource[] = [], limit = 4): KnowledgeSource[] {
   return [...communityResults, ...projectResults, ...organizationResults].slice(0, limit);
 }
+
+/** Shared "already-resolved context" shape threaded into generation
+ *  (chatter-generate.ts, autopost-generate.ts) — built by the runtime
+ *  retrieval layer (community-runtime.ts / autopost-runtime.ts), never
+ *  constructed by the generation layer itself. `scope: "PRESET"` marks a
+ *  structured Project Profile contact preset (moderator/project-profile.ts)
+ *  — NOT a knowledge_sources row — resolved deterministically by contact-
+ *  intent matching rather than relevance scoring, and always
+ *  `authoritative: true`: it must be preferred over any conflicting
+ *  free-form entry below it, never second-guessed against other knowledge. */
+export interface KnowledgeContextEntry {
+  scope: KnowledgeScopeType | "PRESET";
+  title: string;
+  content: string;
+  authoritative?: boolean;
+}

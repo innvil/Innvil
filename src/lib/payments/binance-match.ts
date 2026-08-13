@@ -60,6 +60,7 @@ interface CreditLogContext {
   maskedPanelId?: string | null;
   maskedPaymentId?: string | null;
   paymentStatusBefore?: string;
+  discountPct?: number | null;
 }
 
 function logCredit(event: string, payload: Record<string, unknown>): void {
@@ -208,8 +209,11 @@ export async function creditMatch(
   // Credit the exact Binance amount received (including the unique verification increment).
   const receivedDecimal = asNonNegativeDecimal(tx.amount, 4);
   const received = toNumberFromDecimal(receivedDecimal);
-  const bonusDecimal = "0";
-  const creditDecimal = receivedDecimal;
+  const discountPct = Number.isFinite(logContext?.discountPct as number) ? Number(logContext?.discountPct) : 0;
+  const safeDiscountPct = discountPct > 0 ? discountPct : 0;
+  const bonusAmount = safeDiscountPct > 0 ? round4((received * safeDiscountPct) / 100) : 0;
+  const bonusDecimal = asNonNegativeDecimal(bonusAmount, 4);
+  const creditDecimal = asNonNegativeDecimal(received + bonusAmount, 4);
   const credit = toNumberFromDecimal(creditDecimal);
 
   let txAlreadyClaimed: boolean | null = null;

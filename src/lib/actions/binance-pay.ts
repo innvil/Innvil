@@ -8,6 +8,7 @@ import { BinanceApiError } from "@/src/lib/payments/binance";
 import { loadActiveBinanceCredentials } from "@/src/lib/payments/binance-credentials";
 import { paymentBelongsToRequestScope } from "@/src/lib/payments/binance-scope";
 import { round4 } from "@/src/lib/money";
+import { resolveGatewayDiscountPct } from "@/src/lib/actions/payments";
 import {
   ACCEPTED_ASSET, EXPIRY_MINUTES, TX_COLS,
   pickPayable, validateTx, creditMatch,
@@ -497,10 +498,22 @@ export async function claimBinancePayment(
     elapsedMs: Date.now() - t0,
   });
 
+  let discountPct: number | null = null;
+  try {
+    discountPct = await resolveGatewayDiscountPct("binance_pay", creds.config ?? null, Number(tx.amount));
+  } catch (error) {
+    console.warn("[binance-pay] discount-resolution-failed", {
+      panelId: maskedPanelId,
+      paymentId: maskedPaymentId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const creditRes = await creditMatch(admin, intent, tx, creds.config ?? null, {
     maskedPanelId,
     maskedPaymentId,
     paymentStatusBefore: "pending",
+    discountPct,
   });
   logStage("credit-result", {
     panelId: maskedPanelId,

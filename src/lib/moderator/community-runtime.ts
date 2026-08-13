@@ -13,7 +13,8 @@ import {
 } from "./chatter-coordinator";
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
-import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource } from "./knowledge";
+import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource, type KnowledgeContextEntry } from "./knowledge";
+import { resolveContactIntent, findCommunityContactOverride, CONTACT_LABELS, type ProjectContacts } from "./project-profile";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 import {
   detectSequenceTaskIntent, classifyTaskInstruction, pauseTask, resumeTask, cancelTask, resetSequenceTask,
@@ -492,45 +493,97 @@ async function resolveCommunityProjectId(admin: SupabaseClient, communityId: str
   return data?.project_id ?? null;
 }
 
-/** Phase 4.N (parts A + C, corrected to Panel -> Project -> Community) —
- *  fetches all THREE knowledge scopes for this specific community's context:
- *  its own COMMUNITY-scope knowledge, its resolved PROJECT's PROJECT-scope
- *  knowledge, and the panel's ORGANIZATION-scope knowledge. Each scope is
- *  relevance-ranked INDEPENDENTLY (never a cross-project blend — the PROJECT
- *  query filters strictly by `project_id = <this community's project>`, so a
- *  different project's facts under the same panel are never even fetched,
- *  let alone retrieved), then merged COMMUNITY > PROJECT > ORGANIZATION via
- *  moderator/knowledge.ts's combineKnowledgeRetrieval (ordering is the
- *  precedence signal — spec §7/§24, and the follow-up project-isolation
- *  correction). Isolation is enforced by the query filters themselves, never
- *  by prompting alone (spec §8). Auto-linking (spec §2/§9) falls out of
- *  these filters for free: any active deployment answering in this
- *  community automatically sees its community's + its project's knowledge,
- *  no per-bot manual link required. Returns undefined (not an empty array)
- *  when nothing relevant is found from any scope, so the caller can omit
- *  the prompt block entirely. */
-export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string, communityId: string, query: string): Promise<{ scope: KnowledgeSource["scopeType"]; title: string; content: string }[] | undefined> {
+/** Phase 4.N, simplified: ONE Project Profile a community inherits (name,
+ *  overview, contacts), rather than three competing knowledge systems. Every
+ *  community has exactly one project (communities.project_id NOT NULL,
+ *  migration 0057). */
+async function loadProjectProfileRow(admin: SupabaseClient, projectId: string): Promise<{ name: string; overview: string; contacts: ProjectContacts } | null> {
+  const { data } = await admin.from("projects").select("name, overview, contacts").eq("id", projectId).maybeSingle();
+  if (!data) return null;
+  return { name: data.name ?? "", overview: data.overview ?? "", contacts: (data.contacts as ProjectContacts) ?? {} };
+}
+
+/** Resolves which PROJECT a community belongs to — never trusts a
+ *  client-supplied project id; always derived from the community itself
+ *  (Panel -> Project -> Community hierarchy). Every community has exactly
+ *  one project (communities.project_id is NOT NULL, migration 0057). */
+async function resolveCommunityProjectId(admin: SupabaseClient, communityId: string): Promise<string | null> {
+  const { data } = await admin.from("communities").select("project_id").eq("id", communityId).maybeSingle();
+  return data?.project_id ?? null;
+}
+
+/** Phase 4.N, simplified to a single Project Profile a community inherits
+ *  (name, overview, structured contact presets) plus small optional
+ *  Community-specific context and legacy Organization Knowledge as a
+ *  low-priority fallback (data preserved from before the simplification,
+ *  never surfaced as an equal competing scope — see CLAUDE.md's Phase 4.N
+ *  entry).
+ *
+ *  Two independent mechanisms, combined:
+ *   1. STRUCTURED CONTACT PRESETS (project-profile.ts's resolveContactIntent) —
+ *      when the question's intent clearly maps to a configured contact
+ *      (support/partnerships/sales/technical_support), that preset is
+ *      returned as an AUTHORITATIVE entry, always first, bypassing
+ *      relevance scoring entirely — a support question must never depend on
+ *      keyword luck to surface the right contact. A community may override
+ *      the project's preset with its own local value (project-profile.ts's
+ *      findCommunityContactOverride), checked FIRST.
+ *   2. RELEVANCE-SCORED KNOWLEDGE — the project's own `overview` field
+ *      becomes a synthetic entry that competes in the SAME scoring pool as
+ *      any additional PROJECT-scope knowledge rows (so it's "the best-
+ *      scoring project fact" for a given question, not force-injected into
+ *      every answer), community-specific context, and legacy
+ *      ORGANIZATION-scope rows as a last-resort fallback.
+ *
+ *  Isolation is enforced by the query filters themselves (`project_id =
+ *  <this community's own resolved project>`), never by prompting alone.
+ *  Returns undefined when nothing relevant is found at all, so the caller
+ *  can omit the prompt block entirely. */
+export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string, communityId: string, query: string): Promise<KnowledgeContextEntry[] | undefined> {
   const projectId = await resolveCommunityProjectId(admin, communityId);
 
-  const [communityRes, projectRes, organizationRes] = await Promise.all([
+  const [communityRes, projectRes, organizationRes, profile] = await Promise.all([
     admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("community_id", communityId).eq("scope_type", "COMMUNITY").eq("active", true),
     projectId
       ? admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("project_id", projectId).eq("scope_type", "PROJECT").eq("active", true)
       : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
     admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true),
+    projectId ? loadProjectProfileRow(admin, projectId) : Promise.resolve(null),
   ]);
 
   const communitySources = toKnowledgeSources(communityRes.data);
   const projectSources = toKnowledgeSources(projectRes.data);
   const organizationSources = toKnowledgeSources(organizationRes.data);
-  if (communitySources.length === 0 && projectSources.length === 0 && organizationSources.length === 0) return undefined;
+
+  // Structured contact preset -- resolved BEFORE relevance scoring, never
+  // dependent on it. Community override checked first.
+  const contactEntries: KnowledgeContextEntry[] = [];
+  const intent = resolveContactIntent(query);
+  if (intent) {
+    const communityOverride = findCommunityContactOverride(intent, communitySources.map((s) => ({ title: s.title, content: s.content })));
+    const value = communityOverride ?? profile?.contacts?.[intent];
+    if (value) {
+      contactEntries.push({ scope: "PRESET", title: CONTACT_LABELS[intent], content: value, authoritative: true });
+    }
+  }
+
+  // The project's own overview competes in the SAME relevance pool as any
+  // additional PROJECT-scope knowledge -- never unconditionally injected.
+  const projectSourcesWithOverview: KnowledgeSource[] = profile?.overview
+    ? [{ id: `profile-overview-${projectId}`, panelId, scopeType: "PROJECT", projectId, communityId: null, kind: "overview", title: profile.name || "Overview", content: profile.overview, active: true }, ...projectSources]
+    : projectSources;
+
+  if (contactEntries.length === 0 && communitySources.length === 0 && projectSourcesWithOverview.length === 0 && organizationSources.length === 0) return undefined;
 
   const relevantCommunity = retrieveRelevantKnowledge(query, communitySources);
-  const relevantProject = retrieveRelevantKnowledge(query, projectSources);
+  const relevantProject = retrieveRelevantKnowledge(query, projectSourcesWithOverview);
   const relevantOrganization = retrieveRelevantKnowledge(query, organizationSources);
   const combined = combineKnowledgeRetrieval(relevantCommunity, relevantProject, relevantOrganization);
-  if (combined.length === 0) return undefined;
-  return combined.map((s) => ({ scope: s.scopeType, title: s.title, content: s.content }));
+  const scored = combined.map((s) => ({ scope: s.scopeType, title: s.title, content: s.content }));
+
+  const result = [...contactEntries, ...scored];
+  if (result.length === 0) return undefined;
+  return result;
 }
 
 interface ChatterDeployment {
@@ -1420,7 +1473,7 @@ async function respondAsDeployment(params: {
   /** Phase 4.N — already-retrieved, relevance-ranked, scope-labeled
    *  knowledge for THIS triggering message (see GenerateChatterReplyInput's
    *  doc comment). Only ever set for ANSWER. */
-  projectKnowledge?: { scope: KnowledgeSource["scopeType"]; title: string; content: string }[];
+  projectKnowledge?: KnowledgeContextEntry[];
   timer: RequestTimer;
 }): Promise<{ replied: false } | { replied: true; text: string }> {
   const {

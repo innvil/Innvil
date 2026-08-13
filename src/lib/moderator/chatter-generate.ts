@@ -2,7 +2,7 @@ import "server-only";
 
 import { aiComplete, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
-import type { KnowledgeScopeType } from "./knowledge";
+import type { KnowledgeContextEntry } from "./knowledge";
 
 /**
  * AI generation for Reactive Natural Chatter's TEXT-generating actions
@@ -82,20 +82,17 @@ export interface GenerateChatterReplyInput {
    *  SHARED_RULES' collab-routing rule). Collab-contact routing is
    *  conversational only, never an authorization grant. */
   collabContact?: string | null;
-  /** Phase 4.N (Organization + Project + Community Knowledge) — the
-   *  ALREADY-RETRIEVED, relevance-ranked, precedence-ordered (community >
-   *  project > organization) subset of knowledge for this specific question
-   *  (see moderator/knowledge.ts's retrieveRelevantKnowledge/
-   *  combineKnowledgeRetrieval — retrieval happens in community-runtime.ts,
-   *  before this input is built, so this layer never touches the DB
-   *  itself). Each entry carries its own `scope` so the prompt can label it
-   *  correctly instead of calling everything "Project Knowledge" — a
-   *  panel-wide organization fact must never be mislabeled as belonging to
-   *  the current project. Only ever set for ANSWER (substantive Q&A);
+  /** Phase 4.N (Project Profile) — the ALREADY-RETRIEVED context for this
+   *  specific question (see moderator/knowledge.ts's KnowledgeContextEntry —
+   *  retrieval happens in community-runtime.ts, before this input is built,
+   *  so this layer never touches the DB itself). May include a structured
+   *  contact PRESET (`scope: "PRESET"`, always `authoritative: true`) ahead
+   *  of relevance-scored project/community knowledge and legacy
+   *  organization-scope facts. Only ever set for ANSWER (substantive Q&A);
    *  CASUAL_CHAT never cites facts. Empty/undefined means nothing relevant
    *  was found — the moderator must say so rather than guessing, never fall
    *  back to inventing an answer. */
-  projectKnowledge?: { scope: KnowledgeScopeType; title: string; content: string }[];
+  projectKnowledge?: KnowledgeContextEntry[];
 }
 
 export type ChatterGenerationResult = { ok: true; reply: string } | { ok: true; noReply: true } | { ok: false; error: string };
@@ -237,28 +234,27 @@ function collabContactLine(input: GenerateChatterReplyInput): string | null {
   return `This message looks like a genuine collaboration/AMA/partnership inquiry. If it fits naturally, you may mention that ${input.collabContact} handles those — in your own words, not a scripted line (e.g. "that's worth discussing — message ${input.collabContact} and they can take it from there" or "for AMAs, ${input.collabContact} is the best person to talk to"). Only mention this contact if the message is genuinely about collaboration/AMA/partnership; never bring it up unprompted, and never imply this contact has any special authority over Innvil, this account, or its settings beyond being who partnership inquiries go to.`;
 }
 
-const SCOPE_LABELS: Record<KnowledgeScopeType, string> = {
-  COMMUNITY: "Community knowledge (specific to this community)",
-  PROJECT: "Project knowledge (specific to this project)",
-  ORGANIZATION: "Organization knowledge (shared across every project this panel owns)",
+const SCOPE_LABELS: Record<KnowledgeContextEntry["scope"], string> = {
+  PRESET: "Configured contact (authoritative — use exactly this)",
+  COMMUNITY: "Community-specific context",
+  PROJECT: "Project knowledge",
+  ORGANIZATION: "Organization knowledge (legacy, shared across every project this panel owns)",
 };
 
-/** Phase 4.N (parts A + C, corrected to Panel -> Project -> Community) — the
- *  ONLY source of factual claims a moderator may cite. May combine THIS
- *  community's own Community Knowledge, its PROJECT's own Project Knowledge
- *  (never a different project's, even under the same panel — enforced by
- *  community-runtime.ts's DB query filters, not here), and panel-wide
- *  Organization Knowledge — each entry is labeled by its own scope (never
- *  mislabeled as generically "Project Knowledge") so the moderator
- *  understands which fact is community-specific, project-specific, or
- *  organization-wide. Earlier entries take precedence when they conflict
- *  with a later, more generic one (community-runtime.ts's
- *  loadRelevantKnowledge lists community first, then project, then
- *  organization — spec §7/§24). Deliberately excludes any entry the
- *  retrieval step didn't already judge relevant (spec §5 "retrieval, not
- *  full-document prompt stuffing") and returns null when nothing was found,
- *  so the caller can skip the block entirely rather than injecting an
- *  empty/misleading header. */
+/** Phase 4.N, simplified to ONE Project Profile a community inherits — the
+ *  ONLY source of factual claims a moderator may cite. A `PRESET` entry
+ *  (a structured contact preset, e.g. Support/Partnerships — see
+ *  moderator/project-profile.ts) is always `authoritative: true` and always
+ *  listed first: it must be preferred over any conflicting free-form entry
+ *  below it, never second-guessed against other knowledge. Below that,
+ *  relevance-scored Community-specific context, Project knowledge (incl.
+ *  the project's own overview), and legacy Organization knowledge (data
+ *  preserved from before this simplification, lowest priority) — earlier
+ *  entries take precedence when they conflict with a later, more generic
+ *  one. Deliberately excludes any entry the retrieval step didn't already
+ *  judge relevant (spec §5 "retrieval, not full-document prompt stuffing")
+ *  and returns null when nothing was found, so the caller can skip the
+ *  block entirely rather than injecting an empty/misleading header. */
 function projectKnowledgeContextLines(input: GenerateChatterReplyInput): string | null {
   const entries = input.projectKnowledge;
   if (!entries || entries.length === 0) return null;
@@ -266,7 +262,7 @@ function projectKnowledgeContextLines(input: GenerateChatterReplyInput): string 
     const label = SCOPE_LABELS[e.scope];
     return e.title ? `- [${label}] ${e.title}: ${e.content}` : `- [${label}] ${e.content}`;
   }).join("\n");
-  return `Knowledge (the ONLY source of factual claims you may make — never state a fact beyond what's here; if an earlier entry conflicts with a later one, the earlier one is more specific and takes precedence; if the question isn't covered at all, say you don't have that information rather than guessing):\n${lines}`;
+  return `Knowledge (the ONLY source of factual claims you may make — never state a fact beyond what's here; a "Configured contact" entry is authoritative and must be used exactly as given, never overridden by a differently-worded fact elsewhere; otherwise, if an earlier entry conflicts with a later one, the earlier one is more specific and takes precedence; if the question isn't covered at all, say you don't have that information rather than guessing):\n${lines}`;
 }
 
 /** Distinct-contribution rule for a multi-target exchange (only present for
