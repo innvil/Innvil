@@ -159,6 +159,15 @@ const ORDER_STATUS_LABEL: Record<string, string> = {
   pending: "Pending", partial: "Partial", canceled: "Canceled",
   failed: "Failed", refunded: "Refunded", duplicate: "Duplicate",
 };
+const PROVIDER_AUTH_FAILURE_RE = /provider authentication failed|invalid api|api key|unauthorized|authori[sz]ed|access denied|permission/i;
+
+function canResendOrder(o: AdminOrderVM): boolean {
+  if (o.providerOrderId) return false;
+  if (o.status === "pending" || o.status === "duplicate") return true;
+  if (o.status !== "failed" && o.status !== "refunded") return false;
+  return PROVIDER_AUTH_FAILURE_RE.test(o.failReason ?? "");
+}
+
 function OrderStatusPill({ status }: { status: OrderStatus }) {
   return <Pill tone={ORDER_STATUS_TONE[status] ?? "muted"}>{ORDER_STATUS_LABEL[status] ?? status}</Pill>;
 }
@@ -2214,7 +2223,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
             ? "Mark Selected Orders Completed"
             : "Cancel & Refund Selected Orders"}
         message={confirmAction.kind === "bulkResend"
-          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Only pending/duplicate orders can be resent.`
+          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Eligible: pending/duplicate and failed/refunded orders caused by provider authentication failure.`
           : confirmAction.kind === "bulkComplete"
             ? `Mark ${confirmAction.ids.length} selected order(s) as completed?`
             : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}
@@ -2466,7 +2475,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
                               <p><span className="fp-text-faint">Placed:</span> {new Date(o.createdAt).toLocaleString()}</p>
                             </div>
                             <div className="flex flex-wrap gap-2 pt-1">
-                              {o.status === "pending" && !o.providerOrderId && (
+                              {canResendOrder(o) && (
                                 <button disabled={busy} onClick={() => act(o.id, () => resendOrder(o.id), "Resent to provider.")} className="fp-panel border fp-line-soft rounded px-2.5 py-1.5 fp-text-dim hover:fp-text disabled:opacity-50">Resend to provider</button>
                               )}
                               {o.providerOrderId && (

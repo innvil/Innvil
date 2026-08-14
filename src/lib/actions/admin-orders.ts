@@ -34,9 +34,12 @@ type AuthorizedOrderResult =
         charge: number | null;
         remains: number | null;
         status: OrderStatus;
+        provider_response: unknown;
         provider_payload: unknown;
       };
     };
+
+      const PROVIDER_AUTH_FAILURE_RE = /provider authentication failed|invalid api|api key|unauthorized|authori[sz]ed|access denied|permission/i;
 
 async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string): Promise<boolean> {
   const { data } = await admin
@@ -54,12 +57,26 @@ async function authorizeOrder(orderId: string): Promise<AuthorizedOrderResult> {
   if (!user) return { error: "Not signed in" };
   const { data: order } = await admin
     .from("orders")
-    .select("id, panel_id, customer_id, service_id, provider_id, provider_order_id, link, quantity, charge, remains, status, provider_payload")
+    .select("id, panel_id, customer_id, service_id, provider_id, provider_order_id, link, quantity, charge, remains, status, provider_response, provider_payload")
     .eq("id", orderId)
     .maybeSingle();
   if (!order) return { error: "Order not found" };
   if (!(await ownsPanel(admin, user.id, order.panel_id as string))) return { error: "Not authorized" };
   return { admin, order };
+}
+
+function isProviderAuthFailureResendEligible(order: {
+  status: OrderStatus;
+  provider_order_id: string | null;
+  provider_response: unknown;
+}): boolean {
+  if (order.provider_order_id) return false;
+  if (order.status === "pending" || order.status === "duplicate") return true;
+  if (order.status !== "failed" && order.status !== "refunded") return false;
+  const response = (order.provider_response as Record<string, unknown> | null) ?? null;
+  const category = typeof response?.provider_error_category === "string" ? response.provider_error_category : null;
+  const errorText = typeof response?.error === "string" ? response.error : null;
+  return category === "provider_auth_error" || PROVIDER_AUTH_FAILURE_RE.test(errorText ?? "");
 }
 
 async function addHistory(admin: SupabaseClient, orderId: string, status: OrderStatus, note?: string) {
@@ -725,8 +742,8 @@ export async function resendOrder(orderId: string): Promise<Result> {
   const r = await authorizeOrder(orderId);
   if ("error" in r) return { ok: false, error: r.error };
   const { admin, order } = r;
-  if (order.status !== "pending" && order.status !== "duplicate") {
-    return { ok: false, error: "Only pending or duplicate orders can be resent." };
+  if (!isProviderAuthFailureResendEligible(order)) {
+    return { ok: false, error: "Only pending/duplicate orders or failed/refunded provider-auth failures can be resent." };
   }
   return submitPendingOrderToProvider(admin, order, "Resent to provider by owner");
 }
@@ -756,7 +773,7 @@ export async function bulkResendOrders(
       continue;
     }
     const { admin, order } = auth;
-    if (order.status !== "pending" && order.status !== "duplicate") {
+    if (!isProviderAuthFailureResendEligible(order)) {
       skipped++;
       continue;
     }

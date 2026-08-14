@@ -3673,3 +3673,31 @@ Note: Delete only once saved in_progress
 4: See if you can also add an email forwarder using resend webhook, give me exact instruction on how to get the webhook, the proper endpoint link.
 5: Include binance pay (binance merchant) in the payments. The reason why I needed to register my business was because of binance merchant too.
 6: This is an update: I change the cron route to supabase, so don't add back the cron route in vercel.json (0006 and 0007 sql added)
+
+## Session: Provider-auth resend eligibility fix (2026-08-14)
+
+### Summary
+
+- Fixed Orders resend flow so provider-authentication failures can be retried after API reconfiguration.
+- Expanded resend eligibility from only `pending`/`duplicate` to also allow `failed`/`refunded` when the failure is specifically provider-auth related and the order has no `provider_order_id` yet.
+- Kept non-auth failed/refunded orders blocked from resend to avoid unsafe retries.
+
+### Files changed
+
+- `src/lib/actions/admin-orders.ts`
+  - `authorizeOrder` now includes `provider_response` in the loaded order.
+  - Added provider-auth failure matcher and shared resend-eligibility gate.
+  - Applied gate to both `resendOrder` and `bulkResendOrders`.
+- `src/components/panels/admin/AdminTabs.tsx`
+  - Added shared row-level resend eligibility helper.
+  - Showed "Resend to provider" for auth-failure `failed`/`refunded` rows.
+  - Updated bulk-resend confirmation copy to reflect expanded eligibility.
+
+### Validation
+
+- `npx tsc --noEmit` passed.
+- No diagnostics on edited files.
+
+### Migration
+
+- No new SQL migration.
