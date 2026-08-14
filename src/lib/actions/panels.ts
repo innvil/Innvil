@@ -1,6 +1,7 @@
 "use server";
 
 import { getAuthedAdmin, ensureProfile } from "@/src/lib/auth";
+import { sendDraftOnboardingNudge } from "@/src/lib/actions/platform-support";
 import { normalizePlatformFocus, readPlatformFocus } from "@/src/lib/platform-focus";
 import type { Panel } from "@/src/types";
 import type { PanelRow, PanelStatus } from "@/src/types/db";
@@ -75,6 +76,11 @@ export async function createPanel(input: {
     const taken = error.code === "23505" || /duplicate|unique/i.test(error.message);
     return { ok: false, error: taken ? "That subdomain is already taken" : error.message };
   }
+
+  // Best-effort onboarding outreach: if this account is still in draft mode,
+  // send a one-time "need help launching?" nudge from Innvil.
+  void sendDraftOnboardingNudge({ ownerId: user.id, ownerEmail: user.email ?? null, panelName: name });
+
   return { ok: true, panel: toPanel(data as PanelRow) };
 }
 

@@ -14,7 +14,15 @@ import {
 } from "@/src/lib/actions/superadmin";
 import { commissionBracketRate } from "@/src/lib/money";
 import { getLandingVideo, setLandingVideo, getSupportEmail, setSupportEmail } from "@/src/lib/actions/platform-settings";
-import { listPlatformSupportMessages, setPlatformSupportStatus, type PlatformSupportMessage } from "@/src/lib/actions/platform-support";
+import {
+  listPlatformSupportMessages,
+  setPlatformSupportStatus,
+  listInnvilOwnerContacts,
+  sendSuperAdminOwnerMessage,
+  runDraftOnboardingSweep,
+  type PlatformSupportMessage,
+  type InnvilOwnerContact,
+} from "@/src/lib/actions/platform-support";
 import { toVideoEmbed } from "@/src/lib/video";
 import {
   getPlatformPaymentsMeta, connectPlatformGateway, disconnectPlatformGateway,
@@ -659,10 +667,20 @@ function SupportTab() {
   const [emailMsg, setEmailMsg] = useState<{ text: string; error?: boolean } | null>(null);
   const [rows, setRows] = useState<PlatformSupportMessage[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [contacts, setContacts] = useState<InnvilOwnerContact[] | null>(null);
+  const [contactId, setContactId] = useState("");
+  const [outSubject, setOutSubject] = useState("");
+  const [outBody, setOutBody] = useState("");
+  const [outBusy, setOutBusy] = useState(false);
+  const [outMsg, setOutMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
   const loadEmail = () => getSupportEmail().then((r) => { setEmail(r.email); setSavedEmail(r.email); }).catch(() => {});
   const loadRows = () => listPlatformSupportMessages().then(setRows).catch(() => setRows([]));
-  useEffect(() => { loadEmail(); loadRows(); }, []);
+  const loadContacts = () => listInnvilOwnerContacts().then((r) => {
+    setContacts(r);
+    if (!contactId && r.length > 0) setContactId(r[0].ownerId);
+  }).catch(() => setContacts([]));
+  useEffect(() => { loadEmail(); loadRows(); loadContacts(); }, []);
 
   const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -682,7 +700,32 @@ function SupportTab() {
     if (res.ok) setRows((prev) => (prev ?? []).map((r) => (r.id === id ? { ...r, status } : r)));
   };
 
+  const sendOutreach = async () => {
+    if (outBusy) return;
+    setOutBusy(true);
+    setOutMsg(null);
+    const res = await sendSuperAdminOwnerMessage(contactId, outSubject, outBody);
+    setOutBusy(false);
+    if (!res.ok) {
+      setOutMsg({ text: res.error, error: true });
+      return;
+    }
+    setOutMsg({ text: "Message sent to customer." });
+    setOutSubject("");
+    setOutBody("");
+  };
+
+  const sendAutomated = async () => {
+    if (outBusy) return;
+    setOutBusy(true);
+    setOutMsg(null);
+    const res = await runDraftOnboardingSweep();
+    setOutBusy(false);
+    setOutMsg({ text: `Automated outreach sent: ${res.initialSent} initial, ${res.followupsSent} follow-up.` });
+  };
+
   const openCount = (rows ?? []).filter((r) => r.status !== "resolved").length;
+  const selectedContact = (contacts ?? []).find((c) => c.ownerId === contactId) ?? null;
 
   return (
     <div className="space-y-5 max-w-2xl">
@@ -700,6 +743,55 @@ function SupportTab() {
         <button onClick={saveEmail} disabled={savingEmail || email.trim() === savedEmail.trim()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
           {savingEmail ? "Saving…" : "Save email"}
         </button>
+      </div>
+
+      <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium">Contact Innvil customers</p>
+          <button onClick={loadContacts} className="text-xs fp-gold">Refresh list</button>
+        </div>
+        <p className="fp-text-faint text-xs">
+          Reach out directly to panel owners (including newly created draft-only accounts) to offer onboarding help.
+        </p>
+        {contacts === null ? (
+          <p className="fp-text-faint text-sm">Loading customers…</p>
+        ) : contacts.length === 0 ? (
+          <p className="fp-text-faint text-sm">No panel owners found yet.</p>
+        ) : (
+          <>
+            <label className="fp-text-dim text-xs fp-mono uppercase">Customer</label>
+            <select value={contactId} onChange={(e) => setContactId(e.target.value)} className={inputCls}>
+              {contacts.map((c) => (
+                <option key={c.ownerId} value={c.ownerId}>
+                  {(c.email ?? "unknown email")} · {c.panelCount} panel(s), {c.draftPanels} draft
+                </option>
+              ))}
+            </select>
+            {selectedContact && (
+              <p className="fp-text-faint text-xs">
+                Draft: <span className="fp-text">{selectedContact.draftPanels}</span> · Live: <span className="fp-text">{selectedContact.livePanels}</span>
+              </p>
+            )}
+            <label className="fp-text-dim text-xs fp-mono uppercase">Subject</label>
+            <input value={outSubject} onChange={(e) => setOutSubject(e.target.value)} placeholder="Need help launching your panel?" className={inputCls} maxLength={200} />
+            <label className="fp-text-dim text-xs fp-mono uppercase">Message</label>
+            <textarea value={outBody} onChange={(e) => setOutBody(e.target.value)} rows={4} placeholder="Hi — we can guide you through setup and launch if you need help." className={`${inputCls} resize-y`} maxLength={5000} />
+            {outMsg && (
+              <p className={`text-xs flex items-center gap-1.5 ${outMsg.error ? "text-red-400" : "fp-safe"}`}>
+                {outMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {outMsg.text}
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <button onClick={sendOutreach} disabled={outBusy || !contactId} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+                {outBusy ? "Sending…" : "Send message"}
+              </button>
+              <button onClick={sendAutomated} disabled={outBusy} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-2 disabled:opacity-60">
+                {outBusy ? "Running…" : "One-click auto send"}
+              </button>
+            </div>
+            <p className="fp-text-faint text-xs">Daily automatic follow-up also runs for still-draft owners.</p>
+          </>
+        )}
       </div>
 
       <div className="flex items-center justify-between">

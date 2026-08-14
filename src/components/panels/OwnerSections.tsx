@@ -6,7 +6,17 @@ import { Card, Pill, StatCard } from "@/src/components/ui";
 import { listProviderTopups, deleteProviderTopup, setProviderTopupKind, type ProviderTopup } from "@/src/lib/actions/provider-topups";
 import { formatMoney } from "@/src/lib/money";
 import { listAllOwnerOrders, getOwnerBillingSummary, type OwnerOrderVM, type OwnerBillingSummary } from "@/src/lib/actions/admin-orders";
-import { sendOwnerSupportMessage, listOwnerSupportMessages, listPlatformSupportMessages, setPlatformSupportStatus, type PlatformSupportMessage } from "@/src/lib/actions/platform-support";
+import {
+  sendOwnerSupportMessage,
+  listOwnerSupportMessages,
+  listPlatformSupportMessages,
+  setPlatformSupportStatus,
+  listInnvilOwnerContacts,
+  sendSuperAdminOwnerMessage,
+  runDraftOnboardingSweep,
+  type PlatformSupportMessage,
+  type InnvilOwnerContact,
+} from "@/src/lib/actions/platform-support";
 import { listAllOwnerCustomers, adjustCustomerBalance, type OwnerCustomerVM } from "@/src/lib/actions/customers";
 import { listAllOwnerProviders, fetchProviderBalance, refreshAllProviderBalances, type OwnerProviderVM } from "@/src/lib/actions/providers";
 import { listAllOwnerDeposits, type OwnerAllDepositVM } from "@/src/lib/actions/payments";
@@ -975,6 +985,7 @@ export function OwnerContactSupport() {
                 <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
                   <span className="text-sm font-medium truncate">{m.subject}</span>
                   <span className="flex items-center gap-2 shrink-0">
+                    <Pill tone={m.direction === "outbound" ? "gold" : "muted"}>{m.direction === "outbound" ? "From Innvil" : "You"}</Pill>
                     <Pill tone={m.status === "resolved" ? "safe" : "muted"}>{m.status === "resolved" ? "Resolved" : "Open"}</Pill>
                     <span className="fp-text-faint text-xs fp-mono">{fmtDate(m.createdAt)}</span>
                   </span>
@@ -993,9 +1004,19 @@ export function OwnerContactSupport() {
 export function OwnerPanelSupport() {
   const [rows, setRows] = useState<PlatformSupportMessage[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [contacts, setContacts] = useState<InnvilOwnerContact[] | null>(null);
+  const [contactId, setContactId] = useState("");
+  const [outSubject, setOutSubject] = useState("");
+  const [outBody, setOutBody] = useState("");
+  const [outBusy, setOutBusy] = useState(false);
+  const [outMsg, setOutMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
   const load = () => listPlatformSupportMessages().then(setRows).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  const loadContacts = () => listInnvilOwnerContacts().then((r) => {
+    setContacts(r);
+    if (!contactId && r.length > 0) setContactId(r[0].ownerId);
+  }).catch(() => setContacts([]));
+  useEffect(() => { load(); loadContacts(); }, []);
 
   const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
@@ -1006,7 +1027,32 @@ export function OwnerPanelSupport() {
     if (res.ok) setRows((prev) => (prev ?? []).map((r) => (r.id === id ? { ...r, status } : r)));
   };
 
+  const sendOutreach = async () => {
+    if (outBusy) return;
+    setOutBusy(true);
+    setOutMsg(null);
+    const res = await sendSuperAdminOwnerMessage(contactId, outSubject, outBody);
+    setOutBusy(false);
+    if (!res.ok) {
+      setOutMsg({ text: res.error, error: true });
+      return;
+    }
+    setOutMsg({ text: "Message sent to customer." });
+    setOutSubject("");
+    setOutBody("");
+  };
+
+  const sendAutomated = async () => {
+    if (outBusy) return;
+    setOutBusy(true);
+    setOutMsg(null);
+    const res = await runDraftOnboardingSweep();
+    setOutBusy(false);
+    setOutMsg({ text: `Automated outreach sent: ${res.initialSent} initial, ${res.followupsSent} follow-up.` });
+  };
+
   const openCount = (rows ?? []).filter((r) => r.status !== "resolved").length;
+  const selectedContact = (contacts ?? []).find((c) => c.ownerId === contactId) ?? null;
 
   return (
     <div className="p-4 sm:p-8 space-y-6 max-w-3xl">
@@ -1018,6 +1064,52 @@ export function OwnerPanelSupport() {
         Messages from panel owners contacting Innvil. {openCount > 0 && <span className="fp-gold">{openCount} open.</span>}{" "}
         Reply by email or mark resolved. The support destination email is set under <span className="fp-text">/superadmin → Support</span>.
       </p>
+
+      <Card title="Contact Innvil customers" icon={Send}>
+        <p className="fp-text-faint text-xs mb-3">
+          Send direct onboarding/help messages to panel owners, including newly created draft-only customers.
+        </p>
+        {contacts === null ? (
+          <p className="fp-text-faint text-sm py-2">Loading customers…</p>
+        ) : contacts.length === 0 ? (
+          <p className="fp-text-faint text-sm py-2">No panel owners found yet.</p>
+        ) : (
+          <div className="space-y-3">
+            <label className="fp-text-dim text-xs fp-mono uppercase">Customer</label>
+            <select value={contactId} onChange={(e) => setContactId(e.target.value)} className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border">
+              {contacts.map((c) => (
+                <option key={c.ownerId} value={c.ownerId}>
+                  {(c.email ?? "unknown email")} · {c.panelCount} panel(s), {c.draftPanels} draft
+                </option>
+              ))}
+            </select>
+            {selectedContact && (
+              <p className="fp-text-faint text-xs">
+                Draft: <span className="fp-text">{selectedContact.draftPanels}</span> · Live: <span className="fp-text">{selectedContact.livePanels}</span>
+              </p>
+            )}
+            <label className="fp-text-dim text-xs fp-mono uppercase">Subject</label>
+            <input value={outSubject} onChange={(e) => setOutSubject(e.target.value)} placeholder="Need help launching your panel?" className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border" maxLength={200} />
+            <label className="fp-text-dim text-xs fp-mono uppercase">Message</label>
+            <textarea value={outBody} onChange={(e) => setOutBody(e.target.value)} rows={4} placeholder="Hi — we can guide you through setup and launch if you need help." className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border resize-y" maxLength={5000} />
+            {outMsg && (
+              <p className={`text-xs flex items-center gap-1.5 ${outMsg.error ? "text-red-400" : "fp-safe"}`}>
+                {outMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {outMsg.text}
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <button onClick={sendOutreach} disabled={outBusy || !contactId} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+                {outBusy ? "Sending…" : "Send message"}
+              </button>
+              <button onClick={sendAutomated} disabled={outBusy} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-2 disabled:opacity-60">
+                {outBusy ? "Running…" : "One-click auto send"}
+              </button>
+              <button onClick={loadContacts} className="text-xs fp-gold">Refresh list</button>
+            </div>
+            <p className="fp-text-faint text-xs">Daily automatic follow-up also runs for still-draft owners.</p>
+          </div>
+        )}
+      </Card>
 
       <Card title="Owner messages" icon={LifeBuoy}>
         {rows === null ? (
