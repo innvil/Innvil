@@ -13,6 +13,49 @@
 
 ## Session: Refunded resend re-debit + refunded-row bulk selection (v1.18.8)
 
+## Session: Mass Order premium storefront UI redesign (v1.18.9)
+
+## Session: PR Generator superadmin parity + import UX + collapsible sections (v1.18.10)
+
+### v1.18.10 — Wired PR Generator into owner-app superadmin surface and added collapsible/import UX parity.
+- Superadmin panel-side parity (`src/components/panels/index.tsx`):
+  * added PR Generator nav item to the owner-app superadmin sidebar flow.
+  * mounted full `PRReview` section in the owner app, mirroring Blog placement.
+  * added explicit "Superadmin" badges on Blog and PR Generator section headers.
+- PR review UX (`src/components/superadmin/PRReview.tsx`):
+  * added collapsible import blocks for PR drafts and PR facts.
+  * supports paste + file import for `.csv`, `.xlsx`, `.docx`, `.txt`.
+  * accepted formats:
+    - drafts: `title | summary | topic` (or A/B/C columns in csv/xlsx),
+    - facts: `title | category | content | source url` (or A/B/C/D columns in csv/xlsx).
+- Blog review UX (`src/components/superadmin/BlogReview.tsx`):
+  * made Topic queue collapsible.
+  * made Published blogs list collapsible.
+- Validation:
+  * `npx tsc --noEmit` passed.
+- SQL migration note:
+  * no new migration added in this release.
+
+### v1.18.9 — Redesigned Mass Order presentation to a premium, spacious one-screen flow (UI-only).
+- Mass Order UX layout (`src/components/customer/MassOrder.tsx`):
+  * reorganized into three calm sections: Add services, Selected services, and Targets.
+  * replaced always-open service list with an on-demand collapsible service picker.
+  * added subtle optional filter chips (All/Favorites/platform), while keeping search primary.
+  * selected services now render as compact rows with clearer hierarchy and lighter chrome.
+  * targets textarea made visually dominant with simpler customer-facing helper copy.
+  * added sticky summary/action bar with dynamic intended-order count and CTA label.
+  * result area now shows compact batch summary with expandable attempt-level details.
+- Storefront wiring (`src/components/customer/CustomerDashboard.tsx`):
+  * ensured Mass Order receives storefront panel services/favorites for panel-local selection UX.
+- Behavior guarantees:
+  * parser behavior unchanged.
+  * backend/order semantics unchanged (pricing/wallet/provider pipeline still authoritative).
+  * New Order flow unchanged.
+- Validation:
+  * `npx tsc --noEmit` passed.
+- SQL migration note:
+  * no new migration added in this release.
+
 ### v1.18.8 — Resending refunded orders now re-debits correctly, and refunded rows are selectable for bulk operations.
 - Resend financial correctness (`src/lib/actions/admin-orders.ts`):
   * `submitPendingOrderToProvider` now re-charges customer wallet when resending an order currently in `refunded` state.

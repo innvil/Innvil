@@ -31,6 +31,7 @@ import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/l
 import { PLATFORM_FOCUS_OPTIONS, type PlatformFocus } from "@/src/lib/platform-focus";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { BlogReview } from "@/src/components/superadmin/BlogReview";
+import { PRReview } from "@/src/components/superadmin/PRReview";
 import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdmin";
 import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
@@ -231,6 +232,7 @@ function navItemsFor(isSuper: boolean) {
     ...APP_NAV,
     // Super-admin-only: review + approve AI blog drafts, right in the owner app.
     ...(isSuper ? [{ k: "blog", label: "Blog", icon: Newspaper }] : []),
+    ...(isSuper ? [{ k: "pr-generator", label: "PR Generator", icon: Megaphone }] : []),
     ...(isSuper ? [{ k: "design-pricing", label: "Design pricing", icon: Tag }] : []),
     { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
@@ -1426,11 +1428,26 @@ export function InnvilApp({ setWorld, initialSection }: {
         {section === "contact" && (isSuper ? <OwnerPanelSupport /> : <OwnerContactSupport />)}
         {section === "blog" && isSuper && (
           <div className="p-4 sm:p-8 space-y-6">
-            <div>
-              <h1 className="fp-display text-2xl">Blog</h1>
-              <p className="fp-text-dim text-sm mt-1">Review, edit, and publish AI-written blog drafts. Nothing goes live until you publish it.</p>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h1 className="fp-display text-2xl">Blog</h1>
+                <p className="fp-text-dim text-sm mt-1">Review, edit, and publish AI-written blog drafts. Nothing goes live until you publish it.</p>
+              </div>
+              <span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Superadmin</span>
             </div>
             <BlogReview />
+          </div>
+        )}
+        {section === "pr-generator" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h1 className="fp-display text-2xl">PR Generator</h1>
+                <p className="fp-text-dim text-sm mt-1">Create, review, and track external publication PR workflows with compliance visibility.</p>
+              </div>
+              <span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Superadmin</span>
+            </div>
+            <PRReview />
           </div>
         )}
         {section === "design-pricing" && isSuper && (

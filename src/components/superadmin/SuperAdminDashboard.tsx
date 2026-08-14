@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
-  PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag,
+  PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag, Megaphone,
 } from "lucide-react";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
@@ -58,6 +58,7 @@ import {
 } from "@/src/lib/payments/payment-archive-view";
 import { ArticleBody } from "@/src/components/blog/ArticleBody";
 import { BlogReview } from "./BlogReview";
+import { PRReview } from "./PRReview";
 import { DesignPricingAdmin } from "./DesignPricingAdmin";
 
 const inputCls =
@@ -1527,6 +1528,7 @@ const TABS = [
   { k: "payments", label: "Platform payments", icon: CreditCard },
   { k: "archived-payments", label: "Archived payments", icon: EyeOff },
   { k: "blog", label: "Blog", icon: Newspaper },
+  { k: "pr", label: "PR", icon: Megaphone },
   { k: "pricing", label: "Design pricing", icon: Tag },
   { k: "landing", label: "Landing video", icon: PlayCircle },
   { k: "support", label: "Support", icon: LifeBuoy },
@@ -1579,6 +1581,7 @@ export function SuperAdminDashboard() {
         {tab === "payments" && <PaymentsTab />}
         {tab === "archived-payments" && <ArchivedPaymentsTab />}
         {tab === "blog" && <BlogReview />}
+        {tab === "pr" && <PRReview />}
         {tab === "pricing" && <DesignPricingAdmin />}
         {tab === "landing" && <LandingTab />}
         {tab === "support" && <SupportTab />}
