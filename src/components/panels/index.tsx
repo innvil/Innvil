@@ -1124,7 +1124,7 @@ function AddFundsModal({
             {methodMeta && methodRules.length > 0 && (
               <details className="fp-panel-raised border fp-line-soft rounded-lg p-3 mb-4">
                 <summary className="cursor-pointer fp-text-dim text-xs">
-                  Promo tiers ({methodMeta.label})
+                  Promo tiers
                 </summary>
                 <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {methodRules.map((r) => (

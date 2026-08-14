@@ -8,15 +8,15 @@ import { getPlatformGatewayContext } from "@/src/lib/payments/platform";
 /* =========================================================
    PLATFORM PAYMENTS (super-admin only)
    Configure how PANEL OWNERS pay Innvil. Mirrors the per-panel gateway config
-   but at the platform level (one row per gateway). Cryptomus + NOWPayments for
-   now; Binance Pay later. Secrets stored pgcrypto-encrypted, decrypted only
+  but at the platform level (one row per gateway). Cryptomus + NOWPayments +
+  Binance Pay. Secrets stored pgcrypto-encrypted, decrypted only
    server-side. Every action is gated on the super_admin role.
    ========================================================= */
 
 type Result = { ok: true } | { ok: false; error: string };
 
 /** The gateways a super admin may configure at the platform level (crypto only for now). */
-const PLATFORM_GATEWAY_IDS = ["cryptomus", "nowpayments"] as const;
+const PLATFORM_GATEWAY_IDS = ["cryptomus", "nowpayments", "binance_pay"] as const;
 const OWNER_TOPUP_MIN = 5;
 const OWNER_FIRST_TOPUP_MIN = 10;
 
