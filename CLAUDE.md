@@ -4336,6 +4336,61 @@ win over this):**
 > Mika/Kaleb/Alex piling reactions onto an official announcement); a human replying to
 > a marketing post is a normal new HUMAN event the manager answers reactively.
 
+### Phase 4.R: Superadmin PR Generator (NOTED, not built)
+
+> **Explicit instruction: roadmap note only, read-only now — do not implement yet.**
+> Add a Superadmin-only PR workflow alongside (but separate from) the existing Generate
+> Blog flow. This is a manual external-publication pipeline (for platforms like openPR),
+> not an auto-publishing system.
+
+Core product intent and hard constraints:
+- New content-generation area includes both **Generate Blog** and **Generate PR**.
+- PR generation is **Superadmin-only** at both UI and backend authorization layers.
+- Keep existing blog generation fully intact (no regressions).
+- Generate at most **one PR per cycle** (default 30 days, configurable).
+- Scheduler can check daily, but only generates when eligible.
+- Eligibility baseline is **external publication date**:
+  `next_generation_date = external_publication_date + interval_days`.
+- Do not generate scheduled PRs while latest PR is still Draft/Reviewed/Approved.
+- Manual override exists (`Generate PR Now`) with an explicit unpublished-PR warning.
+- Never auto-submit to openPR or any external PR platform.
+
+PR lifecycle and publication tracking:
+- Statuses: `Draft`, `Reviewed`, `Approved`, `Published Externally`, `Rejected`.
+- `Mark as Published` is internal tracking only and must store:
+  external URL (required), publication name/date, external headline, notes,
+  published_by, published_at.
+- This action must NOT publish on Innvil, auto-submit externally, or auto-create
+  public content.
+
+Featured Article linkage (optional):
+- After PR is marked `Published Externally`, Superadmin may optionally create a
+  **Featured Article** draft in Innvil.
+- Reuse existing blog/article models; do not create a second public CMS.
+- Featured article summarizes the external PR and links out; it must not duplicate
+  the full press release body and must remain draft until manually published.
+
+Compliance and fact-grounding direction:
+- Follow openPR press-code principles for factual, non-deceptive PR writing:
+  https://www.openpr.com/news/presscode.html
+- Add a Superadmin-managed PR Fact Library as the primary claims source.
+- No fabricated stats/awards/partnerships/testimonials/quotes/superiority claims.
+- Claim traceability required (claim -> source/fact entry) and visible in PR detail.
+- Include a compliance-review pass (accuracy, unsupported claims, quote checks,
+  promotional-vs-editorial distinction, similarity/duplicate-angle checks,
+  keyword-stuffing risk) before approval.
+
+Architecture direction for future implementation:
+- Reuse existing Innvil systems for AI abstraction, Superadmin auth, blog/article
+  models, scheduler/cron, notifications, audit logging, and DB conventions.
+- Keep AI credentials server-side only.
+- Expected entities (following current conventions): `pr_campaigns`,
+  `press_releases`, `pr_fact_library`, `pr_compliance_reports`, `pr_claim_sources`,
+  plus optional PR->featured-article relation.
+- Generation pipeline stages (separate concerns): angle selection -> fact/source
+  gathering -> PR draft generation -> claim validation -> compliance review ->
+  similarity review -> optional one-pass regeneration with reviewer feedback.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations

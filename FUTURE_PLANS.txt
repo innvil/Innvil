@@ -205,3 +205,83 @@ Separate products
 	- cleaner operational flow than legacy panels.
 - Keep "coming soon" labels for non-MVP modules until they are truly production-ready.
 - Fix mobile overflow and width issues before public MVP launch.
+
+6) Superadmin PR Generator (NOTED, not built yet)
+
+Scope status
+- Read-only roadmap note only. Do NOT implement in this pass.
+- Must be a separate workflow from Generate Blog and must not break existing blog generation.
+
+Product intent
+- Add a Superadmin-only PR workflow inside Innvil content generation:
+	- Generate Blog
+	- Generate PR
+- Generate one high-quality press release every 30 days by default (configurable interval), intended for manual submission to external PR platforms (for example openPR).
+- No automatic external submission.
+
+Press-code reference
+- Use openPR press-code principles as drafting/compliance guidance:
+	- https://www.openpr.com/news/presscode.html
+
+Core workflow
+- Generate PR -> Review -> Approve -> Manual external submission by Superadmin -> Mark as Published Externally (URL required) -> Optional Create Featured Article draft in Innvil -> Wait interval -> Next PR.
+
+Scheduling invariants
+- Default interval: 30 days.
+- Eligibility baseline: `next_generation_date = external_publication_date + interval_days`.
+- Never start the next cycle from generation date.
+- Daily scheduler checks are allowed, but generate only when eligible.
+- Block scheduled generation while latest PR is still Draft/Reviewed/Approved by default.
+- Allow Superadmin manual override: Generate PR Now with existing-unpublished warning and explicit Generate Anyway path.
+- Process must be idempotent and race-safe.
+
+Status model (PR-specific)
+- Draft
+- Reviewed
+- Approved
+- Published Externally
+- Rejected
+
+Mark as Published Externally
+- Internal tracking action only.
+- Must NOT publish on Innvil, submit externally, or auto-create public content.
+- Required field: external publication URL.
+- Optional fields: publication name/date, external headline, notes.
+- Persist publication metadata and start next interval from external publication date.
+
+Featured Article (optional)
+- Available only after PR is marked Published Externally.
+- Reuse existing Innvil blog/article system.
+- Create draft article that summarizes and links to the external PR (do not duplicate full PR body).
+- Must remain draft until manually published.
+
+Fact-grounded generation and compliance
+- Add Superadmin-managed PR Fact Library as primary claim source.
+- No invented stats, partnerships, awards, quotes, testimonials, market-share/superiority claims, or competitor accusations.
+- Claim traceability required (claim -> source/fact entry).
+- Run compliance review after generation (accuracy, unsupported claims, quote checks, promotional distinction, newsworthiness, repetition/similarity, keyword stuffing risk).
+- If compliance fails: one regenerate attempt with feedback, then keep Draft and require manual review.
+
+Security and governance
+- Superadmin-only at UI and backend levels for all PR actions.
+- Reuse existing auth, server-action patterns, audit logs, scheduler/cron architecture, and AI provider abstraction.
+- Keep AI credentials server-side only.
+
+Data-model direction (follow existing schema conventions)
+- pr_campaigns
+- press_releases
+- pr_fact_library
+- pr_compliance_reports
+- pr_claim_sources
+- Link optional featured article relation on PR record (for example `featured_article_id`).
+
+Implementation constraint for future execution
+- Before coding, inspect and reuse current architecture for:
+	- Generate Blog flow
+	- AI integration
+	- Superadmin authorization
+	- article/blog models
+	- scheduler/cron
+	- notifications
+	- UI patterns
+	- DB conventions

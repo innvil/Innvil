@@ -11,6 +11,21 @@
 
 ## Session: Superadmin owner outreach + automated draft-panel follow-up (v1.18.6)
 
+## Session: Refunded resend re-debit + refunded-row bulk selection (v1.18.8)
+
+### v1.18.8 — Resending refunded orders now re-debits correctly, and refunded rows are selectable for bulk operations.
+- Resend financial correctness (`src/lib/actions/admin-orders.ts`):
+  * `submitPendingOrderToProvider` now re-charges customer wallet when resending an order currently in `refunded` state.
+  * if provider resend fails before acceptance, the re-charge is rolled back immediately via refund path.
+  * updated held-order resend query shapes to include `customer_id` and `charge` so all resend entry points can use the same re-debit logic safely.
+- Orders selection behavior (`src/components/panels/admin/AdminTabs.tsx`):
+  * row checkboxes/select-all now target all visible rows on the current screen (including refunded rows), rather than only cancelable statuses.
+  * bulk actions still enforce per-action eligibility at execution time (resend/cancel/complete each filtered by its own rules).
+- Validation:
+  * `npx tsc --noEmit` passed.
+- SQL migration note:
+  * no new migration added in this release.
+
 ### v1.18.6 — Superadmin can contact Innvil customers directly, with one-click automated outreach and scheduled follow-up.
 - Superadmin outreach backend (`src/lib/actions/platform-support.ts`):
   * added owner-contact discovery (`listInnvilOwnerContacts`) for Innvil customers

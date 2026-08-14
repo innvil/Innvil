@@ -87,12 +87,14 @@ async function submitPendingOrderToProvider(
   admin: SupabaseClient,
   order: {
     id: string;
+    customer_id: string | null;
     service_id: string | null;
     provider_id: string | null;
     provider_order_id: string | null;
     status: OrderStatus;
     link: string | null;
     quantity: number | null;
+    charge: number | null;
     provider_payload: unknown;
   },
   historyNote: string
@@ -144,6 +146,42 @@ async function submitPendingOrderToProvider(
 
   const payload = (order.provider_payload as { runs?: number; interval?: number; comments?: string[] } | null) ?? {};
   const comments = Array.isArray(payload.comments) ? payload.comments : null;
+  const resendNeedsRecharge = order.status === "refunded";
+  const rechargeAmount = Number(order.charge ?? 0);
+  if (resendNeedsRecharge) {
+    if (!order.customer_id) {
+      return { ok: false, error: "This refunded order has no customer account to charge." };
+    }
+    if (!Number.isFinite(rechargeAmount) || rechargeAmount <= 0) {
+      return { ok: false, error: "This refunded order has an invalid charge amount." };
+    }
+    const { error: rechargeErr } = await admin.rpc("apply_balance_change", {
+      p_customer: order.customer_id,
+      p_amount: -rechargeAmount,
+      p_type: "order",
+      p_reason: `Order ${order.id} recharged for resend to provider by owner`,
+      p_ref_order: order.id,
+    });
+    if (rechargeErr) {
+      const insufficient = /insufficient/i.test(rechargeErr.message ?? "");
+      return {
+        ok: false,
+        error: insufficient ? "Customer has insufficient balance to resend this refunded order." : rechargeErr.message,
+      };
+    }
+  }
+
+  const rollbackRecharge = async (reason: string) => {
+    if (!resendNeedsRecharge || !order.customer_id || !Number.isFinite(rechargeAmount) || rechargeAmount <= 0) return;
+    await admin.rpc("apply_balance_change", {
+      p_customer: order.customer_id,
+      p_amount: rechargeAmount,
+      p_type: "refund",
+      p_reason: reason,
+      p_ref_order: order.id,
+    });
+  };
+
   try {
     const creds = await getProviderCredentials(providerId as string, prov.api_url as string);
     const resp = await addOrder(creds, {
@@ -155,6 +193,7 @@ async function submitPendingOrderToProvider(
       ...(comments && comments.length ? { comments: comments.join("\n") } : {}),
     });
     if (!("order" in resp)) {
+      await rollbackRecharge(`Refunded recharge for resent order ${order.id} (provider rejected)`);
       return { ok: false, error: resp.error || "Provider rejected the order." };
     }
     const acceptedStatus: OrderStatus = "processing";
@@ -204,6 +243,7 @@ async function submitPendingOrderToProvider(
     });
     return { ok: true };
   } catch (e) {
+    await rollbackRecharge(`Refunded recharge for resent order ${order.id} (provider error)`);
     console.info("[dup-debug][resend:error]", {
       orderId: order.id,
       message: e instanceof Error ? e.message : String(e),
@@ -809,17 +849,19 @@ export async function refreshProviderBalancesAndRetryHeldOrders(
 
   const { data } = await admin
     .from("orders")
-    .select("id, service_id, provider_id, provider_order_id, link, quantity, provider_cost, status, created_at, provider_payload, provider_response")
+    .select("id, customer_id, service_id, provider_id, provider_order_id, link, quantity, charge, provider_cost, status, created_at, provider_payload, provider_response")
     .eq("panel_id", panelId)
     .eq("status", "pending");
 
   const heldOrders = ((data as Array<{
     id: string;
+    customer_id: string | null;
     service_id: string | null;
     provider_id: string | null;
     provider_order_id: string | null;
     link: string | null;
     quantity: number | null;
+    charge: number | null;
     provider_cost: number | null;
     status: OrderStatus;
     created_at: string;
@@ -969,17 +1011,19 @@ export async function resendPendingHeldOrders(
 
   const { data } = await admin
     .from("orders")
-    .select("id, service_id, provider_id, provider_order_id, link, quantity, provider_cost, status, created_at, provider_payload, provider_response")
+    .select("id, customer_id, service_id, provider_id, provider_order_id, link, quantity, charge, provider_cost, status, created_at, provider_payload, provider_response")
     .eq("panel_id", panelId)
     .eq("status", "pending");
 
   const heldOrders = ((data as Array<{
     id: string;
+    customer_id: string | null;
     service_id: string | null;
     provider_id: string | null;
     provider_order_id: string | null;
     link: string | null;
     quantity: number | null;
+    charge: number | null;
     provider_cost: number | null;
     status: OrderStatus;
     created_at: string;

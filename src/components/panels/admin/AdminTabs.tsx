@@ -2080,9 +2080,12 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
     }
   };
 
-  // Selection + mass cancel (owner cancel auto-refunds).
+  // Selection + mass actions. Keep selection broad (all visible rows), then filter
+  // per-action eligibility at action time.
   const cancelable = (o: AdminOrderVM) => o.status !== "canceled" && o.status !== "refunded";
-  const selectableIds = useMemo(() => filtered.filter(cancelable).map((o) => o.id), [filtered]);
+  const completable = (o: AdminOrderVM) => o.status !== "completed" && o.status !== "refunded";
+  const selectableIds = useMemo(() => filtered.map((o) => o.id), [filtered]);
+  const rowById = useMemo(() => new Map(filtered.map((o) => [o.id, o])), [filtered]);
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => sel.has(id));
   const toggleSel = (id: string) => setSel((prev) => {
     const n = new Set(prev);
@@ -2145,20 +2148,38 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
   };
 
   const requestBulkCancel = () => {
-    const ids = [...sel];
-    if (!ids.length) return;
+    const ids = [...sel].filter((id) => {
+      const row = rowById.get(id);
+      return !!row && cancelable(row);
+    });
+    if (!ids.length) {
+      setMsg({ text: "No selected orders are eligible for Cancel & refund.", error: true });
+      return;
+    }
     setConfirmAction({ kind: "bulkCancel", ids });
   };
 
   const requestBulkResend = () => {
-    const ids = [...sel];
-    if (!ids.length) return;
+    const ids = [...sel].filter((id) => {
+      const row = rowById.get(id);
+      return !!row && canResendOrder(row);
+    });
+    if (!ids.length) {
+      setMsg({ text: "No selected orders are eligible for Resend to provider.", error: true });
+      return;
+    }
     setConfirmAction({ kind: "bulkResend", ids });
   };
 
   const requestBulkComplete = () => {
-    const ids = [...sel];
-    if (!ids.length) return;
+    const ids = [...sel].filter((id) => {
+      const row = rowById.get(id);
+      return !!row && completable(row);
+    });
+    if (!ids.length) {
+      setMsg({ text: "No selected orders are eligible for Mark completed.", error: true });
+      return;
+    }
     setConfirmAction({ kind: "bulkComplete", ids });
   };
 
@@ -2372,7 +2393,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
                 return (
                   <React.Fragment key={o.id}>
                     <tr className="border-b fp-line-soft last:border-0">
-                      <td className="py-3">{cancelable(o) && <input type="checkbox" checked={sel.has(o.id)} onChange={() => toggleSel(o.id)} className="accent-[#C9A574]" aria-label="Select order" />}</td>
+                      <td className="py-3"><input type="checkbox" checked={sel.has(o.id)} onChange={() => toggleSel(o.id)} className="accent-[#C9A574]" aria-label="Select order" /></td>
                       <td className="py-3 fp-mono fp-text-dim">#{o.orderNo ?? o.shortId}</td>
                       <td className="py-3">
                         {o.serviceName}{o.serviceNo != null && <span className="fp-text-faint"> · #{o.serviceNo}</span>}
