@@ -173,7 +173,7 @@ export function aiprimetechProvider(): { provider: AiProvider; apiKey: string; b
 
 /** Whether generation is wired up (a key is present). */
 export function aiConfigured(): boolean {
-  return Boolean(apiKey());
+  return Boolean(apiKey() || fallbackApiKey());
 }
 
 /**
@@ -340,14 +340,21 @@ export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
   }
 
   const key = apiKey();
-  if (!key) throw new Error("No AI API key set (AI_API_KEY or ANTHROPIC_API_KEY).");
+  const fbKey = fallbackApiKey();
+  if (!key) {
+    if (!fbKey) {
+      throw new Error("No AI API key set (AI_API_KEY or ANTHROPIC_API_KEY), and no fallback key set (AI_FALLBACK_API_KEY).");
+    }
+    const model = opts.model || DEFAULT_AI_MODEL;
+    const fb = fallbackProviderConfig();
+    return completeOnce(fb.provider, fb.baseUrl, fbKey, fb.model || model, opts);
+  }
   const { provider, baseUrl } = providerConfig();
   const model = opts.model || DEFAULT_AI_MODEL;
 
   try {
     return await completeOnce(provider, baseUrl, key, model, opts);
   } catch (primaryErr) {
-    const fbKey = fallbackApiKey();
     if (!fbKey) throw primaryErr;
     const fb = fallbackProviderConfig();
     console.error("[ai] primary provider failed, retrying via fallback:", primaryErr instanceof Error ? primaryErr.message : primaryErr);

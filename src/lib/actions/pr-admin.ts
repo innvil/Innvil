@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { generatePRFromFacts } from "@/src/lib/pr/generate";
+import { generatePRDraft, type PRFactInput } from "@/src/lib/ai/pr-writer";
+import { runPRCompliance } from "@/src/lib/ai/pr-compliance";
 
 /* Super-admin PR management (Phase A): manual workflow + scheduler settings.
    AI generation/compliance automation will be layered in Phase B/C. */
@@ -35,6 +37,7 @@ export interface PRItem {
   title: string;
   slug: string;
   summary: string;
+  body: Array<{ kind: "p" | "h3" | "ul" | "ol" | "quote"; text?: string; items?: string[] }>;
   status: PRStatus;
   source: "ai" | "manual";
   topic: string | null;
@@ -220,6 +223,7 @@ interface PRRow {
   title: string;
   slug: string;
   summary: string;
+  body: unknown;
   status: string;
   source: string;
   topic: string | null;
@@ -234,6 +238,27 @@ interface PRRow {
   updated_at: string;
 }
 
+function normalizePRBody(raw: unknown): PRItem["body"] {
+  if (!Array.isArray(raw)) return [];
+  const out: PRItem["body"] = [];
+  for (const block of raw) {
+    if (!block || typeof block !== "object") continue;
+    const kind = (block as { kind?: unknown }).kind;
+    if (kind !== "p" && kind !== "h3" && kind !== "ul" && kind !== "ol" && kind !== "quote") continue;
+    if (kind === "ul" || kind === "ol") {
+      const items = ((block as { items?: unknown }).items ?? []) as unknown[];
+      const clean = items.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean);
+      if (!clean.length) continue;
+      out.push({ kind, items: clean });
+      continue;
+    }
+    const text = typeof (block as { text?: unknown }).text === "string" ? (block as { text: string }).text.trim() : "";
+    if (!text) continue;
+    out.push({ kind, text });
+  }
+  return out;
+}
+
 function mapPR(row: PRRow): PRItem {
   return {
     id: row.id,
@@ -241,6 +266,7 @@ function mapPR(row: PRRow): PRItem {
     title: row.title,
     slug: row.slug,
     summary: row.summary,
+    body: normalizePRBody(row.body),
     status: (["draft", "reviewed", "approved", "published_externally", "rejected"].includes(row.status)
       ? row.status
       : "draft") as PRStatus,
@@ -267,7 +293,7 @@ export async function listPressReleases(): Promise<Result<PRItem[]>> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("press_releases")
-    .select("id, campaign_id, title, slug, summary, status, source, topic, compliance_status, external_url, external_publication_name, external_publication_date, external_headline, external_notes, published_externally_at, created_at, updated_at")
+    .select("id, campaign_id, title, slug, summary, body, status, source, topic, compliance_status, external_url, external_publication_name, external_publication_date, external_headline, external_notes, published_externally_at, created_at, updated_at")
     .order("created_at", { ascending: false })
     .limit(300);
 
@@ -302,7 +328,7 @@ export async function createPressReleaseDraft(input: { title: string; summary?: 
       compliance_status: "pending",
       body: [],
     })
-    .select("id, campaign_id, title, slug, summary, status, source, topic, compliance_status, external_url, external_publication_name, external_publication_date, external_headline, external_notes, published_externally_at, created_at, updated_at")
+    .select("id, campaign_id, title, slug, summary, body, status, source, topic, compliance_status, external_url, external_publication_name, external_publication_date, external_headline, external_notes, published_externally_at, created_at, updated_at")
     .single();
 
   if (error || !data) return { ok: false, error: error?.message ?? "Could not create draft." };
@@ -468,6 +494,127 @@ export async function generatePRNow(input?: { topic?: string; force?: boolean })
   if (!out.ok) return { ok: false, error: out.error };
   revalidatePRSurfaces();
   return { ok: true, data: { id: out.id, title: out.title, slug: out.slug, complianceStatus: out.complianceStatus } };
+}
+
+async function loadActiveFactsForGeneration(admin: ReturnType<typeof createAdminClient>): Promise<PRFactInput[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await admin
+    .from("pr_fact_library")
+    .select("id, title, category, content, source_url, effective_from, effective_to")
+    .eq("active", true)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (error) throw new Error(error.message);
+
+  return ((data as Array<{
+    id: string;
+    title: string;
+    category: string;
+    content: string;
+    source_url: string | null;
+    effective_from: string | null;
+    effective_to: string | null;
+  }> | null) ?? [])
+    .filter((f) => (!f.effective_from || f.effective_from <= today) && (!f.effective_to || f.effective_to >= today))
+    .map((f) => ({
+      id: f.id,
+      title: f.title,
+      category: f.category,
+      content: f.content,
+      sourceUrl: f.source_url,
+    }));
+}
+
+export async function generatePRDraftFromQueue(id: string): Promise<Result<PRItem>> {
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return { ok: false, error: "Super admin only." };
+
+  const admin = createAdminClient();
+  const { data: existing, error: existingError } = await admin
+    .from("press_releases")
+    .select("id, title, summary, topic, status")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (existingError || !existing) return { ok: false, error: existingError?.message ?? "PR item not found." };
+  if (existing.status === "published_externally") {
+    return { ok: false, error: "Cannot regenerate a PR that is already marked as published externally." };
+  }
+
+  const facts = await loadActiveFactsForGeneration(admin);
+  if (!facts.length) return { ok: false, error: "No active PR facts available. Add at least one fact first." };
+
+  const topic = (existing.topic ?? "").trim() || existing.title;
+  const draft = await generatePRDraft({ topic, facts });
+  if (!draft.ok) return { ok: false, error: draft.error };
+
+  const compliance = await runPRCompliance({
+    title: draft.draft.title,
+    summary: draft.draft.summary,
+    body: draft.draft.body,
+    facts,
+  });
+  const complianceStatus = compliance.ok ? compliance.report.status : "fail";
+
+  const summary = (existing.summary ?? "").trim() || draft.draft.summary;
+  const { data: updated, error: updateError } = await admin
+    .from("press_releases")
+    .update({
+      summary,
+      body: draft.draft.body,
+      source: "ai",
+      compliance_status: complianceStatus,
+      status: "draft",
+    })
+    .eq("id", id)
+    .select("id, campaign_id, title, slug, summary, body, status, source, topic, compliance_status, external_url, external_publication_name, external_publication_date, external_headline, external_notes, published_externally_at, created_at, updated_at")
+    .single();
+
+  if (updateError || !updated) return { ok: false, error: updateError?.message ?? "Failed to update PR draft body." };
+
+  await admin.from("pr_claim_sources").delete().eq("press_release_id", id);
+  await admin.from("pr_compliance_reports").delete().eq("press_release_id", id);
+
+  if (draft.draft.claims.length) {
+    await admin.from("pr_claim_sources").insert(
+      draft.draft.claims.map((claim) => ({
+        press_release_id: id,
+        claim_text: claim.claimText,
+        fact_library_id: claim.factId,
+        source_url: claim.sourceUrl,
+        confidence: claim.confidence,
+      }))
+    );
+  }
+
+  if (compliance.ok) {
+    await admin.from("pr_compliance_reports").insert({
+      press_release_id: id,
+      status: compliance.report.status,
+      checks: compliance.report.checks,
+      summary: compliance.report.summary,
+      raw_feedback: compliance.report.rawFeedback,
+    });
+  } else {
+    await admin.from("pr_compliance_reports").insert({
+      press_release_id: id,
+      status: "fail",
+      checks: {
+        unsupportedClaims: [],
+        fabricatedStatsOrAwards: [],
+        unverifiableQuotes: [],
+        promotionalToneRisks: ["Compliance pass failed to execute"],
+        duplicateAngleRisks: [],
+        keywordStuffingRisks: [],
+      },
+      summary: "Compliance engine failed; manual review required.",
+      raw_feedback: compliance.error,
+    });
+  }
+
+  revalidatePRSurfaces();
+  return { ok: true, data: mapPR(updated as PRRow) };
 }
 
 interface FactRow {

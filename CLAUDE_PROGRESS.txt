@@ -3783,3 +3783,23 @@ Note: Delete only once saved in_progress
 ### Migration
 
 - No new SQL migration.
+## Session: PR generation timeout + fallback-key runtime fix + queue draft tooling (v1.18.13)
+
+### v1.18.13 — PR generation reliability + queue-driven draft management improvements.
+- PR queue workflow (`src/components/superadmin/PRReview.tsx`):
+  * added per-row draft toggle (`Open draft` / `Hide draft`) so full PR body is visible directly from queue rows.
+  * added per-row `Generate draft from queue` action to manually generate/update draft content from queued PR topics.
+- PR admin data/actions (`src/lib/actions/pr-admin.ts`):
+  * `PRItem` now includes full `body` for queue rendering.
+  * `listPressReleases` now selects and normalizes `body`.
+  * added `generatePRDraftFromQueue(id)` to regenerate one queued draft with fresh body/compliance/claim mapping.
+- AI model/runtime alignment:
+  * PR writer and PR compliance now follow blog model path (`BLOG_AI_MODEL` -> `AI_MODEL` -> `claude-sonnet-5`) in `src/lib/ai/pr-writer.ts` and `src/lib/ai/pr-compliance.ts`.
+  * fixed shared AI key gate in `src/lib/ai/client.ts` so fallback-only deployments (with `AI_FALLBACK_API_KEY` and no primary key) run instead of throwing `No AI API key set`.
+- PR timeout in codebase:
+  * increased PR AI request timeout to `300_000` ms in `src/lib/ai/pr-writer.ts` and `src/lib/ai/pr-compliance.ts`.
+- Validation:
+  * `npx tsc --noEmit` passed.
+  * `npm run build` passed.
+- SQL migration note:
+  * no new migration added in this release.

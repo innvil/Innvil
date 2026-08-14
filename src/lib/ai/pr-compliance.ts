@@ -1,7 +1,9 @@
 import "server-only";
 
-import { aiComplete, getInnvilModelConfig } from "@/src/lib/ai/client";
+import { aiComplete, aiprimetechProvider } from "@/src/lib/ai/client";
 import type { PRFactInput } from "@/src/lib/ai/pr-writer";
+
+const PR_MODEL = process.env.BLOG_AI_MODEL || process.env.AI_MODEL || "claude-sonnet-5";
 
 export interface PRComplianceReportDraft {
   status: "pass" | "fail";
@@ -82,7 +84,7 @@ export async function runPRCompliance(input: {
     .map((f) => `[${f.id}] ${f.title}: ${f.content}${f.sourceUrl ? ` (source: ${f.sourceUrl})` : ""}`)
     .join("\n");
 
-  const { model, effort } = getInnvilModelConfig();
+  const providerOverride = aiprimetechProvider();
   const system = [
     "You are a strict PR compliance reviewer.",
     "Return JSON only.",
@@ -122,10 +124,12 @@ export async function runPRCompliance(input: {
 
   try {
     const text = await aiComplete({
-      model,
-      effort,
+      model: PR_MODEL,
+      effort: "medium",
       maxTokens: 1400,
+      requestTimeoutMs: 300_000,
       automation: "PR_COMPLIANCE_REVIEW",
+      ...(providerOverride ? { providerOverride } : {}),
       system,
       messages: [{ role: "user", content: prompt }],
     });

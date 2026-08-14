@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, ExternalLink, Megaphone, Plus
 import {
   createPRFact,
   createPRFactsBulk,
+  generatePRDraftFromQueue,
   createPressReleaseDraftsBulk,
   createPressReleaseDraft,
   deletePRFact,
@@ -51,6 +52,7 @@ export function PRReview() {
   const [facts, setFacts] = useState<PRFactLibraryItem[] | null>(null);
   const [detailsById, setDetailsById] = useState<Record<string, PRDetails>>({});
   const [detailsOpenById, setDetailsOpenById] = useState<Record<string, boolean>>({});
+  const [draftOpenById, setDraftOpenById] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
 
@@ -120,6 +122,10 @@ export function PRReview() {
     { key: "keywordStuffingRisks", label: "Keyword stuffing risks" },
   ];
 
+  const toggleDraft = (id: string) => {
+    setDraftOpenById((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
   const grouped = useMemo(() => {
     const all = rows ?? [];
     return {
@@ -176,6 +182,19 @@ export function PRReview() {
     }
     setAiTopic("");
     setMsg({ text: `AI draft generated: ${res.data.title} (${res.data.complianceStatus.toUpperCase()} compliance).` });
+    await load();
+  };
+
+  const generateFromQueue = async (id: string) => {
+    setBusy(`gen-queue:${id}`);
+    setMsg(null);
+    const res = await generatePRDraftFromQueue(id);
+    setBusy(null);
+    if (!res.ok) {
+      setMsg({ text: res.error, error: true });
+      return;
+    }
+    setMsg({ text: `Draft generated from queue item: ${res.data.title}.` });
     await load();
   };
 
@@ -614,6 +633,19 @@ export function PRReview() {
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
+                      onClick={() => toggleDraft(row.id)}
+                      className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5"
+                    >
+                      {draftOpenById[row.id] ? "Hide draft" : "Open draft"}
+                    </button>
+                    <button
+                      onClick={() => void generateFromQueue(row.id)}
+                      disabled={busy === `gen-queue:${row.id}` || row.status === "published_externally"}
+                      className="text-xs fp-btn-primary rounded-lg px-3 py-1.5 disabled:opacity-60"
+                    >
+                      {busy === `gen-queue:${row.id}` ? "Generating…" : "Generate draft from queue"}
+                    </button>
+                    <button
                       onClick={() => void toggleDetails(row.id)}
                       disabled={busy === `details:${row.id}`}
                       className="text-xs fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60"
@@ -669,6 +701,41 @@ export function PRReview() {
                       </button>
                     )}
                   </div>
+
+                  {draftOpenById[row.id] && (
+                    <div className="mt-4 border-t fp-line-soft pt-4 space-y-2">
+                      <p className="text-xs fp-mono uppercase fp-text-dim">Draft body</p>
+                      {row.body.length === 0 ? (
+                        <p className="fp-text-faint text-xs">No draft body blocks yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {row.body.map((block, idx) => {
+                            if ((block.kind === "ul" || block.kind === "ol") && block.items?.length) {
+                              const ListTag = block.kind;
+                              return (
+                                <ListTag key={`${row.id}-body-${idx}`} className="list-disc pl-5 text-sm fp-text-dim space-y-1">
+                                  {block.items.map((item, itemIdx) => (
+                                    <li key={`${row.id}-body-${idx}-item-${itemIdx}`}>{item}</li>
+                                  ))}
+                                </ListTag>
+                              );
+                            }
+                            if (block.kind === "h3") {
+                              return <h4 key={`${row.id}-body-${idx}`} className="text-sm font-semibold">{block.text}</h4>;
+                            }
+                            if (block.kind === "quote") {
+                              return (
+                                <blockquote key={`${row.id}-body-${idx}`} className="border-l-2 fp-line-soft pl-3 italic text-sm fp-text-dim">
+                                  {block.text}
+                                </blockquote>
+                              );
+                            }
+                            return <p key={`${row.id}-body-${idx}`} className="text-sm fp-text-dim leading-relaxed">{block.text}</p>;
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {showPublish && (
                     <div className="mt-4 border-t fp-line-soft pt-4 space-y-2">

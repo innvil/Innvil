@@ -1,6 +1,8 @@
 import "server-only";
 
-import { aiComplete, getInnvilModelConfig } from "@/src/lib/ai/client";
+import { aiComplete, aiprimetechProvider } from "@/src/lib/ai/client";
+
+const PR_MODEL = process.env.BLOG_AI_MODEL || process.env.AI_MODEL || "claude-sonnet-5";
 
 export interface PRFactInput {
   id: string;
@@ -180,15 +182,17 @@ export async function generatePRDraft(input: {
     "- Never include markdown fences or extra keys.",
   ].join("\n");
 
-  const { model, effort } = getInnvilModelConfig();
+  const providerOverride = aiprimetechProvider();
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const text = await aiComplete({
-        model,
-        effort,
+        model: PR_MODEL,
+        effort: "medium",
         maxTokens: 2200,
+        requestTimeoutMs: 300_000,
         automation: "PR_DRAFT_WRITER",
+        ...(providerOverride ? { providerOverride } : {}),
         system,
         messages: [{ role: "user", content: prompt }],
       });
