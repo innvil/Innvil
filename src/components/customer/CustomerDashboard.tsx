@@ -907,7 +907,7 @@ export function CustomerDashboard({
 
         {/* ---------- MASS ORDER ---------- */}
         {page === "massorder" && (
-          <MassOrder panelId={panelId} currency={currency} />
+          <MassOrder panelId={panelId} currency={currency} services={services} favoriteIds={favoriteIds} />
         )}
 
         {/* ---------- CAMPAIGN ---------- */}

@@ -3,10 +3,11 @@
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { placeOrder } from "@/src/lib/actions/orders";
-import { analyzeCampaign } from "@/src/lib/automation/links";
+import { analyzeCampaign, parseCampaignLinks } from "@/src/lib/automation/links";
 import { hasCampaignAutomation, campaignLinkLimit, planTier, tierPlatforms } from "@/src/lib/plans";
 import { readAutomationProfile, profileIsConfigured, slotsForLink } from "@/src/lib/automation/profile";
 import { round4 } from "@/src/lib/money";
+import { placeOrderForAccount } from "@/src/lib/orders/place";
 
 /* =========================================================
    Campaign Automation — fan-out engine (Phase 2b).
@@ -164,13 +165,27 @@ export interface CampaignVM {
 /* ----------------------------------------------------------- mass order ---- */
 
 export interface MassOrderItemVM {
-  raw: string;
+  index: number;
+  target: string;
+  serviceId: string;
+  serviceNo: number | null;
+  serviceName: string;
+  quantity: number;
   ok: boolean;
   orderId?: string;
   charge?: number;
   error?: string;
 }
+
+export interface MassOrderSelectedServiceInput {
+  serviceRef: string; // service UUID or panel local_id
+  quantity: number;
+}
+
 export interface MassOrderResult {
+  totalIntended: number;
+  validTargets: number;
+  selectedServices: number;
   placed: number;
   totalCharge: number;
   failed: number;
@@ -180,7 +195,12 @@ export interface MassOrderResult {
 /** Manual mass order — FREE for any customer (no automator subscription). One line per
  *  order, `serviceId | link | quantity` (pipe or space separated). serviceId is the
  *  service's own number (local id) or its uuid. */
-export async function runMassOrder(input: { panelId: string; text: string }): Promise<Result<MassOrderResult>> {
+export async function runMassOrder(input: {
+  panelId: string;
+  text?: string;
+  targetsText?: string;
+  selectedServices?: MassOrderSelectedServiceInput[];
+}): Promise<Result<MassOrderResult>> {
   const supa = await createStorefrontClient();
   const { data: { user } } = await supa.auth.getUser();
   if (!user) return { ok: false, error: "Please log in." };
@@ -191,44 +211,268 @@ export async function runMassOrder(input: { panelId: string; text: string }): Pr
   if (panel.status !== "live") return { ok: false, error: "This panel isn't accepting orders right now." };
 
   const { data: account } = await admin
-    .from("customer_accounts").select("id, status").eq("user_id", user.id).eq("panel_id", input.panelId).maybeSingle();
+    .from("customer_accounts").select("id, status, balance").eq("user_id", user.id).eq("panel_id", input.panelId).maybeSingle();
   if (!account) return { ok: false, error: "Customer account not found." };
   if (account.status !== "active") return { ok: false, error: "Your account can't place orders right now." };
 
   // Resolve services: accept the panel's own service number (local_id) or the uuid.
   const { data: services } = await admin
-    .from("services").select("id, local_id").eq("panel_id", input.panelId).eq("status", "active");
-  const byLocal = new Map<string, string>();
-  const ids = new Set<string>();
-  for (const s of (services as Array<{ id: string; local_id: number | null }> | null) ?? []) {
-    ids.add(s.id);
-    if (s.local_id != null) byLocal.set(String(s.local_id), s.id);
+    .from("services")
+    .select("id, local_id, name, min, max, sell_rate")
+    .eq("panel_id", input.panelId)
+    .eq("status", "active");
+
+  const svcRows = (services as Array<{
+    id: string;
+    local_id: number | null;
+    name: string;
+    min: number;
+    max: number;
+    sell_rate: number;
+  }> | null) ?? [];
+  const byId = new Map<string, (typeof svcRows)[number]>();
+  const byLocal = new Map<string, (typeof svcRows)[number]>();
+  for (const s of svcRows) {
+    byId.set(s.id, s);
+    if (s.local_id != null) byLocal.set(String(s.local_id), s);
   }
 
-  const lines = input.text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const selected = (input as {
+    selectedServices?: MassOrderSelectedServiceInput[];
+  }).selectedServices;
+  const targetsText = (input as { targetsText?: string }).targetsText;
+
+  // New flow: selected services + one shared target input.
+  if (Array.isArray(selected) && typeof targetsText === "string") {
+    if (selected.length === 0) return { ok: false, error: "Add at least one service." };
+
+    const validTargets = parseCampaignLinks(targetsText);
+    if (validTargets.length === 0) return { ok: false, error: "Paste at least one valid target link." };
+
+    // Resolve selected services in the same order the UI sends them.
+    const resolved: Array<{
+      serviceId: string;
+      serviceNo: number | null;
+      serviceName: string;
+      min: number;
+      max: number;
+      sellRate: number;
+      quantity: number;
+    }> = [];
+    const seen = new Set<string>();
+    for (const row of selected) {
+      const ref = String(row.serviceRef ?? "").trim();
+      if (!ref) continue;
+      const svc = byId.get(ref) ?? byLocal.get(ref) ?? null;
+      if (!svc) continue;
+      if (seen.has(svc.id)) continue; // guard duplicate selected service refs
+      seen.add(svc.id);
+      resolved.push({
+        serviceId: svc.id,
+        serviceNo: svc.local_id,
+        serviceName: svc.name,
+        min: Number(svc.min),
+        max: Number(svc.max),
+        sellRate: Number(svc.sell_rate),
+        quantity: Math.floor(Number(row.quantity)),
+      });
+    }
+    if (resolved.length === 0) return { ok: false, error: "No valid selected services were found." };
+
+    const items: MassOrderItemVM[] = [];
+    let placed = 0;
+    let failed = 0;
+    let totalCharge = 0;
+    let index = 0;
+    let balanceHint = Number(account.balance);
+
+    // Deterministic attempt order: each target, then each selected service.
+    for (const target of validTargets) {
+      for (const svc of resolved) {
+        index += 1;
+        if (!Number.isFinite(svc.quantity) || svc.quantity <= 0) {
+          failed++;
+          items.push({
+            index,
+            target,
+            serviceId: svc.serviceId,
+            serviceNo: svc.serviceNo,
+            serviceName: svc.serviceName,
+            quantity: svc.quantity,
+            ok: false,
+            error: "Quantity must be greater than 0",
+          });
+          continue;
+        }
+        if (svc.quantity < svc.min || svc.quantity > svc.max) {
+          failed++;
+          items.push({
+            index,
+            target,
+            serviceId: svc.serviceId,
+            serviceNo: svc.serviceNo,
+            serviceName: svc.serviceName,
+            quantity: svc.quantity,
+            ok: false,
+            error: `Quantity must be between ${svc.min.toLocaleString()} and ${svc.max.toLocaleString()}.`,
+          });
+          continue;
+        }
+
+        const res = await placeOrderForAccount(
+          admin,
+          { id: panel.id as string, status: panel.status as string },
+          { id: account.id as string, status: account.status as string, balance: balanceHint },
+          { panelId: input.panelId, serviceId: svc.serviceId, link: target, quantity: svc.quantity }
+        );
+
+        if (res.ok) {
+          balanceHint = res.balance;
+          placed++;
+          totalCharge = round4(totalCharge + res.charge);
+          items.push({
+            index,
+            target,
+            serviceId: svc.serviceId,
+            serviceNo: svc.serviceNo,
+            serviceName: svc.serviceName,
+            quantity: svc.quantity,
+            ok: true,
+            orderId: res.orderId,
+            charge: res.charge,
+          });
+        } else {
+          failed++;
+          items.push({
+            index,
+            target,
+            serviceId: svc.serviceId,
+            serviceNo: svc.serviceNo,
+            serviceName: svc.serviceName,
+            quantity: svc.quantity,
+            ok: false,
+            error: res.error,
+          });
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        totalIntended: validTargets.length * resolved.length,
+        validTargets: validTargets.length,
+        selectedServices: resolved.length,
+        placed,
+        totalCharge,
+        failed,
+        items,
+      },
+    };
+  }
+
+  // Legacy flow: one line per order (`serviceId | link | quantity`).
+  const lines = (input.text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return { ok: false, error: "Paste at least one line: serviceId | link | quantity." };
 
   const items: MassOrderItemVM[] = [];
   let placed = 0;
   let failed = 0;
   let totalCharge = 0;
+  let index = 0;
 
   for (const raw of lines) {
+    index += 1;
     const parts = raw.includes("|") ? raw.split("|").map((p) => p.trim()) : raw.split(/\s+/);
-    if (parts.length < 3) { items.push({ raw, ok: false, error: "Use: serviceId | link | quantity" }); failed++; continue; }
+    if (parts.length < 3) {
+      items.push({
+        index,
+        target: "",
+        serviceId: "",
+        serviceNo: null,
+        serviceName: "",
+        quantity: 0,
+        ok: false,
+        error: "Use: serviceId | link | quantity",
+      });
+      failed++;
+      continue;
+    }
     const ref = parts[0];
     const quantity = Number(parts[parts.length - 1]);
     const link = parts.slice(1, parts.length - 1).join(" ");
-    const serviceId = byLocal.get(ref) ?? (ids.has(ref) ? ref : null);
-    if (!serviceId) { items.push({ raw, ok: false, error: `No service "${ref}"` }); failed++; continue; }
-    if (!link || !Number.isFinite(quantity) || quantity <= 0) { items.push({ raw, ok: false, error: "Missing link or quantity" }); failed++; continue; }
+    const svc = byId.get(ref) ?? byLocal.get(ref) ?? null;
+    if (!svc) {
+      items.push({
+        index,
+        target: link,
+        serviceId: ref,
+        serviceNo: null,
+        serviceName: "",
+        quantity,
+        ok: false,
+        error: `No service "${ref}"`,
+      });
+      failed++;
+      continue;
+    }
+    if (!link || !Number.isFinite(quantity) || quantity <= 0) {
+      items.push({
+        index,
+        target: link,
+        serviceId: svc.id,
+        serviceNo: svc.local_id,
+        serviceName: svc.name,
+        quantity,
+        ok: false,
+        error: "Missing link or quantity",
+      });
+      failed++;
+      continue;
+    }
 
-    const res = await placeOrder({ panelId: input.panelId, serviceId, link, quantity });
-    if (res.ok) { placed++; totalCharge = round4(totalCharge + res.charge); items.push({ raw, ok: true, orderId: res.orderId, charge: res.charge }); }
-    else { failed++; items.push({ raw, ok: false, error: res.error }); }
+    const res = await placeOrder({ panelId: input.panelId, serviceId: svc.id, link, quantity });
+    if (res.ok) {
+      placed++;
+      totalCharge = round4(totalCharge + res.charge);
+      items.push({
+        index,
+        target: link,
+        serviceId: svc.id,
+        serviceNo: svc.local_id,
+        serviceName: svc.name,
+        quantity,
+        ok: true,
+        orderId: res.orderId,
+        charge: res.charge,
+      });
+    } else {
+      failed++;
+      items.push({
+        index,
+        target: link,
+        serviceId: svc.id,
+        serviceNo: svc.local_id,
+        serviceName: svc.name,
+        quantity,
+        ok: false,
+        error: res.error,
+      });
+    }
   }
 
-  return { ok: true, data: { placed, totalCharge, failed, items } };
+  return {
+    ok: true,
+    data: {
+      totalIntended: lines.length,
+      validTargets: lines.length,
+      selectedServices: 0,
+      placed,
+      totalCharge,
+      failed,
+      items,
+    },
+  };
 }
 
 /** The signed-in customer's recent campaigns on this panel. */
