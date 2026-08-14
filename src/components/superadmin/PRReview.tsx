@@ -63,6 +63,7 @@ export function PRReview() {
   const [draftImportText, setDraftImportText] = useState("");
   const [draftImportOpen, setDraftImportOpen] = useState(false);
   const [draftSectionOpen, setDraftSectionOpen] = useState(false);
+  const [queueSectionOpen, setQueueSectionOpen] = useState(false);
   const [aiTopic, setAiTopic] = useState("");
 
   const [factTitle, setFactTitle] = useState("");
@@ -582,8 +583,11 @@ export function PRReview() {
       </div>
 
       <div className="space-y-3">
-        <p className="text-sm font-medium">PR queue</p>
-        {rows === null ? (
+        <button onClick={() => setQueueSectionOpen((v) => !v)} className="flex items-center gap-2 text-left">
+          <p className="text-sm font-medium">PR queue</p>
+          <ChevronDown size={14} className={`fp-text-faint transition-transform ${queueSectionOpen ? "rotate-180" : ""}`} />
+        </button>
+        {queueSectionOpen && (rows === null ? (
           <p className="fp-text-faint text-sm py-4 text-center">Loading…</p>
         ) : rows.length === 0 ? (
           <p className="fp-text-faint text-sm py-4">No press releases yet.</p>
@@ -773,7 +777,7 @@ export function PRReview() {
               );
             })}
           </div>
-        )}
+        ))}
       </div>
 
       <div className="fp-panel border fp-line rounded-2xl p-4 space-y-2">

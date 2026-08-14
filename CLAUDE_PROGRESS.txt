@@ -19,6 +19,18 @@
 
 ## Session: PR topics + facts section collapsible parity fix (v1.18.11)
 
+## Session: PR queue collapsible parity completion (v1.18.12)
+
+### v1.18.12 — Added collapsible toggle for PR queue section.
+- PR review UX completion (`src/components/superadmin/PRReview.tsx`):
+  * made the top-level `PR queue` section collapsible.
+  * preserves existing queue actions/details/publish flow inside the collapsed section.
+  * combines with v1.18.11 so all three main PR blocks are now collapsible: `Create PR draft`, `PR queue`, `PR Fact Library`.
+- Validation:
+  * `npx tsc --noEmit` passed.
+- SQL migration note:
+  * no new migration added in this release.
+
 ### v1.18.11 — Completed missing PR section collapsibility (topics + facts blocks).
 - PR review UX correction (`src/components/superadmin/PRReview.tsx`):
   * made the top-level `Create PR draft` section collapsible.
