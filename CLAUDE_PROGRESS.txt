@@ -17,6 +17,18 @@
 
 ## Session: PR Generator superadmin parity + import UX + collapsible sections (v1.18.10)
 
+## Session: PR topics + facts section collapsible parity fix (v1.18.11)
+
+### v1.18.11 — Completed missing PR section collapsibility (topics + facts blocks).
+- PR review UX correction (`src/components/superadmin/PRReview.tsx`):
+  * made the top-level `Create PR draft` section collapsible.
+  * made the top-level `PR Fact Library` section collapsible.
+  * retained nested import collapsibles and all existing create/import behaviors.
+- Validation:
+  * `npx tsc --noEmit` passed.
+- SQL migration note:
+  * no new migration added in this release.
+
 ### v1.18.10 — Wired PR Generator into owner-app superadmin surface and added collapsible/import UX parity.
 - Superadmin panel-side parity (`src/components/panels/index.tsx`):
   * added PR Generator nav item to the owner-app superadmin sidebar flow.

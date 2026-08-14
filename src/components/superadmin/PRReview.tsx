@@ -62,6 +62,7 @@ export function PRReview() {
   const [newTopic, setNewTopic] = useState("");
   const [draftImportText, setDraftImportText] = useState("");
   const [draftImportOpen, setDraftImportOpen] = useState(false);
+  const [draftSectionOpen, setDraftSectionOpen] = useState(false);
   const [aiTopic, setAiTopic] = useState("");
 
   const [factTitle, setFactTitle] = useState("");
@@ -70,6 +71,7 @@ export function PRReview() {
   const [factSourceUrl, setFactSourceUrl] = useState("");
   const [factImportText, setFactImportText] = useState("");
   const [factImportOpen, setFactImportOpen] = useState(false);
+  const [factSectionOpen, setFactSectionOpen] = useState(false);
 
   const [publishForId, setPublishForId] = useState<string | null>(null);
   const [pubUrl, setPubUrl] = useState("");
@@ -477,72 +479,79 @@ export function PRReview() {
       </div>
 
       <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
-        <p className="text-sm font-medium">Create PR draft</p>
-        <div className="space-y-2">
-          <div>
-            <label className="fp-text-dim text-xs fp-mono uppercase">Title</label>
-            <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} className={inputCls} placeholder="Press release title" />
-          </div>
-          <div>
-            <label className="fp-text-dim text-xs fp-mono uppercase">Summary</label>
-            <textarea value={newSummary} onChange={(e) => setNewSummary(e.target.value)} rows={3} className={inputCls} placeholder="Short PR summary" />
-          </div>
-          <div>
-            <label className="fp-text-dim text-xs fp-mono uppercase">Topic (optional)</label>
-            <input value={newTopic} onChange={(e) => setNewTopic(e.target.value)} className={inputCls} placeholder="Campaign topic" />
-          </div>
-        </div>
-        <button
-          onClick={() => void createDraft()}
-          disabled={busy === "create" || !newTitle.trim()}
-          className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 inline-flex items-center gap-1.5"
-        >
-          <Plus size={14} /> {busy === "create" ? "Creating…" : "Create draft"}
+        <button onClick={() => setDraftSectionOpen((v) => !v)} className="flex items-center gap-2 text-left">
+          <p className="text-sm font-medium">Create PR draft</p>
+          <ChevronDown size={14} className={`fp-text-faint transition-transform ${draftSectionOpen ? "rotate-180" : ""}`} />
         </button>
-
-        <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 space-y-2">
-          <button
-            onClick={() => setDraftImportOpen((v) => !v)}
-            className="w-full flex items-center justify-between text-left"
-          >
-            <p className="fp-text-faint text-[11px] fp-mono uppercase">Import draft topics (title | summary | topic)</p>
-            <ChevronDown size={14} className={`fp-text-faint transition-transform ${draftImportOpen ? "rotate-180" : ""}`} />
-          </button>
-          {draftImportOpen && (
-            <>
-              <textarea
-                value={draftImportText}
-                onChange={(e) => setDraftImportText(e.target.value)}
-                rows={3}
-                className={`${inputCls} font-mono`}
-                placeholder={"One row per line\nTitle | Summary | Topic\nLaunches AI PR Generator for Superadmin | New workflow is live | Product updates"}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => void importDraftRows(parseDraftRows(draftImportText))}
-                  disabled={busy === "draft-import" || !draftImportText.trim()}
-                  className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60"
-                >
-                  {busy === "draft-import" ? "Importing…" : "Import pasted"}
-                </button>
-                <label className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 hover:fp-text cursor-pointer">
-                  Upload file
-                  <input
-                    type="file"
-                    accept=".csv,.txt,.xlsx,.docx"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void importDraftFile(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-                <span className="fp-text-faint text-[11px]">.csv/.xlsx: col A=title, B=summary, C=topic · .txt/.docx: one line per row</span>
+        {draftSectionOpen && (
+          <>
+            <div className="space-y-2">
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Title</label>
+                <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} className={inputCls} placeholder="Press release title" />
               </div>
-            </>
-          )}
-        </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Summary</label>
+                <textarea value={newSummary} onChange={(e) => setNewSummary(e.target.value)} rows={3} className={inputCls} placeholder="Short PR summary" />
+              </div>
+              <div>
+                <label className="fp-text-dim text-xs fp-mono uppercase">Topic (optional)</label>
+                <input value={newTopic} onChange={(e) => setNewTopic(e.target.value)} className={inputCls} placeholder="Campaign topic" />
+              </div>
+            </div>
+            <button
+              onClick={() => void createDraft()}
+              disabled={busy === "create" || !newTitle.trim()}
+              className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60 inline-flex items-center gap-1.5"
+            >
+              <Plus size={14} /> {busy === "create" ? "Creating…" : "Create draft"}
+            </button>
+
+            <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 space-y-2">
+              <button
+                onClick={() => setDraftImportOpen((v) => !v)}
+                className="w-full flex items-center justify-between text-left"
+              >
+                <p className="fp-text-faint text-[11px] fp-mono uppercase">Import draft topics (title | summary | topic)</p>
+                <ChevronDown size={14} className={`fp-text-faint transition-transform ${draftImportOpen ? "rotate-180" : ""}`} />
+              </button>
+              {draftImportOpen && (
+                <>
+                  <textarea
+                    value={draftImportText}
+                    onChange={(e) => setDraftImportText(e.target.value)}
+                    rows={3}
+                    className={`${inputCls} font-mono`}
+                    placeholder={"One row per line\nTitle | Summary | Topic\nLaunches AI PR Generator for Superadmin | New workflow is live | Product updates"}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => void importDraftRows(parseDraftRows(draftImportText))}
+                      disabled={busy === "draft-import" || !draftImportText.trim()}
+                      className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60"
+                    >
+                      {busy === "draft-import" ? "Importing…" : "Import pasted"}
+                    </button>
+                    <label className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 hover:fp-text cursor-pointer">
+                      Upload file
+                      <input
+                        type="file"
+                        accept=".csv,.txt,.xlsx,.docx"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void importDraftFile(f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    <span className="fp-text-faint text-[11px]">.csv/.xlsx: col A=title, B=summary, C=topic · .txt/.docx: one line per row</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
@@ -775,104 +784,111 @@ export function PRReview() {
       </div>
 
       <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
-        <p className="text-sm font-medium">PR Fact Library</p>
-        <p className="fp-text-faint text-xs">Only active facts are used for AI drafting/compliance checks.</p>
-        <div className="space-y-2">
-          <input value={factTitle} onChange={(e) => setFactTitle(e.target.value)} className={inputCls} placeholder="Fact title" />
-          <input value={factCategory} onChange={(e) => setFactCategory(e.target.value)} className={inputCls} placeholder="Category" />
-          <textarea value={factContent} onChange={(e) => setFactContent(e.target.value)} rows={3} className={inputCls} placeholder="Factual content (no marketing fluff)" />
-          <input value={factSourceUrl} onChange={(e) => setFactSourceUrl(e.target.value)} className={inputCls} placeholder="Source URL (optional)" />
-          <button
-            onClick={() => void addFact()}
-            disabled={busy === "fact-add" || !factTitle.trim() || !factContent.trim()}
-            className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60"
-          >
-            {busy === "fact-add" ? "Adding…" : "Add fact"}
-          </button>
-        </div>
+        <button onClick={() => setFactSectionOpen((v) => !v)} className="flex items-center gap-2 text-left">
+          <p className="text-sm font-medium">PR Fact Library</p>
+          <ChevronDown size={14} className={`fp-text-faint transition-transform ${factSectionOpen ? "rotate-180" : ""}`} />
+        </button>
+        {factSectionOpen && (
+          <>
+            <p className="fp-text-faint text-xs">Only active facts are used for AI drafting/compliance checks.</p>
+            <div className="space-y-2">
+              <input value={factTitle} onChange={(e) => setFactTitle(e.target.value)} className={inputCls} placeholder="Fact title" />
+              <input value={factCategory} onChange={(e) => setFactCategory(e.target.value)} className={inputCls} placeholder="Category" />
+              <textarea value={factContent} onChange={(e) => setFactContent(e.target.value)} rows={3} className={inputCls} placeholder="Factual content (no marketing fluff)" />
+              <input value={factSourceUrl} onChange={(e) => setFactSourceUrl(e.target.value)} className={inputCls} placeholder="Source URL (optional)" />
+              <button
+                onClick={() => void addFact()}
+                disabled={busy === "fact-add" || !factTitle.trim() || !factContent.trim()}
+                className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60"
+              >
+                {busy === "fact-add" ? "Adding…" : "Add fact"}
+              </button>
+            </div>
 
-        <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 space-y-2">
-          <button
-            onClick={() => setFactImportOpen((v) => !v)}
-            className="w-full flex items-center justify-between text-left"
-          >
-            <p className="fp-text-faint text-[11px] fp-mono uppercase">Import facts (title | category | content | source url)</p>
-            <ChevronDown size={14} className={`fp-text-faint transition-transform ${factImportOpen ? "rotate-180" : ""}`} />
-          </button>
-          {factImportOpen && (
-            <>
-              <textarea
-                value={factImportText}
-                onChange={(e) => setFactImportText(e.target.value)}
-                rows={3}
-                className={`${inputCls} font-mono`}
-                placeholder={"One row per line\nTitle | Category | Content | Source URL\nMain launch date | roadmap | Launch announced for Sept 2026 | https://example.com/post"}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => void importFactRows(parseFactRows(factImportText))}
-                  disabled={busy === "fact-import" || !factImportText.trim()}
-                  className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60"
-                >
-                  {busy === "fact-import" ? "Importing…" : "Import pasted"}
-                </button>
-                <label className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 hover:fp-text cursor-pointer">
-                  Upload file
-                  <input
-                    type="file"
-                    accept=".csv,.txt,.xlsx,.docx"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void importFactFile(f);
-                      e.target.value = "";
-                    }}
+            <div className="fp-panel-raised border fp-line-soft rounded-xl p-3 space-y-2">
+              <button
+                onClick={() => setFactImportOpen((v) => !v)}
+                className="w-full flex items-center justify-between text-left"
+              >
+                <p className="fp-text-faint text-[11px] fp-mono uppercase">Import facts (title | category | content | source url)</p>
+                <ChevronDown size={14} className={`fp-text-faint transition-transform ${factImportOpen ? "rotate-180" : ""}`} />
+              </button>
+              {factImportOpen && (
+                <>
+                  <textarea
+                    value={factImportText}
+                    onChange={(e) => setFactImportText(e.target.value)}
+                    rows={3}
+                    className={`${inputCls} font-mono`}
+                    placeholder={"One row per line\nTitle | Category | Content | Source URL\nMain launch date | roadmap | Launch announced for Sept 2026 | https://example.com/post"}
                   />
-                </label>
-                <span className="fp-text-faint text-[11px]">.csv/.xlsx: A=title, B=category, C=content, D=source URL · .txt/.docx line format supported</span>
-              </div>
-            </>
-          )}
-        </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => void importFactRows(parseFactRows(factImportText))}
+                      disabled={busy === "fact-import" || !factImportText.trim()}
+                      className="fp-btn-primary text-xs font-semibold px-3 py-2 rounded-lg disabled:opacity-60"
+                    >
+                      {busy === "fact-import" ? "Importing…" : "Import pasted"}
+                    </button>
+                    <label className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-2 hover:fp-text cursor-pointer">
+                      Upload file
+                      <input
+                        type="file"
+                        accept=".csv,.txt,.xlsx,.docx"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void importFactFile(f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    <span className="fp-text-faint text-[11px]">.csv/.xlsx: A=title, B=category, C=content, D=source URL · .txt/.docx line format supported</span>
+                  </div>
+                </>
+              )}
+            </div>
 
-        <div className="space-y-2">
-          {(facts ?? []).length === 0 ? (
-            <p className="fp-text-faint text-sm">No facts yet.</p>
-          ) : (
-            (facts ?? []).map((fact) => (
-              <div key={fact.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{fact.title}</p>
-                    <p className="fp-text-faint text-xs">{fact.category} · {fact.active ? "active" : "inactive"}</p>
+            <div className="space-y-2">
+              {(facts ?? []).length === 0 ? (
+                <p className="fp-text-faint text-sm">No facts yet.</p>
+              ) : (
+                (facts ?? []).map((fact) => (
+                  <div key={fact.id} className="fp-panel-raised border fp-line-soft rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{fact.title}</p>
+                        <p className="fp-text-faint text-xs">{fact.category} · {fact.active ? "active" : "inactive"}</p>
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={() => void toggleFact(fact.id, !fact.active)}
+                          disabled={busy === `fact:${fact.id}`}
+                          className="text-xs fp-panel border fp-line-soft rounded-lg px-2 py-1 disabled:opacity-60"
+                        >
+                          {fact.active ? "Disable" : "Enable"}
+                        </button>
+                        <button
+                          onClick={() => void removeFact(fact.id)}
+                          disabled={busy === `factdel:${fact.id}`}
+                          className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2 py-1 disabled:opacity-60"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    <p className="fp-text-dim text-sm mt-2 whitespace-pre-wrap">{fact.content}</p>
+                    {fact.sourceUrl && (
+                      <a href={fact.sourceUrl} target="_blank" rel="noreferrer" className="text-xs fp-gold inline-flex items-center gap-1 mt-2">
+                        Source <ExternalLink size={11} />
+                      </a>
+                    )}
                   </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button
-                      onClick={() => void toggleFact(fact.id, !fact.active)}
-                      disabled={busy === `fact:${fact.id}`}
-                      className="text-xs fp-panel border fp-line-soft rounded-lg px-2 py-1 disabled:opacity-60"
-                    >
-                      {fact.active ? "Disable" : "Enable"}
-                    </button>
-                    <button
-                      onClick={() => void removeFact(fact.id)}
-                      disabled={busy === `factdel:${fact.id}`}
-                      className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2 py-1 disabled:opacity-60"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-                <p className="fp-text-dim text-sm mt-2 whitespace-pre-wrap">{fact.content}</p>
-                {fact.sourceUrl && (
-                  <a href={fact.sourceUrl} target="_blank" rel="noreferrer" className="text-xs fp-gold inline-flex items-center gap-1 mt-2">
-                    Source <ExternalLink size={11} />
-                  </a>
-                )}
-              </div>
-            ))
-          )}
-        </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
