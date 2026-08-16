@@ -2,8 +2,11 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
-import { telegramApiCall } from "./telegram-client";
-import { virtualModBotAcknowledgement, virtualModNaturalChatterActive, moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT } from "./plan";
+import { telegramApiCall, getTelegramFile, downloadTelegramFileBuffer, TELEGRAM_MAX_DOWNLOADABLE_BYTES } from "./telegram-client";
+import {
+  virtualModBotAcknowledgement, virtualModNaturalChatterActive, virtualModMediaModeration, virtualModVideoModeration,
+  moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT,
+} from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
   selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, requiresIndividualContribution,
@@ -26,6 +29,13 @@ import {
   COLLAB_ROUTABLE_CATEGORIES, PROMOTION_WARNING_LIMIT, type LinkWarningState,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
+import {
+  decideMediaEnforcement, aggregateFrameResults, computeSamplePositions, isEarlyExitResult,
+  type MediaKind, type MediaClassificationResult, type FrameResult,
+} from "./media-moderation";
+import { classifyImageBytes } from "./media-safety-provider";
+import { extractVideoFrames } from "./media-frame-extractor";
+import { generateMediaModerationWarning } from "./media-warning";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -107,13 +117,24 @@ export async function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promi
 
 type TelegramChat = { id: number; type?: string; title?: string; username?: string };
 type TelegramUser = { id: number; is_bot?: boolean; username?: string; first_name?: string };
-type TelegramMessage = {
+type TelegramPhotoSize = { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number };
+type TelegramVideo = { file_id: string; file_unique_id: string; duration?: number; file_size?: number; mime_type?: string };
+type TelegramAnimation = { file_id: string; file_unique_id: string; duration?: number; file_size?: number; mime_type?: string };
+type TelegramDocument = { file_id: string; file_unique_id: string; file_size?: number; mime_type?: string; file_name?: string };
+export type TelegramMessage = {
   message_id: number;
   chat: TelegramChat;
   from?: TelegramUser;
   text?: string;
   caption?: string;
   reply_to_message?: { message_id: number };
+  /** Telegram sends an ARRAY of the same photo at multiple resolutions
+   *  (smallest first) — the LAST entry is the highest resolution without
+   *  needing to fetch/compare every variant. */
+  photo?: TelegramPhotoSize[];
+  video?: TelegramVideo;
+  animation?: TelegramAnimation;
+  document?: TelegramDocument;
 };
 export type TelegramUpdate = {
   update_id?: number;
@@ -547,16 +568,22 @@ export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: stri
   const organizationSources = toKnowledgeSources(organizationRes.data);
 
   // Structured contact preset -- resolved BEFORE relevance scoring, never
-  // dependent on it. Community override checked first.
+  // dependent on it. Community override checked first. The matched
+  // community entry (if any) is EXCLUDED from the normal relevance-scored
+  // pool below so it never appears twice (once authoritative, once as an
+  // ordinary scored duplicate).
   const contactEntries: KnowledgeContextEntry[] = [];
   const intent = resolveContactIntent(query);
+  let usedCommunitySourceId: string | null = null;
   if (intent) {
-    const communityOverride = findCommunityContactOverride(intent, communitySources.map((s) => ({ title: s.title, content: s.content })));
-    const value = communityOverride ?? profile?.contacts?.[intent];
+    const communityOverrideSource = communitySources.find((s) => findCommunityContactOverride(intent, [{ title: s.title, content: s.content }]) !== null);
+    const value = communityOverrideSource?.content ?? profile?.contacts?.[intent];
     if (value) {
       contactEntries.push({ scope: "PRESET", title: CONTACT_LABELS[intent], content: value, authoritative: true });
+      if (communityOverrideSource) usedCommunitySourceId = communityOverrideSource.id;
     }
   }
+  const communitySourcesForScoring = usedCommunitySourceId ? communitySources.filter((s) => s.id !== usedCommunitySourceId) : communitySources;
 
   // The project's own overview competes in the SAME relevance pool as any
   // additional PROJECT-scope knowledge -- never unconditionally injected.
@@ -564,9 +591,9 @@ export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: stri
     ? [{ id: `profile-overview-${projectId}`, panelId, scopeType: "PROJECT", projectId, communityId: null, kind: "overview", title: profile.name || "Overview", content: profile.overview, active: true }, ...projectSources]
     : projectSources;
 
-  if (contactEntries.length === 0 && communitySources.length === 0 && projectSourcesWithOverview.length === 0 && organizationSources.length === 0) return undefined;
+  if (contactEntries.length === 0 && communitySourcesForScoring.length === 0 && projectSourcesWithOverview.length === 0 && organizationSources.length === 0) return undefined;
 
-  const relevantCommunity = retrieveRelevantKnowledge(query, communitySources);
+  const relevantCommunity = retrieveRelevantKnowledge(query, communitySourcesForScoring);
   const relevantProject = retrieveRelevantKnowledge(query, projectSourcesWithOverview);
   const relevantOrganization = retrieveRelevantKnowledge(query, organizationSources);
   const combined = combineKnowledgeRetrieval(relevantCommunity, relevantProject, relevantOrganization);
@@ -1172,6 +1199,192 @@ async function runLinkModeration(
   return { handled: true, collabRoutable: false };
 }
 
+/* -------------------------------------------------------- media moderation ---- */
+// Direct photo/video NSFW detection -- extends the SAME ModerationEnforcement
+// abstraction runLinkModeration uses above (media-moderation.ts), rather than
+// a second competing moderation engine. A SEPARATE decision from Natural
+// Chatter/link moderation: never routes through DeepSeek/Claude conversational
+// paths, only the specialized visual-safety classifier (media-safety-provider.ts).
+
+/** A media processing cap tighter than Telegram's own 20MB getFile ceiling --
+ *  untrusted uploads shouldn't be downloaded up to the platform maximum by
+ *  default. */
+const MEDIA_MAX_BYTES = 15 * 1024 * 1024;
+const MEDIA_MAX_VIDEO_DURATION_S = 5 * 60; // 5 minutes -- longer videos are skipped as unsupported, never downloaded
+
+export interface DetectedMedia {
+  kind: MediaKind;
+  fileId: string;
+  fileUniqueId: string;
+  fileSize: number | null;
+  durationS: number | null;
+  mimeType: string | null;
+}
+
+/** Recognizes Telegram's own typed media fields (photo/video/animation) plus
+ *  a document ONLY when Telegram's own reported mime_type identifies it as
+ *  an image/video -- never based on filename/extension alone (spec: "do not
+ *  blindly process arbitrary documents based only on an untrusted filename
+ *  extension"). */
+export function detectSupportedMedia(message: TelegramMessage): DetectedMedia | null {
+  if (message.photo && message.photo.length > 0) {
+    // Telegram sends smallest-first; the LAST entry is the highest
+    // resolution without needing to compare/fetch every variant.
+    const largest = message.photo[message.photo.length - 1];
+    return { kind: "photo", fileId: largest.file_id, fileUniqueId: largest.file_unique_id, fileSize: largest.file_size ?? null, durationS: null, mimeType: "image/jpeg" };
+  }
+  if (message.video) {
+    return { kind: "video", fileId: message.video.file_id, fileUniqueId: message.video.file_unique_id, fileSize: message.video.file_size ?? null, durationS: message.video.duration ?? null, mimeType: message.video.mime_type ?? "video/mp4" };
+  }
+  if (message.animation) {
+    return { kind: "animation", fileId: message.animation.file_id, fileUniqueId: message.animation.file_unique_id, fileSize: message.animation.file_size ?? null, durationS: message.animation.duration ?? null, mimeType: message.animation.mime_type ?? "video/mp4" };
+  }
+  if (message.document?.mime_type?.startsWith("image/")) {
+    return { kind: "photo", fileId: message.document.file_id, fileUniqueId: message.document.file_unique_id, fileSize: message.document.file_size ?? null, durationS: null, mimeType: message.document.mime_type };
+  }
+  if (message.document?.mime_type?.startsWith("video/")) {
+    return { kind: "video", fileId: message.document.file_id, fileUniqueId: message.document.file_unique_id, fileSize: message.document.file_size ?? null, durationS: null, mimeType: message.document.mime_type };
+  }
+  return null;
+}
+
+async function loadMediaDedup(admin: SupabaseClient, communityId: string, fileUniqueId: string): Promise<{ enforcementKind: "ALLOW" | "DELETE_WARN" | "DELETE_BAN" } | null> {
+  const { data } = await admin.from("moderator_media_dedup").select("enforcement_kind").eq("community_id", communityId).eq("file_unique_id", fileUniqueId).maybeSingle();
+  if (!data) return null;
+  return { enforcementKind: data.enforcement_kind as "ALLOW" | "DELETE_WARN" | "DELETE_BAN" };
+}
+
+async function recordMediaDedup(admin: SupabaseClient, panelId: string, communityId: string, fileUniqueId: string, verdict: "safe" | "uncertain" | "explicit" | "error", enforcementKind: "ALLOW" | "DELETE_WARN" | "DELETE_BAN") {
+  await admin.from("moderator_media_dedup").upsert(
+    { panel_id: panelId, community_id: communityId, file_unique_id: fileUniqueId, verdict, enforcement_kind: enforcementKind },
+    { onConflict: "community_id,file_unique_id" }
+  );
+}
+
+/** Same overall shape as runLinkModeration: a SEPARATE moderation decision,
+ *  checked once per message via a SINGLE enforcer (deployments[0] — the
+ *  SAME single-coordinated-actor pattern link moderation already uses, so
+ *  an explicit upload never produces one action per deployed moderator).
+ *  `handled: true` means the message was deleted (nothing left to
+ *  task-route/chat about). */
+async function runMediaModeration(
+  admin: SupabaseClient,
+  panelId: string,
+  community: { id: string },
+  chatId: string,
+  message: TelegramMessage,
+  event: CommunityEvent,
+  deployments: ChatterDeployment[],
+  settings: unknown,
+  now: Date
+): Promise<{ handled: boolean }> {
+  if (!virtualModMediaModeration(settings) || !deployments.length) return { handled: false };
+
+  const media = detectSupportedMedia(message);
+  if (!media) return { handled: false };
+
+  // Cost-saving dedup only (spec: "prevent unnecessary duplicate
+  // processing") -- genuine Telegram webhook retries are ALREADY fully
+  // covered upstream by isDuplicateUpdate's per-update dedup before this
+  // function is ever reached; this is purely "don't reclassify the exact
+  // same file content if reposted as a distinct message". Known, accepted
+  // limitation: does not track classifier/policy version, so a provider or
+  // threshold change won't retroactively reclassify an already-cached file
+  // -- acceptable for a v1 per the "keep this simple" instruction.
+  const cached = await loadMediaDedup(admin, community.id, media.fileUniqueId);
+  if (cached) return { handled: cached.enforcementKind !== "ALLOW" };
+
+  if (media.fileSize && media.fileSize > MEDIA_MAX_BYTES) {
+    await recordMediaDedup(admin, panelId, community.id, media.fileUniqueId, "error", "ALLOW");
+    await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "too_large", { mediaKind: media.kind, fileSize: media.fileSize });
+    return { handled: false };
+  }
+  if (media.kind !== "photo") {
+    if (!virtualModVideoModeration(settings)) return { handled: false }; // video moderation not yet enabled -- skip silently, never treated as explicit
+    if (media.durationS != null && media.durationS > MEDIA_MAX_VIDEO_DURATION_S) {
+      await recordMediaDedup(admin, panelId, community.id, media.fileUniqueId, "error", "ALLOW");
+      await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "duration_exceeded", { mediaKind: media.kind, durationS: media.durationS });
+      return { handled: false };
+    }
+  }
+
+  const enforcer = deployments[0];
+  const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
+  if (!token) return { handled: false };
+
+  const fileRes = await getTelegramFile(token, media.fileId);
+  if (!fileRes.ok) {
+    await logActivity(admin, panelId, community.id, enforcer.deploymentId, "media_moderation", "SKIPPED", "download_failed", { mediaKind: media.kind });
+    return { handled: false };
+  }
+  const download = await downloadTelegramFileBuffer(token, fileRes.result.file_path, Math.min(MEDIA_MAX_BYTES, TELEGRAM_MAX_DOWNLOADABLE_BYTES));
+  if (!download.ok) {
+    await logActivity(admin, panelId, community.id, enforcer.deploymentId, "media_moderation", "SKIPPED", "download_failed", { mediaKind: media.kind, error: download.error });
+    return { handled: false };
+  }
+
+  const result: MediaClassificationResult =
+    media.kind === "photo"
+      ? await classifyImageBytes(download.buffer, media.mimeType ?? "image/jpeg")
+      : await (async () => {
+          const positions = computeSamplePositions((media.durationS ?? 30) * 1000);
+          const extraction = await extractVideoFrames(download.buffer, positions);
+          if (!extraction.ok) return { ok: false, failure: "decode_failed" } as MediaClassificationResult;
+          const frameResults: FrameResult[] = [];
+          for (const frame of extraction.frames) {
+            const r = await classifyImageBytes(frame, "image/jpeg");
+            frameResults.push(r);
+            if (isEarlyExitResult(r)) break;
+          }
+          return aggregateFrameResults(frameResults);
+        })();
+
+  // Unified content-policy strike counter -- reuses the SAME per-(community,
+  // user) warning state link moderation already maintains, rather than a
+  // second parallel warning system.
+  const priorState = await loadLinkWarningState(admin, community.id, event.sender.platformUserId);
+  const enforcement = decideMediaEnforcement({ result, priorWarningCount: priorState.warningCount });
+
+  await logActivity(admin, panelId, community.id, enforcer.deploymentId, "media_moderation", enforcement.kind, result.ok ? result.verdict : result.failure, {
+    mediaKind: media.kind,
+    confidence: result.ok ? result.confidence : undefined,
+  });
+  await recordMediaDedup(admin, panelId, community.id, media.fileUniqueId, result.ok ? result.verdict : "error", enforcement.kind);
+
+  if (enforcement.kind === "ALLOW") return { handled: false };
+
+  if (token) {
+    const deleteResult = await executeAction(admin, chatId, { kind: "DELETE_MESSAGE", targetDeploymentId: enforcer.deploymentId, targetMessageId: event.messageId });
+    if (!deleteResult.ok) console.error("[telegram/community] media moderation DELETE_MESSAGE failed", deleteResult.error);
+  }
+
+  if (enforcement.kind === "DELETE_BAN") {
+    if (token) {
+      const banResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: event.sender.platformUserId, mode: "BAN" });
+      if (!banResult.ok) console.error("[telegram/community] media moderation RESTRICT_USER failed", banResult.error);
+    }
+    await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, priorState, { kind: enforcement.reason, now });
+    return { handled: true };
+  }
+
+  // DELETE_WARN
+  const nextState: LinkWarningState = { ...priorState, warningCount: enforcement.warningNumber };
+  await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
+  const warningText = await generateMediaModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT);
+  if (token) {
+    const sendResult = await executeAction(admin, chatId, {
+      kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null, origin: "HUMAN", interactionDepth: 0, causationMessageId: event.messageId,
+    });
+    if (sendResult.sentMessageId) {
+      await admin.from("community_messages").insert({
+        panel_id: panelId, community_id: community.id, platform_message_id: sendResult.sentMessageId,
+        sender_type: "INNVIL_MODERATOR", sender_platform_id: null, sender_display_name: enforcer.moderatorName, deployment_id: enforcer.deploymentId, text: warningText,
+      });
+    }
+  }
+  return { handled: true };
+}
+
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string,
@@ -1179,17 +1392,26 @@ async function handleHumanMessage(
   message: TelegramMessage,
   event: CommunityEvent,
   isTrialEntitlement: boolean,
-  timer: RequestTimer
+  timer: RequestTimer,
+  settings: unknown
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
   if (!deployments.length) return; // no chatter-eligible deployment in this community
 
+  // Media moderation is a SEPARATE decision, checked BEFORE link moderation
+  // -- a message that's a flagged photo/video has nothing left to check for
+  // links/task-route/chat about either. Never routed through DeepSeek/Claude
+  // conversational paths -- only the specialized visual-safety classifier.
+  const chatId = String(message.chat.id);
+  const mediaModeration = await runMediaModeration(admin, panelId, community, chatId, message, event, deployments, settings, new Date());
+  timer.mark("media_moderation_check", { handled: mediaModeration.handled });
+  if (mediaModeration.handled) return;
+
   // Link moderation is a SEPARATE decision from chatter (spec §18/§50) --
   // checked first, independent of and never disabled by the reactive
   // chatter quota (spec §45). If the message got deleted, there is nothing
   // left to task-route or chat about, so it short-circuits everything else.
-  const chatId = String(message.chat.id);
   const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date());
   timer.mark("link_moderation_check", { handled: moderation.handled });
   if (moderation.handled) return;
@@ -1694,7 +1916,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // paid tiers are unaffected and this patch does not change their
     // existing (unlimited) behavior.
     const isTrialEntitlement = moderatorEntitlementSource(settings) === "trial";
-    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer);
+    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings);
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;
   }

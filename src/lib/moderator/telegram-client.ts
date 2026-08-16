@@ -63,6 +63,44 @@ export async function telegramApiCall<T>(
   return { ok: true, result: data.result as T };
 }
 
+/** Telegram's own hard limit on files a bot can fetch via getFile (20 MB) --
+ *  checked BEFORE attempting a download, not after, so an oversized upload
+ *  never even starts downloading (media moderation's own, generally
+ *  tighter, size limit is enforced separately by the caller). */
+export const TELEGRAM_MAX_DOWNLOADABLE_BYTES = 20 * 1024 * 1024;
+const TELEGRAM_DOWNLOAD_TIMEOUT_MS = 15_000;
+
+/** Resolves a Telegram file_id to its download path + size via getFile —
+ *  required before any file can actually be fetched (Telegram's file_id
+ *  alone isn't a URL). */
+export async function getTelegramFile(token: string, fileId: string): Promise<TelegramResult<{ file_path: string; file_size?: number }>> {
+  return telegramApiCall<{ file_path: string; file_size?: number }>(token, "getFile", { file_id: fileId });
+}
+
+/** Downloads a Telegram file's raw bytes given the file_path from
+ *  getTelegramFile. Bounded by both a byte-size ceiling (checked via
+ *  Content-Length when present, and again against the actual downloaded
+ *  size as a fallback since some responses omit it) and a request timeout —
+ *  untrusted user-uploaded media must never be downloaded unboundedly. */
+export async function downloadTelegramFileBuffer(token: string, filePath: string, maxBytes: number = TELEGRAM_MAX_DOWNLOADABLE_BYTES): Promise<{ ok: true; buffer: Buffer } | { ok: false; error: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TELEGRAM_DOWNLOAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`, { signal: controller.signal });
+    if (!res.ok) return { ok: false, error: `Telegram file download failed (${res.status})` };
+    const contentLength = Number(res.headers.get("content-length") ?? "0");
+    if (contentLength > maxBytes) return { ok: false, error: "file exceeds download size limit" };
+    const arrayBuffer = await res.arrayBuffer();
+    if (arrayBuffer.byteLength > maxBytes) return { ok: false, error: "file exceeds download size limit" };
+    return { ok: true, buffer: Buffer.from(arrayBuffer) };
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") return { ok: false, error: "Telegram file download timed out" };
+    return { ok: false, error: err instanceof Error ? err.message : "Telegram file download failed" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function cleanTelegramHandle(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();

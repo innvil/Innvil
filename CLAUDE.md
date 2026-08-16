@@ -127,6 +127,120 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Direct photo/video moderation (media safety) for Virtual Moderator (v1.19.0)
+- **New capability, extends the EXISTING moderation abstraction, not a parallel engine.** `link-moderation.ts`'s
+  `ModerationEnforcement` (ALLOW / DELETE_WARN / DELETE_BAN) is reused verbatim for media — gained two new
+  reasons (`explicit_content_borderline` for a warn, `repeated_explicit_content` for the escalated ban) rather
+  than a second competing enforcement type. Investigated first (per explicit instruction): confirmed no
+  existing NSFW/vision/media-download dependency or infrastructure anywhere in this codebase before writing
+  any code.
+- **`src/lib/moderator/media-moderation.ts` (NEW, pure, no I/O)** — the policy layer. `MediaSafetyVerdict`
+  (safe/uncertain/explicit) + `MediaSafetyConfidence` (low/medium/high) from a classifier call, structurally
+  separate from `MediaFailureKind` (provider_unconfigured/provider_error/provider_timeout/download_failed/
+  unsupported_media/too_large/duration_exceeded/decode_failed) so a classifier failure can never be silently
+  read as "explicit" — `decideMediaEnforcement()` resolves EVERY failure kind to `ALLOW`, always, regardless of
+  prior warning history. High-confidence explicit → immediate `DELETE_BAN` (never role-exempt, same severity
+  class as an explicit link); borderline (explicit-but-not-high, or uncertain-at-high-confidence) → 3-strike
+  `DELETE_WARN`/`DELETE_BAN` escalation reusing link moderation's own `PROMOTION_WARNING_LIMIT`; safe (any
+  confidence) → `ALLOW`, no action.
+- **Bounded video sampling, never frame-by-frame.** `computeSamplePositions(durationMs)` spreads
+  `MAX_VIDEO_SAMPLE_FRAMES = 5` sample points evenly across the clip regardless of duration (a 30-second and a
+  6-hour video both sample the same flat count — cost never scales with length), always including points past
+  the very first second so a user can't evade detection by only putting safe content up front.
+  `aggregateFrameResults()` — the strongest (most explicit) genuine verdict across sampled frames wins; a
+  frame-level failure never contributes an "explicit" signal; if every sampled frame failed, the AGGREGATE is
+  itself a failure (never silently safe or explicit). `isEarlyExitResult()` short-circuits sampling the instant
+  a high-confidence explicit frame is found — never wastes classifier calls sampling the rest of a clearly
+  explicit video.
+- **`src/lib/moderator/media-safety-provider.ts` (NEW)** — `classifyImageBytes(bytes, mimeType)`, a deliberately
+  REPLACEABLE HTTP adapter (send image bytes, get back `{verdict, confidence, reason?}`), **NOT wired to any
+  specific vendor** — per explicit instruction not to arbitrarily couple to a vendor when none already exists in
+  this codebase. Reads `MEDIA_SAFETY_PROVIDER_URL`/`MEDIA_SAFETY_PROVIDER_API_KEY`/`MEDIA_SAFETY_TIMEOUT_MS`
+  (default 10s); unconfigured/non-2xx/malformed-response/timeout/network-error all resolve to a distinct,
+  named failure — never a fabricated verdict. **The feature is a no-op (always ALLOW) until a real vendor is
+  configured.**
+- **Telegram file download** (`telegram-client.ts`) — new `getTelegramFile`/`downloadTelegramFileBuffer`
+  (`TELEGRAM_MAX_DOWNLOADABLE_BYTES` = Telegram's own 20MB getFile ceiling, checked against BOTH the
+  Content-Length header and the actual bytes received, 15s timeout).
+- **`src/lib/moderator/media-frame-extractor.ts` (NEW)** — `extractVideoFrames(videoBuffer, positionsMs)` via
+  the new `ffmpeg-static` dependency (added to `package.json`; resolves a platform binary at install time — a
+  Linux binary on Vercel's build, verified locally to resolve on Windows). Writes the video to a `mkdtemp`
+  unique temp directory, extracts one JPEG per requested position (20s timeout per position), and **guarantees
+  cleanup of the whole temp directory in a `finally` block on both success and failure paths** — no explicit
+  media is ever left on disk. A single failed extraction position is skipped, not fatal to the whole pass.
+- **`src/lib/moderator/community-runtime.ts`'s `runMediaModeration()`** — the orchestrator, mirrors
+  `runLinkModeration()`'s exact shape: a SINGLE coordinated enforcer (`deployments[0]`, the same pattern link
+  moderation already uses) so an explicit upload produces ONE action, never one per deployed moderator bot.
+  Checked BEFORE link moderation and BEFORE Natural Chatter routing in `handleHumanMessage` — a deleted message
+  has nothing left to link-check or chat about. `detectSupportedMedia()` recognizes Telegram's own typed
+  `photo`/`video`/`animation` fields (highest-resolution photo variant, Telegram sends smallest-first) plus a
+  `document` **only when Telegram's own reported `mime_type` starts with `image/`or `video/`** — never by
+  filename/extension alone (a `.jpg.exe` with no image mime type is correctly never treated as media).
+  `MEDIA_MAX_BYTES = 15MB` (tighter than Telegram's own ceiling) and `MEDIA_MAX_VIDEO_DURATION_S = 5min` are
+  checked BEFORE any download — oversized/too-long media is skipped as unsupported, never downloaded.
+- **Video moderation has its OWN separate rollout flag** (`MEDIA_MODERATION_VIDEO_ENABLED`, layered on top of
+  `MEDIA_MODERATION_ENABLED`) since `ffmpeg-static` needs live Vercel verification before enabling — photo
+  moderation can ship without being blocked by that risk, same "ship OFF, verify live, flip flag" pattern
+  already used for `AUTO_POSTING_ENABLED` etc. Both reuse the EXISTING `virtualModModeration` entitlement gate
+  (no new toggle/entitlement axis — deliberately not overbuilt).
+- **Dedup**: new `moderator_media_dedup` table (migration `0059`, unique on `(community_id, file_unique_id)`) —
+  a COST optimization only; genuine Telegram webhook-retry dedup is already fully covered upstream by the
+  pre-existing `isDuplicateUpdate`. Known, accepted v1 limitation: doesn't track classifier/policy version, so a
+  later provider/threshold change won't retroactively reclassify an already-cached file. **Run migration
+  `0059`.**
+- **Privacy/retention**: no explicit media is ever persisted beyond the temp-file lifetime of a single
+  classification pass; the activity log (`media_moderation` event type, reusing the existing
+  `moderator_activity_log`) retains only metadata (message id, community id, verdict/failure, enforcement kind,
+  confidence) — never the downloaded image/video bytes themselves.
+- **Model-routing invariant preserved**: media classification NEVER calls `aiComplete`/DeepSeek/Claude — only
+  the dedicated `classifyImageBytes` HTTP call. The one AI call in this whole feature is
+  `generateMediaModerationWarning` (`media-warning.ts`, mirrors `link-classify.ts`'s `generateModerationWarning`
+  exactly) — natural-language WARNING TEXT only, still routed through the existing Sonnet-5-medium
+  `getInnvilModelConfig()`, same as link moderation's own warning text already was.
+- **Warning-state reuse**: media violations share the SAME per-(community,user) strike counter link moderation
+  already maintains (`loadLinkWarningState`/`persistLinkWarningState`) — a unified content-policy counter,
+  not a second parallel warning-state table, per explicit "keep this simple" instruction.
+- New tests: `media-moderation.test.ts` (+31 — sampling bounds/coverage incl. beyond-first-frame, aggregation
+  strongest-wins + all-failures-is-failure, early exit, every enforcement case incl. every failure kind
+  resolving to ALLOW regardless of warning history), `media-safety-provider.test.ts` (+7, mocked `fetch` —
+  unconfigured/non-2xx/malformed-response/network-error/timeout all fail explicitly, correct request shape),
+  `community-runtime.test.ts` (+10 — `detectSupportedMedia` across photo/video/animation/document-by-mimetype,
+  document-by-filename-only correctly rejected, no-mime-type document rejected, photo-precedence). 770 tests
+  pass (up from 727), `tsc --noEmit` clean, production build clean. **Scope note**: the full DB/Telegram-mocked
+  `runMediaModeration` orchestrator itself is verified via typecheck + build + code review (mirrors
+  `runLinkModeration`'s already-established shape) rather than a full integration test — consistent with how
+  comparably complex existing orchestrators (`executeAction`, `handleCommunityUpdate`) are treated in this
+  codebase; the pure policy/adapter/detection layers underneath it are fully unit-tested.
+- **Not done this pass, by design**: no NSFW/image-safety vendor is actually wired up — `MEDIA_SAFETY_PROVIDER_URL`/
+  `MEDIA_SAFETY_PROVIDER_API_KEY`/`MEDIA_SAFETY_TIMEOUT_MS` must be set before this does anything beyond ALLOW
+  everything; `ffmpeg-static`'s Vercel-Linux compatibility needs live verification before flipping
+  `NEXT_PUBLIC_MEDIA_MODERATION_VIDEO_ENABLED` on in production.
+
+### 2026-08-17 — Project Profile UI consolidation + Auto-Posting sourced from the same profile (v1.18.14)
+- **Completes the Project Profile simplification** (backend — migration `0058`, `project-profile.ts`,
+  `getProjectProfile`/`updateProjectProfile`/`setProjectContact`, the `loadRelevantKnowledge` preset-injection
+  logic — shipped earlier this session). This pass finishes the two pieces that were still outstanding: the
+  owner-facing UI consolidation and Auto-Posting's own sourcing.
+- **`AdminTabs.tsx`: the old three-equally-prominent-cards layout is replaced with ONE primary `ProjectProfileCard`.**
+  Structured fields (name, description, website, docs URL, main overview) + four structured **contact presets**
+  (Support/Partnerships/Sales/Technical — authoritative fields, not ordinary knowledge rows) are now the primary
+  editing surface; the old free-form FAQ/Fact/Link/Note entries still exist, just demoted into a collapsed
+  "Additional Knowledge" section (closed by default) as an explicit secondary fallback, not a competing system.
+  `CommunityKnowledgeCard` is relabeled "Community Context" (copy now frames it as a SMALL optional override,
+  not a parallel full system). `OrganizationKnowledgeCard` is now `LegacyOrganizationKnowledgeSection` — wrapped
+  in a collapsed-by-default disclosure so old rows stay reachable/editable without competing for attention; no
+  data was destroyed or migrated away.
+- **`autopost-runtime.ts`'s `loadKnowledgeForWindow` now sources from the same Project Profile**, in the
+  corrected priority order: Main Overview first, then website/docs, then free-form project knowledge, then
+  community context, then legacy organization knowledge as the last fallback — no separate knowledge
+  architecture for Auto-Posting. **Contact presets are never included** — the loader never even reads
+  `projects.contacts`, only `overview`/`website`/`docs_url`, so a configured support handle can never leak into
+  generated post content as inspiration.
+- New tests: `autopost-runtime.test.ts` (+5, NEW file — overview-first priority ordering, a project with no
+  overview/website/docs still surfaces free-form knowledge, contacts structurally never read/leaked, community +
+  legacy organization knowledge still flow through as fallback material, no crash when a community has no
+  resolved project). 770 tests pass, `tsc --noEmit` clean, production build clean.
+
 ### 2026-08-12 — Verified + locked in: project_id for retrieval is never client-suppliable (v1.18.2)
 - **Explicit security requirement checked, not assumed**: audited both retrieval paths
   (`community-runtime.ts`'s `loadRelevantKnowledge`, `autopost-runtime.ts`'s `loadKnowledgeForWindow`) —

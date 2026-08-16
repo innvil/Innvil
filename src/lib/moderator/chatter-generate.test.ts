@@ -983,9 +983,9 @@ test("REQUIRED: COMMUNITY, PROJECT, and ORGANIZATION entries are each labeled by
       ],
     })
   );
-  assert.match(line!, /community.*specific to this community/i);
-  assert.match(line!, /project.*specific to this project/i);
-  assert.match(line!, /organization.*shared across every project/i);
+  assert.match(line!, /Community-specific context/i);
+  assert.match(line!, /Project knowledge/i);
+  assert.match(line!, /Organization knowledge.*shared across every project/i);
 });
 
 test("an organization-wide entry is never labeled as project knowledge", () => {

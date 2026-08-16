@@ -145,8 +145,8 @@ export function isFloodRepeat(observedState: LinkWarningState): boolean {
 
 export type ModerationEnforcement =
   | { kind: "ALLOW" }
-  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" }
-  | { kind: "DELETE_BAN"; reason: "explicit_content" | "phishing" | "flood" | "repeated_unsolicited_promotion" };
+  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "explicit_content_borderline" }
+  | { kind: "DELETE_BAN"; reason: "explicit_content" | "phishing" | "flood" | "repeated_unsolicited_promotion" | "repeated_explicit_content" };
 
 /** 3 confirmed unsolicited-promotion violations get a warning each; the
  *  NEXT one after that (the 4th) escalates to removal (spec §25/§57). */

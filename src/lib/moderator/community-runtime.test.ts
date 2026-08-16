@@ -4,7 +4,7 @@ import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
-  classifySender, loadRelevantKnowledge,
+  classifySender, loadRelevantKnowledge, detectSupportedMedia, type TelegramMessage,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -580,7 +580,11 @@ interface FakeKnowledgeRow {
 /** `communityProjects` resolves the Panel -> Project -> Community hierarchy
  *  (communities.project_id) the real loadRelevantKnowledge depends on before
  *  it can even query PROJECT-scope rows. */
-function fakeAdminForKnowledge(rows: FakeKnowledgeRow[], communityProjects: Record<string, string> = {}) {
+function fakeAdminForKnowledge(
+  rows: FakeKnowledgeRow[],
+  communityProjects: Record<string, string> = {},
+  projectProfiles: Record<string, { name?: string; overview?: string; contacts?: Record<string, string> }> = {}
+) {
   return {
     from(table: string) {
       if (table === "communities") {
@@ -591,6 +595,19 @@ function fakeAdminForKnowledge(rows: FakeKnowledgeRow[], communityProjects: Reco
           async maybeSingle() {
             const id = filters.id as string;
             return { data: communityProjects[id] ? { project_id: communityProjects[id] } : null, error: null };
+          },
+        };
+        return api;
+      }
+      if (table === "projects") {
+        const filters: Record<string, unknown> = {};
+        const api = {
+          select() { return api; },
+          eq(col: string, val: unknown) { filters[col] = val; return api; },
+          async maybeSingle() {
+            const id = filters.id as string;
+            const p = projectProfiles[id];
+            return { data: { name: p?.name ?? "", overview: p?.overview ?? "", contacts: p?.contacts ?? {} }, error: null };
           },
         };
         return api;
@@ -737,4 +754,73 @@ test("no rows at all in any scope -> undefined, no query result mishandling", as
   const admin = fakeAdminForKnowledge([], { "community-1": "project-litho" });
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "anything");
   assert.equal(result, undefined);
+});
+
+/* ==================================================== detectSupportedMedia ==== */
+
+function baseMessage(overrides: Partial<TelegramMessage> = {}): TelegramMessage {
+  return { message_id: 1, chat: { id: 100 }, from: { id: 200 }, ...overrides };
+}
+
+test("REQUIRED: a photo message is recognized, using the HIGHEST-resolution variant (last in Telegram's array)", () => {
+  const msg = baseMessage({
+    photo: [
+      { file_id: "small", file_unique_id: "u-small", width: 90, height: 90, file_size: 1000 },
+      { file_id: "large", file_unique_id: "u-large", width: 1280, height: 1280, file_size: 90000 },
+    ],
+  });
+  const media = detectSupportedMedia(msg);
+  assert.deepEqual(media, { kind: "photo", fileId: "large", fileUniqueId: "u-large", fileSize: 90000, durationS: null, mimeType: "image/jpeg" });
+});
+
+test("REQUIRED: a video message is recognized with its reported duration/mime type", () => {
+  const msg = baseMessage({ video: { file_id: "v1", file_unique_id: "uv1", duration: 42, file_size: 500000, mime_type: "video/mp4" } });
+  const media = detectSupportedMedia(msg);
+  assert.deepEqual(media, { kind: "video", fileId: "v1", fileUniqueId: "uv1", fileSize: 500000, durationS: 42, mimeType: "video/mp4" });
+});
+
+test("an animation (GIF) message is recognized the same way as video", () => {
+  const msg = baseMessage({ animation: { file_id: "a1", file_unique_id: "ua1", duration: 5, file_size: 20000, mime_type: "video/mp4" } });
+  const media = detectSupportedMedia(msg);
+  assert.equal(media?.kind, "animation");
+  assert.equal(media?.fileId, "a1");
+});
+
+test("REQUIRED: a document is treated as an image ONLY via Telegram's own reported mime_type, never by filename", () => {
+  const msg = baseMessage({ document: { file_id: "d1", file_unique_id: "ud1", file_size: 3000, mime_type: "image/png", file_name: "totally-safe.png" } });
+  const media = detectSupportedMedia(msg);
+  assert.equal(media?.kind, "photo");
+  assert.equal(media?.mimeType, "image/png");
+});
+
+test("REQUIRED: a document reported as video/* mime type is recognized as video", () => {
+  const msg = baseMessage({ document: { file_id: "d2", file_unique_id: "ud2", file_size: 30000, mime_type: "video/quicktime", file_name: "clip.mov" } });
+  const media = detectSupportedMedia(msg);
+  assert.equal(media?.kind, "video");
+});
+
+test("REQUIRED (negative): a document whose filename LOOKS like an image but has no image/video mime_type is NOT treated as media -- filename alone is never trusted", () => {
+  const msg = baseMessage({ document: { file_id: "d3", file_unique_id: "ud3", file_size: 1000, mime_type: "application/octet-stream", file_name: "nudes.jpg.exe" } });
+  assert.equal(detectSupportedMedia(msg), null);
+});
+
+test("a document with NO mime_type at all is not treated as media", () => {
+  const msg = baseMessage({ document: { file_id: "d4", file_unique_id: "ud4", file_size: 1000, file_name: "mystery.bin" } });
+  assert.equal(detectSupportedMedia(msg), null);
+});
+
+test("a plain text message has no detected media", () => {
+  assert.equal(detectSupportedMedia(baseMessage({ text: "hello everyone" })), null);
+});
+
+test("an empty photo array is not treated as a photo message", () => {
+  assert.equal(detectSupportedMedia(baseMessage({ photo: [] })), null);
+});
+
+test("photo takes precedence when (hypothetically) multiple media fields are present on the same message", () => {
+  const msg = baseMessage({
+    photo: [{ file_id: "p1", file_unique_id: "up1", width: 800, height: 600, file_size: 5000 }],
+    video: { file_id: "v1", file_unique_id: "uv1", duration: 10, file_size: 10000, mime_type: "video/mp4" },
+  });
+  assert.equal(detectSupportedMedia(msg)?.kind, "photo");
 });

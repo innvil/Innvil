@@ -270,6 +270,30 @@ export function virtualModContentGeneration(settings: unknown): boolean {
  *  NATURAL_CHATTER_ENABLED. */
 export const AUTO_POSTING_ENABLED = process.env.NEXT_PUBLIC_AUTO_POSTING_ENABLED === "true";
 
+/** Master switch for direct photo/video moderation (Phase 4.M media
+ *  moderation) — OFF until a real MEDIA_SAFETY_PROVIDER_URL/API_KEY is
+ *  configured AND live-verified (no vendor is wired by default — see
+ *  media-safety-provider.ts). Photo and video are independently gated:
+ *  video additionally requires ffmpeg-static's Linux binary to be verified
+ *  on Vercel's actual build/runtime before enabling, so photo moderation
+ *  can ship without waiting on that. Not a separate entitlement axis from
+ *  the rest of moderation — gated by the SAME virtualModModeration
+ *  capability check, matching "keep the UI simple, one unified moderation
+ *  toggle" rather than adding a new per-panel setting. */
+export const MEDIA_MODERATION_ENABLED = process.env.NEXT_PUBLIC_MEDIA_MODERATION_ENABLED === "true";
+export const MEDIA_MODERATION_VIDEO_ENABLED = process.env.NEXT_PUBLIC_MEDIA_MODERATION_VIDEO_ENABLED === "true";
+
+/** Direct-media (photo) moderation capability — reuses the existing
+ *  moderation entitlement (any active tier or trial, same as link/spam
+ *  moderation) rather than introducing a new toggle. */
+export function virtualModMediaModeration(settings: unknown): boolean {
+  return MEDIA_MODERATION_ENABLED && virtualModModeration(settings);
+}
+
+export function virtualModVideoModeration(settings: unknown): boolean {
+  return MEDIA_MODERATION_VIDEO_ENABLED && virtualModMediaModeration(settings);
+}
+
 /** Master switch for "Innvil Moderator Acknowledgement" (bot-to-bot ack between
  *  Innvil moderators in the same community) — OFF in production until Telegram's
  *  bot-to-bot delivery configuration (§14/§15 of the bot-ack spec) and loop
