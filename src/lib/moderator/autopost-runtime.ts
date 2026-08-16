@@ -10,7 +10,7 @@ import {
   isTooSimilarToRecent, validateGeneratedPost, type AutoPostOccurrenceStatus,
 } from "./autopost";
 import { generateAutoPostContent } from "./autopost-generate";
-import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource } from "./knowledge";
+import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource, type KnowledgeScopeType } from "./knowledge";
 
 /* =========================================================
    AI Telegram Auto-Posting — the cron-driven sweep (Phase 4.N part B). Each
@@ -92,16 +92,25 @@ async function ensureTodaysOccurrences(admin: SupabaseClient, now: Date) {
   }
 }
 
-async function loadKnowledgeForWindow(admin: SupabaseClient, panelId: string, communityId: string): Promise<{ scope: KnowledgeSource["scopeType"]; title: string; content: string }[]> {
+/** Auto-Posting sources from the SAME Project Profile as Q&A retrieval — no
+ *  separate knowledge architecture. Priority order per the corrected
+ *  product spec: Main Overview > website/docs > additional (free-form)
+ *  knowledge > community context > legacy organization knowledge. Contact
+ *  presets are NEVER included here -- they're for routing a human's
+ *  question to a person, not post-topic inspiration for generated content. */
+export async function loadKnowledgeForWindow(admin: SupabaseClient, panelId: string, communityId: string): Promise<{ scope: KnowledgeScopeType; title: string; content: string }[]> {
   const { data: communityRow } = await admin.from("communities").select("project_id").eq("id", communityId).maybeSingle();
   const projectId = communityRow?.project_id ?? null;
 
-  const [communityRes, projectRes, organizationRes] = await Promise.all([
+  const [communityRes, projectRes, organizationRes, profileRes] = await Promise.all([
     admin.from("knowledge_sources").select("id, panel_id, scope_type, project_id, community_id, kind, title, content, active").eq("community_id", communityId).eq("scope_type", "COMMUNITY").eq("active", true),
     projectId
       ? admin.from("knowledge_sources").select("id, panel_id, scope_type, project_id, community_id, kind, title, content, active").eq("project_id", projectId).eq("scope_type", "PROJECT").eq("active", true)
       : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
     admin.from("knowledge_sources").select("id, panel_id, scope_type, project_id, community_id, kind, title, content, active").eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true),
+    projectId
+      ? admin.from("projects").select("name, overview, website, docs_url").eq("id", projectId).maybeSingle()
+      : Promise.resolve({ data: null as { name?: string; overview?: string; website?: string; docs_url?: string } | null, error: null }),
   ]);
   const toSources = (rows: Array<Record<string, unknown>> | null): KnowledgeSource[] =>
     (rows ?? []).map((r) => ({
@@ -109,17 +118,25 @@ async function loadKnowledgeForWindow(admin: SupabaseClient, panelId: string, co
       projectId: (r.project_id as string) ?? null, communityId: (r.community_id as string) ?? null, kind: r.kind as KnowledgeSource["kind"],
       title: (r.title as string) ?? "", content: (r.content as string) ?? "", active: r.active !== false,
     }));
-  // No specific "question" to score against for a generated post -- take the
-  // most relevant-to-nothing-in-particular set by just capping each scope's
-  // ACTIVE rows directly (community first for precedence, same ordering
-  // contract as the Q&A retrieval path). PROJECT is strictly scoped to THIS
-  // community's own resolved project -- never a different project's rows,
-  // even under the same panel.
-  const community = toSources(communityRes.data).slice(0, MAX_KNOWLEDGE_ENTRIES);
+
+  const entries: { scope: KnowledgeScopeType; title: string; content: string }[] = [];
+  const profile = profileRes.data;
+  if (profile?.overview) entries.push({ scope: "PROJECT", title: profile.name || "Overview", content: profile.overview });
+  if (profile?.website) entries.push({ scope: "PROJECT", title: "Website", content: profile.website });
+  if (profile?.docs_url) entries.push({ scope: "PROJECT", title: "Docs", content: profile.docs_url });
+
+  // Additional (free-form) project knowledge, then community context, then
+  // legacy organization knowledge -- same relative precedence Q&A retrieval
+  // already uses, just without a query to score against (no specific
+  // "question" for a generated post, so this just caps each scope's active
+  // rows directly rather than relevance-scoring them).
   const project = toSources(projectRes.data).slice(0, MAX_KNOWLEDGE_ENTRIES);
+  const community = toSources(communityRes.data).slice(0, MAX_KNOWLEDGE_ENTRIES);
   const organization = toSources(organizationRes.data).slice(0, MAX_KNOWLEDGE_ENTRIES);
   const combined = combineKnowledgeRetrieval(community, project, organization, MAX_KNOWLEDGE_ENTRIES);
-  return combined.map((s) => ({ scope: s.scopeType, title: s.title, content: s.content }));
+  for (const s of combined) entries.push({ scope: s.scopeType, title: s.title, content: s.content });
+
+  return entries.slice(0, MAX_KNOWLEDGE_ENTRIES);
 }
 
 async function loadRecentPostSummaries(admin: SupabaseClient, communityId: string, now: Date): Promise<string[]> {

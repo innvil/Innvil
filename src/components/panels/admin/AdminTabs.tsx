@@ -29,6 +29,8 @@ import {
   type PanelProjectOption, type PanelCommunityOption,
 } from "@/src/lib/actions/knowledge";
 import { KNOWLEDGE_KINDS, type KnowledgeSource, type KnowledgeSourceKind } from "@/src/lib/moderator/knowledge";
+import { getProjectProfile, updateProjectProfile, setProjectContact } from "@/src/lib/actions/project-profile";
+import { CONTACT_KINDS, CONTACT_LABELS, type ContactKind } from "@/src/lib/moderator/project-profile";
 import {
   getCommunityTimezone, setCommunityTimezone, listCommunityDeployments, listAutoPostWindows,
   createAutoPostWindow, setAutoPostWindowEnabled, deleteAutoPostWindow, listRecentAutoPosts,
@@ -4140,9 +4142,9 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
         </div>
       </Card>
 
-      <ProjectKnowledgeCard panelId={panelId} />
+      <ProjectProfileCard panelId={panelId} />
       <CommunityKnowledgeCard panelId={panelId} />
-      <OrganizationKnowledgeCard panelId={panelId} />
+      <LegacyOrganizationKnowledgeSection panelId={panelId} />
       {AUTO_POSTING_ENABLED && <AutoPostingCard panelId={panelId} />}
     </div>
   );
@@ -4213,18 +4215,33 @@ function KnowledgeAddForm({ onAdd, saving, msg, titlePlaceholder, contentPlaceho
   );
 }
 
-/** Phase 4.N (Project Knowledge, corrected to Panel -> Project -> Community)
- *  — owner picks WHICH project they're editing (never panel-wide); every
- *  community attached to that project inherits the same knowledge. A panel
- *  with only one project still shows the selector so the scope is always
- *  explicit, never assumed. */
-function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
+/** Project Profile (corrected architecture — supersedes the old "Project
+ *  Knowledge" card). A project's identity is now a STRUCTURED profile (name,
+ *  description, website, docs, overview) plus structured CONTACT PRESETS
+ *  (Support/Partnerships/Sales/Technical) — never ordinary free-form
+ *  knowledge rows. Every community attached to this project inherits it; a
+ *  different project's community never sees it, even under the same panel.
+ *  Free-form facts (old FAQ/Fact/Link/Note entries) still exist, just
+ *  demoted to a collapsed "Additional Knowledge" section below the profile —
+ *  a secondary fallback, not a competing primary system. */
+function ProjectProfileCard({ panelId }: { panelId: string }) {
   const [projects, setProjects] = React.useState<PanelProjectOption[] | null>(null);
   const [projectId, setProjectId] = React.useState<string>("");
+  const [newProjectName, setNewProjectName] = React.useState("");
+
+  const [name, setName] = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const [website, setWebsite] = React.useState("");
+  const [docsUrl, setDocsUrl] = React.useState("");
+  const [overview, setOverview] = React.useState("");
+  const [contacts, setContacts] = React.useState<Partial<Record<ContactKind, string>>>({});
+  const [profileSaving, setProfileSaving] = React.useState(false);
+  const [profileMsg, setProfileMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
+
   const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [msg, setMsg] = React.useState<{ text: string; error?: boolean } | null>(null);
-  const [newProjectName, setNewProjectName] = React.useState("");
+  const [showAdditional, setShowAdditional] = React.useState(false);
 
   const refreshProjects = React.useCallback(async () => {
     const res = await listPanelProjects(panelId);
@@ -4235,6 +4252,17 @@ function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
   }, [panelId]);
 
   React.useEffect(() => { refreshProjects(); }, [refreshProjects]);
+
+  const refreshProfile = React.useCallback(async () => {
+    if (!projectId) return;
+    const res = await getProjectProfile(panelId, projectId);
+    if (res.ok) {
+      setName(res.data.name); setDescription(res.data.description); setWebsite(res.data.website);
+      setDocsUrl(res.data.docsUrl); setOverview(res.data.overview); setContacts(res.data.contacts);
+    }
+  }, [panelId, projectId]);
+
+  React.useEffect(() => { refreshProfile(); }, [refreshProfile]);
 
   const refresh = React.useCallback(async () => {
     if (!projectId) { setEntries([]); return; }
@@ -4247,10 +4275,26 @@ function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
   const addProject = async () => {
     if (!newProjectName.trim()) return;
     const res = await createProject(panelId, newProjectName);
-    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    if (!res.ok) { setProfileMsg({ text: res.error, error: true }); return; }
     setNewProjectName("");
     await refreshProjects();
     setProjectId(res.data.id);
+  };
+
+  const saveProfile = async () => {
+    if (!projectId) return;
+    setProfileSaving(true); setProfileMsg(null);
+    const res = await updateProjectProfile(panelId, projectId, { name, description, website, docsUrl, overview });
+    setProfileSaving(false);
+    if (!res.ok) { setProfileMsg({ text: res.error, error: true }); return; }
+    setProfileMsg({ text: "Saved." });
+    await refreshProjects();
+  };
+
+  const saveContact = async (kind: ContactKind, value: string) => {
+    if (!projectId) return;
+    setContacts((prev) => ({ ...prev, [kind]: value }));
+    await setProjectContact(panelId, projectId, kind, value);
   };
 
   const add = async (input: { kind: KnowledgeSourceKind; title: string; content: string }) => {
@@ -4269,10 +4313,11 @@ function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
   if (projects === null) return null;
 
   return (
-    <Card title="Project Knowledge" icon={FileText}>
+    <Card title="Project Profile" icon={FileText}>
       <p className="fp-text-dim text-sm mb-4 leading-relaxed">
-        Facts specific to ONE project — website, chains, support contact, docs. Every community attached to
-        this project inherits it; a different project&apos;s community never sees it, even under the same panel.
+        The primary source of truth for a project — used for both moderator Q&amp;A and Auto-Posting. Every
+        community attached to this project inherits it; a different project&apos;s community never sees it,
+        even under the same panel.
       </p>
 
       {projects.length === 0 ? (
@@ -4293,8 +4338,62 @@ function ProjectKnowledgeCard({ panelId }: { panelId: string }) {
 
       {projectId && (
         <>
-          <KnowledgeAddForm onAdd={add} saving={saving} msg={msg} titlePlaceholder="Title (e.g. Supported chains, Website)" contentPlaceholder="Content — the actual fact/answer/URL a moderator can cite." />
-          <KnowledgeEntryList entries={entries} onToggle={toggleActive} onDelete={remove} />
+          <div className="space-y-2 mb-4">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none" />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short description" rows={2} className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none resize-none" />
+            <div className="grid grid-cols-2 gap-2">
+              <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="Website URL" className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none" />
+              <input value={docsUrl} onChange={(e) => setDocsUrl(e.target.value)} placeholder="Docs URL" className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none" />
+            </div>
+            <textarea
+              value={overview}
+              onChange={(e) => setOverview(e.target.value)}
+              placeholder="Main overview — what this project is, what it does. The primary source for moderator answers and Auto-Posting."
+              rows={4}
+              className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none resize-none"
+            />
+            <button onClick={saveProfile} disabled={profileSaving} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+              {profileSaving ? "Saving…" : "Save profile"}
+            </button>
+            {profileMsg && <p className={`text-xs ${profileMsg.error ? "text-red-400" : "fp-safe"}`}>{profileMsg.text}</p>}
+          </div>
+
+          <div className="mb-4">
+            <p className="text-[11px] fp-mono uppercase fp-text-faint mb-2">Contact presets</p>
+            <p className="fp-text-faint text-xs mb-2">
+              Authoritative — when a moderator resolves a question to one of these intents, this exact contact is
+              used instead of searching free-form knowledge. Never used as Auto-Posting content inspiration.
+            </p>
+            <div className="space-y-2">
+              {CONTACT_KINDS.map((kind) => (
+                <div key={kind} className="flex items-center gap-2">
+                  <span className="w-40 shrink-0 text-xs fp-text-dim">{CONTACT_LABELS[kind]}</span>
+                  <input
+                    value={contacts[kind] ?? ""}
+                    onChange={(e) => setContacts((prev) => ({ ...prev, [kind]: e.target.value }))}
+                    onBlur={(e) => saveContact(kind, e.target.value)}
+                    placeholder="e.g. @support_handle or support@project.com"
+                    className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button onClick={() => setShowAdditional((v) => !v)} className="flex items-center gap-1.5 text-xs fp-text-faint hover:fp-text mb-3">
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdditional ? "rotate-180" : ""}`} />
+            Additional knowledge {entries && entries.length > 0 ? `(${entries.length})` : ""}
+          </button>
+          {showAdditional && (
+            <>
+              <p className="fp-text-faint text-xs mb-3">
+                Secondary, free-form facts/FAQ/links — used only as a fallback when the structured profile above
+                doesn&apos;t answer a question.
+              </p>
+              <KnowledgeAddForm onAdd={add} saving={saving} msg={msg} titlePlaceholder="Title (e.g. Supported chains)" contentPlaceholder="Content — the actual fact/answer/URL a moderator can cite." />
+              <KnowledgeEntryList entries={entries} onToggle={toggleActive} onDelete={remove} />
+            </>
+          )}
         </>
       )}
     </Card>
@@ -4347,11 +4446,11 @@ function CommunityKnowledgeCard({ panelId }: { panelId: string }) {
   const selected = communities.find((c) => c.id === communityId) ?? null;
 
   return (
-    <Card title="Community Knowledge" icon={Users}>
+    <Card title="Community Context" icon={Users}>
       <p className="fp-text-dim text-sm mb-4 leading-relaxed">
-        Narrow overrides/additions specific to ONE community — local rules, AMA times, a local contact.
-        Automatically available to every active moderator deployed there; takes precedence over Project
-        Knowledge when the two conflict. This is NOT a substitute for Project Knowledge.
+        Optional, small overrides specific to ONE community — local rules, AMA times, a local contact.
+        Automatically available to every active moderator deployed there; takes precedence over the Project
+        Profile when the two conflict. This is NOT a substitute for the Project Profile — keep it small.
       </p>
 
       <p className="text-[11px] fp-mono uppercase fp-text-faint mb-1">Community</p>
@@ -4378,9 +4477,28 @@ function CommunityKnowledgeCard({ panelId }: { panelId: string }) {
   );
 }
 
+/** De-emphasized legacy wrapper — Organization Knowledge is no longer a
+ *  primary, equally-prominent card (superseded by the Project Profile
+ *  above). Old rows are preserved, never destroyed; this collapsed section
+ *  just keeps them reachable/editable without competing for attention. */
+function LegacyOrganizationKnowledgeSection({ panelId }: { panelId: string }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div>
+      <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-1.5 text-xs fp-text-faint hover:fp-text mb-2">
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        Legacy: Organization Knowledge
+      </button>
+      {open && <OrganizationKnowledgeCard panelId={panelId} />}
+    </div>
+  );
+}
+
 /** Panel-wide, shared across every project the panel owns — truly global
  *  facts only (company info, legal, shared policy). Never project-specific
- *  information — that belongs in Project Knowledge instead. */
+ *  information — that belongs in the Project Profile instead. Kept for
+ *  backward compatibility with rows created before the Project Profile
+ *  correction; no longer a primary/equally-prominent editing surface. */
 function OrganizationKnowledgeCard({ panelId }: { panelId: string }) {
   const [entries, setEntries] = React.useState<KnowledgeSource[] | null>(null);
   const [saving, setSaving] = React.useState(false);
