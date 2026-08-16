@@ -4569,6 +4569,62 @@ Architecture direction for future implementation:
   gathering -> PR draft generation -> claim validation -> compliance review ->
   similarity review -> optional one-pass regeneration with reviewer feedback.
 
+### Phase 4.S: Future Enterprise BYO pricing + Media Moderation entitlement (NOTED, not built — documentation/planning only)
+
+> **FUTURE PLAN — DO NOT IMPLEMENT YET.** Full verbatim spec (source of truth):
+> `docs/moderator/enterprise-byo-pricing-and-media-entitlement-plan.md`. Nothing in
+> `money.ts`, `moderator/plan.ts`, migrations, or Vercel env vars was changed to
+> produce this — it records intended future pricing/entitlement direction only.
+> **The active engineering priority remains Telegram Virtual Moderator refinement/
+> debugging** (Sightengine integration, photo moderation review, false-positive
+> handling, Vercel/ffmpeg production verification, moderator behavior correctness) —
+> this section must not distract from that.
+- **Intended normal-tier pricing** (supersedes the current LIVE `money.ts` values,
+  not yet applied): Basic **$49.99** (unchanged) / Standard **$129.99** (was $114.99)
+  / Premium **$219.99** (was $209.99) / Pro **$379.99** (was $359.99). Community
+  entitlements (1/2/3→5/5→10 per tier) are unchanged, kept as their own separate
+  concept from moderator slots.
+- **Future Enterprise BYO** (customer supplies their own conversational x-API
+  credential — Anthropic/DeepSeek/OpenAI/future): **Enterprise BYO 50 $599/mo** (up
+  to 50 licensed moderator deployments) / **Enterprise BYO Unlimited $799/mo**
+  (unlimited licensed deployments only — never unlimited compute/storage/bandwidth).
+  **Hard invariant: BYO must have ZERO fallback to an Innvil-owned conversational
+  credential** — a customer's own provider failing must degrade that
+  provider-dependent feature explicitly, never silently substitute Innvil's key.
+  `subscription_tier` and `api_source_mode` (BYO vs. INNVIL_MANAGED) stay separate
+  concepts, never one overloaded enum. Innvil Managed Enterprise pricing stays
+  slot/capacity-based or custom — not finalized.
+- **New provider-independent accounting concept: Media Moderation Unit** — 1
+  classified photo = 1 unit; 1 representative video frame actually sent to the
+  classifier = 1 unit. **The entitlement must never determine how many frames Innvil
+  samples** — the EXISTING bounded-sampling architecture (`computeSamplePositions`/
+  `classifySampledFrames`/`MAX_VIDEO_SAMPLE_FRAMES` in `media-moderation.ts`) stays
+  solely responsible for frame count, a safety+cost invariant unrelated to allowance
+  headroom. Deliberately Sightengine-independent naming (never "Sightengine
+  Credits") so it survives a future provider/plan change.
+- **Proposed launch allowances** (hard monthly caps initially, no overage billing):
+  Basic 500 / Standard 2,000 / Premium 5,000 / Pro 10,000 / Enterprise BYO 50 20,000
+  / Enterprise BYO Unlimited 30,000 units/mo. Customer-facing wording: "Included
+  media moderation capacity" / "checks" — never a raw file/video count (one video
+  can consume multiple bounded-frame checks).
+- **At 100% of allowance** (future `MEDIA_LIMIT_REACHED` outcome, parallel to the
+  existing `MediaFailureKind` taxonomy): stop sending NEW media to the classifier —
+  never disable the whole moderator, never delete incoming media, never fabricate an
+  explicit result, never disable unrelated capabilities (text moderation, Project
+  Profile, Auto-Posting, SILENCE/REACT/SHORT_ACK). Resolves to no destructive
+  enforcement, same as every other failure kind `decideMediaEnforcement` already
+  handles today.
+- **Dedup already satisfies the "no duplicate units per multi-moderator community"
+  requirement** — the existing single-enforcer architecture (`deployments[0]` in
+  `runMediaModeration`) + `isDuplicateUpdate`/`moderator_media_dedup` already ensure
+  exactly one classification path per media event; future metering should count at
+  that same single point, nothing new to build there.
+- Also records (all NOT implemented): future media-capacity add-ons, future
+  infrastructure add-ons, a resource/usage dashboard, dashboard promotion placement
+  rules (never near moderation-incident/security/billing-error screens), and the
+  pricing-economics rationale (Innvil still pays for hosting/queues/Telegram
+  processing/storage/bandwidth/classification/monitoring/security even under BYO).
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
