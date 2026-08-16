@@ -279,9 +279,17 @@ export const AUTO_POSTING_ENABLED = process.env.NEXT_PUBLIC_AUTO_POSTING_ENABLED
  *  can ship without waiting on that. Not a separate entitlement axis from
  *  the rest of moderation — gated by the SAME virtualModModeration
  *  capability check, matching "keep the UI simple, one unified moderation
- *  toggle" rather than adding a new per-panel setting. */
-export const MEDIA_MODERATION_ENABLED = process.env.NEXT_PUBLIC_MEDIA_MODERATION_ENABLED === "true";
-export const MEDIA_MODERATION_VIDEO_ENABLED = process.env.NEXT_PUBLIC_MEDIA_MODERATION_VIDEO_ENABLED === "true";
+ *  toggle" rather than adding a new per-panel setting.
+ *
+ *  DELIBERATELY server-only env vars (no NEXT_PUBLIC_ prefix) — unlike
+ *  VIRTUAL_MODERATOR_ENABLED/AUTO_POSTING_ENABLED above, nothing in the
+ *  client-side owner UI reads these two (verified: only community-
+ *  runtime.ts's server-only Telegram webhook handler calls
+ *  virtualModMediaModeration/virtualModVideoModeration) — there's no
+ *  legitimate reason for this operational kill-switch to ship to the
+ *  browser at all. */
+export const MEDIA_MODERATION_ENABLED = process.env.MEDIA_MODERATION_ENABLED === "true";
+export const MEDIA_MODERATION_VIDEO_ENABLED = process.env.MEDIA_MODERATION_VIDEO_ENABLED === "true";
 
 /** Direct-media (photo) moderation capability — reuses the existing
  *  moderation entitlement (any active tier or trial, same as link/spam

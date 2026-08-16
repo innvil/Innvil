@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  aggregateFrameResults, computeSamplePositions, isEarlyExitResult, decideMediaEnforcement,
+  aggregateFrameResults, computeSamplePositions, isEarlyExitResult, decideMediaEnforcement, classifySampledFrames,
   MAX_VIDEO_SAMPLE_FRAMES, type FrameResult, type MediaFailureKind,
 } from "./media-moderation";
 
@@ -138,4 +138,56 @@ test("REQUIRED (negative case): ordinary skin exposure alone is not enough -- on
   // beach photos/swimwear/etc: that judgment call lives entirely in the
   // classifier, not in a separate skin-detection heuristic here.
   assert.deepEqual(decideMediaEnforcement({ result: ok("safe", "high"), priorWarningCount: 0 }), { kind: "ALLOW" });
+});
+
+/* ================================================== classifySampledFrames ==== */
+
+test("REQUIRED (case 18): early exit -- once a decisive explicit frame is found, later frames are NEVER classified", async () => {
+  const calls: number[] = [];
+  let i = 0;
+  const classify = async () => {
+    const idx = i++;
+    calls.push(idx);
+    if (idx === 1) return ok("explicit", "high");
+    return ok("safe", "high");
+  };
+  const frames = [Buffer.from("f0"), Buffer.from("f1"), Buffer.from("f2"), Buffer.from("f3"), Buffer.from("f4")];
+  const result = await classifySampledFrames(frames, classify);
+  assert.equal(calls.length, 2); // stopped right after the decisive frame -- frames 2/3/4 never classified
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.verdict, "explicit");
+});
+
+test("REQUIRED (case 19): with no early exit, the classifier is called at most once per frame, never more than the bounded sample count", async () => {
+  let calls = 0;
+  const classify = async () => { calls++; return ok("safe", "high"); };
+  const frames = Array.from({ length: MAX_VIDEO_SAMPLE_FRAMES }, (_, n) => Buffer.from(`f${n}`));
+  const result = await classifySampledFrames(frames, classify);
+  assert.equal(calls, MAX_VIDEO_SAMPLE_FRAMES);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.verdict, "safe");
+});
+
+test("a provider failure on one frame does not fabricate an explicit result -- remaining frames still contribute", async () => {
+  let i = 0;
+  const classify = async () => {
+    const idx = i++;
+    if (idx === 0) return fail("provider_error");
+    return ok("safe", "high");
+  };
+  const result = await classifySampledFrames([Buffer.from("f0"), Buffer.from("f1")], classify);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.verdict, "safe");
+});
+
+test("safe + uncertain(low) + safe frames -> aggregate stays non-explicit, and decideMediaEnforcement never issues a destructive action for it", async () => {
+  const classify = async (frame: Buffer) => {
+    const s = frame.toString();
+    if (s === "f1") return ok("uncertain", "low");
+    return ok("safe", "high");
+  };
+  const result = await classifySampledFrames([Buffer.from("f0"), Buffer.from("f1"), Buffer.from("f2")], classify);
+  assert.equal(result.ok, true);
+  const enforcement = decideMediaEnforcement({ result, priorWarningCount: 0 });
+  assert.equal(enforcement.kind, "ALLOW");
 });

@@ -19,10 +19,10 @@ const execFileAsync = promisify(execFile);
    Uses ffmpeg-static (added as a new dependency — no ffmpeg binary or
    equivalent existed anywhere in this codebase/deployment before this).
    Requires live verification on Vercel's Linux build/runtime before
-   enabling in production — gated behind its own
-   NEXT_PUBLIC_MEDIA_MODERATION_VIDEO_ENABLED flag (see plan.ts), OFF by
-   default, independent of the photo-moderation flag, so photo moderation
-   can ship without waiting on that verification.
+   enabling in production — gated behind its own server-only
+   MEDIA_MODERATION_VIDEO_ENABLED flag (see plan.ts), OFF by default,
+   independent of the photo-moderation flag, so photo moderation can ship
+   without waiting on that verification.
 
    Every temp file uses a random, non-user-controlled name inside a
    per-request temp directory, and is removed in a try/finally covering

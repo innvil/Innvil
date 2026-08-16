@@ -125,3 +125,65 @@ test("the raw image bytes are sent as the request body with the given mime type 
     global.fetch = originalFetch;
   }
 });
+
+/* ==================================================== dispatcher (MEDIA_SAFETY_PROVIDER) ==== */
+
+test("MEDIA_SAFETY_PROVIDER=sightengine routes classifyImageBytes to the Sightengine endpoint, not the legacy generic adapter", async () => {
+  const originalFetch = global.fetch;
+  let capturedUrl: string | undefined;
+  global.fetch = async (url: RequestInfo | URL) => {
+    capturedUrl = String(url);
+    return new Response(JSON.stringify({ status: "success", nudity: { none: 1 } }), { status: 200 });
+  };
+  try {
+    await withEnv(
+      { MEDIA_SAFETY_PROVIDER: "sightengine", SIGHTENGINE_API_USER: "u", SIGHTENGINE_API_SECRET: "s", MEDIA_SAFETY_PROVIDER_URL: undefined, MEDIA_SAFETY_PROVIDER_API_KEY: undefined },
+      async () => {
+        const result = await classifyImageBytes(Buffer.from("x"), "image/jpeg");
+        assert.ok(capturedUrl?.includes("sightengine.com"));
+        assert.equal(result.ok, true);
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("with MEDIA_SAFETY_PROVIDER unset, classifyImageBytes falls back to the legacy generic adapter (backward compatible)", async () => {
+  const originalFetch = global.fetch;
+  let capturedUrl: string | undefined;
+  global.fetch = async (url: RequestInfo | URL) => {
+    capturedUrl = String(url);
+    return new Response(JSON.stringify({ verdict: "safe", confidence: "high" }), { status: 200 });
+  };
+  try {
+    await withEnv(
+      { MEDIA_SAFETY_PROVIDER: undefined, MEDIA_SAFETY_PROVIDER_URL: "https://legacy.example/classify", MEDIA_SAFETY_PROVIDER_API_KEY: "k" },
+      async () => {
+        const result = await classifyImageBytes(Buffer.from("x"), "image/jpeg");
+        assert.equal(capturedUrl, "https://legacy.example/classify");
+        assert.equal(result.ok, true);
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("REQUIRED (case 22 shape): with no provider configured at all (neither sightengine credentials nor the legacy URL/key), classifyImageBytes never calls fetch", async () => {
+  const originalFetch = global.fetch;
+  let called = false;
+  global.fetch = async () => { called = true; throw new Error("should not be called"); };
+  try {
+    await withEnv(
+      { MEDIA_SAFETY_PROVIDER: undefined, MEDIA_SAFETY_PROVIDER_URL: undefined, MEDIA_SAFETY_PROVIDER_API_KEY: undefined, SIGHTENGINE_API_USER: undefined, SIGHTENGINE_API_SECRET: undefined },
+      async () => {
+        const result = await classifyImageBytes(Buffer.from("x"), "image/jpeg");
+        assert.equal(result.ok, false);
+        assert.equal(called, false);
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

@@ -127,6 +127,70 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Sightengine wired as the first real media-safety provider (v1.19.1)
+- **First real vendor behind the replaceable `media-safety-provider.ts` dispatcher** (was unwired since v1.19.0
+  by design). `classifyImageBytes` now dispatches on `MEDIA_SAFETY_PROVIDER`: `"sightengine"` routes to the new
+  `src/lib/moderator/sightengine-provider.ts` adapter; unset falls back to the original generic HTTP adapter
+  (kept for local testing / a future second vendor, not removed). Rest of the codebase still only ever calls
+  the vendor-neutral `classifyImageBytes` — nothing outside the adapter file knows Sightengine exists.
+- **Endpoint/model** (from Sightengine's current official docs, fetched at implementation time, not assumed):
+  `POST https://api.sightengine.com/1.0/check.json`, `models=nudity-2.1`, multipart fields
+  `media`/`models`/`api_user`/`api_secret`.
+- **Conservative, documented threshold mapping** (`normalizeSightengineNudity`, pure + directly unit-tested) —
+  deliberately reads only `sexual_activity`/`sexual_display`/`erotica`/`very_suggestive`/`suggestive` (never the
+  nested `suggestive_classes`/`context` breakdown): `sexual_activity`/`sexual_display` ≥0.9 → explicit/high
+  (immediate-ban-eligible); ≥0.6 (below that) or `erotica` ≥0.6 → explicit/medium (warn/escalate path, not an
+  instant ban); `erotica`/`very_suggestive` ≥0.55 → uncertain/high (also warn/escalate-eligible); ≥0.3 →
+  uncertain/medium (logged, no action); else safe. This is why ordinary beach/swimwear/fitness/shirtless photos
+  never auto-escalate: those score high on `suggestive`/`mildly_suggestive`, not on the sexual-activity/display/
+  erotica classes this policy actually keys on — verified with dedicated tests, not just asserted.
+- **Failure taxonomy extended, not replaced** — `MediaFailureKind` gained `provider_auth_failed` (401/403, or
+  Sightengine's own `status:"failure"` credential-shaped error) and `provider_rate_limited` (429, or
+  Sightengine's own quota-shaped error) alongside the existing kinds, purely for LOG/diagnostic granularity —
+  `decideMediaEnforcement` already resolved (and still resolves) every `ok:false` failure to `ALLOW`
+  uniformly, so this changes nothing about enforcement, only what shows up in `[media-safety]` telemetry.
+  Malformed JSON, a 200 response missing the `nudity` object, and timeouts all map to their own distinct,
+  already-existing failure kinds — never a fabricated verdict.
+- **Bounded video sampling architecture unchanged, only the frame loop was extracted for testability** — new
+  `classifySampledFrames(frames, classify)` in `media-moderation.ts` (pure, classifier injected as a parameter)
+  replaces the inline loop that used to live in `community-runtime.ts`'s `runMediaModeration`; same early-exit-
+  on-high-confidence-explicit behavior, same `MAX_VIDEO_SAMPLE_FRAMES` bound — now directly proven by tests
+  (later frames genuinely never classified after a decisive result; call count never exceeds the bound) rather
+  than only inspected by reading the orchestrator. **Video moderation stays OFF** (`MEDIA_MODERATION_VIDEO_ENABLED`
+  unset) — Sightengine wiring doesn't change that gate.
+- **Rollout flags migrated to server-only names** — `NEXT_PUBLIC_MEDIA_MODERATION_ENABLED`/
+  `NEXT_PUBLIC_MEDIA_MODERATION_VIDEO_ENABLED` → `MEDIA_MODERATION_ENABLED`/`MEDIA_MODERATION_VIDEO_ENABLED` (no
+  `NEXT_PUBLIC_` prefix). Verified first, not assumed: grepped every reference — only `community-runtime.ts`'s
+  server-only Telegram webhook handler ever calls `virtualModMediaModeration`/`virtualModVideoModeration`; unlike
+  `VIRTUAL_MODERATOR_ENABLED`/`AUTO_POSTING_ENABLED` (which the owner-facing `AdminTabs.tsx` UI legitimately
+  reads to conditionally render cards), nothing client-side depends on these two, so there was no legitimate
+  reason for them to ship to the browser. **Both still default OFF; this is a rename, not a behavior change** —
+  update the Vercel env var names if `NEXT_PUBLIC_MEDIA_MODERATION_ENABLED` was ever set anywhere (it wasn't, per
+  the prior release note).
+- **Credentials**: `SIGHTENGINE_API_USER`/`SIGHTENGINE_API_SECRET`, server-only, read only inside
+  `sightengine-provider.ts`. Sent as Sightengine's own multipart `api_user`/`api_secret` fields (their auth
+  scheme, not a bearer token) — never in the URL, never logged, never in a thrown/user-visible error. New
+  `[media-safety]` structured log line (`JSON.stringify`, same convention as `[ai-usage]`) records
+  provider/verdict/confidence/duration/http-status/failure-reason only — never the secret, the request body, or
+  the image/frame bytes.
+- New tests: `sightengine-provider.test.ts` (+23 — every documented threshold bucket incl. the swimwear/fitness/
+  medical false-positive protection cases, 401/403/429/5xx/timeout/network-error/malformed-JSON/missing-fields/
+  Sightengine's own failure envelope all mapping to a distinct non-explicit failure, unconfigured-credentials
+  making zero network calls, the secret never appearing in a serialized result, credentials sent as multipart
+  fields never in the URL/as a bearer header), `media-safety-provider.test.ts` (+3 — dispatch to Sightengine vs.
+  legacy fallback vs. fully-unconfigured-makes-zero-calls), `media-moderation.test.ts` (+4 —
+  `classifySampledFrames`'s early exit and bound proven by actual call counts, a mid-sequence provider failure
+  never fabricating explicit, a safe+low-uncertain+safe video never producing a destructive enforcement),
+  `plan.test.ts` (+2 — both flags OFF by default in this environment, video can never be on while photo is off).
+  802 tests pass (up from 770), `tsc --noEmit` clean, production build clean. **Mocked HTTP throughout — no live
+  Sightengine API calls in the test suite.**
+- **Deliberately not done this pass** (per explicit scope): no Enterprise/BYO-provider work, no media-moderation
+  usage-metering/entitlement system, no dashboard/health UI, no `suggestive_classes`/`context`-based threshold
+  refinement (documented as intentionally out of scope — the classes actually used already satisfy every
+  required false-positive test). **Photo moderation is ready to review for enabling; video stays gated behind
+  its own flag pending live Vercel/ffmpeg verification. Neither flag was flipped on by this pass — that remains
+  a separate, explicit action.**
+
 ### 2026-08-17 — Direct photo/video moderation (media safety) for Virtual Moderator (v1.19.0)
 - **New capability, extends the EXISTING moderation abstraction, not a parallel engine.** `link-moderation.ts`'s
   `ModerationEnforcement` (ALLOW / DELETE_WARN / DELETE_BAN) is reused verbatim for media — gained two new
@@ -4620,6 +4684,24 @@ AI_FALLBACK_BASE_URL=https://aiprimetech.io
 DEEPSEEK_API_KEY=your_deepseek_key
 # DEEPSEEK_BASE_URL=https://api.deepseek.com
 # DEEPSEEK_CHATTER_MODEL=deepseek-v4-flash   # next candidate if quality is insufficient: deepseek-v4-pro (explicit config change only, never automatic)
+#
+# --- Direct photo/video moderation (media safety) -- src/lib/moderator/media-safety-provider.ts ---
+# Vendor-neutral dispatcher; MEDIA_SAFETY_PROVIDER selects the adapter. Sightengine
+# is the first real vendor wired (src/lib/moderator/sightengine-provider.ts).
+MEDIA_SAFETY_PROVIDER=sightengine
+SIGHTENGINE_API_USER=your_sightengine_api_user
+SIGHTENGINE_API_SECRET=your_sightengine_api_secret
+# Legacy generic HTTP adapter, used only when MEDIA_SAFETY_PROVIDER is unset:
+# MEDIA_SAFETY_PROVIDER_URL=https://your-nsfw-classifier.example/classify
+# MEDIA_SAFETY_PROVIDER_API_KEY=your_key
+# MEDIA_SAFETY_TIMEOUT_MS=10000   # shared by every adapter, default 10000
+#
+# Master kill-switches -- server-only (no NEXT_PUBLIC_ prefix; nothing in the
+# client-side owner UI reads these). OFF (unset) by default. Video requires its
+# own separate flag on top of photo, pending live ffmpeg-static/Vercel-Linux
+# verification.
+MEDIA_MODERATION_ENABLED=false
+MEDIA_MODERATION_VIDEO_ENABLED=false
 ```
 
 ---

@@ -30,6 +30,8 @@ export type MediaFailureKind =
   | "provider_unconfigured"
   | "provider_error"
   | "provider_timeout"
+  | "provider_auth_failed"
+  | "provider_rate_limited"
   | "download_failed"
   | "unsupported_media"
   | "too_large"
@@ -107,6 +109,28 @@ export function computeSamplePositions(durationMs: number, maxFrames: number = M
  *  frames once one is unambiguously explicit. */
 export function isEarlyExitResult(result: FrameResult): boolean {
   return result.ok && result.verdict === "explicit" && result.confidence === "high";
+}
+
+/** Classifies each sampled video frame IN ORDER via the given classifier,
+ *  stopping EARLY the instant a high-confidence explicit frame is found —
+ *  never spends classification calls on the remaining frames once the
+ *  result is already decisive (spec: "do not continue spending
+ *  classification requests unnecessarily after a decisive explicit
+ *  result"). The classifier is a PARAMETER rather than an import so this
+ *  stays pure/directly testable (a fake classifier can prove the early-exit
+ *  call count) independent of which vendor adapter is actually wired up.
+ *  Returns the aggregated media-level result via aggregateFrameResults. */
+export async function classifySampledFrames(
+  frames: Buffer[],
+  classify: (frame: Buffer, mimeType: string) => Promise<MediaClassificationResult>
+): Promise<MediaClassificationResult> {
+  const frameResults: FrameResult[] = [];
+  for (const frame of frames) {
+    const r = await classify(frame, "image/jpeg");
+    frameResults.push(r);
+    if (isEarlyExitResult(r)) break;
+  }
+  return aggregateFrameResults(frameResults);
 }
 
 /** The deterministic policy layer (mirrors link-moderation.ts's

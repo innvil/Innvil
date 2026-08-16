@@ -1,31 +1,36 @@
 import "server-only";
 
 import type { MediaClassificationResult } from "./media-moderation";
+import { classifyImageBytesViaSightengine } from "./sightengine-provider";
 
 /* =========================================================
    Visual safety classification — the I/O half of media moderation, kept
    separate from media-moderation.ts (pure policy/no I/O), mirroring the
    existing link-classify.ts / link-moderation.ts split.
 
-   No image-safety/NSFW provider or dependency exists anywhere in this
-   codebase (checked before writing this file — no such package.json
-   dependency, no existing vision/moderation client). This is deliberately a
-   REPLACEABLE ADAPTER, not a hardcoded vendor integration: it speaks one
-   small, generic HTTP contract (send image bytes, get back a verdict +
-   confidence) so it can be pointed at whichever concrete NSFW-classification
-   vendor/service Innvil ultimately picks, without coupling the moderation
-   pipeline itself to that choice. This is INTENTIONALLY NOT wired to any
-   specific vendor yet -- see MEDIA_SAFETY_PROVIDER_URL below. This is a
-   SPECIALIZED VISUAL CLASSIFIER, never Innvil's own conversational AI
-   (DeepSeek/Claude chat routing) -- media moderation must never depend on
-   or be confused with that path.
+   This is a vendor-neutral DISPATCHER, not a hardcoded vendor integration:
+   the rest of Innvil calls `classifyImageBytes` and never needs to know
+   which concrete NSFW-classification vendor is behind it. Vendor selection
+   is `MEDIA_SAFETY_PROVIDER` (currently only `"sightengine"` is a real,
+   wired implementation — see sightengine-provider.ts, which normalizes
+   Sightengine's own response shape entirely internally). Unset/anything
+   else falls back to the original generic HTTP contract below (a small
+   proxy-shaped adapter kept for local testing / a future second vendor —
+   NOT wired to any specific vendor). This is a SPECIALIZED VISUAL
+   CLASSIFIER, never Innvil's own conversational AI (DeepSeek/Claude chat
+   routing) -- media moderation must never depend on or be confused with
+   that path.
 
    Required environment variables (undocumented/unset = provider treated as
    unconfigured, which is a FAILURE state that always resolves to ALLOW at
    the policy layer -- never silently "explicit"):
+     MEDIA_SAFETY_PROVIDER          -- "sightengine" to use the real adapter
+     SIGHTENGINE_API_USER           -- Sightengine credential (server-only)
+     SIGHTENGINE_API_SECRET         -- Sightengine credential (server-only)
+     MEDIA_SAFETY_TIMEOUT_MS        -- optional, default 10000, shared by every adapter
+   Legacy generic adapter (used only when MEDIA_SAFETY_PROVIDER is unset):
      MEDIA_SAFETY_PROVIDER_URL      -- POST endpoint accepting image bytes
      MEDIA_SAFETY_PROVIDER_API_KEY  -- bearer token for that endpoint
-     MEDIA_SAFETY_TIMEOUT_MS        -- optional, default 10000
    ========================================================= */
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -49,11 +54,18 @@ interface RawProviderResponse {
 const VALID_VERDICTS = new Set(["safe", "uncertain", "explicit"]);
 const VALID_CONFIDENCE = new Set(["low", "medium", "high"]);
 
-/** Classifies a single still image. Returns a FAILURE (never a fabricated
- *  verdict) for: unconfigured provider, network/HTTP error, timeout, or a
- *  malformed response — the policy layer (media-moderation.ts's
- *  decideMediaEnforcement) always resolves any failure to ALLOW. */
+/** Classifies a single still image (or a sampled video frame — the caller
+ *  never distinguishes the two, per the "media classification happens at
+ *  the image level" architecture). Dispatches on `MEDIA_SAFETY_PROVIDER`;
+ *  returns a FAILURE (never a fabricated verdict) for: unconfigured
+ *  provider, network/HTTP error, timeout, or a malformed response — the
+ *  policy layer (media-moderation.ts's decideMediaEnforcement) always
+ *  resolves any failure to ALLOW regardless of which adapter produced it. */
 export async function classifyImageBytes(bytes: Buffer, mimeType: string): Promise<MediaClassificationResult> {
+  if (process.env.MEDIA_SAFETY_PROVIDER === "sightengine") {
+    return classifyImageBytesViaSightengine(bytes, mimeType);
+  }
+
   if (!isConfigured()) return { ok: false, failure: "provider_unconfigured" };
 
   const url = process.env.MEDIA_SAFETY_PROVIDER_URL!;

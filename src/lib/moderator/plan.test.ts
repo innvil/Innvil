@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -131,4 +131,24 @@ test("no entitlement: cannot create any saved moderators", () => {
 
 test("MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY is 5, independent of tier", () => {
   assert.equal(MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, 5);
+});
+
+/* ==================================================== media moderation flags ==== */
+
+test("REQUIRED (case 22/23): with MEDIA_MODERATION_ENABLED unset (the default in this test environment), photo AND video media moderation are both OFF regardless of settings", () => {
+  // These flags are read ONCE at module load from process.env -- this test
+  // exercises the actual current process env (unset here), proving the
+  // real deployed default is OFF, not a mocked/injected value.
+  assert.equal(virtualModMediaModeration({ addons: { moderator: { tier: "pro" } } }), false);
+  assert.equal(virtualModVideoModeration({ addons: { moderator: { tier: "pro" } } }), false);
+});
+
+test("video moderation can never be on while photo moderation is off -- it's layered strictly on top, never independent", () => {
+  // virtualModVideoModeration always requires virtualModMediaModeration to
+  // also be true (see plan.ts) -- with the flags unset in this environment,
+  // both must be false, and video specifically can never be true while
+  // photo is false.
+  const photoOn = virtualModMediaModeration({ addons: { moderator: { tier: "pro" } } });
+  const videoOn = virtualModVideoModeration({ addons: { moderator: { tier: "pro" } } });
+  if (videoOn) assert.equal(photoOn, true);
 });

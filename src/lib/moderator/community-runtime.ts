@@ -30,8 +30,8 @@ import {
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
-  decideMediaEnforcement, aggregateFrameResults, computeSamplePositions, isEarlyExitResult,
-  type MediaKind, type MediaClassificationResult, type FrameResult,
+  decideMediaEnforcement, computeSamplePositions, classifySampledFrames,
+  type MediaKind, type MediaClassificationResult,
 } from "./media-moderation";
 import { classifyImageBytes } from "./media-safety-provider";
 import { extractVideoFrames } from "./media-frame-extractor";
@@ -1330,13 +1330,7 @@ async function runMediaModeration(
           const positions = computeSamplePositions((media.durationS ?? 30) * 1000);
           const extraction = await extractVideoFrames(download.buffer, positions);
           if (!extraction.ok) return { ok: false, failure: "decode_failed" } as MediaClassificationResult;
-          const frameResults: FrameResult[] = [];
-          for (const frame of extraction.frames) {
-            const r = await classifyImageBytes(frame, "image/jpeg");
-            frameResults.push(r);
-            if (isEarlyExitResult(r)) break;
-          }
-          return aggregateFrameResults(frameResults);
+          return classifySampledFrames(extraction.frames, classifyImageBytes);
         })();
 
   // Unified content-policy strike counter -- reuses the SAME per-(community,
