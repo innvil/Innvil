@@ -141,7 +141,3 @@ export async function claimWatchBinancePayment(depositId: string, transactionId:
   await activateWatchEntitlement(admin, deposit.owner_id as string, deposit.plan as string, deposit.id as string);
   return { ok: true, data: null };
 }
-
-export function watchBinanceGatewayId(): "binance_pay" {
-  return "binance_pay";
-}

@@ -7,6 +7,12 @@
 export const PANEL_ROOT_DOMAIN =
   process.env.NEXT_PUBLIC_PANEL_ROOT_DOMAIN?.trim() || "innvil.cloud";
 
+/** Innvil Watch's standalone product domain (proxy.ts already reserves the
+ *  "watch" subdomain so it's never mistaken for a panel — see
+ *  src/lib/products/watch.ts). Presentation-only: this never grants Watch
+ *  access by itself, entitlement is always resolved server-side. */
+export const WATCH_ROOT_DOMAIN = `watch.${PANEL_ROOT_DOMAIN}`;
+
 /**
  * CLIENT-side link prefix for a panel's own storefront pages, based on the host the
  * browser is actually on:

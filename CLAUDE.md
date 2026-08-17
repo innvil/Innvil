@@ -127,6 +127,75 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Innvil Watch standalone customer-facing domain + Binance Pay direct checkout + live pricing update (v1.23.0)
+- **`watch.innvil.cloud` now renders a real, distinct Innvil Watch product experience** — previously it silently
+  fell through to the generic SMM-panel/Forge landing (root `app/page.tsx` had no host branching at all; the
+  domain was only reserved at the proxy level so it wouldn't 404 as an unregistered panel subdomain). New
+  `src/lib/watch-host.ts` `isWatchHost()` (reads the request host via `next/headers`, presentation-only — never
+  used for authorization) branches `app/page.tsx` into three states: unauthenticated → `WatchLanding`
+  (authenticated=false); authenticated without Watch entitlement → `WatchLanding` (authenticated=true, pricing
+  CTAs go straight to checkout instead of `/signup`); authenticated **with** an active Watch entitlement →
+  `WatchDashboard`. Entitlement is resolved through the EXISTING `hasProductAccess()` from the prior phase —
+  no new authorization concept. `generateMetadata()` also branches on host so Watch gets its own title/
+  description/OG tags instead of inheriting the SMM-panel ones. **Verified live** (dev server + `curl -H "Host:
+  watch.innvil.cloud"`): correct title, no "Create your panel" copy, correct Bronze/Silver/Gold/Platinum prices
+  render in the raw HTML; the normal host confirmed unchanged (still shows "Create your panel").
+- **New `src/components/watch/` tree** — `WatchLanding.tsx` (server component: hero, features grounded in
+  actually-implemented capabilities only — natural conversation, spam/scam moderation, Auto-Posting, Project
+  Knowledge — never invented functionality), `WatchPricingSection.tsx` (client, plan grid + checkout modal
+  trigger), `WatchCheckout.tsx` (client, wired to the REAL backend contracts — `listAvailableDirectWatchGateways`/
+  `createDirectWatchCheckout`/`createWatchBinanceDeposit`/`claimWatchBinancePayment` — never a fabricated
+  "payment successful" state; only gateways the backend actually reports as configured are shown, and an
+  empty list shows an honest "payments temporarily unavailable" state rather than a broken checkout),
+  `WatchDashboard.tsx` (entitled customers only — lists the account's real Projects via the prior phase's
+  `listAccountProjects`, a create-Project control wired to `createStandaloneProject`, and deliberately ZERO
+  SMM-panel commerce navigation — no New Order/Orders/Services/Providers/storefront). Reuses the shared `fp-*`
+  visual language + `InnvilBrandMark` so Watch visibly reads as the same Innvil ecosystem ("Part of Innvil" in
+  both the nav and footer), not a forked product — never a copy of `PublicLanding.tsx`.
+- **New `src/lib/actions/watch-dashboard.ts`** — `getWatchAccessState()` / `createWatchProject()`, thin auth
+  wrappers over the session-less `ownership.ts` core (same established pattern as `orders/place.ts`). New
+  `listAccountProjects(admin, accountId)` added to `ownership.ts` (returns both standalone and Panel-backed
+  projects for an account — a Watch dashboard should show the full picture regardless of which path created
+  each project).
+- **Binance Pay is now a real, working direct-Watch payment option** — per the user's explicit follow-up request
+  after the prior pass reported it as unsupported. New `src/lib/products/watch-binance.ts`
+  (`createWatchBinanceDeposit`/`claimWatchBinancePayment`) mirrors the existing PANEL-level Binance Pay
+  claim-by-transaction-id pattern, but reuses only the genuinely gateway-agnostic piece (the raw
+  `getPayTransactions` Binance API client) with fresh matching against `platform_deposits` (Innvil's OWN
+  Binance account) instead of a panel owner's `payments`/`binance_pay_transactions` cache. Migration
+  `0068_watch_binance_pay.sql` (NEW) adds `platform_deposits.binance_tx_id` + a partial unique index — one
+  Binance transaction can never activate two Watch subscriptions. **v1 simplification, stated plainly:** no
+  unique-payable-amount anti-theft enhancement (the panel-level flow's later refinement) — this is the
+  original "pay the exact price, submit the transaction id" shape; a duplicate transaction id is still
+  rejected at the DB level. `watch-checkout.ts`'s `listAvailableDirectWatchGateways()` now also reports
+  `binance_pay` when genuinely configured (real `payId` + API credentials present).
+- **Live pricing update, explicitly authorized by the user this pass (not silently applied):** `money.ts`'s
+  `MODERATOR_STANDARD_PRICE`/`MODERATOR_PREMIUM_PRICE`/`MODERATOR_PRO_PRICE` raised from
+  $114.99/$209.99/$359.99 to **$129.99/$219.99/$379.99** (Basic/Bronze unchanged at $49.99) — this is the
+  previously-documented "Phase 4.S — future plan" price the prior pass deliberately did NOT apply on its own.
+  Since Enterprise's per-slot formula (`moderatorEnterpriseSlotPrice`) is based directly on
+  `MODERATOR_PRO_PRICE`, its worked examples also shifted (50 slots: $809.99→**$829.99**; 75 slots:
+  $1,134.99→**$1,154.99**) — updated the doc comment and both pinned tests to match, not left stale.
+- **DB verified applied, checked live (read-only) before reporting this as production-ready**: migrations `0067`
+  and `0068` both confirmed present in the actual Supabase project (`platform_deposits.purpose/product_id/plan/
+  binance_tx_id`, `watch_telegram_links`, `watch_abuse_signals` all exist); the `watch` product row is `active`
+  with the correct domain; all three platform payment gateways (Cryptomus, NOWPayments, Binance Pay) are
+  connected, with Binance Pay carrying a real `payId` and QR image already configured.
+- New tests: `ownership.test.ts` (+1 — `listAccountProjects` returns only the requesting account's projects,
+  standalone and Panel-backed alike, never another account's), `money.test.ts` pricing assertions updated to
+  the new live values. 909 tests pass (up from 908), `tsc --noEmit` clean, production build clean (one real
+  build-time catch along the way: a stray non-async export in a `"use server"` file — Next's own Server-Actions
+  rule, not caught by `tsc`, removed since it was unused). **No dedicated test added for `watch-host.ts`'s
+  `isWatchHost()`** — consistent with this codebase's existing convention of not unit-testing header-based host
+  detection helpers (`storefront-host.ts`'s equivalent `storefrontBase()` has no test either); verified instead
+  via a live local request with a `Host:` header override (see above).
+- **Deliberately not built this pass** (documented, not silently skipped): Community/Watcher creation for a
+  standalone Project — the Watch dashboard states this honestly inline ("still requires a Panel today") rather
+  than exposing a non-functional "Connect Telegram" control; self-serve Enterprise checkout (Enterprise stays
+  a "Contact us" link, no fabricated flow); a `next`-param-based post-login return path (unnecessary — `/login`
+  and `/signup` already redirect to `/`, and `/` is host-aware, so the flow naturally lands back on Watch);
+  ecosystem product-switcher UI beyond a plain link back to `innvil.cloud`.
+
 ### 2026-08-17 — Direct (Panel-less) Watch payment + Bronze/Silver/Gold/Platinum rename + anti-abuse identity (v1.22.0)
 - **Scope note, stated upfront:** two large phases were requested together this session — (1) extending nullable/
   neutral ownership down to Communities/Watchers so a standalone Project can hold a live Watch deployment, and

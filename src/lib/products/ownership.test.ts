@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasProductAccess, createStandaloneProject, projectBelongsToAccount, activateWatchEntitlement } from "./ownership";
+import { hasProductAccess, createStandaloneProject, projectBelongsToAccount, activateWatchEntitlement, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 
 /**
@@ -26,6 +26,7 @@ function fakeAdmin(seed: { panels?: Row[]; products?: Row[]; product_entitlement
       const builder: Record<string, unknown> = {
         select() { return builder; },
         eq(col: string, val: unknown) { filters.push([col, val]); return builder; },
+        order() { return builder; },
         async maybeSingle() { return { data: rowsMatching()[0] ?? null, error: null }; },
         insert(row: Row) {
           return {
@@ -176,4 +177,21 @@ test("a subsequent activation for the SAME account+product now grants hasProduct
   assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), false);
   await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
   assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), true);
+});
+
+/* -------------------------------------------------------- account projects ---- */
+
+test("listAccountProjects returns only this account's projects, standalone and Panel-backed alike", async () => {
+  const admin = fakeAdmin({
+    projects: [
+      { id: "proj-1", account_id: "acct-1", panel_id: null, name: "Standalone Hub", created_at: "2026-01-01T00:00:00Z" },
+      { id: "proj-2", account_id: "acct-1", panel_id: "panel-1", name: "Panel Project", created_at: "2026-01-02T00:00:00Z" },
+      { id: "proj-3", account_id: "acct-2", panel_id: null, name: "Someone Else's", created_at: "2026-01-01T00:00:00Z" },
+    ],
+  });
+  const rows = await listAccountProjects(admin, "acct-1");
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((r) => r.id !== "proj-3"));
+  assert.equal(rows.find((r) => r.id === "proj-1")?.panelId, null);
+  assert.equal(rows.find((r) => r.id === "proj-2")?.panelId, "panel-1");
 });

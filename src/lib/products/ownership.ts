@@ -110,3 +110,28 @@ export async function createStandaloneProject(admin: SupabaseClient, accountId: 
 export function projectBelongsToAccount(project: { accountId: string }, accountId: string): boolean {
   return project.accountId === accountId;
 }
+
+export interface AccountProjectRow {
+  id: string;
+  name: string;
+  panelId: string | null;
+  createdAt: string;
+}
+
+/** Every Project this account owns directly (`projects.account_id`) —
+ *  covers BOTH standalone (`panel_id: null`) and Panel-backed projects, so
+ *  a Watch dashboard can show the account's full picture regardless of
+ *  which path created each one. */
+export async function listAccountProjects(admin: SupabaseClient, accountId: string): Promise<AccountProjectRow[]> {
+  const { data } = await admin
+    .from("projects")
+    .select("id, name, panel_id, created_at")
+    .eq("account_id", accountId)
+    .order("created_at", { ascending: true });
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    name: r.name as string,
+    panelId: (r.panel_id as string | null) ?? null,
+    createdAt: r.created_at as string,
+  }));
+}
