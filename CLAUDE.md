@@ -127,6 +127,47 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Real "Getting Started" guide on the Watch landing page + honest onboarding-gap disclosure (v1.23.2)
+- **Investigated the actual current onboarding sequence before writing any copy, per explicit instruction** —
+  found a real, important gap: account creation, choosing a Watch plan, and creating a standalone Project
+  (`createStandaloneProject`/`createWatchProject`) are genuinely self-serve today with NO Panel required. But
+  connecting a Telegram community and creating/deploying a Watcher are only reachable through Innvil's existing
+  OWNER-side Virtual Moderator tooling — `communities.panel_id`/`moderator_deployments.panel_id` are still NOT
+  NULL, and the customer-facing storefront surface for it (`AiModeratorSurface.tsx`) is still explicitly gated
+  behind `aiModeratorComingSoon` in `app/p/[subdomain]/Storefront.tsx` (confirmed live in the JSX, not assumed).
+  **The guide states this honestly** (a "Rolling out" callout on the Telegram-connect step) rather than
+  promising a self-serve flow that doesn't exist yet — per the explicit "do not invent features, report
+  discrepancies" instruction.
+- **New `src/lib/products/watch-onboarding.ts` (pure, no I/O)** — the 8-step guide content
+  (Account → Plan → Project → Connect Telegram → Create Watcher → Deploy → Configure → Go live). Every numeric
+  limit shown (Watcher slots per tier, communities per tier, the 5-per-community deployment cap) is READ from
+  the same canonical constants the backend actually enforces (`moderator/plan.ts`'s `CAPACITY`/
+  `MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY`, `money.ts`'s `MODERATOR_COMMUNITY_CAPACITY`, `watch-plans.ts`'s
+  `watchPlanOptions()`) — never a second hardcoded copy that could drift from real enforcement.
+- **New `src/components/watch/WatchOnboardingGuide.tsx`** — one large step card per scroll section (not a
+  compact accordion/grid), each with a main explanation column and a callout column (`plan-limit`/
+  `community-limit`/`good-to-know`/`required`/`in-progress`, each with distinct Watch-token styling — teal for
+  plan info, amber for community limits/in-progress, red for required, neutral for good-to-know). A subtle
+  sticky step-number rail (desktop only, hidden on mobile — no horizontal scroll requirement) highlights the
+  active step via `IntersectionObserver`, updating as the visitor scrolls rather than requiring a click.
+  Mounted in `WatchLanding.tsx` between the existing short "How it works" section and Pricing, per the
+  requested `Hero → Features → How it works → Detailed guide → Pricing → FAQ` order.
+- **New Watch-specific FAQ section** (`WatchFaq`, same file, native `<details>`/`<summary>` — accessible by
+  default, matches the existing pattern already used on the main Innvil landing) — 7 questions grounded in
+  actual architecture (no Panel required for direct Watch, Watcher-slot vs. community-limit distinction,
+  Project/Community/Watcher relationship, plan-change behavior).
+- New tests: `watch-onboarding.test.ts` (+9 — every plan-capacity number in the guide traces to the canonical
+  `CAPACITY`/`MODERATOR_COMMUNITY_CAPACITY` constants byte-for-byte, the per-community deployment callout
+  matches `MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY`, no step claims Forge/Panel ownership is required, the account
+  step explicitly states Watch independence, the Telegram step carries the honest in-progress disclosure, no
+  empty callout text). 918 tests pass (up from 909), `tsc --noEmit` clean, production build clean. Verified live
+  via `Host: watch.localhost` — confirmed the real numbers (Bronze 2/Silver 5/Gold 10/Platinum 20 slots, 5-per-
+  community cap) render correctly, and the honest "still rolling out" + "Contact support" copy is present.
+- **Deliberately not built this pass**: no fix to the underlying Panel-scoping gap itself (that's the
+  documented next architectural step from Phase 4.T, not landing-page copy work); no CTA deep-linking into an
+  authenticated flow that doesn't exist yet (Step 4's CTA goes to `/signup`, matching "do not create broken
+  deep links"); no changes to Watch entitlement/checkout/Telegram/moderation logic.
+
 ### 2026-08-18 — Innvil Watch distinct visual identity + real brand assets (v1.23.1)
 - **Watch now has its own design system, separate from the parent site's `fp-*` gold/serif theme.** New
   `.watch-root`/`w-*` token layer in `app/globals.css` — deep charcoal/midnight base, cool teal/cyan primary

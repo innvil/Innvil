@@ -5,6 +5,7 @@ import {
   Radio, Zap, Users, Clock,
 } from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
+import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 
 /**
@@ -31,6 +32,7 @@ function WatchNav() {
         <nav className="hidden md:flex items-center gap-6 text-sm w-text-dim">
           <a href="#features" className="hover:w-text">Features</a>
           <a href="#how" className="hover:w-text">How it works</a>
+          <a href="#getting-started" className="hover:w-text">Getting started</a>
           <a href="#pricing" className="hover:w-text">Pricing</a>
           <a href="https://innvil.cloud" className="hover:w-text flex items-center gap-1">← Innvil</a>
         </nav>
@@ -124,6 +126,35 @@ const STEPS = [
   { n: "04", title: "Let it operate", body: "Your Watcher moderates, answers, and posts on schedule." },
 ];
 
+const FAQ: Array<{ q: string; a: string }> = [
+  { q: "Do I need an SMM Panel to use Innvil Watch?", a: "No. Watch is an independently ownable Innvil product — you can subscribe and use it directly with just an Innvil account. Owning Innvil Forge (the SMM panel product) is one way to access Watch, never a requirement." },
+  { q: "How many Watchers can I deploy?", a: "Your plan sets a total Watcher-slot allowance shared across every community you connect. Each individual community also has its own cap of up to 5 active Watchers, independent of your plan's total." },
+  { q: "Can I use Watch in more than one community?", a: "Yes, up to your plan's community allowance — Bronze includes 1, Silver 2, Gold 3, Platinum 5. Each community is a separate connection with its own Watcher deployments." },
+  { q: "What happens if I reach my plan limit?", a: "Innvil tells you clearly and blocks the specific action (deploying another Watcher, connecting another community) rather than silently failing or bypassing the limit." },
+  { q: "Can I change my plan later?", a: "Yes — subscribing to a different plan updates your entitlement; nothing about your existing Projects, communities, or Watcher configuration is deleted." },
+  { q: "Does Watch work with my existing Innvil account?", a: "Yes. Product entitlements (Forge, Watch, and future products) all live on the same Innvil account — there's no separate Watch-only login." },
+  { q: "What's the difference between a Project, a Community, and a Watcher?", a: "A Project is your identity and knowledge base. A Community is a specific Telegram group or channel you connect. A Watcher is the AI-powered Virtual Moderator you deploy into a Community — one Project can have multiple Communities, and Watchers are deployed per Community." },
+];
+
+function WatchFaq() {
+  return (
+    <section id="faq" className="max-w-3xl mx-auto px-6 py-16">
+      <h2 className="w-display text-2xl text-center mb-10">Frequently asked questions</h2>
+      <div className="space-y-2.5">
+        {FAQ.map((f) => (
+          <details key={f.q} className="w-card px-4 py-3 group">
+            <summary className="cursor-pointer text-sm font-medium w-text list-none flex items-center justify-between gap-3">
+              {f.q}
+              <span className="w-teal text-xs shrink-0 group-open:rotate-180 transition-transform">▾</span>
+            </summary>
+            <p className="text-sm w-text-dim mt-2 leading-relaxed">{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function WatchLanding({ authenticated }: { authenticated: boolean }) {
   const options = watchPlanOptions();
   return (
@@ -187,7 +218,11 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
         </div>
       </section>
 
+      <WatchOnboardingGuide />
+
       <WatchPricingSection options={options} authenticated={authenticated} />
+
+      <WatchFaq />
 
       <footer className="border-t w-line-soft py-10 text-center">
         <p className="w-display text-sm mb-1">Innvil Watch</p>
