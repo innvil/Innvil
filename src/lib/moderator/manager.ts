@@ -111,6 +111,52 @@ export function buildManagedBotDeepLink(managerUsername: string, suggestedUserna
 }
 
 /**
+ * Add-to-group deep link (Phase 4.O — telegram-bot-to-bot-onboarding-spec.md
+ * §2/§6). Confirmed against Telegram's current official docs (core.telegram.org
+ * /bots/features): `https://t.me/<bot_username>?startgroup=<payload>` opens
+ * Telegram's own "choose a group, review permissions, confirm" flow for the
+ * user — `startgroup` accepts `[A-Za-z0-9_-]`, max 64 chars.
+ *
+ * Deliberately does NOT append an `admin=<rights>` parameter suggesting
+ * specific admin rights — despite the spec explicitly wanting one, current
+ * official documentation could NOT be confirmed to specify this parameter's
+ * exact syntax/valid right names (checked live before implementing, per the
+ * spec's own "do not hardcode the exact permission-string format until
+ * inspecting Telegram's current official deep-link specification" instruction).
+ * Telegram's own add-to-group dialog already lets the user review/toggle
+ * admin permissions regardless of any suggestion, so omitting this parameter
+ * doesn't block the flow — it just means Innvil communicates the REQUESTED
+ * rights via its own UI text (computeRequiredAdminRights below) instead of a
+ * pre-filled Telegram dialog. Add the parameter later once its exact syntax
+ * is confirmed against live Telegram behavior, per the same "verify before
+ * claiming automated" principle used throughout this feature.
+ */
+export function buildAddToGroupDeepLink(botUsername: string, setupToken: string): string {
+  return `https://t.me/${encodeURIComponent(botUsername)}?startgroup=${encodeURIComponent(setupToken)}`;
+}
+
+/** Feature-based least-privilege admin rights (spec §3/§4 — "do not request
+ *  every possible admin permission for every deployment"). Communicated to
+ *  the owner/customer via UI text (Telegram doesn't let Innvil pre-fill
+ *  these into the add-to-group dialog — see buildAddToGroupDeepLink above),
+ *  and cross-checked after the fact via checkChatMembership's real
+ *  can_delete_messages/can_restrict_members introspection — never assumed
+ *  granted just because they were requested. */
+export interface RequiredAdminRights {
+  deleteMessages: boolean;
+  restrictMembers: boolean;
+  postMessages: boolean;
+}
+
+export function computeRequiredAdminRights(input: { moderationEnabled: boolean; autoPostingEnabled: boolean }): RequiredAdminRights {
+  return {
+    deleteMessages: input.moderationEnabled,
+    restrictMembers: input.moderationEnabled,
+    postMessages: input.autoPostingEnabled,
+  };
+}
+
+/**
  * Fetches a managed bot's token. Confirmed against Telegram's current Bot
  * API 9.6 docs: getManagedBotToken takes `user_id` = the MANAGED bot's own
  * numeric id (i.e. `managed_bot.bot.id`), NOT the creator/owner's id

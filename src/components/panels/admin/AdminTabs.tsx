@@ -17,8 +17,10 @@ import {
   requestTelegramCreation, getModeratorProvisioning, cancelTelegramProvisioning,
   connectCommunity, listModeratorCommunities, setDeploymentEnabled, setCommunityBotAckMode, setCommunityCollabContact,
   setModeratorPersonaDescription, applyModeratorPersonaPreset, clearModeratorPersonaPreset, setModeratorCustomInstructions,
-  type VirtualModeratorRow, type ModeratorPlanInfo, type CommunityDeploymentRow,
+  createTelegramSetupSession,
+  type VirtualModeratorRow, type ModeratorPlanInfo,
 } from "@/src/lib/actions/moderator";
+import type { CommunityDeploymentRow } from "@/src/lib/moderator/community-runtime";
 import { MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS } from "@/src/lib/moderator/presets";
 import { VIRTUAL_MODERATOR_ENABLED } from "@/src/lib/moderator/plan";
 import {
@@ -5084,10 +5086,33 @@ function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId
   // typing in one card's contact field never fights the fetched value.
   const [collabDrafts, setCollabDrafts] = React.useState<Record<string, string>>({});
   const [collabSaving, setCollabSaving] = React.useState<string | null>(null);
+  const [addToGroupBusy, setAddToGroupBusy] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setCommunities(await listModeratorCommunities(panelId, moderatorId));
   }, [panelId, moderatorId]);
+
+  // Phase 4.O — opens Telegram's own add-to-group dialog; the resulting
+  // /start in the chosen group is what actually completes the connection
+  // (community-runtime.ts's handleStartCommand), so nothing here polls or
+  // assumes success — refresh() below just picks it up whenever the owner
+  // comes back to this tab.
+  const addToGroup = async () => {
+    setAddToGroupBusy(true); setMsg(null);
+    const res = await createTelegramSetupSession(panelId, moderatorId);
+    setAddToGroupBusy(false);
+    if (!res.ok) { setMsg({ text: res.error, error: true }); return; }
+    window.open(res.data.deepLink, "_blank", "noopener,noreferrer");
+    const rights: string[] = [];
+    if (res.data.requiredRights.deleteMessages) rights.push("delete messages");
+    if (res.data.requiredRights.restrictMembers) rights.push("restrict/ban members");
+    if (res.data.requiredRights.postMessages) rights.push("post messages");
+    setMsg({
+      text: rights.length
+        ? `Choose a group in Telegram and grant admin rights to ${rights.join(", ")}. This link expires in 15 minutes.`
+        : "Choose a group in Telegram to add this moderator to. This link expires in 15 minutes.",
+    });
+  };
 
   React.useEffect(() => { void refresh(); }, [refresh]);
 
@@ -5135,11 +5160,16 @@ function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId
     <div className="mt-3 pt-3 border-t fp-line-soft">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] fp-mono uppercase fp-text-faint">Communities</p>
-        {!expanded && (
-          <button onClick={() => setExpanded(true)} className="text-xs px-2.5 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
-            Connect community
+        <div className="flex items-center gap-2">
+          <button onClick={addToGroup} disabled={addToGroupBusy} className="fp-btn-primary text-xs font-semibold px-2.5 py-1 rounded-lg disabled:opacity-60">
+            {addToGroupBusy ? "Opening Telegram&hellip;" : "Add to Telegram"}
           </button>
-        )}
+          {!expanded && (
+            <button onClick={() => setExpanded(true)} className="text-xs px-2.5 py-1 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
+              Enter chat manually
+            </button>
+          )}
+        </div>
       </div>
 
       {expanded && (
@@ -5196,6 +5226,26 @@ function ModeratorCommunities({ panelId, moderatorId, botAckEnabled }: { panelId
                       <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
+                )}
+                {botAckEnabled && c.botAckMode !== "off" && (
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full ${
+                      c.botToBotStatus === "verified_by_delivery"
+                        ? "fp-gold-soft-bg fp-gold"
+                        : c.botToBotStatus === "failed"
+                        ? "bg-red-500/10 text-red-400"
+                        : "fp-line-soft fp-panel-raised fp-text-faint"
+                    }`}
+                    title="Bot-to-bot acknowledgement is only confirmed once a real delivery between two Innvil moderators has succeeded"
+                  >
+                    {c.botToBotStatus === "verified_by_delivery"
+                      ? "Bot-to-bot: verified"
+                      : c.botToBotStatus === "failed"
+                      ? "Bot-to-bot: failed"
+                      : c.botToBotStatus === "ready_for_test"
+                      ? "Bot-to-bot: ready to test"
+                      : "Bot-to-bot: not tested"}
+                  </span>
                 )}
                 <span className={`text-[10px] px-2 py-0.5 rounded-full ${c.enabled ? "fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-faint"}`}>
                   {c.enabled ? "Active" : "Paused"}

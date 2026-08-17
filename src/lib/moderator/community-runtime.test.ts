@@ -4,7 +4,7 @@ import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
-  classifySender, loadRelevantKnowledge, detectSupportedMedia, type TelegramMessage,
+  classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, type TelegramMessage,
 } from "./community-runtime";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
@@ -837,4 +837,45 @@ test("photo takes precedence when (hypothetically) multiple media fields are pre
     video: { file_id: "v1", file_unique_id: "uv1", duration: 10, file_size: 10000, mime_type: "video/mp4" },
   });
   assert.equal(detectSupportedMedia(msg)?.kind, "photo");
+});
+
+/* ------------------------------------------------- Phase 4.O: /start ---- */
+// START_COMMAND_RE is the entry gate for handleStartCommand (private-chat
+// touchpoint + group add-to-group completion, telegram-bot-to-bot-
+// onboarding-spec.md §2/§6/§23). The DB-heavy orchestration around it
+// (session lookup/consumption, finalizeCommunityConnection) is verified via
+// typecheck + build + code review, consistent with how this codebase treats
+// other comparably complex DB-mocked orchestrators (see the media-moderation
+// v1.19.0 changelog note) -- this pins the one genuinely pure decision layer.
+
+test("START_COMMAND_RE matches a bare /start with no payload (private-chat touchpoint)", () => {
+  const m = START_COMMAND_RE.exec("/start");
+  assert.ok(m);
+  assert.equal(m?.[1], undefined);
+});
+
+test("START_COMMAND_RE captures the setup-session token from a startgroup deep link", () => {
+  const m = START_COMMAND_RE.exec("/start aB3dEf9012XyZw==");
+  assert.ok(m);
+  assert.equal(m?.[1], "aB3dEf9012XyZw==");
+});
+
+test("START_COMMAND_RE matches /start@botusername (Telegram's group-mention form) with a payload", () => {
+  const m = START_COMMAND_RE.exec("/start@kwan_mod_bot abc123");
+  assert.ok(m);
+  assert.equal(m?.[1], "abc123");
+});
+
+test("START_COMMAND_RE does not match an ordinary message that merely contains the word start", () => {
+  assert.equal(START_COMMAND_RE.exec("let's start the meeting"), null);
+});
+
+test("START_COMMAND_RE does not match a message that starts with /startsomething else entirely", () => {
+  assert.equal(START_COMMAND_RE.exec("/startgroup fake"), null);
+});
+
+test("START_COMMAND_RE tolerates trailing whitespace", () => {
+  const m = START_COMMAND_RE.exec("/start   token123   ");
+  assert.ok(m);
+  assert.equal(m?.[1], "token123");
 });

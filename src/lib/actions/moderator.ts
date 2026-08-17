@@ -11,25 +11,30 @@
  * fallback for an already-created bot (spec §19).
  */
 
+import { randomBytes } from "node:crypto";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT, normalizeModeratorPersona } from "@/src/lib/moderator/domain";
 import { resolvePersonaPreset, applyPersonaPreset } from "@/src/lib/moderator/presets";
 import {
   hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon,
-  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement,
+  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement, virtualModModeration, virtualModContentGeneration,
   communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage,
 } from "@/src/lib/moderator/plan";
 import type { BotAckMode } from "@/src/lib/moderator/coordinator";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildManagedBotDeepLink,
+  buildAddToGroupDeepLink,
+  computeRequiredAdminRights,
   checkChatMembership,
   getManagerBotUsername,
   setIntegrationWebhook,
   validateRequestedUsername,
   verifyBotToken,
+  type RequiredAdminRights,
 } from "@/src/lib/moderator/manager";
+import { finalizeCommunityConnection, type CommunityDeploymentRow, type DeploymentHealthInfo } from "@/src/lib/moderator/community-runtime";
 
 const BOT_ACK_MODES: BotAckMode[] = ["off", "reactions_only", "acknowledgements", "role_handoffs"];
 
@@ -415,65 +420,33 @@ export async function connectExistingBotToken(panelId: string, moderatorId: stri
 
 const DEPLOYABLE_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
 
-export interface DeploymentHealthInfo {
-  present: boolean;
-  canSend: boolean;
-  canDelete: boolean;
-  canRestrict: boolean;
-  checkedAt: string | null;
-}
+const TELEGRAM_SETUP_SESSION_TTL_MINUTES = 15;
 
-export interface CommunityDeploymentRow {
-  deploymentId: string;
-  communityId: string;
-  chatId: string;
-  handle: string | null;
-  title: string | null;
-  chatType: string | null;
-  enabled: boolean;
-  health: DeploymentHealthInfo;
-  botAckMode: BotAckMode;
-  /** Phase 4.M (F) — who partnership/AMA/collab inquiries get routed to in
-   *  this community, owner-typed (username or plain description). Null =
-   *  unset; the moderator never invents a contact when this is unset. */
-  collabContact: string | null;
-}
+/** Phase 4.O — "Add [moderator] to Telegram" deep link (spec §2/§6/§23).
+ *  Returns a `startgroup` link that opens Telegram's own add-to-group flow;
+ *  the opaque token correlates the resulting group /start back to this
+ *  moderator (never tenant data in the visible token itself — spec §6). */
+export async function createTelegramSetupSession(panelId: string, moderatorId: string): Promise<Result<{ deepLink: string; token: string; expiresAt: string; requiredRights: RequiredAdminRights }>> {
+  const ctx = await ownedModerator(panelId, moderatorId);
+  if (!ctx) return { ok: false, error: "Moderator not found." };
+  if (!DEPLOYABLE_PROVISIONING_STATUSES.has(ctx.moderator.provisioning_status)) {
+    return { ok: false, error: "Connect this moderator's Telegram bot before adding a community." };
+  }
+  const { data: integration } = await ctx.admin.from("telegram_bot_integrations").select("username").eq("virtual_moderator_id", moderatorId).maybeSingle();
+  if (!integration?.username) return { ok: false, error: "No Telegram bot connected for this moderator yet." };
 
-/**
- * Starts the 7-day free trial (spec §45) the moment a panel's first
- * ModeratorDeployment is about to go live, IF this owner account has never
- * had one before. Idempotent/race-safe: moderator_trial_usage.owner_id is a
- * primary key, so the insert either wins exactly once (grant it) or fails
- * with a unique violation (already used, on this panel or another — no-op).
- * Silently does nothing if the panel already has a paid tier or an active
- * trial; capacity for that case is already correct.
- */
-async function startModeratorTrialIfEligible(admin: SupabaseClient, ownerId: string, panelId: string, moderatorId: string): Promise<void> {
-  const { data: panel } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
-  const settings = (panel?.settings as Record<string, unknown>) ?? {};
-  if (hasVirtualModerator(settings)) return; // already entitled (paid tier or active trial) — nothing to grant
-
-  const now = new Date();
-  const endsAt = new Date(now.getTime() + TRIAL_DURATION_DAYS * 24 * 60 * 60_000);
-  const { error } = await admin.from("moderator_trial_usage").insert({
-    owner_id: ownerId,
-    panel_id: panelId,
-    virtual_moderator_id: moderatorId,
-    started_at: now.toISOString(),
-    ends_at: endsAt.toISOString(),
+  const token = randomBytes(16).toString("base64url");
+  const expiresAt = new Date(Date.now() + TELEGRAM_SETUP_SESSION_TTL_MINUTES * 60_000).toISOString();
+  const { error } = await ctx.admin.from("telegram_setup_sessions").insert({
+    token, panel_id: panelId, virtual_moderator_id: moderatorId, initiator: "owner", expires_at: expiresAt,
   });
-  if (error) return; // this owner already has a trial on record (or a genuine DB error) — don't grant/modify anything
+  if (error) return { ok: false, error: "Could not start the setup session." };
 
-  const addons = (settings.addons as Record<string, unknown>) ?? {};
-  const moderatorAddon = (addons.moderator as Record<string, unknown>) ?? {};
-  const nextSettings = {
-    ...settings,
-    addons: {
-      ...addons,
-      moderator: { ...moderatorAddon, trial: { startedAt: now.toISOString(), endsAt: endsAt.toISOString() } },
-    },
-  };
-  await admin.from("panels").update({ settings: nextSettings }).eq("id", panelId);
+  const requiredRights = computeRequiredAdminRights({
+    moderationEnabled: virtualModModeration(ctx.panel.settings),
+    autoPostingEnabled: virtualModContentGeneration(ctx.panel.settings),
+  });
+  return { ok: true, data: { deepLink: buildAddToGroupDeepLink(integration.username, token), token, expiresAt, requiredRights } };
 }
 
 /** Connect a bot-ready moderator to a Telegram community: verify presence/permissions with the
@@ -505,133 +478,7 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
   if (!membership.ok) return { ok: false, error: `Telegram couldn't verify that chat: ${membership.error}` };
   if (!membership.result.present) return { ok: false, error: "This bot isn't a member of that chat yet — add it in Telegram first, then try again." };
 
-  // Past all Telegram verification — this connection attempt is real, so this
-  // is the right moment to start the trial if this owner has never had one
-  // (spec §45: trial starts on the first deployment actually going live, not
-  // merely on moderator/draft creation). Re-fetch settings afterward so the
-  // capacity check below sees trial capacity on this very first call.
-  await startModeratorTrialIfEligible(ctx.admin, ctx.user.id, panelId, moderatorId);
-  const { data: freshPanel } = await ctx.admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
-  const currentSettings = freshPanel?.settings ?? ctx.panel.settings;
-
-  const capacity = moderatorCapacity(currentSettings);
-  const { count: existingCommunityCount } = await ctx.admin
-    .from("communities")
-    .select("id", { count: "exact", head: true })
-    .eq("panel_id", panelId);
-  const { data: existingCommunity } = await ctx.admin
-    .from("communities")
-    .select("id, project_id")
-    .eq("panel_id", panelId)
-    .eq("platform", "telegram")
-    .eq("chat_id", String(membership.result.chat.id))
-    .maybeSingle();
-  if (communityCountExceeded(!existingCommunity, existingCommunityCount ?? 0, capacity.maxCommunities)) {
-    return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
-  }
-
-  // Panel -> Project -> Community: every community belongs to exactly one
-  // project (communities.project_id is NOT NULL, migration 0057). Reuse the
-  // EXISTING community's project unchanged (never silently reassign it on a
-  // reconnect); a genuinely new community gets its own new project, named
-  // after the Telegram chat itself -- the same conservative "one project per
-  // community" default the migration used for existing data, since this
-  // action has no project-selector UI yet to ask the owner explicitly.
-  let projectId = existingCommunity?.project_id ?? null;
-  if (!projectId) {
-    const { data: project, error: projectError } = await ctx.admin
-      .from("projects")
-      .insert({ panel_id: panelId, name: membership.result.chat.title ?? membership.result.chat.username ?? "Project" })
-      .select("id")
-      .single();
-    if (projectError || !project) return { ok: false, error: projectError?.message ?? "Could not create a project for this community." };
-    projectId = project.id;
-  }
-
-  const { data: community, error: communityError } = await ctx.admin
-    .from("communities")
-    .upsert(
-      {
-        panel_id: panelId,
-        platform: "telegram",
-        chat_id: String(membership.result.chat.id),
-        handle: membership.result.chat.username ?? null,
-        title: membership.result.chat.title ?? null,
-        chat_type: membership.result.chat.type ?? null,
-        project_id: projectId,
-      },
-      { onConflict: "panel_id,platform,chat_id" }
-    )
-    .select("id, chat_id, handle, title, chat_type, bot_ack_mode, collab_contact")
-    .single();
-  if (communityError || !community) return { ok: false, error: communityError?.message ?? "Could not save the community." };
-
-  const { count: activeSlotCount } = await ctx.admin
-    .from("moderator_deployments")
-    .select("id", { count: "exact", head: true })
-    .eq("panel_id", panelId)
-    .eq("enabled", true);
-  const { data: existingDeployment } = await ctx.admin
-    .from("moderator_deployments")
-    .select("id, enabled")
-    .eq("moderator_id", moderatorId)
-    .eq("community_id", community.id)
-    .maybeSingle();
-
-  // Flat per-community cap, independent of tier — keeps bot-to-bot
-  // acknowledgement traffic sane even on plans with plenty of total Active
-  // Mod Slots left. Innvil's own connection only; doesn't touch how many
-  // bots the owner adds to the Telegram group directly. Same shared check
-  // used by every other deployment-creation/re-activation path.
-  const { count: communityDeploymentCount } = await ctx.admin
-    .from("moderator_deployments")
-    .select("id", { count: "exact", head: true })
-    .eq("community_id", community.id)
-    .eq("enabled", true);
-  const slotCheck = checkDeploymentSlotCaps({
-    isExistingDeployment: !!existingDeployment,
-    activeSlotCount: activeSlotCount ?? 0,
-    maxActiveSlots: capacity.maxActiveSlots,
-    communityDeploymentCount: communityDeploymentCount ?? 0,
-  });
-  if (!slotCheck.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(slotCheck, capacity.maxActiveSlots) };
-
-  const checkedAt = new Date().toISOString();
-  const health: DeploymentHealthInfo = {
-    present: membership.result.present,
-    canSend: membership.result.canSend,
-    canDelete: membership.result.canDelete,
-    canRestrict: membership.result.canRestrict,
-    checkedAt,
-  };
-
-  const { data: deployment, error: deploymentError } = await ctx.admin
-    .from("moderator_deployments")
-    .upsert(
-      { panel_id: panelId, moderator_id: moderatorId, community_id: community.id, enabled: true, health },
-      { onConflict: "moderator_id,community_id" }
-    )
-    .select("id")
-    .single();
-  if (deploymentError || !deployment) return { ok: false, error: deploymentError?.message ?? "Could not create the deployment." };
-
-  await ctx.admin.from("virtual_moderators").update({ provisioning_status: "active" }).eq("id", moderatorId);
-
-  return {
-    ok: true,
-    data: {
-      deploymentId: deployment.id,
-      communityId: community.id,
-      chatId: community.chat_id,
-      handle: community.handle,
-      title: community.title,
-      chatType: community.chat_type,
-      enabled: true,
-      health,
-      botAckMode: (community.bot_ack_mode as BotAckMode) ?? "off",
-      collabContact: community.collab_contact ?? null,
-    },
-  };
+  return finalizeCommunityConnection(ctx.admin, panelId, moderatorId, ctx.user.id, ctx.panel.settings, membership.result);
 }
 
 export async function listModeratorCommunities(panelId: string, moderatorId: string): Promise<CommunityDeploymentRow[]> {
@@ -639,7 +486,7 @@ export async function listModeratorCommunities(panelId: string, moderatorId: str
   if (!ctx) return [];
   const { data } = await ctx.admin
     .from("moderator_deployments")
-    .select("id, enabled, health, communities(id, chat_id, handle, title, chat_type, bot_ack_mode, collab_contact)")
+    .select("id, enabled, health, bot_to_bot_status, communities(id, chat_id, handle, title, chat_type, bot_ack_mode, collab_contact)")
     .eq("moderator_id", moderatorId)
     .order("created_at", { ascending: true });
   return ((data as Array<Record<string, unknown>>) ?? []).map((row) => {
@@ -664,6 +511,7 @@ export async function listModeratorCommunities(panelId: string, moderatorId: str
       },
       botAckMode: (BOT_ACK_MODES.includes(community?.bot_ack_mode as BotAckMode) ? community?.bot_ack_mode : "off") as BotAckMode,
       collabContact: community?.collab_contact ?? null,
+      botToBotStatus: (row.bot_to_bot_status as CommunityDeploymentRow["botToBotStatus"]) ?? "not_tested",
     };
   });
 }
@@ -681,6 +529,18 @@ export async function setCommunityBotAckMode(panelId: string, communityId: strin
     .eq("id", communityId)
     .eq("panel_id", panelId);
   if (error) return { ok: false, error: error.message };
+
+  // Phase 4.O (spec §15) — turning bot-ack on makes this community's
+  // deployments eligible for a real delivery test; never claim VERIFIED here
+  // (only an actual successful bot-ack send does that, in community-runtime.ts).
+  // Turning it off resets an unverified deployment back to not_tested rather
+  // than leaving a stale "ready" status once there's nothing to test.
+  await ctx.admin
+    .from("moderator_deployments")
+    .update({ bot_to_bot_status: mode === "off" ? "not_tested" : "ready_for_test" })
+    .eq("community_id", communityId)
+    .neq("bot_to_bot_status", "verified_by_delivery");
+
   return { ok: true, data: null };
 }
 

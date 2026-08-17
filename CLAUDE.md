@@ -127,6 +127,89 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Phase 4.O (Telegram onboarding automation) + Phase 4.Q (innvil_bot_manager) backbone (v1.20.0)
+- **Phase 4.O, implemented end-to-end from `docs/moderator/telegram-bot-to-bot-onboarding-spec.md`.** New
+  **"Add to Telegram" flow** — `createTelegramSetupSession(panelId, moderatorId)` (`actions/moderator.ts`)
+  generates an opaque, short-lived (15 min) token, stores it in new `telegram_setup_sessions` (migration `0064`),
+  and returns `buildAddToGroupDeepLink()`'s `https://t.me/<bot>?startgroup=<token>` link (`manager.ts`) —
+  confirmed against Telegram's current official docs before implementing. **Deliberately did NOT append an
+  `admin=<rights>` deep-link parameter** — three separate live doc checks could not confirm its exact syntax, so
+  requested admin rights (`computeRequiredAdminRights()`, feature-based least-privilege: delete+restrict only
+  when moderation is on, post only when auto-posting is on) are communicated via Innvil's own UI text instead,
+  never fabricated as a pre-filled Telegram dialog.
+- **Session-less core extracted, not duplicated** (per the spec's own "do not create a parallel moderator/
+  deployment system" instruction): `finalizeCommunityConnection()` and `startModeratorTrialIfEligible()` moved
+  OUT of the `"use server"` `actions/moderator.ts` and INTO the plain `server-only` `community-runtime.ts` —
+  same "extract the real logic into a lib module, keep the action a thin auth wrapper" pattern already
+  established by `orders/place.ts`'s `placeOrderForAccount`. Both the owner-authed `connectCommunity` action AND
+  the new `/start`-driven auto-connect below now call the exact same function — one cap-respecting deployment-
+  creation path, not two.
+- **`handleStartCommand()` (`community-runtime.ts`), checked BEFORE `resolveCommunity`'s bail-out** in
+  `handleCommunityUpdate` (its whole purpose is completing a connection for a chat that has no community row
+  yet) — a private-chat `/start` gets a generic, safe touchpoint reply (never discloses tenant/panel/community
+  data to whoever sent it — Telegram gives no guarantee the sender is the real subscriber); a group-chat
+  `/start <token>` (what Telegram itself sends right after the user finishes the add-to-group dialog) resolves
+  the `telegram_setup_sessions` token, verifies it belongs to THIS bot/panel and hasn't expired/already been
+  consumed (atomically, via a single `status='pending'`-keyed UPDATE, so a duplicate Telegram delivery can't
+  complete the same session twice), re-verifies real Telegram membership, then calls the SAME
+  `finalizeCommunityConnection()` the owner-authed flow uses. A `/start` is never routed into moderation/
+  chatter/bot-ack either way.
+- **Delivery-based verification, never a checkbox.** New `moderator_deployments.bot_to_bot_status`
+  (`not_tested`/`ready_for_test`/`verified_by_delivery`/`failed`) — set to `ready_for_test` when a community's
+  bot-ack mode is turned on (`setCommunityBotAckMode`, reset back to `not_tested` on turning it off, never
+  overwriting an already-`verified_by_delivery` deployment); set to `verified_by_delivery` ONLY at the exact
+  point a real bot-ack send actually succeeds in `handleCommunityUpdate`'s bot-ack branch — never inferred from
+  a UI action. Surfaced as a real badge in the owner's Communities list (`AdminTabs.tsx`), next to a new
+  **"Add to Telegram"** button (opens the deep link, shows the required-rights text, 15-minute expiry note) —
+  the existing manual chat-ID/handle entry stays as an explicit fallback, not replaced.
+- **Phase 4.Q backbone implemented from `docs/moderator/innvil-bot-manager-spec.md`** — `innvil_bot_manager`,
+  Innvil's own platform-wide product bot, on a **separate credential** from both the control-plane-only Manager
+  Bot (`TELEGRAM_MANAGER_BOT_TOKEN`, never posts customer-facing content) and every subscriber-owned moderator
+  (`INNVIL_OFFICIAL_BOT_TOKEN`/`INNVIL_OFFICIAL_BOT_WEBHOOK_SECRET`, new webhook
+  `app/api/webhooks/telegram/innvil-bot-manager`). **Only the reactive-support half is built this pass** — the
+  proactive marketing-campaign SEND path is scaffolded at the DB layer only (see below), matching this
+  codebase's own "ship the safer/more valuable half, flag the rest" pattern.
+- **Reactive support, confidence-gated and grounded-only.** `bot-manager-classify.ts`'s
+  `classifyManagerMessageIntent()` (Sonnet 5 medium, the hard `INNVIL_REQUIRED_MODEL` default — whether an
+  official Innvil answer sends at all is exactly the class of consequential decision that invariant protects,
+  never the DeepSeek `CASUAL_CHAT` carve-out) gates on `MANAGER_INTENT_CONFIDENCE_THRESHOLD = 0.80`; anything
+  below that or classified `UNRELATED` gets **silence**, never a guess. `bot-manager-knowledge.ts`'s
+  `INNVIL_PRODUCT_KNOWLEDGE` is a static, hand-authored fact set (what Innvil is, pricing/commission model,
+  getting started, custom domains, the Virtual Moderator add-on, support contact, the customer-privacy
+  boundary) — reuses the SAME keyword-overlap scorer as tenant Project Knowledge (`knowledge.ts`'s
+  `scoreKnowledgeRelevance`), not a second retrieval implementation; a query with zero overlap correctly
+  retrieves nothing. `generateManagerSupportReply()` answers using ONLY the already-retrieved facts and returns
+  an explicit "I don't have confirmed information about that yet" fallback — **without calling the model at
+  all** — whenever retrieval comes up empty, so this bot can never fabricate a confident-sounding answer about
+  Innvil's own product. **This static knowledge file is NOT auto-derived from `money.ts`/`plan.ts`** — flagged
+  inline as a manual review item whenever pricing/plans/features actually change.
+- **Priority-over-customer-moderators (spec "3. Priority in shared groups") is explicitly DEFERRED**, documented
+  inline rather than silently skipped — in practice already substantially mitigated structurally, since
+  `innvil_bot_manager` has no `telegram_bot_integrations` row on any panel, so every customer moderator's own
+  `classifySender` already reads it as an ordinary human/external sender rather than "another bot to defer to."
+  A genuine suppression mechanism needs its own design pass.
+- **Marketing-campaign send path also deliberately NOT built this pass** — `bot_manager_campaigns`/
+  `bot_manager_campaign_sends`/`bot_manager_chats` (migration `0064`) exist and are ready (approval gate
+  `approved boolean not null default false` baked into the schema itself), but there is no cron sweep, no
+  superadmin CRUD actions, and no UI yet. `bot_manager_chats` IS populated live (best-effort, on every inbound
+  message this bot receives) so a future sweep has real known destinations to enumerate, never a guess.
+- New tests: `bot-manager-knowledge.test.ts` (+5 — retrieval finds the right entries, empty-overlap returns
+  nothing, every entry is active/ORGANIZATION-scoped, limit respected), `bot-manager-classify.test.ts` (+9,
+  fetch-spy verified — intent classification routes to Sonnet 5, unrelated/unconfigured/malformed/out-of-range-
+  confidence all degrade safely to silence, the 0.80 threshold constant, grounded generation makes zero model
+  calls with no retrieved knowledge, generation is provably grounded in the retrieved facts, a failed call falls
+  back to the honest no-info line). `community-runtime.test.ts` (+6 — `START_COMMAND_RE`'s bare/payload/
+  `@botname`/non-match/whitespace shapes; the full DB-mocked `/start` session-consumption orchestration is
+  verified via typecheck + build + code review, consistent with how this codebase treats other comparably
+  complex DB-mocked orchestrators). 864 tests pass (up from 844), `tsc --noEmit` clean, production build clean
+  (confirmed `/api/webhooks/telegram/innvil-bot-manager` appears in the build output).
+- **Run migration `0064_telegram_setup_and_bot_manager.sql`** before either phase governs anything live. **Set
+  `INNVIL_OFFICIAL_BOT_TOKEN`/`INNVIL_OFFICIAL_BOT_WEBHOOK_SECRET`** and register this bot's webhook (Telegram
+  `setWebhook` → `https://<app>/api/webhooks/telegram/innvil-bot-manager`, `secret_token` =
+  `INNVIL_OFFICIAL_BOT_WEBHOOK_SECRET`) before Phase 4.Q does anything — until then the route returns 500 rather
+  than silently no-op'ing. Phase 4.O's `/start` flow needs no new env vars (reuses each subscriber bot's own
+  already-stored credential).
+
 ### 2026-08-17 — Per-community moderator cap made testable + context-aware moderation mentions (v1.19.7)
 - **Part 1 (5-per-community cap) was already fully implemented** (`MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY = 5`,
   independent of subscription slot count, enforced server-side in all four deployment-creation/re-activation
@@ -4641,7 +4724,7 @@ win over this):**
   current capacity. The entitlement *unit* was already right; only the table's numbers
   needed correcting. New tests in `plan.test.ts` pin the corrected per-tier values.
 
-### Phase 4.O: Bot-to-Bot delivery correction + Telegram AI Moderator onboarding automation (NOTED, not built)
+### Phase 4.O: Bot-to-Bot delivery correction + Telegram AI Moderator onboarding automation (onboarding automation DONE v1.20.0 — see the dated changelog entry above; bot-to-bot delivery diagnosis below was already corrected/acted on earlier)
 
 > **Live bot-ack delivery test (2026-08-08) failed** — a message sent directly through
 > Kwan's bot token to the shared test community never reached Test's webhook (not in
@@ -4719,7 +4802,7 @@ win over this):**
 > - Only `INNVIL_MODERATOR`-classified senders (numeric bot ID + active deployment in
 >   the same community) participate — `EXTERNAL_BOT` never gets this treatment.
 
-### Phase 4.Q: `innvil_bot_manager` — Innvil's official product bot (NOTED, not built)
+### Phase 4.Q: `innvil_bot_manager` — Innvil's official product bot (reactive-support half DONE v1.20.0 — see the dated changelog entry above; the proactive marketing-campaign SEND path below is still NOT built — schema only)
 
 > **Explicit instruction: "Take note only, will implement this once the ai mods are
 > fully intact."** A new Innvil-owned, platform-wide (not per-panel/tenant) Telegram

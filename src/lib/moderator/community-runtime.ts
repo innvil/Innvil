@@ -6,6 +6,8 @@ import { telegramApiCall, getTelegramFile, downloadTelegramFileBuffer, TELEGRAM_
 import {
   virtualModBotAcknowledgement, virtualModNaturalChatterActive, virtualModMediaModeration, virtualModVideoModeration,
   moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT,
+  hasVirtualModerator, moderatorCapacity, TRIAL_DURATION_DAYS,
+  communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage,
 } from "./plan";
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
@@ -37,6 +39,7 @@ import {
 import { classifyImageBytes } from "./media-safety-provider";
 import { extractVideoFrames } from "./media-frame-extractor";
 import { generateMediaModerationWarning } from "./media-warning";
+import { checkChatMembership, type ChatMembershipResult } from "./manager";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -202,6 +205,364 @@ async function resolveCommunity(admin: SupabaseClient, panelId: string, chat: Te
   if (updateError) console.error("[telegram/community] resolveCommunity metadata update failed", data.id, updateError.message);
 
   return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null };
+}
+
+/* ---------------------------------------------------- community connect ---- */
+// Session-less core shared by the owner-authed connectCommunity action
+// (actions/moderator.ts) AND the Phase 4.O /start-driven auto-connect below
+// -- same "extract the real logic into a plain server-only lib module, keep
+// the action a thin auth wrapper over it" pattern already used for
+// orders/place.ts's placeOrderForAccount.
+
+type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+
+export interface DeploymentHealthInfo {
+  present: boolean;
+  canSend: boolean;
+  canDelete: boolean;
+  canRestrict: boolean;
+  checkedAt: string | null;
+}
+
+export interface CommunityDeploymentRow {
+  deploymentId: string;
+  communityId: string;
+  chatId: string;
+  handle: string | null;
+  title: string | null;
+  chatType: string | null;
+  enabled: boolean;
+  health: DeploymentHealthInfo;
+  botAckMode: BotAckMode;
+  /** Phase 4.M (F) — who partnership/AMA/collab inquiries get routed to in
+   *  this community, owner-typed (username or plain description). Null =
+   *  unset; the moderator never invents a contact when this is unset. */
+  collabContact: string | null;
+  /** Phase 4.O — delivery-based bot-to-bot verification (spec §13/§15).
+   *  "verified_by_delivery" is only ever set from an actual successful
+   *  bot-ack send, never fabricated from a UI checkbox. */
+  botToBotStatus: "not_tested" | "ready_for_test" | "verified_by_delivery" | "failed";
+}
+
+/**
+ * Starts the 7-day free trial (spec §45) the moment a panel's first
+ * ModeratorDeployment is about to go live, IF this owner account has never
+ * had one before. Idempotent/race-safe: moderator_trial_usage.owner_id is a
+ * primary key, so the insert either wins exactly once (grant it) or fails
+ * with a unique violation (already used, on this panel or another — no-op).
+ * Silently does nothing if the panel already has a paid tier or an active
+ * trial; capacity for that case is already correct.
+ */
+async function startModeratorTrialIfEligible(admin: SupabaseClient, ownerId: string, panelId: string, moderatorId: string): Promise<void> {
+  const { data: panel } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  const settings = (panel?.settings as Record<string, unknown>) ?? {};
+  if (hasVirtualModerator(settings)) return; // already entitled (paid tier or active trial) — nothing to grant
+
+  const now = new Date();
+  const endsAt = new Date(now.getTime() + TRIAL_DURATION_DAYS * 24 * 60 * 60_000);
+  const { error } = await admin.from("moderator_trial_usage").insert({
+    owner_id: ownerId,
+    panel_id: panelId,
+    virtual_moderator_id: moderatorId,
+    started_at: now.toISOString(),
+    ends_at: endsAt.toISOString(),
+  });
+  if (error) return; // this owner already has a trial on record (or a genuine DB error) — don't grant/modify anything
+
+  const addons = (settings.addons as Record<string, unknown>) ?? {};
+  const moderatorAddon = (addons.moderator as Record<string, unknown>) ?? {};
+  const nextSettings = {
+    ...settings,
+    addons: {
+      ...addons,
+      moderator: { ...moderatorAddon, trial: { startedAt: now.toISOString(), endsAt: endsAt.toISOString() } },
+    },
+  };
+  await admin.from("panels").update({ settings: nextSettings }).eq("id", panelId);
+}
+
+/**
+ * Shared core of "connect a bot-ready moderator to a Telegram community" —
+ * everything AFTER Telegram membership has been verified with the
+ * moderator's own bot token (trial-start, capacity checks, project/community/
+ * deployment upsert). Called from BOTH the owner-authed connectCommunity
+ * action AND the Phase 4.O /start-driven auto-connect below — ONE
+ * deployment-creation path, never a second competing implementation of the
+ * same cap-respecting logic (telegram-bot-to-bot-onboarding-spec.md's
+ * explicit "do not create a parallel moderator/deployment system"
+ * instruction).
+ */
+export async function finalizeCommunityConnection(
+  admin: SupabaseClient,
+  panelId: string,
+  moderatorId: string,
+  ownerId: string,
+  panelSettings: unknown,
+  membership: ChatMembershipResult
+): Promise<Result<CommunityDeploymentRow>> {
+  // Past all Telegram verification — this connection attempt is real, so this
+  // is the right moment to start the trial if this owner has never had one
+  // (spec §45: trial starts on the first deployment actually going live, not
+  // merely on moderator/draft creation). Re-fetch settings afterward so the
+  // capacity check below sees trial capacity on this very first call.
+  await startModeratorTrialIfEligible(admin, ownerId, panelId, moderatorId);
+  const { data: freshPanel } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  const currentSettings = freshPanel?.settings ?? panelSettings;
+
+  const capacity = moderatorCapacity(currentSettings);
+  const { count: existingCommunityCount } = await admin
+    .from("communities")
+    .select("id", { count: "exact", head: true })
+    .eq("panel_id", panelId);
+  const { data: existingCommunity } = await admin
+    .from("communities")
+    .select("id, project_id")
+    .eq("panel_id", panelId)
+    .eq("platform", "telegram")
+    .eq("chat_id", String(membership.chat.id))
+    .maybeSingle();
+  if (communityCountExceeded(!existingCommunity, existingCommunityCount ?? 0, capacity.maxCommunities)) {
+    return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
+  }
+
+  // Panel -> Project -> Community: every community belongs to exactly one
+  // project (communities.project_id is NOT NULL, migration 0057). Reuse the
+  // EXISTING community's project unchanged (never silently reassign it on a
+  // reconnect); a genuinely new community gets its own new project, named
+  // after the Telegram chat itself -- the same conservative "one project per
+  // community" default the migration used for existing data, since this
+  // action has no project-selector UI yet to ask the owner explicitly.
+  let projectId = existingCommunity?.project_id ?? null;
+  if (!projectId) {
+    const { data: project, error: projectError } = await admin
+      .from("projects")
+      .insert({ panel_id: panelId, name: membership.chat.title ?? membership.chat.username ?? "Project" })
+      .select("id")
+      .single();
+    if (projectError || !project) return { ok: false, error: projectError?.message ?? "Could not create a project for this community." };
+    projectId = project.id;
+  }
+
+  const { data: community, error: communityError } = await admin
+    .from("communities")
+    .upsert(
+      {
+        panel_id: panelId,
+        platform: "telegram",
+        chat_id: String(membership.chat.id),
+        handle: membership.chat.username ?? null,
+        title: membership.chat.title ?? null,
+        chat_type: membership.chat.type ?? null,
+        project_id: projectId,
+      },
+      { onConflict: "panel_id,platform,chat_id" }
+    )
+    .select("id, chat_id, handle, title, chat_type, bot_ack_mode, collab_contact")
+    .single();
+  if (communityError || !community) return { ok: false, error: communityError?.message ?? "Could not save the community." };
+
+  const { count: activeSlotCount } = await admin
+    .from("moderator_deployments")
+    .select("id", { count: "exact", head: true })
+    .eq("panel_id", panelId)
+    .eq("enabled", true);
+  const { data: existingDeployment } = await admin
+    .from("moderator_deployments")
+    .select("id, enabled")
+    .eq("moderator_id", moderatorId)
+    .eq("community_id", community.id)
+    .maybeSingle();
+
+  // Flat per-community cap, independent of tier — keeps bot-to-bot
+  // acknowledgement traffic sane even on plans with plenty of total Active
+  // Mod Slots left. Innvil's own connection only; doesn't touch how many
+  // bots the owner adds to the Telegram group directly. Same shared check
+  // used by every other deployment-creation/re-activation path.
+  const { count: communityDeploymentCount } = await admin
+    .from("moderator_deployments")
+    .select("id", { count: "exact", head: true })
+    .eq("community_id", community.id)
+    .eq("enabled", true);
+  const slotCheck = checkDeploymentSlotCaps({
+    isExistingDeployment: !!existingDeployment,
+    activeSlotCount: activeSlotCount ?? 0,
+    maxActiveSlots: capacity.maxActiveSlots,
+    communityDeploymentCount: communityDeploymentCount ?? 0,
+  });
+  if (!slotCheck.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(slotCheck, capacity.maxActiveSlots) };
+
+  const checkedAt = new Date().toISOString();
+  const health: DeploymentHealthInfo = {
+    present: membership.present,
+    canSend: membership.canSend,
+    canDelete: membership.canDelete,
+    canRestrict: membership.canRestrict,
+    checkedAt,
+  };
+
+  const { data: deployment, error: deploymentError } = await admin
+    .from("moderator_deployments")
+    .upsert(
+      { panel_id: panelId, moderator_id: moderatorId, community_id: community.id, enabled: true, health },
+      { onConflict: "moderator_id,community_id" }
+    )
+    .select("id")
+    .single();
+  if (deploymentError || !deployment) return { ok: false, error: deploymentError?.message ?? "Could not create the deployment." };
+
+  await admin.from("virtual_moderators").update({ provisioning_status: "active" }).eq("id", moderatorId);
+
+  return {
+    ok: true,
+    data: {
+      deploymentId: deployment.id,
+      communityId: community.id,
+      chatId: community.chat_id,
+      handle: community.handle,
+      title: community.title,
+      chatType: community.chat_type,
+      enabled: true,
+      health,
+      botAckMode: (community.bot_ack_mode as BotAckMode) ?? "off",
+      collabContact: community.collab_contact ?? null,
+      botToBotStatus: "not_tested",
+    },
+  };
+}
+
+/** Fetch a Telegram bot credential directly from its integration row (no
+ *  deployment required) — used by the /start handler below, which only has
+ *  the inbound integration itself, not yet a resolved deployment. */
+async function getBotTokenForIntegration(admin: SupabaseClient, integrationId: string): Promise<string | null> {
+  const { data: tokenData } = await admin.rpc("get_telegram_bot_key", { p_row: integrationId, p_secret: providerKeySecret() });
+  return (tokenData as string | null) ?? null;
+}
+
+async function sendPlainMessage(token: string, chatId: string | number, text: string): Promise<void> {
+  const res = await telegramApiCall(token, "sendMessage", { chat_id: chatId, text });
+  if (!res.ok) console.error("[telegram/setup] sendMessage failed", res.error);
+}
+
+export const START_COMMAND_RE = /^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/i;
+
+/**
+ * Handles Telegram's /start command — both the private-chat "what is this
+ * bot" touchpoint AND the group-chat add-to-group completion
+ * (telegram-bot-to-bot-onboarding-spec.md §2/§6/§23). Tapping
+ * buildAddToGroupDeepLink's `?startgroup=<token>` link makes Telegram itself
+ * deliver `/start <token>` as an ordinary message right after the user picks
+ * a group and confirms — there is no separate Telegram-side callback.
+ * Returns true whenever the message WAS a /start command (handled or not),
+ * so the caller stops there — a /start is never routed into moderation,
+ * chatter, or bot-ack.
+ */
+async function handleStartCommand(
+  admin: SupabaseClient,
+  integration: { id: string; panel_id: string; virtual_moderator_id: string },
+  message: TelegramMessage
+): Promise<boolean> {
+  const match = START_COMMAND_RE.exec((message.text ?? "").trim());
+  if (!match) return false;
+
+  const token = await getBotTokenForIntegration(admin, integration.id);
+  if (!token) return true; // nothing we can safely do without a bot credential
+
+  const { data: moderator } = await admin.from("virtual_moderators").select("name").eq("id", integration.virtual_moderator_id).maybeSingle();
+  const moderatorName = (moderator?.name as string | undefined)?.trim() || "your Innvil moderator";
+
+  if (message.chat.type === "private") {
+    // Never disclose tenant/panel/community data to whoever sent this —
+    // Telegram gives no guarantee the sender is the real subscriber (spec
+    // §29: "never trust Telegram username as identity"). A generic, safe
+    // touchpoint only, never a reactive-quota-consuming chatter reply.
+    await sendPlainMessage(
+      token,
+      message.chat.id,
+      `Hi! I'm ${moderatorName}, an AI community moderator powered by Innvil. To add me to your Telegram group, use the "Add to group" button from your Innvil dashboard.`
+    );
+    return true;
+  }
+
+  // Group/supergroup/channel: only meaningful when it carries the opaque
+  // setup-session token from buildAddToGroupDeepLink's startgroup payload —
+  // a bare /start with no token (e.g. someone typed it manually) has
+  // nothing to correlate to, so it's swallowed silently rather than
+  // auto-connecting an unrelated group to an unrelated moderator.
+  const setupToken = match[1]?.trim();
+  if (!setupToken) return true;
+
+  await completeGroupSetupSession(admin, integration, message, setupToken, token, moderatorName);
+  return true;
+}
+
+/** Consumes an opaque telegram_setup_sessions token to finish the Phase 4.O
+ *  add-to-group flow — validates the session belongs to THIS bot/panel,
+ *  hasn't expired, and hasn't already been consumed (a duplicate Telegram
+ *  delivery of the same /start must never complete the same session twice),
+ *  then calls the SAME finalizeCommunityConnection every owner-initiated
+ *  connection goes through. */
+async function completeGroupSetupSession(
+  admin: SupabaseClient,
+  integration: { id: string; panel_id: string; virtual_moderator_id: string },
+  message: TelegramMessage,
+  setupToken: string,
+  botToken: string,
+  moderatorName: string
+): Promise<void> {
+  const now = new Date();
+  const { data: session } = await admin
+    .from("telegram_setup_sessions")
+    .select("id, panel_id, virtual_moderator_id, status, expires_at")
+    .eq("token", setupToken)
+    .maybeSingle();
+
+  if (!session || session.status !== "pending" || new Date(session.expires_at).getTime() < now.getTime()) {
+    if (session?.status === "pending") await admin.from("telegram_setup_sessions").update({ status: "expired" }).eq("id", session.id);
+    await sendPlainMessage(botToken, message.chat.id, "This setup link has expired or was already used — start a new one from your Innvil dashboard.");
+    return;
+  }
+
+  // The token must belong to THIS bot's own moderator — a setup session
+  // created for a different moderator (even under the same panel) must
+  // never be completed by a different bot's webhook.
+  if (session.virtual_moderator_id !== integration.virtual_moderator_id || session.panel_id !== integration.panel_id) return;
+
+  // Consume atomically-enough: a single UPDATE keyed on the still-pending
+  // status, so two overlapping deliveries of the same /start can't both
+  // "win" and double-run the connection logic below.
+  const { data: consumed } = await admin
+    .from("telegram_setup_sessions")
+    .update({ status: "consumed", consumed_at: now.toISOString() })
+    .eq("id", session.id)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
+  if (!consumed) return; // another delivery already consumed it
+
+  const membership = await checkChatMembership(botToken, String(message.chat.id));
+  if (!membership.ok || !membership.result.present) {
+    await sendPlainMessage(botToken, message.chat.id, "I couldn't verify my membership in this group yet — try the add-to-group link again in a moment.");
+    return;
+  }
+
+  const { data: panelRow } = await admin.from("panels").select("owner_id, settings").eq("id", integration.panel_id).maybeSingle();
+  if (!panelRow) return;
+
+  const result = await finalizeCommunityConnection(
+    admin,
+    integration.panel_id,
+    integration.virtual_moderator_id,
+    panelRow.owner_id as string,
+    panelRow.settings,
+    membership.result
+  );
+
+  if (!result.ok) {
+    await sendPlainMessage(botToken, message.chat.id, `I'm in the group, but couldn't finish connecting: ${result.error}`);
+    return;
+  }
+
+  await sendPlainMessage(botToken, message.chat.id, `${moderatorName} is now connected and ready to help moderate this community.`);
 }
 
 /** Tenant-isolated sender classification (spec §2/§4/§5) — the DB lookups behind event-types.ts's pure decision.
@@ -1952,6 +2313,12 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   const integration = await resolveIntegration(admin, integrationId);
   if (!integration) { timer.mark("no_integration"); return; }
 
+  // /start (Phase 4.O — telegram-bot-to-bot-onboarding-spec.md) is checked
+  // BEFORE resolveCommunity's bail-out, since its whole purpose is to
+  // complete a connection for a chat that doesn't have a community row YET.
+  // Never routed into moderation/chatter/bot-ack either way.
+  if (await handleStartCommand(admin, integration, message)) { timer.mark("start_command_handled"); return; }
+
   const { data: panel } = await admin.from("panels").select("settings").eq("id", integration.panel_id).maybeSingle();
   const settings = panel?.settings ?? null;
 
@@ -2022,6 +2389,12 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     if ((action.kind === "SEND_TEXT" || action.kind === "COMMUNITY_HANDOFF") && sent.sentMessageId) {
       await recordBotAckReply(admin, integration.panel_id, community.id, sent.sentMessageId, action);
     }
+    // Phase 4.O delivery-based verification (spec §13/§15) -- reaching this
+    // point means THIS deployment both received another bot's message (Bot-
+    // to-Bot Communication Mode is genuinely on) and successfully sent its
+    // own acknowledgement. Only ever set from an ACTUAL successful delivery,
+    // never from a UI checkbox/self-report.
+    await admin.from("moderator_deployments").update({ bot_to_bot_status: "verified_by_delivery" }).eq("id", sender.deploymentId);
     return;
   }
 

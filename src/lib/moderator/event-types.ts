@@ -11,8 +11,13 @@ export type SenderType = "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT";
  *  by bot-ack-social-behavior-spec.md §5/§6). A BOT_ACK-origin event may
  *  produce AT MOST a COMMUNITY_HANDOFF (never another acknowledgement); a
  *  COMMUNITY_HANDOFF-origin event must never itself produce any bot action
- *  at all (§12 — only a human reply restarts normal Coordinator logic). */
-export type EventOrigin = "HUMAN" | "PROACTIVE" | "BOT_ACK" | "COMMUNITY_HANDOFF";
+ *  at all (§12 — only a human reply restarts normal Coordinator logic).
+ *  INNVIL_MARKETING (innvil-bot-manager-spec.md §7) — a proactive broadcast
+ *  from Innvil's own official product bot, never a customer moderator's own
+ *  message: customer moderators must NOT BOT_ACK or COMMUNITY_HANDOFF on it
+ *  (an official announcement is not another moderator's casual chatter to
+ *  react to), same hard-stop treatment as COMMUNITY_HANDOFF. */
+export type EventOrigin = "HUMAN" | "PROACTIVE" | "BOT_ACK" | "COMMUNITY_HANDOFF" | "INNVIL_MARKETING";
 
 export interface CommunitySender {
   platformUserId: string;
