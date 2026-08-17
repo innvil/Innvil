@@ -127,6 +127,23 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Fix: scheme-less scam domains (no https://) were never extracted as links (v1.19.4)
+- **Live gap, found immediately while testing v1.19.3's new scam enforcement**: a real scam message
+  (`mysteryboxsol.live`, no `https://` prefix) never reached moderation at all — `link_moderation_check:
+  handled:false` on every trace, meaning `runLinkModeration` returned before ever calling the classifier. Root
+  cause: `extractLinks`'s only pattern was `\bhttps?:\/\/[^\s]+` — a scheme-less domain is a real, common scam
+  evasion tactic specifically to dodge this kind of naive extractor, and simply produced zero candidates.
+- **`extractLinks` now also matches scheme-less domain candidates**, bounded by a TLD allowlist
+  (`COMMON_TLDS` — com/net/org/io/live/xyz/click/top/... incl. common scam-favored TLDs) to avoid flooding
+  ordinary prose with false "links" (an unbounded `label.tld` pattern would also match "ASP.NET", "e.g.",
+  "v2.0", decimal numbers, etc.). **Widening extraction is never destructive on its own** — every candidate
+  still has to pass `classifyLinkIntent`'s AI classification AND `decideLinkEnforcement`'s high-confidence gate
+  before any action; this only widens what gets a CHANCE to be classified, never bypasses classification.
+- New tests (`link-moderation.test.ts`, +8): the exact live repro, a scheme-less domain with a path, no
+  double-counting when the same link also appears with `https://`, and explicit false-positive guards
+  (`e.g.`/`i.e.`/`etc.`, a decimal number, a version number, an unrecognized/non-allowlisted TLD). 827 tests
+  pass (up from 820), `tsc --noEmit` clean, production build clean.
+
 ### 2026-08-17 — Graduated scam/phishing enforcement: warn, then kick, then fall back to ban (v1.19.3)
 - **Was: high-confidence `PHISHING_OR_SCAM` → immediate `DELETE_BAN` on the first offense.** Now a graduated
   response, per explicit product decision: first confirmed offense → `DELETE_WARN` (deterministic warning,

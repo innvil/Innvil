@@ -41,9 +41,28 @@ export const COLLAB_ROUTABLE_CATEGORIES: ReadonlySet<LinkCategory> = new Set(["C
 const URL_RE = /\bhttps?:\/\/[^\s]+/gi;
 const TELEGRAM_HANDLE_RE = /(?:^|[\s(])@([a-z0-9_]{5,32})\b/gi;
 
-/** Extracts every URL and bare @handle (Telegram identity references count
- *  as "links" for moderation purposes — "join @othergroup" is functionally
- *  identical to a t.me URL). Order-preserving, deduped. */
+/** Scheme-less domains are a real, common evasion tactic (a scam link typed
+ *  as "mysteryboxsol.live" instead of "https://mysteryboxsol.live" to dodge
+ *  a naive `https?://` extractor) -- this candidate matcher catches that,
+ *  bounded by a TLD allowlist to avoid flooding ordinary prose with false
+ *  "links" (a bare `label.tld` shape is common in casual text — "ASP.NET",
+ *  "e.g.", software version numbers — so an unbounded match would be too
+ *  noisy). Extraction alone is never destructive: every candidate still has
+ *  to pass classifyLinkIntent's AI classification AND decideLinkEnforcement's
+ *  high-confidence gate before any action -- widening what counts as a link
+ *  candidate only widens what gets a CHANCE to be classified, it never
+ *  bypasses the classifier or confidence gate. */
+const COMMON_TLDS = new Set([
+  "com", "net", "org", "io", "co", "xyz", "live", "site", "online", "click", "top", "info", "app",
+  "finance", "gg", "so", "fi", "cc", "biz", "me", "tv", "link", "page", "shop", "store", "vip", "win",
+  "dev", "ai", "cloud", "tech", "world", "fun", "icu", "cyou", "buzz", "fyi", "pro", "cash", "money",
+]);
+const BARE_DOMAIN_CANDIDATE_RE = /\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,24}\b(?:\/[^\s]*)?/gi;
+
+/** Extracts every URL, scheme-less domain candidate, and bare @handle
+ *  (Telegram identity references count as "links" for moderation purposes
+ *  — "join @othergroup" is functionally identical to a t.me URL).
+ *  Order-preserving, deduped. */
 export function extractLinks(text: string): string[] {
   const found: string[] = [];
   // Trailing sentence/list punctuation ("," "." "!" "?" ")" etc.) is never
@@ -53,6 +72,15 @@ export function extractLinks(text: string): string[] {
   for (const m of text.matchAll(URL_RE)) {
     const url = m[0].replace(/[.,!?;:)\]]+$/, "");
     if (!found.includes(url)) found.push(url);
+  }
+  for (const m of text.matchAll(BARE_DOMAIN_CANDIDATE_RE)) {
+    const candidate = m[0].replace(/[.,!?;:)\]]+$/, "");
+    // Already caught above as a full https://... URL -- don't double-count
+    // the bare-domain tail of one we already extracted.
+    if (found.some((f) => f.endsWith(candidate) || candidate.endsWith(f))) continue;
+    const tld = candidate.split("/")[0].split(".").pop()?.toLowerCase() ?? "";
+    if (!COMMON_TLDS.has(tld)) continue;
+    if (!found.includes(candidate)) found.push(candidate);
   }
   for (const m of text.matchAll(TELEGRAM_HANDLE_RE)) {
     const handle = `@${m[1]}`;

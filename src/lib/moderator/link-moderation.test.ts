@@ -308,3 +308,33 @@ test("first-offense and repeat-offense warning texts are distinct (never the sam
   const mention = telegramMentionHtml("1", "Alice");
   assert.notEqual(scamFirstOffenseWarningHtml(mention), scamRepeatOffenseWarningHtml(mention));
 });
+
+/* ------------------------------------------------- scheme-less domain extraction ---- */
+
+test("REQUIRED (live repro): a scheme-less scam domain (no https://) is still extracted as a link candidate", () => {
+  assert.deepEqual(extractLinks("Open your SOLANA mystery box mysteryboxsol.live claim your rewards"), ["mysteryboxsol.live"]);
+});
+
+test("a scheme-less domain with a path is extracted whole", () => {
+  assert.deepEqual(extractLinks("check mysteryboxsol.live/claim now"), ["mysteryboxsol.live/claim"]);
+});
+
+test("a scheme-less domain is not double-counted when the same link also appears with https://", () => {
+  assert.deepEqual(extractLinks("mysteryboxsol.live or https://mysteryboxsol.live"), ["https://mysteryboxsol.live"]);
+});
+
+test("REQUIRED (false-positive guard): common abbreviations like e.g./i.e./etc. are never extracted as links", () => {
+  assert.deepEqual(extractLinks("e.g. this is a good point, i.e. exactly what I meant, etc."), []);
+});
+
+test("REQUIRED (false-positive guard): a decimal number is never extracted as a link", () => {
+  assert.deepEqual(extractLinks("the ratio is about 3.14 or so"), []);
+});
+
+test("REQUIRED (false-positive guard): a software version number is never extracted as a link", () => {
+  assert.deepEqual(extractLinks("we shipped v2.0 of the app today"), []);
+});
+
+test("a bare domain with an unrecognized/non-allowlisted TLD is not extracted (avoids over-broad matching)", () => {
+  assert.deepEqual(extractLinks("check out somefile.exe or randomword.zzz"), []);
+});
