@@ -70,38 +70,54 @@ async function recordKnownChat(admin: SupabaseClient, message: TelegramMessage):
  * Innvil-product question) needs its own design pass and is intentionally
  * not built here.
  */
+// TEMPORARY diagnostic logging (remove once live behavior is confirmed) --
+// mirrors the same "log the actual decision, not just token counts" pattern
+// already used earlier in this codebase's Telegram debugging (manager-
+// webhook.ts). Never logs the bot token/secret; truncates message text.
+function dlog(step: string, meta: Record<string, unknown> = {}) {
+  console.log("[bot-manager-debug]", step, JSON.stringify(meta));
+}
+
 export async function handleBotManagerUpdate(update: TelegramUpdate): Promise<void> {
   const admin = createAdminClient();
-  if (await isDuplicateManagerUpdate(admin, update.update_id)) return;
+  dlog("received", { updateId: update.update_id, keys: Object.keys(update) });
+
+  if (await isDuplicateManagerUpdate(admin, update.update_id)) { dlog("stop:duplicate_update"); return; }
 
   const message = update.message ?? update.edited_message;
-  if (!message?.from || !message.chat) return;
-  if (message.from.is_bot) return; // never engage another bot, incl. accidental self-loops
+  if (!message?.from || !message.chat) { dlog("stop:no_message_or_sender"); return; }
+  if (message.from.is_bot) { dlog("stop:sender_is_bot"); return; } // never engage another bot, incl. accidental self-loops
 
   await recordKnownChat(admin, message);
 
   const text = (message.text ?? "").trim();
-  if (!text) return;
+  dlog("message_shape", { chatType: message.chat.type, hasText: !!message.text, textPreview: text.slice(0, 60) });
+  if (!text) { dlog("stop:no_text"); return; }
 
   const { data: chatRow } = await admin
     .from("bot_manager_chats")
     .select("support_enabled")
     .eq("chat_id", String(message.chat.id))
     .maybeSingle();
-  if (chatRow && chatRow.support_enabled === false) return;
+  if (chatRow && chatRow.support_enabled === false) { dlog("stop:support_disabled_for_chat"); return; }
 
   const intentResult = await classifyManagerMessageIntent(text);
+  dlog("intent_classified", { intent: intentResult.intent, confidence: intentResult.confidence, threshold: MANAGER_INTENT_CONFIDENCE_THRESHOLD });
   if (intentResult.intent !== "INNVIL_PRODUCT_QUESTION" || intentResult.confidence < MANAGER_INTENT_CONFIDENCE_THRESHOLD) {
+    dlog("stop:below_confidence_threshold_or_unrelated");
     return; // stays silent on anything not confidently about Innvil itself
   }
 
   const retrieved = retrieveProductKnowledge(text);
+  dlog("knowledge_retrieved", { count: retrieved.length, ids: retrieved.map((r) => r.id) });
   const reply = await generateManagerSupportReply(text, retrieved);
+  dlog("reply_generated", { replyPreview: reply.slice(0, 80) });
 
   const token = botManagerToken();
-  await telegramApiCall(token, "sendMessage", {
+  const sent = await telegramApiCall(token, "sendMessage", {
     chat_id: message.chat.id,
     text: reply,
     reply_to_message_id: message.message_id,
   });
+  dlog("send_result", { ok: sent.ok, error: sent.ok ? undefined : sent.error });
 }
