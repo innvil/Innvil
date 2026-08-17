@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -151,4 +151,71 @@ test("video moderation can never be on while photo moderation is off -- it's lay
   const photoOn = virtualModMediaModeration({ addons: { moderator: { tier: "pro" } } });
   const videoOn = virtualModVideoModeration({ addons: { moderator: { tier: "pro" } } });
   if (videoOn) assert.equal(photoOn, true);
+});
+
+/* ==================================================== deployment cap checks ==== */
+// The shared decision used by every deployment-creation/re-activation path
+// (owner: connectCommunity/setDeploymentEnabled; customer/storefront:
+// connectCustomerCommunity/setCustomerDeploymentEnabled) -- no path hand-
+// rolls its own arithmetic anymore.
+
+test("REQUIRED (scenario 1): community with 0-4 moderators -- another can be added when subscription slots are available", () => {
+  for (let existing = 0; existing < MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY; existing++) {
+    const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 2, maxActiveSlots: 20, communityDeploymentCount: existing });
+    assert.deepEqual(result, { ok: true }, `expected ok at communityDeploymentCount=${existing}`);
+  }
+});
+
+test("REQUIRED (scenario 2): community with exactly 5 active moderators -- a sixth is rejected", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 2, maxActiveSlots: 20, communityDeploymentCount: MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY });
+  assert.deepEqual(result, { ok: false, reason: "community_deployment_cap" });
+});
+
+test("REQUIRED (scenario 3): unused subscription slots do not bypass the per-community cap -- rejected specifically because of the community cap, not the slot limit", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 1, maxActiveSlots: 20, communityDeploymentCount: 5 });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "community_deployment_cap");
+});
+
+test("REQUIRED (scenario 4): fewer than 5 in the community but subscription slots exhausted -- rejected because of the slot limit, not the community cap", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 20, maxActiveSlots: 20, communityDeploymentCount: 2 });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "active_slot_limit");
+});
+
+test("REQUIRED (scenario 6): re-activating an already-disabled deployment is treated the SAME as a fresh add -- still subject to both caps", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 0, maxActiveSlots: 20, communityDeploymentCount: MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY });
+  assert.deepEqual(result, { ok: false, reason: "community_deployment_cap" });
+});
+
+test("an already-ACTIVE deployment (isExistingDeployment: true) is never re-checked against either cap -- saving metadata on it must never fail", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: true, activeSlotCount: 999, maxActiveSlots: 1, communityDeploymentCount: 999 });
+  assert.deepEqual(result, { ok: true });
+});
+
+test("REQUIRED: the two limits are independent -- both being exceeded still resolves to exactly one reason, not a combined/ambiguous state", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 20, maxActiveSlots: 20, communityDeploymentCount: 5 });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.ok(result.reason === "active_slot_limit" || result.reason === "community_deployment_cap");
+});
+
+test("communityCountExceeded only applies to a genuinely NEW community -- reconnecting to an existing one never counts against it", () => {
+  assert.equal(communityCountExceeded(false, 999, 1), false);
+});
+
+test("communityCountExceeded rejects a new community once the plan's community limit is reached", () => {
+  assert.equal(communityCountExceeded(true, 2, 2), true);
+  assert.equal(communityCountExceeded(true, 1, 2), false);
+});
+
+test("REQUIRED: the customer-facing error message for the community-deployment cap never implies the overall subscription is exhausted", () => {
+  const msg = deploymentSlotCheckErrorMessage({ ok: false, reason: "community_deployment_cap" }, 20);
+  assert.match(msg, /maximum of 5 Virtual Moderators/i);
+  assert.ok(!/subscription/i.test(msg));
+  assert.ok(!/slot/i.test(msg));
+});
+
+test("the customer-facing error message for the active-slot limit names the actual plan limit", () => {
+  const msg = deploymentSlotCheckErrorMessage({ ok: false, reason: "active_slot_limit" }, 20);
+  assert.match(msg, /20 active mod slot/i);
 });

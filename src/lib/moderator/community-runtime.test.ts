@@ -564,6 +564,20 @@ test("a HUMAN sender is unaffected by this fix -- still uses first_name/username
   assert.equal(sender.displayName, "K");
 });
 
+test("REQUIRED: a HUMAN sender's raw username is exposed separately from displayName (needed for moderation-warning @mentions, distinct from ordinary conversational naming)", async () => {
+  const admin = fakeAdminForClassifySender({});
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 222, is_bot: false, first_name: "Jon", username: "jon_arthur1" });
+  assert.equal(sender.senderType, "HUMAN");
+  assert.equal(sender.displayName, "Jon", "ordinary conversational naming still prefers the given name");
+  assert.equal(sender.username, "jon_arthur1", "the raw username is available separately for moderation mentions");
+});
+
+test("a HUMAN sender with no Telegram username at all has username: null, never a missing/throwing case", async () => {
+  const admin = fakeAdminForClassifySender({});
+  const sender = await classifySender(admin, "panel-1", "community-1", { id: 333, is_bot: false, first_name: "Alice" });
+  assert.equal(sender.username, null);
+});
+
 /* ================================== Phase 4.N: loadRelevantKnowledge (parts A + C) ==== */
 // Only the DB query filters enforce isolation (spec §8) -- this fake admin
 // holds two independently-scoped in-memory tables (PROJECT rows with no

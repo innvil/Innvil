@@ -27,7 +27,7 @@ import {
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, PROMOTION_WARNING_LIMIT, type LinkWarningState,
-  effectiveScamStrikeCount, telegramMentionHtml, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
@@ -212,7 +212,7 @@ async function resolveCommunity(admin: SupabaseClient, panelId: string, chat: Te
 export async function classifySender(admin: SupabaseClient, panelId: string, communityId: string, from: TelegramUser): Promise<CommunityEvent["sender"]> {
   const platformUserId = String(from.id);
   if (!from.is_bot) {
-    return { platformUserId, isBot: false, senderType: "HUMAN", displayName: from.first_name ?? from.username ?? null };
+    return { platformUserId, isBot: false, senderType: "HUMAN", displayName: from.first_name ?? from.username ?? null, username: from.username ?? null };
   }
 
   // Never filter by panel here — deliberately fetch ALL integrations sharing
@@ -1246,7 +1246,7 @@ async function runLinkModeration(
     const nextState: LinkWarningState = { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() };
     await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
 
-    const mention = telegramMentionHtml(senderPlatformId, event.sender.displayName);
+    const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
     const warningText = scamRepeatOffenseWarningHtml(mention);
     if (token) {
       const sendResult = await executeAction(admin, chatId, {
@@ -1284,9 +1284,17 @@ async function runLinkModeration(
     : { ...observedState, warningCount: enforcement.warningNumber };
   await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
 
+  // Every DELETE_WARN now explicitly mentions the offender -- deterministic
+  // in both cases (never AI-decided formatting): the scam template embeds
+  // it directly; the ordinary unsolicited-promotion warning keeps its
+  // EXISTING AI-phrased body (unchanged generation logic, per explicit
+  // "don't rewrite detection/generation unless required") and is prefixed
+  // with the SAME mention mechanism deterministically, never asking the
+  // model to compose or format the mention itself.
+  const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
   const warningText = isScamEnforcement
-    ? scamFirstOffenseWarningHtml(telegramMentionHtml(senderPlatformId, event.sender.displayName))
-    : await generateModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT);
+    ? scamFirstOffenseWarningHtml(mention)
+    : `${mention}, ${await generateModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT)}`;
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -1296,7 +1304,7 @@ async function runLinkModeration(
       origin: "HUMAN",
       interactionDepth: 0,
       causationMessageId: event.messageId,
-      ...(isScamEnforcement ? { parseMode: "HTML" as const } : {}),
+      parseMode: "HTML",
     });
     if (sendResult.sentMessageId) {
       await admin.from("community_messages").insert({

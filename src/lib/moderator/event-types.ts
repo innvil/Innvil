@@ -18,7 +18,20 @@ export interface CommunitySender {
   platformUserId: string;
   isBot: boolean;
   senderType: SenderType;
+  /** Friendly/conversational identity — for a HUMAN this is their Telegram
+   *  given name (first_name, falling back to username only if no first_name
+   *  is set); for an INNVIL_MODERATOR this is the moderator's OWN configured
+   *  name, never its Telegram bot username. Used for ordinary conversational
+   *  reference ("Hi Jon", "Thanks, Kwan") — never for a moderation-warning
+   *  mention, which needs the raw username/platformUserId below instead. */
   displayName: string | null;
+  /** The sender's raw Telegram @username (no leading @), when Telegram
+   *  reports one — distinct from displayName. Only meaningful for a HUMAN
+   *  sender; a moderation warning explicitly targeting this person should
+   *  use this (real, clickable @mention) when set, falling back to a
+   *  platformUserId-based mention otherwise. Never used for ordinary
+   *  conversational naming (that's what displayName is for). */
+  username?: string | null;
   /** Set only when senderType === INNVIL_MODERATOR. */
   innvilModeratorId?: string;
   /** The sender's OWN active deployment in this community, when known. */

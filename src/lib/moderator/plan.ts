@@ -172,9 +172,67 @@ export const TRIAL_MAX_SAVED_MODERATORS = 1;
  *  most this many Innvil-connected bots into any ONE community, to keep
  *  bot-to-bot acknowledgement traffic sane. This governs Innvil's own
  *  connection only; it has no bearing on how many bots the owner adds to the
- *  Telegram group directly (outside Innvil). Enforced in connectCommunity/
- *  setDeploymentEnabled in src/lib/actions/moderator.ts, not here. */
+ *  Telegram group directly (outside Innvil). Applies to every plan,
+ *  including future Enterprise, unless a later product decision explicitly
+ *  changes it — a subscription's TOTAL slot count and this per-community cap
+ *  are independent, orthogonal limits, never conflated.
+ *
+ *  Rationale (why this exists, not just what it is): reduces bot-to-bot
+ *  complexity, reduces reply-storm risk, reduces duplicate moderation/action
+ *  risk, reduces unnecessary provider/model calls, reduces Telegram
+ *  rate-limit pressure, keeps Coordinator behavior tractable, and keeps the
+ *  community UX reasonable — a product/platform safeguard, not a
+ *  subscription slot count.
+ *
+ *  Enforced via checkDeploymentSlotCaps/communityCountExceeded below — the
+ *  ONE shared decision used by every deployment-creation/re-activation path
+ *  (owner: connectCommunity/setDeploymentEnabled; customer/storefront:
+ *  connectCustomerCommunity/setCustomerDeploymentEnabled, both in
+ *  src/lib/actions/). No path may bypass this by hand-rolling its own check. */
 export const MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY = 5;
+
+/** Phase 1 of the two-phase deployment-creation check (a genuinely NEW
+ *  community only — reconnecting to an already-known community, or
+ *  re-enabling an existing deployment, never counts against this). Kept as
+ *  its own tiny pure function since it's checked at a structurally
+ *  different point in the flow (before the community row even exists) than
+ *  the slot/community-cap checks below. */
+export function communityCountExceeded(isNewCommunity: boolean, existingCommunityCount: number, maxCommunities: number): boolean {
+  return isNewCommunity && existingCommunityCount >= maxCommunities;
+}
+
+export type DeploymentSlotCheck =
+  | { ok: true }
+  | { ok: false; reason: "active_slot_limit" }
+  | { ok: false; reason: "community_deployment_cap" };
+
+/** Phase 2 — the subscription active-mod-slot entitlement AND the flat
+ *  per-community deployment cap, checked together (both only apply when
+ *  actually ACTIVATING a deployment that isn't already active — re-saving
+ *  metadata on an existing, already-enabled deployment never re-triggers
+ *  either). These are two INDEPENDENT limits (spec: "subscription slot
+ *  limit AND community entitlement AND per-community moderator cap must all
+ *  be satisfied independently, do not conflate these concepts") — checked in
+ *  a fixed order (slot limit first) purely for a stable, predictable error
+ *  message when both would fail, not because one supersedes the other. */
+export function checkDeploymentSlotCaps(input: {
+  isExistingDeployment: boolean;
+  activeSlotCount: number;
+  maxActiveSlots: number;
+  communityDeploymentCount: number;
+}): DeploymentSlotCheck {
+  if (input.isExistingDeployment) return { ok: true };
+  if (input.activeSlotCount >= input.maxActiveSlots) return { ok: false, reason: "active_slot_limit" };
+  if (input.communityDeploymentCount >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) return { ok: false, reason: "community_deployment_cap" };
+  return { ok: true };
+}
+
+/** Customer-facing wording for a slot-cap rejection — never implies the
+ *  overall subscription is exhausted unless that's the SPECIFIC reason. */
+export function deploymentSlotCheckErrorMessage(check: Extract<DeploymentSlotCheck, { ok: false }>, maxActiveSlots: number): string {
+  if (check.reason === "active_slot_limit") return `You've reached the limit of ${maxActiveSlots} active mod slot(s) for your current plan.`;
+  return `This community already has the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} Virtual Moderators. Remove an existing moderator before adding another.`;
+}
 
 /** Active Mod Slot / community capacity for the panel's current entitlement source (zero if none). */
 export function moderatorCapacity(settings: unknown): ModeratorCapacity {

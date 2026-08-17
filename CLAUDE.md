@@ -127,6 +127,58 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Per-community moderator cap made testable + context-aware moderation mentions (v1.19.7)
+- **Part 1 (5-per-community cap) was already fully implemented** (`MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY = 5`,
+  independent of subscription slot count, enforced server-side in all four deployment-creation/re-activation
+  paths — owner `connectCommunity`/`setDeploymentEnabled` and customer/storefront `connectCustomerCommunity`/
+  `setCustomerDeploymentEnabled`) — confirmed by tracing before touching anything, per explicit instruction.
+  What was missing: each of the 4 call sites hand-rolled the same three-check arithmetic inline (never unit-
+  testable, four places to drift out of sync). **Extracted the shared decision into pure functions**
+  (`communityCountExceeded`/`checkDeploymentSlotCaps`/`deploymentSlotCheckErrorMessage`, `plan.ts`) and wired
+  all four call sites to it — one decision, reused everywhere, now directly tested. Customer-facing error text
+  for the community cap specifically never implies the subscription itself is exhausted (`"This community
+  already has the maximum of 5 Virtual Moderators..."`, distinct wording from the slot-limit message).
+- **Identity/mention rendering — investigated first, per explicit instruction.** Fellow-moderator naming ("Kwan"
+  not "@kwan_mod_bot") and ordinary human conversational naming (first_name-preferred) were BOTH already
+  correct via `classifySender`'s existing `displayName` resolution (confirmed live-verified back in v1.1.99) —
+  no code needed there. The actual gap was moderation WARNINGS never explicitly, verifiably targeting the
+  offender with a real Telegram mention.
+- **New `renderHumanModerationMention(platformUserId, username, displayName)`** (`link-moderation.ts`) — the
+  ONE new mention mechanism this pass introduces: prefers a real `@username` mention (plain text, no escaping
+  needed — Telegram usernames are restricted to `[a-z0-9_]`) when the offender has one; falls back to a stable
+  `tg://user?id=...` mention (HTML-escaped display name as the visible label) when they don't, since a warning
+  must never go unaddressed just because a user has no username. Deliberately never applied to a fellow
+  moderator — moderation only ever runs against HUMAN senders in the first place (`runLinkModeration` is only
+  reached from `handleHumanMessage`, itself gated on `senderType === "HUMAN"`).
+- **`CommunitySender` gained a `username` field**, distinct from `displayName` — `classifySender` now populates
+  it from Telegram's own `from.username` for HUMAN senders. `displayName` keeps serving ordinary conversational
+  naming (given name); `username` exists specifically for the moderation-mention case, so the two purposes are
+  never conflated into one generic string.
+- **Both scam-tier warnings now use the smarter mention** (was always the id-based form regardless of whether a
+  username existed). **The existing unsolicited-promotion warning also gained an explicit mention** —
+  deterministically PREPENDED to its existing AI-phrased body (never asking the model to compose/format the
+  mention itself, and the underlying AI generation logic is otherwise untouched, per explicit "don't rewrite
+  detection logic unless required"). `SEND_TEXT` now always sets `parseMode: "HTML"` for every `DELETE_WARN`/
+  `DELETE_KICK` warning (a bare `@username` is valid unescaped text under HTML parse mode too, so this is safe
+  for both mention forms).
+- **Coordinator/idempotency safeguards untouched, still fully in effect at 5 deployed moderators**: single-
+  enforcer (`deployments[0]`) still produces exactly one delete/warn/kick per real message regardless of
+  community size; `recordCommunityMessage`'s claim-race still guarantees at-most-once processing per message.
+  Nothing about the cap or the new mention logic touches either mechanism.
+- New tests: `plan.test.ts` (+11 — every required cap scenario incl. unused-slots-doesn't-bypass-community-cap,
+  fewer-than-5-but-slots-exhausted, re-activation treated as a fresh add, an already-active deployment never
+  re-checked, both limits independent, customer-facing wording never conflates the two), `link-moderation.test.ts`
+  (+7 replacing the old id-only mention tests — @username preferred, id-fallback when absent, HTML escaping,
+  empty-string username treated as absent, exact requested wording for both scam warning tiers),
+  `community-runtime.test.ts` (+2 — `classifySender` exposes `username` separately from `displayName`, `null`
+  when Telegram reports none). 844 tests pass (up from 827), `tsc --noEmit` clean, production build clean.
+- **Deliberately not built this pass** (out of scope per explicit "primarily identity/mention rendering, not a
+  UI overhaul"): a proactive "disable Add Moderator before hitting the cap" UI state — the existing generic
+  error-display mechanism already surfaces the backend's exact clear-explanation message on a rejected attempt,
+  satisfying the safety requirement without new UI code; a live check for any pre-existing community already
+  over the 5-deployment cap (no destructive cleanup implied either way — flagged as a follow-up to run
+  separately, not assumed clean).
+
 ### 2026-08-17 — Video moderation unblocked: ffmpeg-static confirmed working live on Vercel (v1.19.6)
 - **Follow-up to v1.19.5.** That fix (npm `allowScripts` approval) got the ffmpeg binary onto disk during
   Vercel's build (`path exists: true` at build time, confirmed via a guaranteed-visible build-log check), but

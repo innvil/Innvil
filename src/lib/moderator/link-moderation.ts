@@ -278,23 +278,50 @@ export function decideLinkEnforcement(input: {
   return { kind: "DELETE_WARN", warningNumber: nextCount, reason: nextCount === 1 ? "unsolicited_promotion" : "repeated_unsolicited_promotion" };
 }
 
-/* ------------------------------------------------------- scam warning text ---- */
-// Deterministic/template-based ONLY -- a scam/phishing warning must never
-// depend on a model call (never Claude/DeepSeek), and must never reproduce
-// the malicious URL itself.
+/* ---------------------------------------------------- identity/mention rendering ---- */
+// Context-aware identity rendering (three distinct behaviors, never
+// conflated into one generic "displayName" string):
+//
+//  1. Fellow-moderator reference & ordinary human conversational naming are
+//     ALREADY correctly handled by classifySender's existing displayName
+//     resolution (community-runtime.ts) -- a HUMAN's displayName is their
+//     Telegram given name (first_name), an INNVIL_MODERATOR's displayName is
+//     its OWN configured name, never its Telegram bot username. Both flow
+//     straight into generation as `senderName` (chatter-generate.ts) and
+//     need no separate wrapper here -- there's nothing this file could add.
+//  2. A MODERATION WARNING is different: it must explicitly, verifiably
+//     target the offending human (a real clickable Telegram mention), which
+//     plain conversational naming was never designed for. That's
+//     renderHumanModerationMention below -- the ONLY new mention mechanism
+//     this file introduces, deliberately never applied to a fellow
+//     moderator (moderation only ever runs against HUMAN senders in the
+//     first place -- runLinkModeration is only reached from
+//     handleHumanMessage, itself gated on senderType === "HUMAN").
 
 function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** A stable Telegram-native mention via user id (`tg://user?id=...`),
- *  never `@username` — usernames can change or be absent entirely, but a
- *  numeric platform user id is permanent. Requires `parse_mode: "HTML"` on
- *  the outgoing sendMessage call. */
-export function telegramMentionHtml(platformUserId: string, displayName: string | null): string {
+/** The ONLY mention mechanism used for moderation warnings/enforcement
+ *  notices. Prefers a real `@username` mention (plain text, genuinely
+ *  clickable, no escaping needed -- Telegram usernames are restricted to
+ *  `[a-z0-9_]`) when the offender has one; falls back to a stable
+ *  `tg://user?id=...` mention (their given/display name as the visible
+ *  label, HTML-escaped) when they don't, since not every Telegram user has
+ *  a username and a warning must never silently go unaddressed just
+ *  because one is missing. Requires `parse_mode: "HTML"` on the outgoing
+ *  sendMessage call in EITHER case (a bare `@username` is valid, unescaped
+ *  text under HTML parse mode too). */
+export function renderHumanModerationMention(platformUserId: string, username: string | null, displayName: string | null): string {
+  if (username && username.trim()) return `@${username.trim()}`;
   const safeName = escapeTelegramHtml((displayName ?? "").trim() || "there");
   return `<a href="tg://user?id=${platformUserId}">${safeName}</a>`;
 }
+
+/* ------------------------------------------------------- scam warning text ---- */
+// Deterministic/template-based ONLY -- a scam/phishing warning must never
+// depend on a model call (never Claude/DeepSeek), and must never reproduce
+// the malicious URL itself.
 
 /** First confirmed high-confidence scam/phishing offense -- warn only,
  *  never ban. The malicious URL is deliberately never included. */

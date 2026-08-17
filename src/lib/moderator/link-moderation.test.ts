@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, PROMOTION_WARNING_LIMIT,
-  effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, telegramMentionHtml, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -266,46 +266,65 @@ test("REQUIRED (scenario 3, end-to-end via decide()): an expired strike means th
   assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" });
 });
 
-/* --------------------------------------------------- scam warning templates ---- */
+/* --------------------------------------------------- identity/mention rendering ---- */
 
-test("REQUIRED: telegramMentionHtml uses a stable tg://user id-based mention, never @username", () => {
-  const mention = telegramMentionHtml("123456789", "Alice");
+test("REQUIRED (human warning WITH username): renderHumanModerationMention prefers a real @username mention when one exists", () => {
+  const mention = renderHumanModerationMention("999", "jon_arthur1", "Jon Arthur");
+  assert.equal(mention, "@jon_arthur1");
+});
+
+test("the @username mention is plain text -- never wrapped in an HTML anchor", () => {
+  const mention = renderHumanModerationMention("999", "jon_arthur1", "Jon Arthur");
+  assert.ok(!mention.includes("<a "));
+});
+
+test("REQUIRED (human warning WITHOUT username): falls back to a stable tg://user id-based mention, never a missing/unaddressed warning", () => {
+  const mention = renderHumanModerationMention("123456789", null, "Alice");
   assert.match(mention, /^<a href="tg:\/\/user\?id=123456789">Alice<\/a>$/);
   assert.ok(!mention.includes("@"));
 });
 
-test("telegramMentionHtml falls back to a generic label when the sender has no display name", () => {
-  const mention = telegramMentionHtml("123456789", null);
+test("the id-based fallback falls back to a generic label when the sender has no display name either", () => {
+  const mention = renderHumanModerationMention("123456789", null, null);
   assert.match(mention, /^<a href="tg:\/\/user\?id=123456789">there<\/a>$/);
 });
 
-test("REQUIRED: telegramMentionHtml escapes HTML-significant characters in a user-controlled display name", () => {
-  const mention = telegramMentionHtml("1", '<script>alert("x")</script>');
+test("REQUIRED (escaping): the id-based fallback escapes HTML-significant characters in a user-controlled display name", () => {
+  const mention = renderHumanModerationMention("1", null, '<script>alert("x")</script>');
   assert.ok(!mention.includes("<script>"));
   assert.match(mention, /&lt;script&gt;/);
 });
 
+test("an empty-string username is treated the same as no username at all", () => {
+  const mention = renderHumanModerationMention("1", "", "Alice");
+  assert.match(mention, /^<a href="tg:\/\/user\?id=1">Alice<\/a>$/);
+});
+
 test("REQUIRED (scenario 7): the first-offense scam warning never includes a URL", () => {
-  const text = scamFirstOffenseWarningHtml(telegramMentionHtml("1", "Alice"));
+  const text = scamFirstOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
   assert.ok(!/https?:\/\//i.test(text));
   assert.match(text, /suspected scam\/phishing link/i);
   assert.match(text, /removal from this community/i);
 });
 
-test("the first-offense warning mentions the sender via the mention HTML, verbatim", () => {
-  const mention = telegramMentionHtml("42", "Bob");
-  const text = scamFirstOffenseWarningHtml(mention);
-  assert.ok(text.startsWith(mention));
+test("the first-offense warning explicitly includes @username when the sender has one, matching the exact requested wording", () => {
+  const text = scamFirstOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
+  assert.equal(text, "@jon_arthur1, your message was removed because it contained a suspected scam/phishing link. Do not post scam, wallet-drainer, or fake reward links. Repeated violations may result in removal from this community.");
 });
 
 test("REQUIRED (scenario 7): the second-offense (kick) warning never includes a URL either", () => {
-  const text = scamRepeatOffenseWarningHtml(telegramMentionHtml("1", "Alice"));
+  const text = scamRepeatOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
   assert.ok(!/https?:\/\//i.test(text));
   assert.match(text, /removed from this community/i);
 });
 
+test("the repeat-offense warning explicitly includes @username, matching the exact requested wording", () => {
+  const text = scamRepeatOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
+  assert.equal(text, "@jon_arthur1, another scam/phishing link was detected. You have been removed from this community.");
+});
+
 test("first-offense and repeat-offense warning texts are distinct (never the same message for both tiers)", () => {
-  const mention = telegramMentionHtml("1", "Alice");
+  const mention = renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur");
   assert.notEqual(scamFirstOffenseWarningHtml(mention), scamRepeatOffenseWarningHtml(mention));
 });
 

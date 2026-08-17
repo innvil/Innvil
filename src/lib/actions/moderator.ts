@@ -17,7 +17,8 @@ import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT, normalizeModerat
 import { resolvePersonaPreset, applyPersonaPreset } from "@/src/lib/moderator/presets";
 import {
   hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, readModeratorAddon,
-  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY,
+  TRIAL_DURATION_DAYS, virtualModBotAcknowledgement,
+  communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage,
 } from "@/src/lib/moderator/plan";
 import type { BotAckMode } from "@/src/lib/moderator/coordinator";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -525,7 +526,7 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
     .eq("platform", "telegram")
     .eq("chat_id", String(membership.result.chat.id))
     .maybeSingle();
-  if (!existingCommunity && (existingCommunityCount ?? 0) >= capacity.maxCommunities) {
+  if (communityCountExceeded(!existingCommunity, existingCommunityCount ?? 0, capacity.maxCommunities)) {
     return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
   }
 
@@ -576,22 +577,24 @@ export async function connectCommunity(panelId: string, moderatorId: string, cha
     .eq("moderator_id", moderatorId)
     .eq("community_id", community.id)
     .maybeSingle();
-  if (!existingDeployment && (activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
-    return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
-  }
 
-  // Flat cap, independent of tier — keeps bot-to-bot acknowledgement traffic
-  // sane even on plans with plenty of total Active Mod Slots left. Innvil's
-  // own connection only; doesn't touch how many bots the owner adds to the
-  // Telegram group directly.
+  // Flat per-community cap, independent of tier — keeps bot-to-bot
+  // acknowledgement traffic sane even on plans with plenty of total Active
+  // Mod Slots left. Innvil's own connection only; doesn't touch how many
+  // bots the owner adds to the Telegram group directly. Same shared check
+  // used by every other deployment-creation/re-activation path.
   const { count: communityDeploymentCount } = await ctx.admin
     .from("moderator_deployments")
     .select("id", { count: "exact", head: true })
     .eq("community_id", community.id)
     .eq("enabled", true);
-  if (!existingDeployment && (communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
-    return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
-  }
+  const slotCheck = checkDeploymentSlotCaps({
+    isExistingDeployment: !!existingDeployment,
+    activeSlotCount: activeSlotCount ?? 0,
+    maxActiveSlots: capacity.maxActiveSlots,
+    communityDeploymentCount: communityDeploymentCount ?? 0,
+  });
+  if (!slotCheck.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(slotCheck, capacity.maxActiveSlots) };
 
   const checkedAt = new Date().toISOString();
   const health: DeploymentHealthInfo = {
@@ -713,21 +716,24 @@ export async function setDeploymentEnabled(panelId: string, moderatorId: string,
       .select("id", { count: "exact", head: true })
       .eq("panel_id", panelId)
       .eq("enabled", true);
-    if ((activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
-      return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
-    }
 
     const { data: target } = await ctx.admin.from("moderator_deployments").select("community_id").eq("id", deploymentId).maybeSingle();
+    let communityDeploymentCount = 0;
     if (target?.community_id) {
-      const { count: communityDeploymentCount } = await ctx.admin
+      const { count } = await ctx.admin
         .from("moderator_deployments")
         .select("id", { count: "exact", head: true })
         .eq("community_id", target.community_id)
         .eq("enabled", true);
-      if ((communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
-        return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
-      }
+      communityDeploymentCount = count ?? 0;
     }
+    const slotCheck = checkDeploymentSlotCaps({
+      isExistingDeployment: false, // re-activating a currently-disabled deployment -- always re-checked
+      activeSlotCount: activeSlotCount ?? 0,
+      maxActiveSlots: capacity.maxActiveSlots,
+      communityDeploymentCount,
+    });
+    if (!slotCheck.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(slotCheck, capacity.maxActiveSlots) };
   }
 
   const { error } = await ctx.admin

@@ -10,7 +10,7 @@ import {
   type TrialQualificationSource, type PersistedTrialState,
 } from "@/src/lib/moderator/customer-entitlement";
 import { DEFAULT_MODERATOR_PERSONA, DEFAULT_PROVISIONING_DRAFT } from "@/src/lib/moderator/domain";
-import { MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
+import { communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
 import type { BotAckMode } from "@/src/lib/moderator/coordinator";
 import {
   buildManagedBotDeepLink, checkChatMembership, getManagerBotUsername, setIntegrationWebhook,
@@ -626,7 +626,7 @@ export async function connectCustomerCommunity(panelId: string, moderatorId: str
     .eq("platform", "telegram")
     .eq("chat_id", String(membership.result.chat.id))
     .maybeSingle();
-  if (!existingCommunity && (existingCommunityCount ?? 0) >= capacity.maxCommunities) {
+  if (communityCountExceeded(!existingCommunity, existingCommunityCount ?? 0, capacity.maxCommunities)) {
     return { ok: false, error: `You've reached the limit of ${capacity.maxCommunities} communit${capacity.maxCommunities === 1 ? "y" : "ies"} for your current plan.` };
   }
 
@@ -658,18 +658,19 @@ export async function connectCustomerCommunity(panelId: string, moderatorId: str
     .eq("moderator_id", moderatorId)
     .eq("community_id", community.id)
     .maybeSingle();
-  if (!existingDeployment && (activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
-    return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
-  }
 
   const { count: communityDeploymentCount } = await c.admin
     .from("moderator_deployments")
     .select("id", { count: "exact", head: true })
     .eq("community_id", community.id)
     .eq("enabled", true);
-  if (!existingDeployment && (communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
-    return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
-  }
+  const slotCheck = checkDeploymentSlotCaps({
+    isExistingDeployment: !!existingDeployment,
+    activeSlotCount: activeSlotCount ?? 0,
+    maxActiveSlots: capacity.maxActiveSlots,
+    communityDeploymentCount: communityDeploymentCount ?? 0,
+  });
+  if (!slotCheck.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(slotCheck, capacity.maxActiveSlots) };
 
   const checkedAt = new Date().toISOString();
   const health: CustomerDeploymentHealthInfo = {
@@ -759,21 +760,24 @@ export async function setCustomerDeploymentEnabled(panelId: string, moderatorId:
       .select("id", { count: "exact", head: true })
       .eq("panel_id", panelId)
       .eq("enabled", true);
-    if ((activeSlotCount ?? 0) >= capacity.maxActiveSlots) {
-      return { ok: false, error: `You've reached the limit of ${capacity.maxActiveSlots} active mod slot(s) for your current plan.` };
-    }
 
     const { data: target } = await c.admin.from("moderator_deployments").select("community_id").eq("id", deploymentId).maybeSingle();
+    let communityDeploymentCount = 0;
     if (target?.community_id) {
-      const { count: communityDeploymentCount } = await c.admin
+      const { count } = await c.admin
         .from("moderator_deployments")
         .select("id", { count: "exact", head: true })
         .eq("community_id", target.community_id)
         .eq("enabled", true);
-      if ((communityDeploymentCount ?? 0) >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) {
-        return { ok: false, error: `You've reached the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} bots for this community.` };
-      }
+      communityDeploymentCount = count ?? 0;
     }
+    const slotCheck = checkDeploymentSlotCaps({
+      isExistingDeployment: false,
+      activeSlotCount: activeSlotCount ?? 0,
+      maxActiveSlots: capacity.maxActiveSlots,
+      communityDeploymentCount,
+    });
+    if (!slotCheck.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(slotCheck, capacity.maxActiveSlots) };
   }
 
   const { error } = await c.admin
