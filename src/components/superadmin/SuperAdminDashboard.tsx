@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
-  PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag, Megaphone,
+  PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag, Megaphone, Boxes,
 } from "lucide-react";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
@@ -60,6 +60,7 @@ import { ArticleBody } from "@/src/components/blog/ArticleBody";
 import { BlogReview } from "./BlogReview";
 import { PRReview } from "./PRReview";
 import { DesignPricingAdmin } from "./DesignPricingAdmin";
+import { ProductsAdmin } from "./ProductsAdmin";
 
 const inputCls =
   "w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-1.5 outline-none focus:fp-gold-border";
@@ -1525,6 +1526,7 @@ function SuperadminConfirmModal({
 const TABS = [
   { k: "overview", label: "Overview", icon: LayoutGrid },
   { k: "panels", label: "Panels", icon: Wallet },
+  { k: "products", label: "Products", icon: Boxes },
   { k: "payments", label: "Platform payments", icon: CreditCard },
   { k: "archived-payments", label: "Archived payments", icon: EyeOff },
   { k: "blog", label: "Blog", icon: Newspaper },
@@ -1578,6 +1580,7 @@ export function SuperAdminDashboard() {
           </>
         )}
         {tab === "panels" && <PanelsTab />}
+        {tab === "products" && <ProductsAdmin />}
         {tab === "payments" && <PaymentsTab />}
         {tab === "archived-payments" && <ArchivedPaymentsTab />}
         {tab === "blog" && <BlogReview />}

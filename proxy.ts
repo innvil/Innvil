@@ -12,7 +12,13 @@ import { PANEL_ROOT_DOMAIN } from "@/src/lib/config";
    ========================================================= */
 
 // Subdomains that are NOT panels (reserved for the platform itself).
-const RESERVED = new Set(["www", "app", "api", "admin", "superadmin", "staging", "dev", "mail", "cdn", "assets"]);
+// "watch" is reserved for the Innvil Watch product domain (watch.innvil.cloud,
+// Phase 4 of the multi-product architecture — see src/lib/products/watch.ts).
+// This ONLY keeps the subdomain from being mistaken for an unregistered
+// panel; it grants no product access by itself — Watch entitlement stays
+// entirely server-side (existing Virtual Moderator checks), never inferred
+// from hostname. Actual Watch-specific host presentation is future work.
+const RESERVED = new Set(["www", "app", "api", "admin", "superadmin", "staging", "dev", "mail", "cdn", "assets", "watch"]);
 
 /** Hosts that serve the OWNER app / landing (never a storefront). */
 function isAppHost(h: string): boolean {

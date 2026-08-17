@@ -9,7 +9,7 @@ import {
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
-  AlertTriangle, Wrench, Eye, EyeOff, Trash2, LifeBuoy, PiggyBank, Newspaper,
+  AlertTriangle, Wrench, Eye, EyeOff, Trash2, LifeBuoy, PiggyBank, Newspaper, Boxes,
 } from "lucide-react";
 import {
   Card, StatCard, RevenueChart, StatusBadge,
@@ -33,6 +33,7 @@ import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { BlogReview } from "@/src/components/superadmin/BlogReview";
 import { PRReview } from "@/src/components/superadmin/PRReview";
 import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdmin";
+import { ProductsAdmin } from "@/src/components/superadmin/ProductsAdmin";
 import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
@@ -234,6 +235,7 @@ function navItemsFor(isSuper: boolean) {
     ...(isSuper ? [{ k: "blog", label: "Blog", icon: Newspaper }] : []),
     ...(isSuper ? [{ k: "pr-generator", label: "PR Generator", icon: Megaphone }] : []),
     ...(isSuper ? [{ k: "design-pricing", label: "Design pricing", icon: Tag }] : []),
+    ...(isSuper ? [{ k: "products", label: "Products", icon: Boxes }] : []),
     { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
 }
@@ -1457,6 +1459,15 @@ export function InnvilApp({ setWorld, initialSection }: {
               <p className="fp-text-dim text-sm mt-1">Set each design&apos;s one-time price and first-purchase promotions.</p>
             </div>
             <DesignPricingAdmin />
+          </div>
+        )}
+        {section === "products" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Products</h1>
+              <p className="fp-text-dim text-sm mt-1">Manage Innvil&apos;s official product catalog (Forge, Watch, Herald, and future products).</p>
+            </div>
+            <ProductsAdmin />
           </div>
         )}
       </div>

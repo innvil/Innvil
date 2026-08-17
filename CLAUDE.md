@@ -127,6 +127,109 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Phase 4.T: Innvil multi-product architecture — Phase 1+2, Watch-first (v1.21.0)
+- **New top-level architecture, per explicit spec**: Innvil (parent ecosystem) → official products (Innvil Forge =
+  the white-label SMM panel product, Innvil Watch = community moderation, Innvil Herald = future campaigns/
+  outreach) → each product's own plans/subscriptions/entitlements. **Implemented Phase 1 (generic Product
+  Catalog foundation) + Phase 2 (Watch wired in as the first real consumer) only** — per explicit instruction,
+  Phase 3 (Watch operating fully independent of Panel ownership), full Forge migration, and Herald itself are
+  all deliberately NOT built this pass.
+- **Investigated architecture before writing any code, per explicit instruction.** Traced Account/User → Panel
+  → Project → Community and confirmed `panels` currently serves BOTH roles at once — commercial SMM-panel
+  product (subdomain/storefront/status/theme) AND generic tenant/workspace container (every
+  project/community/moderator_deployment is keyed by `panel_id`, with no account-level ownership path that
+  doesn't go through a panel). This coupling is the reason Watch can't yet be owned without a Panel — see
+  "Panel optionality" below.
+- **`products` table (migration `0065`, NEW)** — the generic, superadmin-managed Product Catalog: `id` (immutable),
+  `slug` (immutable identity key — ownership must never key off the mutable `name`), `name`, `description`,
+  `status` (`draft`/`private_beta`/`active`/`hidden`/`retired`), `domain`, `standalone_available`,
+  `cross_sell_available`, timestamps. **Deliberately generic** — no `is_watch`/`is_panel`/`is_campaign` columns;
+  a product's actual plans/subscriptions/entitlements stay entirely in that product's OWN existing system
+  (Watch's stay 100% in `panels.settings`/`customer_moderator_entitlement`, completely untouched by this
+  migration). Seeded idempotently: `forge` (active — Panel creation already works), `watch` (active, domain
+  `watch.innvil.cloud` — Virtual Moderator already works), `herald` (draft — no functionality yet, per explicit
+  "do not implement Herald"). **Run migration `0065`.**
+- **`src/lib/products/catalog.ts` (NEW, pure)** — `ProductStatus`/`ProductRow`/`ProductInput` + shared
+  `validateProductInput` (slug format, name length, status enum, domain shape — same validation for create AND
+  update, never duplicated) + `productPurchasable()` (ACTIVE/PRIVATE_BETA only — HIDDEN keeps existing owners at
+  the entitlement layer but is never offered as a new purchase, RETIRED never is either).
+- **`src/lib/actions/products.ts` (NEW, superadmin-only)** — `listProducts`/`createProduct`/`updateProduct`/
+  `setProductStatus`. Every export independently re-verifies `role === 'super_admin'` via the service-role
+  client keyed by the validated auth user id — the EXACT same `requireSuperAdmin()` pattern already established
+  in `actions/superadmin.ts` (not a new authorization concept). Hiding UI controls is never the enforcement
+  mechanism — a direct non-superadmin call is rejected server-side regardless of what any client shows. `slug`
+  is intentionally NOT accepted by `updateProduct` (immutable once created); changing `name`/`description`
+  never affects ownership since nothing elsewhere keys off `name`.
+- **Official Products vs. panel SMM services — confirmed structurally separate, not merged.** `products.ts`/
+  `catalog.ts` have zero import from `actions/services.ts` (the panel owner's OWN service catalog) and vice
+  versa — a panel owner adding an SMM service was, is, and remains completely unrelated to this catalog. Only
+  a superadmin can create an official Product; a panel owner's existing service-catalog permissions are
+  untouched.
+- **Innvil Watch — the first product wired through the new architecture (Phase 2).** `src/lib/products/watch.ts`
+  (NEW) is deliberately THIN: `WATCH_PRODUCT_SLUG = "watch"` + `getWatchProduct()` (resolves the canonical
+  catalog row, never throws — a missing/retired catalog row must not break the existing Virtual Moderator
+  surfaces, which have their own independent entitlement checks and don't depend on this resolving). **No
+  second Watch backend was created** — every existing Virtual Moderator system (`moderator/plan.ts`,
+  `moderator/customer-entitlement.ts`, `actions/moderator.ts`, `actions/customer-moderator.ts`,
+  `moderator/community-runtime.ts`, all Telegram/moderation/knowledge/Auto-Posting/media logic) is completely
+  untouched — confirmed via diff review. This file is a read-only identity pointer onto the existing system,
+  not a parallel implementation.
+- **Panel optionality — honest current state, not aspirational.** Watch ownership is STILL keyed through
+  `panels.id` today (owner-side `panels.settings.addons.moderator`, customer-side
+  `customer_moderator_entitlement.panel_id`) — this pass does not change that, per the explicit "do not force a
+  destructive migration merely for architectural purity" instruction. What Phase 1+2 DOES establish is the
+  canonical product identity ("this feature IS Innvil Watch") that a later phase can point a genuinely
+  non-panel-owning entitlement path at, without redesigning anything that already works. **Existing Panel-owner
+  Watch distribution (integrate/offer/rent Watch capacity through a Panel, panel-owner's own direct use)
+  remains completely intact** — nothing in this pass touches
+  `virtualModModeration`/`moderatorCapacity`/`customer_moderator_entitlement` or any billing/commission logic;
+  these become additional COMMERCIAL CHANNELS into the same one Watch product once Phase 3 exists, not
+  something this pass had to build. **Safest next architectural step (documented, not started):** allow a
+  `panels` row to exist purely as a non-commercial container (never goes `live` for SMM, exists only to hold
+  Watch's `projects`/`communities`/`moderator_deployments`) — this is ALREADY largely possible today (a panel
+  can stay `draft` forever while still holding an active `moderator` addon), so genuine standalone Watch
+  ownership may be closer to "stop requiring the SMM-panel-creation UI step" than a schema change.
+- **`watch.innvil.cloud` — application support prepared, no production cutover.** Added `"watch"` to
+  `proxy.ts`'s `RESERVED` subdomain set — the ONLY change — so the subdomain is never mistaken for an
+  unregistered panel (which would otherwise 404 looking for a panel literally named "watch"). **Grants no
+  product access by itself** — Watch entitlement stays entirely server-side via the EXISTING Virtual Moderator
+  checks; hostname is never trusted as authorization. No Watch-specific page/route was built this pass (no
+  actual standalone Watch frontend exists yet) — confirmed via review that every other route/API/webhook
+  (`/api/webhooks/telegram/*`, storefront, owner app, customer API) is byte-for-byte unchanged. Manual DNS/
+  Vercel work still required before this domain does anything: add `watch.innvil.cloud` as a domain on the
+  SAME existing Vercel project (per the architecture doc's own explicit "one project, multiple domains, not a
+  second Vercel project" instruction) — no code changes needed for that step.
+- **Superadmin Product Management UI** — `src/components/superadmin/ProductsAdmin.tsx` (NEW): list + add +
+  per-product lifecycle status dropdown + `standaloneAvailable`/`crossSellAvailable` toggles. Deliberately
+  minimal, per explicit "do not overbuild advanced merchandising" instruction — no cross-sell relationship UI,
+  no rich merchandising, no generic "app generator." Mounted in BOTH surfaces (matching every other
+  superadmin-managed feature's existing convention): the `/superadmin` route (new "Products" tab,
+  `SuperAdminDashboard.tsx`) and the owner-app super-admin sidebar (new "Products" section, `panels/index.tsx`,
+  gated on `isSuper` exactly like the existing "Design pricing" section beside it).
+- **Billing untouched, per explicit instruction** — no new live Stripe/payment-provider products, prices, or
+  subscription migrations were created; no current pricing/commission logic was touched. The Product Catalog is
+  identity/lifecycle metadata only, with billing/plan concerns explicitly deferred to Phase 3+.
+- **Herald deliberately stayed a placeholder** — seeded as `draft` status, `standalone_available: false`, no
+  functionality/routing/billing/domain behavior implemented, per the explicit "do not implement Herald" instruction.
+- **Forge deliberately not migrated** — seeded into the catalog as `active` (so the generic architecture can be
+  proven end-to-end with two real products, not just one), but zero Panel UI/routes/internal code was renamed
+  or restructured toward "Forge" branding. Panel creation/management behaves identically to before this pass.
+- New tests: `src/lib/products/catalog.test.ts` (+11 — validation rules incl. slug/name/status/domain shapes,
+  the 5-state lifecycle list, `productPurchasable`'s ACTIVE/PRIVATE_BETA-only rule, a REQUIRED structural test
+  proving the `ProductRow` shape carries no `is_watch`/`is_panel`/`is_campaign`-style fields, a REQUIRED test
+  proving forge/watch/herald/a hypothetical future slug all validate identically through the same generic
+  rules, and `WATCH_PRODUCT_SLUG` pinned to `"watch"` matching the seed migration). 876 tests pass (up from
+  864), `tsc --noEmit` clean, production build clean. **No dedicated action-level Supabase-mocked test was
+  added for `products.ts`'s superadmin gating** — its `requireSuperAdmin()` is byte-identical to the
+  already-relied-upon, itself-untested pattern in `actions/superadmin.ts`, consistent with this codebase's
+  established convention of not DB-mocking server actions (verified instead via code review: every export
+  independently re-checks the role before touching the `products` table).
+- **Deliberately not built this pass** (documented, not silently skipped, per the spec's own phasing): Phase 3
+  (a real non-panel-owning entitlement path for Watch), Phase 4/5 (actual `watch.innvil.cloud` cutover /
+  Watch-specific frontend), a cross-sell relationship table/UI (kept the schema flag-only —
+  `cross_sell_available` — rather than a speculative join table, per "do not add speculative fields"), Herald
+  functionality, and any Forge rename/restructure.
+
 ### 2026-08-17 — Phase 4.O (Telegram onboarding automation) + Phase 4.Q (innvil_bot_manager) backbone (v1.20.0)
 - **Phase 4.O, implemented end-to-end from `docs/moderator/telegram-bot-to-bot-onboarding-spec.md`.** New
   **"Add to Telegram" flow** — `createTelegramSetupSession(panelId, moderatorId)` (`actions/moderator.ts`)
