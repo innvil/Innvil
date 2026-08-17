@@ -161,17 +161,45 @@ async function resolveIntegration(admin: SupabaseClient, integrationId: string) 
   return data as { id: string; panel_id: string; virtual_moderator_id: string; telegram_bot_id: number | null } | null;
 }
 
+/** Resolves the community row for an inbound Telegram message. SELECT-then-
+ *  UPDATE, never upsert -- `communities.project_id` is NOT NULL (migration
+ *  0057) and this code path has no project to assign a genuinely new
+ *  community, so it must never attempt to INSERT one. (Postgres itself
+ *  validates NOT NULL constraints on the proposed row of an `INSERT ...
+ *  ON CONFLICT DO UPDATE` BEFORE checking whether a conflict even exists --
+ *  a live incident on 2026-08-17 traced every existing community's message
+ *  handling silently failing back to exactly this: the old upsert always
+ *  hit the project_id NOT NULL violation first, regardless of whether the
+ *  row already existed.) A message from a chat with no matching row is
+ *  simply not from a connected community -- communities are created only
+ *  through the explicit connectCommunity flow (actions/moderator.ts), which
+ *  supplies a real project_id, never implicitly on first message here. */
 async function resolveCommunity(admin: SupabaseClient, panelId: string, chat: TelegramChat) {
   const chatId = String(chat.id);
   const { data, error } = await admin
     .from("communities")
-    .upsert(
-      { panel_id: panelId, platform: "telegram", chat_id: chatId, handle: chat.username ?? null, title: chat.title ?? null, chat_type: chat.type ?? null },
-      { onConflict: "panel_id,platform,chat_id" }
-    )
     .select("id, bot_ack_mode, collab_contact")
-    .single();
-  if (error || !data) return null;
+    .eq("panel_id", panelId)
+    .eq("platform", "telegram")
+    .eq("chat_id", chatId)
+    .maybeSingle();
+  if (error) {
+    console.error("[telegram/community] resolveCommunity select failed", panelId, chatId, error.message, error.code);
+    return null;
+  }
+  if (!data) return null;
+
+  // Best-effort metadata refresh (title/handle/chat_type may have changed
+  // in Telegram since the community was connected) -- an UPDATE on an
+  // already-existing row, never touching project_id, so it can't re-trigger
+  // the NOT NULL issue above. Failure here is non-fatal; the community
+  // still resolves correctly from the SELECT above.
+  const { error: updateError } = await admin
+    .from("communities")
+    .update({ handle: chat.username ?? null, title: chat.title ?? null, chat_type: chat.type ?? null })
+    .eq("id", data.id);
+  if (updateError) console.error("[telegram/community] resolveCommunity metadata update failed", data.id, updateError.message);
+
   return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null };
 }
 
@@ -1824,16 +1852,16 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   if (isDup) return;
 
   const message = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
-  if (!message?.from || !message.chat) return;
+  if (!message?.from || !message.chat) { timer.mark("no_message_or_sender"); return; }
 
   const integration = await resolveIntegration(admin, integrationId);
-  if (!integration) return;
+  if (!integration) { timer.mark("no_integration"); return; }
 
   const { data: panel } = await admin.from("panels").select("settings").eq("id", integration.panel_id).maybeSingle();
   const settings = panel?.settings ?? null;
 
   const community = await resolveCommunity(admin, integration.panel_id, message.chat);
-  if (!community) return;
+  if (!community) { timer.mark("no_community", { chatId: message.chat.id, chatType: message.chat.type }); return; }
 
   const sender = await classifySender(admin, integration.panel_id, community.id, message.from);
 

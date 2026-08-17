@@ -127,6 +127,50 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Critical fix: every existing community's Telegram messages were silently dropped (v1.19.2)
+- **Live incident, found via direct production diagnosis** (a temporary read-only debug route + Telegram's own
+  `getWebhookInfo` + direct SQL against production, all removed/reverted after use — see git history for the
+  investigation). A connected community's moderator bots stopped responding to ANY message.
+- **Root cause: `resolveCommunity()` (`community-runtime.ts`) used `.upsert(..., {onConflict: "panel_id,platform,chat_id"})`
+  without supplying `project_id`.** Migration 0057 made `communities.project_id` `NOT NULL`. Postgres's
+  `INSERT ... ON CONFLICT DO UPDATE` validates NOT NULL constraints on the PROPOSED row via a real speculative
+  insert attempt BEFORE it ever checks whether a conflict exists — so the upsert failed with `23502` for
+  **every** message in **every already-connected community**, regardless of whether the row already existed.
+  This was NOT a missing index (confirmed live: the original `unique(panel_id,platform,chat_id)` constraint from
+  migration 0043 was present and valid the whole time — chasing that was a dead end) and was NOT specific to
+  today's session's work — it's been broken since migration 0057 shipped.
+- **Fix**: `resolveCommunity` no longer upserts. SELECT first (scoped by `panel_id`+`platform`+`chat_id`); if
+  found, a separate best-effort `UPDATE` refreshes only `handle`/`title`/`chat_type` (never touches `project_id`,
+  so it can't re-trigger the NOT NULL issue); if not found, returns `null` — a message from an unconnected chat
+  is simply not processed, matching the existing product invariant that communities are only ever created
+  through the explicit `connectCommunity` flow (which supplies a real `project_id`), never implicitly on first
+  message here.
+- **`resolveCommunity`'s error path was also silently swallowing the real Postgres error** (`if (error || !data)
+  return null`) — now `console.error`s the actual message/code first, so a future regression of this class
+  surfaces immediately in logs instead of reading as "moderator not responding" with zero trace.
+- **Also fixed this session, all now confirmed live and working**: production redeploy (was serving stale code
+  from a Vercel dashboard-triggered auto-redeploy off an old GitHub commit after unrelated env var edits — see
+  the "adding Vercel env vars can trigger a full redeploy from the connected Git branch, not your local commits"
+  operational note below); Vercel Deployment Protection (SSO) was blocking Telegram's webhook POSTs to Preview
+  with a 401 before ever reaching the app — disabled via `vercel project protection disable innvil --sso`;
+  `NEXT_PUBLIC_APP_URL` (Preview, branch-scoped) was hardcoded to a frozen, non-realiasable one-off deployment
+  URL instead of the real updatable git-branch alias — corrected to
+  `https://innvil-git-rebrand-innvil-v0.2.0-ako-me.vercel.app`, and both connected bots' webhooks were
+  re-registered (`setIntegrationWebhook`) to match.
+- **Operational note for future sessions**: this project's Vercel GitHub integration auto-redeploys Production
+  from the connected branch's LAST PUSHED commit whenever certain dashboard actions happen (e.g. adding/editing
+  env vars) — completely independent of any `vercel --prod` CLI deploy done locally. Since this session's work
+  was never pushed to GitHub, any such dashboard action silently reverted Production to a stale commit. Until
+  this branch is pushed and kept in sync, treat every CLI production deploy as **temporary** until confirmed by
+  re-checking `vercel ls`/`vercel alias ls` immediately before relying on it.
+- **Migration `0062_communities_unique_index_fix.sql`** — restores a plain unique index on
+  `(panel_id, platform, chat_id)` (harmless/redundant now that the real root cause is known not to be a missing
+  index, but left in place since it's a safe, idempotent no-op and doesn't hurt). **Already run** against
+  production during the live incident.
+- 802 tests pass, `tsc --noEmit` clean, production build clean. Verified live end-to-end after the fix: a real
+  Telegram message produced a full `claim_won → coordinator_action_selected → generation → telegram_send:
+  sent:true` trace, and the moderator's reply was confirmed received.
+
 ### 2026-08-17 — Sightengine wired as the first real media-safety provider (v1.19.1)
 - **First real vendor behind the replaceable `media-safety-provider.ts` dispatcher** (was unwired since v1.19.0
   by design). `classifyImageBytes` now dispatches on `MEDIA_SAFETY_PROVIDER`: `"sightengine"` routes to the new
