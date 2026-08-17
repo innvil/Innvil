@@ -1,6 +1,6 @@
 {
   "name": "innvil",
-  "version": "1.19.4",
+  "version": "1.19.5",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -49,5 +49,13 @@
   "overrides": {
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3"
+  },
+  "allowScripts": {
+    "ffmpeg-static@5.3.0": true,
+    "core-js@3.49.0": true,
+    "esbuild@0.28.1": true,
+    "sharp@0.34.5": true,
+    "tesseract.js@5.1.1": true,
+    "unrs-resolver@1.12.2": true
   }
 }

@@ -127,6 +127,37 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Root-cause fix: video moderation's ffmpeg binary was silently blocked on every deploy (v1.19.5)
+- **Live investigation while verifying #2 of the post-Sightengine queue** ("verify ffmpeg-static on Vercel's
+  Linux runtime before enabling video moderation"). A temporary diagnostic route confirmed
+  `node_modules/ffmpeg-static/ffmpeg` (and its whole directory) never existed in ANY deployed function —
+  consistently, across cached AND fully-forced-clean (`vercel --force`, no build cache) deploys, ruling out
+  caching, `outputFileTracingIncludes` glob correctness (verified locally: the config picks up every file
+  present at build time), and CI-only progress-bar suppression (a red herring — `ffmpeg-static`'s install
+  script prints nothing on success by design, even outside CI).
+- **Actual root cause: npm 11's install-script allowlisting security feature was silently blocking
+  `ffmpeg-static`'s `install` script on every install** (`npm warn allow-scripts` — a package's
+  preinstall/install/postinstall script only runs if explicitly approved in `package.json`'s new
+  `allowScripts` field; otherwise npm silently skips it with a warning, not an error, so `npm install`
+  reports full success while the download step never ran). This blocked ANY environment installing fresh
+  (Vercel's build machine on both cache paths, and a genuinely clean local `npm ci`) — nothing about this was
+  Vercel-specific.
+- **Fix**: `npm approve-scripts ffmpeg-static` (persists `"allowScripts": {"ffmpeg-static@5.3.0": true}` in
+  `package.json`) — verified locally that a from-scratch reinstall (`rm -rf node_modules/ffmpeg-static && npm
+  install`) now actually runs the script and downloads the binary. **Also approved `core-js`/`esbuild`/`sharp`/
+  `tesseract.js`/`unrs-resolver`** — all pre-existing, already-relied-upon dependencies (sharp = image
+  processing, tesseract.js = the existing business-registration-OCR feature) silently affected by the exact
+  same mechanism; left unapproved, this could have been causing quiet breakage in those features too,
+  independent of anything media-moderation-related.
+- **`outputFileTracingIncludes` (added to `next.config.js` during this investigation) is kept** even though it
+  wasn't the actual root cause — it's a real, correct safety net (forces the binary into the function bundle
+  for both `/api/webhooks/telegram/bots/[integrationId]` and any future ffmpeg-touching route) and is harmless
+  now that the binary actually exists to be included.
+- No test changes (nothing here is unit-testable pure logic — this is a build/dependency-installation
+  configuration fix). 827 tests pass (unchanged), `tsc --noEmit` clean, production build clean. **Video
+  moderation (`MEDIA_MODERATION_VIDEO_ENABLED`) is still OFF** — this fix clears the blocker, but flipping the
+  flag is a separate, explicit action once you're ready.
+
 ### 2026-08-17 — Fix: scheme-less scam domains (no https://) were never extracted as links (v1.19.4)
 - **Live gap, found immediately while testing v1.19.3's new scam enforcement**: a real scam message
   (`mysteryboxsol.live`, no `https://` prefix) never reached moderation at all — `link_moderation_check:
