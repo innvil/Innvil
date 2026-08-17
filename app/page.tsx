@@ -20,6 +20,7 @@ export async function generateMetadata(): Promise<Metadata> {
       alternates: { canonical: "/" },
       openGraph: { url: "/", title: "Innvil Watch", description: "AI-powered Watchers for modern communities.", siteName: "Innvil Watch" },
       robots: { index: true, follow: true },
+      icons: { icon: "/watch/app-tile.svg" },
     };
   }
   return {

@@ -15,6 +15,15 @@ const PLAN_BLURBS: Record<Plan, string> = {
   Platinum: "For teams running Watch at scale.",
 };
 
+// Subtle rank accent per tier — never literal metallic gradients, just a
+// small badge color cue so the hierarchy reads at a glance.
+const RANK_ACCENT: Record<Plan, string> = {
+  Bronze: "#B08D57",
+  Silver: "#B8C2CC",
+  Gold: "#D9B44A",
+  Platinum: "#8FE3D6",
+};
+
 export function WatchPricingSection({ options, authenticated }: { options: WatchPlanOption[]; authenticated: boolean }) {
   const router = useRouter();
   const [checkoutPlan, setCheckoutPlan] = useState<Plan | null>(null);
@@ -26,30 +35,40 @@ export function WatchPricingSection({ options, authenticated }: { options: Watch
 
   return (
     <section id="pricing" className="max-w-6xl mx-auto px-6 py-20">
-      <p className="text-xs fp-mono uppercase fp-gold tracking-wider text-center mb-2">Pricing</p>
-      <h2 className="fp-display text-3xl text-center mb-3">Choose your Watch plan</h2>
-      <p className="fp-text-dim text-center max-w-lg mx-auto mb-12">Simple monthly pricing. Cancel anytime.</p>
+      <p className="text-xs w-mono uppercase w-teal tracking-wider text-center mb-2">Pricing</p>
+      <h2 className="w-display text-3xl text-center mb-3">Choose your Watch plan</h2>
+      <p className="w-text-dim text-center max-w-lg mx-auto mb-12">Simple monthly pricing. Cancel anytime.</p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {options.map((opt) => (
-          <div key={opt.tier} className="fp-panel border fp-line-soft rounded-2xl p-5 flex flex-col">
-            <p className="fp-display text-lg">{opt.displayName}</p>
-            <p className="text-xs fp-text-faint mb-4">{PLAN_BLURBS[opt.displayName as Plan]}</p>
-            <p className="text-2xl fp-display mb-1">${opt.price.toFixed(2)}<span className="text-sm fp-text-faint">/mo</span></p>
-            <button
-              onClick={() => subscribe(opt.displayName as Plan)}
-              className="mt-4 fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg"
-            >
-              Subscribe
-            </button>
-          </div>
-        ))}
+        {options.map((opt) => {
+          const plan = opt.displayName as Plan;
+          return (
+            <div key={opt.tier} className="w-card p-5 flex flex-col">
+              <span
+                className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full mb-3"
+                style={{ color: RANK_ACCENT[plan], background: `${RANK_ACCENT[plan]}1F`, border: `1px solid ${RANK_ACCENT[plan]}55` }}
+              >
+                {plan}
+              </span>
+              <p className="text-xs w-text-faint mb-4">{PLAN_BLURBS[plan]}</p>
+              <p className="text-2xl w-display mb-1">${opt.price.toFixed(2)}<span className="text-sm w-text-faint">/mo</span></p>
+              <button
+                onClick={() => subscribe(plan)}
+                className="mt-4 w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg"
+              >
+                Subscribe
+              </button>
+            </div>
+          );
+        })}
 
-        <div className="fp-panel border fp-line-soft rounded-2xl p-5 flex flex-col">
-          <p className="fp-display text-lg">Enterprise</p>
-          <p className="text-xs fp-text-faint mb-4">For large-scale deployments — custom pricing.</p>
-          <p className="text-2xl fp-display mb-1 flex items-center gap-1"><CheckCircle2 size={18} className="fp-gold" /> Custom</p>
-          <a href="/signup" className="mt-4 text-sm px-4 py-2 rounded-lg border fp-line-soft fp-panel-raised text-center hover:fp-text">
+        <div className="w-card-raised p-5 flex flex-col border w-teal-border">
+          <span className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full mb-3 w-teal-soft-bg w-teal">
+            Enterprise
+          </span>
+          <p className="text-xs w-text-faint mb-4">For large-scale deployments — custom pricing.</p>
+          <p className="text-2xl w-display mb-1 flex items-center gap-1"><CheckCircle2 size={18} className="w-teal" /> Custom</p>
+          <a href="/signup" className="mt-4 text-sm px-4 py-2 rounded-lg border w-line-soft w-surface text-center hover:w-text">
             Contact us
           </a>
         </div>

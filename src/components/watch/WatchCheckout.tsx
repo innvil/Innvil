@@ -67,14 +67,14 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
-      <div className="fp-panel border fp-line rounded-2xl p-6 max-w-md w-full">
+      <div className="w-surface border w-line rounded-2xl p-6 max-w-md w-full">
         <div className="flex items-center justify-between mb-4">
-          <p className="fp-display text-lg">Subscribe to {plan}</p>
-          <button onClick={onClose} className="text-sm fp-text-dim hover:fp-text">Close</button>
+          <p className="w-display text-lg">Subscribe to {plan}</p>
+          <button onClick={onClose} className="text-sm w-text-dim hover:w-text">Close</button>
         </div>
 
         {gateways === null && (
-          <p className="text-sm fp-text-dim flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading payment options…</p>
+          <p className="text-sm w-text-dim flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading payment options…</p>
         )}
 
         {gateways !== null && gateways.length === 0 && (
@@ -83,12 +83,12 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
         {gateways !== null && gateways.length > 0 && !selected && (
           <div className="space-y-2">
-            <p className="text-xs fp-text-faint mb-2">Choose a payment method</p>
+            <p className="text-xs w-text-faint mb-2">Choose a payment method</p>
             {gateways.map((g) => (
               <button
                 key={g}
                 onClick={() => setSelected(g)}
-                className="w-full text-left text-sm fp-panel-raised border fp-line-soft rounded-lg px-4 py-3 hover:fp-gold-border"
+                className="w-full text-left text-sm w-surface-raised border w-line-soft rounded-lg px-4 py-3 hover:w-teal-border"
               >
                 {GATEWAY_LABELS[g] ?? g}
               </button>
@@ -98,16 +98,16 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
         {selected && (selected === "cryptomus" || selected === "nowpayments") && (
           <div className="space-y-3">
-            <p className="text-sm fp-text-dim">You&apos;ll be redirected to {GATEWAY_LABELS[selected]} to complete payment securely.</p>
+            <p className="text-sm w-text-dim">You&apos;ll be redirected to {GATEWAY_LABELS[selected]} to complete payment securely.</p>
             {error && <p className="text-xs text-red-400">{error}</p>}
             <div className="flex gap-2">
-              <button onClick={() => setSelected(null)} disabled={busy || redirecting} className="text-xs px-3 py-2 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim disabled:opacity-60">
+              <button onClick={() => setSelected(null)} disabled={busy || redirecting} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
                 Back
               </button>
               <button
                 onClick={() => startHostedCheckout(selected as "cryptomus" | "nowpayments")}
                 disabled={busy || redirecting}
-                className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 disabled:opacity-60"
+                className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 disabled:opacity-60"
               >
                 {redirecting ? <>Redirecting… <ExternalLink size={14} /></> : busy ? "Starting…" : "Continue"}
               </button>
@@ -117,13 +117,13 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
         {selected === "binance_pay" && !binanceDeposit && (
           <div className="space-y-3">
-            <p className="text-sm fp-text-dim">Pay Innvil directly via Binance Pay, then confirm with your transaction id.</p>
+            <p className="text-sm w-text-dim">Pay Innvil directly via Binance Pay, then confirm with your transaction id.</p>
             {error && <p className="text-xs text-red-400">{error}</p>}
             <div className="flex gap-2">
-              <button onClick={() => setSelected(null)} disabled={busy} className="text-xs px-3 py-2 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim disabled:opacity-60">
+              <button onClick={() => setSelected(null)} disabled={busy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
                 Back
               </button>
-              <button onClick={startBinanceDeposit} disabled={busy} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+              <button onClick={startBinanceDeposit} disabled={busy} className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
                 {busy ? "Preparing…" : "Get payment details"}
               </button>
             </div>
@@ -132,26 +132,26 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
         {binanceDeposit && claimStatus !== "confirmed" && (
           <div className="space-y-3">
-            <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 text-sm">
+            <div className="w-surface-raised border w-line-soft rounded-lg p-3 text-sm">
               <p>Send <strong>{binanceDeposit.amount.toFixed(2)} USDT</strong> to Binance Pay ID:</p>
-              <p className="fp-mono fp-gold text-base mt-1">{binanceDeposit.payId}</p>
+              <p className="w-mono w-teal text-base mt-1">{binanceDeposit.payId}</p>
               {binanceDeposit.qrImage && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={binanceDeposit.qrImage} alt="Binance Pay QR code" className="mt-3 w-32 h-32 rounded-lg" />
               )}
             </div>
-            <p className="text-xs fp-text-faint">USDT only. After paying, enter the transaction/order id from your Binance app to confirm.</p>
+            <p className="text-xs w-text-faint">USDT only. After paying, enter the transaction/order id from your Binance app to confirm.</p>
             <input
               value={txInput}
               onChange={(e) => setTxInput(e.target.value)}
               placeholder="Transaction / order id"
-              className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none focus:fp-gold-border"
+              className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border"
             />
             {claimStatus === "failed" && claimError && <p className="text-xs text-red-400 flex items-center gap-1.5"><XCircle size={14} /> {claimError}</p>}
             <button
               onClick={claimBinance}
               disabled={claimStatus === "checking" || !txInput.trim()}
-              className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg w-full disabled:opacity-60"
+              className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg w-full disabled:opacity-60"
             >
               {claimStatus === "checking" ? "Verifying…" : "I've paid — verify"}
             </button>
@@ -160,9 +160,9 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
         {claimStatus === "confirmed" && (
           <div className="text-center py-4 space-y-2">
-            <CheckCircle2 size={32} className="mx-auto fp-safe" />
-            <p className="text-sm fp-text">Payment confirmed — your Watch subscription is now active.</p>
-            <button onClick={() => window.location.reload()} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg mt-2">
+            <CheckCircle2 size={32} className="mx-auto w-green" />
+            <p className="text-sm w-text">Payment confirmed — your Watch subscription is now active.</p>
+            <button onClick={() => window.location.reload()} className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg mt-2">
               Continue to dashboard
             </button>
           </div>

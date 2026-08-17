@@ -211,6 +211,124 @@ body {
   color: transparent;
 }
 
+/* =========================================================
+   Innvil Watch design tokens — scoped under .watch-root, deliberately
+   SEPARATE from the fp-* system above (never touches it). Watch is a
+   distinct product under the Innvil ecosystem: cool operational teal
+   instead of the parent site's gold/serif editorial treatment, a modern
+   sans-serif display face (reuses the already-loaded Inter, no new font
+   fetch), and an operational/monitoring visual language instead of the
+   parent's luxury/editorial one. See src/components/watch/.
+   ========================================================= */
+.watch-root {
+  --w-void: #0A0E11;
+  --w-void-2: #0D1316;
+  --w-surface: #121A1E;
+  --w-surface-raised: #172227;
+  --w-line: #223035;
+  --w-line-soft: #1A2428;
+
+  --w-text: #E7EDEE;
+  --w-text-dim: #92A3A8;
+  --w-text-faint: #566569;
+
+  --w-teal: #2DD4BF;
+  --w-teal-light: #5EEAD4;
+  --w-teal-soft: rgba(45, 212, 191, 0.12);
+  --w-teal-border: rgba(45, 212, 191, 0.35);
+
+  --w-amber: #F5A623;
+  --w-amber-soft: rgba(245, 166, 35, 0.12);
+  --w-green: #34D399;
+  --w-green-soft: rgba(52, 211, 153, 0.12);
+  --w-red: #F87171;
+  --w-red-soft: rgba(248, 113, 113, 0.12);
+
+  background: var(--w-void);
+  color: var(--w-text);
+  font-family: var(--font-sans);
+}
+
+.watch-root :focus-visible {
+  outline: 2px solid var(--w-teal);
+  outline-offset: 2px;
+}
+
+.w-display {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+.w-mono { font-family: var(--font-mono); }
+.w-void { background: var(--w-void); }
+.w-void-2 { background: var(--w-void-2); }
+.w-surface { background: var(--w-surface); }
+.w-surface-raised { background: var(--w-surface-raised); }
+.w-line { border-color: var(--w-line); }
+.w-line-soft { border-color: var(--w-line-soft); }
+.w-text { color: var(--w-text); }
+.w-text-dim { color: var(--w-text-dim); }
+.w-text-faint { color: var(--w-text-faint); }
+
+.w-teal { color: var(--w-teal); }
+.w-teal-bg { background: var(--w-teal); }
+.w-teal-border { border-color: var(--w-teal-border); }
+.w-teal-soft-bg { background: var(--w-teal-soft); }
+
+.w-amber { color: var(--w-amber); }
+.w-amber-soft-bg { background: var(--w-amber-soft); }
+.w-green { color: var(--w-green); }
+.w-green-soft-bg { background: var(--w-green-soft); }
+.w-red { color: var(--w-red); }
+.w-red-soft-bg { background: var(--w-red-soft); }
+
+.w-btn-primary {
+  background: linear-gradient(120deg, var(--w-teal-light), var(--w-teal));
+  color: #052420;
+}
+.w-btn-primary:hover { filter: brightness(1.08); }
+
+.w-card {
+  background: var(--w-surface);
+  border: 1px solid var(--w-line);
+  border-radius: 16px;
+}
+
+.w-card-raised {
+  background: var(--w-surface-raised);
+  border: 1px solid var(--w-line);
+  border-radius: 16px;
+}
+
+/* Status pill — reused across the landing's demo panel and (later) the
+   authenticated dashboard, so the visual language carries through. */
+.w-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--w-line);
+}
+
+@keyframes w-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.w-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: w-pulse 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .w-pulse-dot { animation: none; }
+}
+
 /* Toggle component */
 .fp-toggle {
   width: 34px;

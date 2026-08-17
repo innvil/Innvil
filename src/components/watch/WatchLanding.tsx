@@ -1,41 +1,43 @@
 import React from "react";
 import Link from "next/link";
-import { ShieldCheck, MessageSquare, Sparkles, Bot, ArrowRight, ScrollText } from "lucide-react";
-import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
+import {
+  ShieldCheck, MessageSquare, Sparkles, Bot, ArrowRight, ScrollText, Activity,
+  Radio, Zap, Users, Clock,
+} from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 
 /**
  * Innvil Watch's own public, standalone landing page — served on
- * watch.innvil.cloud (app/page.tsx branches on host). Deliberately NOT a
- * clone of PublicLanding.tsx (the Forge/SMM-panel marketing page); it never
- * mentions "create your panel" or panel-specific copy. Reuses the shared
- * fp-* visual language + InnvilBrandMark so it reads as the SAME Innvil
- * ecosystem, not a different product.
+ * watch.innvil.cloud (app/page.tsx branches on host). Deliberately its own
+ * visual product: `.watch-root`/`w-*` design tokens (cool teal, modern
+ * sans-serif, operational/monitoring language) — NOT the parent site's
+ * `fp-root`/`fp-*` gold-editorial system, and NOT a copy of
+ * PublicLanding.tsx's structure. Still visibly "by Innvil" via the shared
+ * brand mark + explicit ecosystem links in the nav/footer.
  */
 function WatchNav() {
   return (
-    <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0B0F]/80 border-b fp-line-soft">
+    <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0E11]/85 border-b w-line-soft">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <a href="#top" className="flex items-center gap-2.5 shrink-0">
-          <div className="w-10 h-10 rounded-[9px] bg-[#C9A574] flex items-center justify-center">
-            <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
-          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/watch/app-tile.svg" alt="" width={36} height={36} className="w-9 h-9 rounded-[9px]" />
           <div className="leading-tight">
-            <span className="fp-display text-lg tracking-wide block">Innvil Watch</span>
-            <span className="text-[10px] fp-text-faint">Part of Innvil</span>
+            <span className="w-display text-base tracking-tight block">Innvil Watch</span>
+            <span className="text-[10px] w-text-faint">by Innvil</span>
           </div>
         </a>
-        <nav className="hidden md:flex items-center gap-6 text-sm fp-text-dim">
-          <a href="#features" className="hover:fp-text">Features</a>
-          <a href="#how" className="hover:fp-text">How it works</a>
-          <a href="#pricing" className="hover:fp-text">Pricing</a>
-          <a href="https://innvil.cloud" className="hover:fp-text">innvil.cloud</a>
+        <nav className="hidden md:flex items-center gap-6 text-sm w-text-dim">
+          <a href="#features" className="hover:w-text">Features</a>
+          <a href="#how" className="hover:w-text">How it works</a>
+          <a href="#pricing" className="hover:w-text">Pricing</a>
+          <a href="https://innvil.cloud" className="hover:w-text flex items-center gap-1">← Innvil</a>
         </nav>
         <div className="flex items-center gap-3">
-          <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
-          <Link href="/signup" className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
-            Get Started <ArrowRight size={14} />
+          <Link href="/login" className="text-sm w-text-dim">Log in</Link>
+          <Link href="/signup" className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
+            Start Watching <ArrowRight size={14} />
           </Link>
         </div>
       </div>
@@ -43,66 +45,154 @@ function WatchNav() {
   );
 }
 
-const FEATURES = [
-  { icon: MessageSquare, title: "Natural conversation", body: "Watchers chat naturally in your community, in their own configured persona — not a generic support bot." },
-  { icon: ShieldCheck, title: "Spam & scam moderation", body: "Automatic detection and graduated enforcement for unsolicited promotion, link spam, and phishing/scam links." },
-  { icon: Bot, title: "AI-powered Virtual Moderators", body: "Each Watcher is an AI-powered Virtual Moderator deployed into your Telegram community — answering questions and keeping order." },
-  { icon: Sparkles, title: "Auto-Posting", body: "Schedule per-Watcher posting windows so your community stays active, grounded in your own project knowledge." },
-  { icon: ScrollText, title: "Project Knowledge", body: "Ground every answer in facts you provide — Watchers never invent claims about your project." },
+/** Hero product visualization — a realistic Watch operations panel using
+ *  clearly-labeled sample data, not real customer metrics. */
+function WatchOpsPanel() {
+  return (
+    <div className="w-card p-5 relative overflow-hidden">
+      <div className="absolute top-3 right-3 text-[10px] w-text-faint font-medium">Sample data</div>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-full w-teal-soft-bg border w-teal-border flex items-center justify-center">
+            <Bot size={16} className="w-teal" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold w-text">Kwan</p>
+            <p className="text-[11px] w-text-faint">Watcher</p>
+          </div>
+        </div>
+        <span className="w-pill w-green-soft-bg w-green">
+          <span className="w-pulse-dot" /> Online
+        </span>
+      </div>
+
+      <div className="w-line-soft border-t pt-4 mb-4">
+        <p className="text-[11px] w-text-faint mb-1">Community</p>
+        <p className="text-sm w-text flex items-center gap-1.5"><Users size={13} className="w-text-dim" /> @samplecommunity</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="w-surface-raised rounded-lg p-3">
+          <p className="text-[11px] w-text-faint flex items-center gap-1"><ShieldCheck size={12} /> Spam blocked</p>
+          <p className="text-lg w-display w-text">18</p>
+        </div>
+        <div className="w-surface-raised rounded-lg p-3">
+          <p className="text-[11px] w-text-faint flex items-center gap-1"><Radio size={12} /> Scam links removed</p>
+          <p className="text-lg w-display w-text">3</p>
+        </div>
+        <div className="w-surface-raised rounded-lg p-3">
+          <p className="text-[11px] w-text-faint flex items-center gap-1"><MessageSquare size={12} /> Questions answered</p>
+          <p className="text-lg w-display w-text">42</p>
+        </div>
+        <div className="w-surface-raised rounded-lg p-3">
+          <p className="text-[11px] w-text-faint flex items-center gap-1"><Clock size={12} /> Next auto-post</p>
+          <p className="text-lg w-display w-text">2h 14m</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldCheck; title: string; body: string }> }> = [
+  {
+    label: "Watch",
+    items: [
+      { icon: ShieldCheck, title: "Spam & scam moderation", body: "Automatic detection and graduated enforcement for unsolicited promotion, link spam, and phishing/scam links." },
+      { icon: Radio, title: "Media safety", body: "Photo and video moderation, so unsafe media doesn't sit in your community." },
+    ],
+  },
+  {
+    label: "Engage",
+    items: [
+      { icon: MessageSquare, title: "Natural conversation", body: "Watchers chat naturally, in their own configured persona — not a generic support bot." },
+      { icon: ScrollText, title: "Project knowledge", body: "Ground every answer in facts you provide — Watchers never invent claims about your project." },
+    ],
+  },
+  {
+    label: "Operate",
+    items: [
+      { icon: Sparkles, title: "Auto-Posting", body: "Schedule per-Watcher posting windows so your community stays active." },
+      { icon: Activity, title: "Activity & status", body: "See what your Watcher is doing — always on, always watching." },
+    ],
+  },
+];
+
+const STEPS = [
+  { n: "01", title: "Choose a plan", body: "Create your Innvil account and choose a Watch plan." },
+  { n: "02", title: "Connect Telegram", body: "Add your Watcher to your Telegram community." },
+  { n: "03", title: "Configure", body: "Set its persona and knowledge base." },
+  { n: "04", title: "Let it operate", body: "Your Watcher moderates, answers, and posts on schedule." },
 ];
 
 export function WatchLanding({ authenticated }: { authenticated: boolean }) {
   const options = watchPlanOptions();
   return (
-    <div id="top" className="fp-root min-h-screen">
+    <div id="top" className="watch-root min-h-screen">
       <WatchNav />
 
-      <section className="max-w-4xl mx-auto px-6 pt-24 pb-16 text-center">
-        <p className="text-xs fp-mono uppercase fp-gold tracking-wider mb-4">Innvil Watch</p>
-        <h1 className="fp-display text-4xl sm:text-5xl leading-tight mb-6">
-          AI-powered Watchers<br />for modern communities.
-        </h1>
-        <p className="fp-text-dim text-lg max-w-xl mx-auto mb-8">
-          Deploy a Watcher — an AI-powered Virtual Moderator — into your Telegram community. It chats naturally, answers
-          questions grounded in your own project knowledge, and keeps spam and scams out.
-        </p>
-        <div className="flex items-center justify-center gap-3">
-          <a href="#pricing" className="fp-btn-primary text-sm font-semibold px-5 py-3 rounded-lg flex items-center gap-1.5">
-            Start with Watch <ArrowRight size={14} />
-          </a>
-          <a href="#how" className="text-sm px-5 py-3 rounded-lg border fp-line-soft fp-panel-raised fp-text-dim hover:fp-text">
-            How it works
-          </a>
+      <section className="max-w-6xl mx-auto px-6 pt-20 pb-16 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <span className="w-pill w-teal-soft-bg w-teal mb-5">
+            <Zap size={12} /> Innvil Watch
+          </span>
+          <h1 className="w-display text-4xl sm:text-5xl leading-[1.08] mb-6">
+            Your community doesn&apos;t sleep.<br />Neither does your Watch.
+          </h1>
+          <p className="w-text-dim text-lg mb-8 max-w-md">
+            Deploy AI-powered Watchers that moderate, answer questions, detect abuse, and keep your Telegram
+            community active — around the clock.
+          </p>
+          <div className="flex items-center gap-3">
+            <a href="#pricing" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg flex items-center gap-1.5">
+              Start Watching <ArrowRight size={14} />
+            </a>
+            <a href="#how" className="text-sm px-5 py-3 rounded-lg border w-line-soft w-surface w-text-dim hover:w-text">
+              See how it works
+            </a>
+          </div>
         </div>
+        <WatchOpsPanel />
       </section>
 
       <section id="features" className="max-w-6xl mx-auto px-6 py-16">
-        <h2 className="fp-display text-2xl text-center mb-10">What a Watcher does</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {FEATURES.map((f) => (
-            <div key={f.title} className="fp-panel border fp-line-soft rounded-2xl p-5">
-              <f.icon size={18} className="fp-gold mb-3" />
-              <p className="fp-display text-base mb-1.5">{f.title}</p>
-              <p className="text-sm fp-text-dim">{f.body}</p>
+        <h2 className="w-display text-2xl text-center mb-10">What a Watcher does</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {FEATURE_GROUPS.map((group) => (
+            <div key={group.label}>
+              <p className="text-xs w-mono uppercase tracking-wider w-teal mb-3">{group.label}</p>
+              <div className="space-y-3">
+                {group.items.map((f) => (
+                  <div key={f.title} className="w-card p-4">
+                    <f.icon size={16} className="w-teal mb-2" />
+                    <p className="w-display text-sm mb-1">{f.title}</p>
+                    <p className="text-xs w-text-dim">{f.body}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
       </section>
 
       <section id="how" className="max-w-4xl mx-auto px-6 py-16">
-        <h2 className="fp-display text-2xl text-center mb-10">How it works</h2>
-        <ol className="space-y-4 text-sm fp-text-dim max-w-md mx-auto">
-          <li className="flex gap-3"><span className="fp-gold fp-mono">01</span> Create an Innvil account and choose a Watch plan.</li>
-          <li className="flex gap-3"><span className="fp-gold fp-mono">02</span> Add your Watcher to your Telegram community.</li>
-          <li className="flex gap-3"><span className="fp-gold fp-mono">03</span> Configure its persona and knowledge — then let it moderate and chat.</li>
-        </ol>
+        <h2 className="w-display text-2xl text-center mb-10">How it works</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {STEPS.map((s) => (
+            <div key={s.n} className="w-card p-4">
+              <span className="w-mono text-xs w-teal">{s.n}</span>
+              <p className="w-display text-sm mt-2 mb-1">{s.title}</p>
+              <p className="text-xs w-text-dim">{s.body}</p>
+            </div>
+          ))}
+        </div>
       </section>
 
       <WatchPricingSection options={options} authenticated={authenticated} />
 
-      <footer className="border-t fp-line-soft py-10 text-center text-xs fp-text-faint">
-        <p>Innvil Watch — part of the Innvil ecosystem.</p>
-        <a href="https://innvil.cloud" className="fp-gold hover:underline">innvil.cloud</a>
+      <footer className="border-t w-line-soft py-10 text-center">
+        <p className="w-display text-sm mb-1">Innvil Watch</p>
+        <p className="text-xs w-text-faint mb-2">Part of the Innvil ecosystem.</p>
+        <a href="https://innvil.cloud" className="text-xs w-teal hover:underline">innvil.cloud</a>
       </footer>
     </div>
   );

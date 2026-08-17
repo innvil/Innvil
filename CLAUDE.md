@@ -127,6 +127,34 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Innvil Watch distinct visual identity + real brand assets (v1.23.1)
+- **Watch now has its own design system, separate from the parent site's `fp-*` gold/serif theme.** New
+  `.watch-root`/`w-*` token layer in `app/globals.css` — deep charcoal/midnight base, cool teal/cyan primary
+  accent (`--w-teal`), amber/green/red status accents, modern sans-serif (`w-display`, reuses the already-loaded
+  Inter — no new font fetch). Deliberately scoped under `.watch-root` so it never touches the `fp-*` system the
+  main Innvil/Forge site still uses. `WatchLanding.tsx`, `WatchPricingSection.tsx`, `WatchCheckout.tsx`,
+  `WatchDashboard.tsx` all redesigned onto these tokens — a two-column hero with a live-status "operations
+  panel" (clearly labeled sample data), features grouped into Watch/Engage/Operate, rank-badge pricing cards,
+  and a `w-pill`/`w-pulse-dot` status-indicator language intended to carry forward into the authenticated
+  dashboard. Zero changes to checkout logic, auth flow, entitlement resolution, or backend behavior — purely
+  presentational, confirmed via the full unchanged 909-test pass.
+- **Real delivered brand assets wired in, replacing the placeholder tinted `InnvilBrandMark`.** A full logo
+  package (`symbol-primary/ondark/mono-black/mono-white`, `lockup-dark/light`, `app-tile`) now lives in
+  `public/watch/` — a monoline gateway/tower symbol with a gold lintel bar and teal beacon accent, on a
+  charcoal rounded-square tile. `WatchLanding.tsx`'s nav and `WatchDashboard.tsx`'s header now render
+  `/watch/app-tile.svg` directly instead of the exploratory teal-tinted anvil mark. `app/page.tsx`'s
+  `generateMetadata()` also sets a Watch-specific favicon (`icons: { icon: "/watch/app-tile.svg" }`) on the
+  Watch host branch only — the main site's favicon is untouched. **Deliberately did not load the delivered
+  lockups' Poppins font** — the "Innvil Watch"/"by Innvil" text stays on the project's existing Inter-based
+  `w-display` styling already built this pass, avoiding a second font fetch and keeping typography consistent
+  with the rest of the Watch UI; the lockup SVGs themselves are still in `public/watch/` if a literal Poppins
+  lockup is wanted later.
+- 909 tests pass (unchanged — no logic touched), `tsc --noEmit` clean, production build clean. Verified live via
+  a local `Host: watch.localhost` request (`.env.local` has a dev-only `NEXT_PUBLIC_PANEL_ROOT_DOMAIN=localhost`
+  override so `http://watch.localhost:3000` resolves to the Watch branch without needing real DNS — gitignored,
+  never affects production): correct favicon link, correct title, real logo asset referenced in both the nav
+  and the page head.
+
 ### 2026-08-17 — Innvil Watch standalone customer-facing domain + Binance Pay direct checkout + live pricing update (v1.23.0)
 - **`watch.innvil.cloud` now renders a real, distinct Innvil Watch product experience** — previously it silently
   fell through to the generic SMM-panel/Forge landing (root `app/page.tsx` had no host branching at all; the
