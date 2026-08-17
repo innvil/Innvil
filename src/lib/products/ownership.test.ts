@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hasProductAccess, createStandaloneProject, projectBelongsToAccount } from "./ownership";
+import { hasProductAccess, createStandaloneProject, projectBelongsToAccount, activateWatchEntitlement } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 
 /**
@@ -40,6 +40,15 @@ function fakeAdmin(seed: { panels?: Row[]; products?: Row[]; product_entitlement
         },
         then(resolve: (v: { data: Row[]; error: null }) => void) {
           resolve({ data: rowsMatching(), error: null });
+        },
+        upsert(row: Row, opts: { onConflict: string }) {
+          const keys = opts.onConflict.split(",");
+          const rows = store[table] ?? [];
+          const existingIdx = rows.findIndex((r) => keys.every((k) => r[k] === row[k]));
+          if (existingIdx >= 0) rows[existingIdx] = { ...rows[existingIdx], ...row };
+          else rows.push({ id: `gen-${table}-${rows.length + 1}`, ...row });
+          store[table] = rows;
+          return Promise.resolve({ data: null, error: null });
         },
       };
       return builder;
@@ -135,4 +144,36 @@ test("createStandaloneProject rejects an empty name", async () => {
 test("REQUIRED: projectBelongsToAccount rejects a cross-tenant match", () => {
   assert.equal(projectBelongsToAccount({ accountId: "acct-1" }, "acct-1"), true);
   assert.equal(projectBelongsToAccount({ accountId: "acct-1" }, "acct-2"), false);
+});
+
+/* -------------------------------------------------------- direct payment ---- */
+
+test("REQUIRED: activateWatchEntitlement creates an active entitlement for the account", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.status, "active");
+  assert.equal(row?.product_id, "product-watch");
+  assert.match(String(row?.subscription_ref), /^standard:deposit-1$/);
+});
+
+test("REQUIRED: activateWatchEntitlement is idempotent -- calling it twice (duplicate webhook) does not create two entitlement rows", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  const rows = admin.__store.product_entitlements.filter((r: Row) => r.account_id === "acct-1");
+  assert.equal(rows.length, 1);
+});
+
+test("activateWatchEntitlement never writes anything if the Watch product row is missing (never fabricates one)", async () => {
+  const admin = fakeAdmin({ products: [] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  assert.equal(admin.__store.product_entitlements.length, 0);
+});
+
+test("a subsequent activation for the SAME account+product now grants hasProductAccess", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), false);
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), true);
 });

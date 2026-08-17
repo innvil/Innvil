@@ -47,6 +47,26 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
   return data?.id ?? null;
 }
 
+/**
+ * Activates (or extends) a direct Watch subscription for an account —
+ * called ONLY from the authoritative, server-verified payment webhook path
+ * (`src/lib/payments/platform.ts`), never from a client-side "payment
+ * succeeded" redirect. Idempotent by construction: the caller
+ * (`handlePlatformWebhook`) already claims the deposit via a single
+ * `status='pending' -> 'completed'` conditional UPDATE before this runs, so
+ * a duplicate/retried webhook can never call this twice for the same
+ * payment. Upserts on `(account_id, product_id)` — a renewal simply
+ * updates the existing row rather than creating a duplicate entitlement.
+ */
+export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string): Promise<void> {
+  const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
+  if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
+  await admin.from("product_entitlements").upsert(
+    { account_id: accountId, product_id: productId, status: "active", subscription_ref: `${tier}:${subscriptionRef}`, activated_at: new Date().toISOString() },
+    { onConflict: "account_id,product_id" }
+  );
+}
+
 export interface StandaloneProjectResult {
   ok: boolean;
   projectId?: string;

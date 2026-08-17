@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { getAdapter } from "./adapters";
+import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 
 /* =========================================================
    PLATFORM PAYMENTS runtime (server-only).
@@ -60,7 +61,7 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
   const admin = createAdminClient();
   const { data: deposit } = await admin
     .from("platform_deposits")
-    .select("id, panel_id, gateway, credit_amount, status")
+    .select("id, panel_id, gateway, credit_amount, status, purpose, owner_id, plan")
     .eq("id", depositId)
     .maybeSingle();
   if (!deposit || deposit.gateway !== gateway) return NextResponse.json({ ok: true }, { status: 200 });
@@ -78,15 +79,23 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
   }
   if (!paid) return NextResponse.json({ ok: true }, { status: 200 });
 
-  // Claim the transition so only one webhook credits.
+  // Claim the transition so only one webhook credits/activates -- the SAME
+  // single conditional UPDATE covers BOTH purposes, so a duplicate/retried
+  // webhook can never double-credit a panel top-up OR double-activate a
+  // direct Watch entitlement.
   const { data: claimed } = await admin
     .from("platform_deposits")
     .update({ status: "completed" })
     .eq("id", deposit.id)
     .eq("status", "pending")
-    .select("id, panel_id, credit_amount")
+    .select("id, panel_id, credit_amount, purpose, owner_id, plan")
     .maybeSingle();
   if (!claimed) return NextResponse.json({ ok: true }, { status: 200 });
+
+  if (claimed.purpose === "watch_subscription") {
+    await activateWatchEntitlement(admin, claimed.owner_id as string, claimed.plan as string, claimed.id as string);
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
 
   const { data: newBalance, error } = await admin.rpc("credit_panel_innvil_balance", {
     p_panel: claimed.panel_id,

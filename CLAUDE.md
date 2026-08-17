@@ -127,6 +127,89 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Direct (Panel-less) Watch payment + Bronze/Silver/Gold/Platinum rename + anti-abuse identity (v1.22.0)
+- **Scope note, stated upfront:** two large phases were requested together this session — (1) extending nullable/
+  neutral ownership down to Communities/Watchers so a standalone Project can hold a live Watch deployment, and
+  (2) direct payment + plan rename + anti-abuse. **Only (2) was implemented this pass.** (1) was deliberately
+  deferred — `communities.panel_id`/`moderator_deployments.panel_id`/`virtual_moderators.panel_id` are all still
+  `NOT NULL` and the entire Telegram/community-runtime pipeline is still panel-scoped, unchanged. Rewiring the
+  live moderation runtime safely needs its own careful pass, not a rushed combination with a payment-webhook
+  change in the same session. This is documented here, not silently skipped.
+- **Direct Watch payment REUSES the existing owner→Innvil platform payment system** (`platform_payment_gateways`/
+  `platform_deposits`, migrations 0008/0016 — the same Cryptomus/NOWPayments infrastructure that already powers
+  panel-owner top-ups) rather than building a second payment system. `platform_deposits.owner_id` was ALREADY a
+  plain account id, never FK'd to panels — exactly the "account, not Panel" identity this needed; it had just
+  never been used for anything but panel top-ups until now.
+- **Migration `0067_watch_direct_payment.sql` (NEW, additive)** — `platform_deposits` gained `purpose`
+  (`panel_topup` default / `watch_subscription`, preserving every existing insert's behavior unchanged), `panel_id`
+  made nullable, `product_id`/`plan` columns, and a CHECK constraint enforcing the two purposes' required-field
+  shapes can never be confused (`panel_topup` requires a panel and no product/plan; `watch_subscription` requires
+  a product/plan and no panel). New `watch_telegram_links` (account_id ↔ verified Telegram numeric user id,
+  unique per pair — deliberately NOT unique on the Telegram id alone, since the same identity linking to
+  MULTIPLE accounts is the exact cross-account signal this exists to detect) and `watch_abuse_signals` (typed
+  `abuse_type`/`scope` enum, `ip_hash` never a raw IP).
+- **`src/lib/payments/platform.ts`'s `handlePlatformWebhook` now branches on `purpose`** — the SAME single
+  `status='pending'→'completed'` conditional UPDATE claims BOTH purposes, so a duplicate/retried webhook can
+  never double-credit a panel top-up OR double-activate a Watch entitlement; only the post-claim branch differs
+  (existing `credit_panel_innvil_balance` RPC, unchanged, vs. new `activateWatchEntitlement`). A client-side
+  "payment succeeded" redirect is never the activation signal — only this server-verified webhook path is.
+- **`src/lib/products/watch-checkout.ts` (NEW)** — `createDirectWatchCheckout()` mirrors the existing
+  `createPlatformDeposit` pattern exactly (same adapter/context/checkout-creation shape), but inserts
+  `panel_id: null, purpose: 'watch_subscription', product_id, plan`. **Provider status, checked before writing
+  any code (not assumed):** Cryptomus and NOWPayments both implement a real `createCheckout`/`verifyWebhook` —
+  genuinely usable here (`WATCH_DIRECT_PAYMENT_GATEWAYS`). **Binance Pay is NOT offered** — its adapter
+  (`adapters/binance.ts`) has `createCheckout` that THROWS by design and `verifyWebhook` that always returns
+  `paid:false`; it exists only so the owner's connect form can reuse the shared credential UI. Supporting Watch
+  via Binance Pay would need its own bespoke claim-by-transaction-id flow (like the existing panel-level Binance
+  Pay feature) — not built this pass, reported honestly rather than fabricated as working.
+- **`src/lib/products/ownership.ts` gained `activateWatchEntitlement(admin, accountId, tier, subscriptionRef)`**
+  — upserts `product_entitlements` on `(account_id, product_id)` (the exact table from the prior phase, now
+  used for the first time by something other than a test) — `subscription_ref` stores `"<tier>:<depositId>"`,
+  a pointer only, never a second source of billing truth. Never fabricates a Watch product row if the catalog
+  entry is missing.
+- **Watch plan rename — display-name layer only.** New `src/lib/products/watch-plans.ts`:
+  Basic→**Bronze**, Standard→**Silver**, Premium→**Gold**, Pro→**Platinum**, Enterprise unchanged. The stable
+  internal `ModeratorPlanTier` (`"basic"/"standard"/"premium"/"pro"`) and every price/entitlement constant in
+  `money.ts` are completely untouched — `watchPlanOptions()` reads prices straight from `moderatorPlanPrice()`,
+  never a duplicated hardcoded number. **Pricing mismatch found and reported, not silently applied:** the task
+  stated an intended Silver price of $129.99, but the live/authoritative price in `money.ts` is still $114.99 —
+  this matches CLAUDE.md's own pre-existing "Phase 4.S — future plan" note (that $129.99 was already documented
+  as an intended-but-not-yet-applied future price). Per explicit "do not accidentally change production billing
+  objects merely because naming changed" instruction, this pass does NOT apply that price bump — it's a
+  separate, explicit billing decision.
+- **Anti-abuse model (`src/lib/products/watch-abuse.ts`, NEW)** — layered per spec: canonical account id first;
+  verified Telegram NUMERIC user id (never username, which is mutable) as the primary cross-account anchor;
+  Telegram community id as resource scope only; IP hashed and treated as a secondary risk signal only, never a
+  primary/hard identity, never stored raw. `eligibleForOneTimeOffer()` checks BOTH the account level AND the
+  Telegram-identity level — a fresh account/community alone cannot bypass a trial/promo already consumed by the
+  same verified Telegram person on a different account (tested explicitly). `linkTelegramIdentity()` only
+  RECORDS an already-established link (e.g. from a real Telegram webhook's `from.id`) — it does not itself
+  perform verification, and the doc comment states plainly that callers must never pass a raw client-supplied
+  Telegram id into it. No scoring engine, no device fingerprinting, no automatic permanent bans — matching the
+  explicit "do not build a fraud platform" instruction.
+- **Superadmin-only Product Catalog management is untouched** — `activateWatchEntitlement`/checkout/abuse
+  functions are ordinary customer-resource-creation paths (same authorization layer as Panel service creation
+  always was), never confused with the separate, still-superadmin-only `actions/products.ts`.
+- New tests: `watch-plans.test.ts` (+6 — all four rename mappings, round-trip, live prices sourced from
+  `money.ts` not duplicated, ascending Bronze→Platinum order), `watch-abuse.test.ts` (+11 — link idempotency,
+  the exact cross-account-same-Telegram-identity detection scenario, one-time-offer eligibility at both the
+  account and Telegram-identity scope including the specific "new account, same Telegram person, still
+  ineligible" case, `hashIp` never returns the raw input and is deterministic-but-input-sensitive),
+  `ownership.test.ts` (+4 — `activateWatchEntitlement` creates an active entitlement, is idempotent under a
+  duplicate webhook, never fabricates a missing Watch product row, and a subsequent `hasProductAccess` call
+  reflects the new entitlement). 908 tests pass (up from 886), `tsc --noEmit` clean, production build clean.
+- **Run migration `0067`** before this governs anything live. **NOWPayments/Cryptomus must already be connected
+  at the platform level** (super admin → Platform payments) for `listAvailableDirectWatchGateways()` to offer
+  anything — this pass wires the checkout/webhook path, not a guarantee those credentials are already configured
+  in this environment.
+- **Deliberately not built this pass** (documented, not silently skipped): the Community/Watcher-level ownership
+  extension from the same session's other request (see scope note above); any standalone Watch checkout UI/page
+  (`watch.innvil.cloud` still shows the same landing as before — this pass is backend-only, matching the
+  explicit "backend must make it possible" allowance); Binance Pay support for direct Watch; subscription
+  renewal/expiry lifecycle handling (a `product_entitlements` row activates once per webhook and is never
+  automatically re-billed or expired — no fake recurring billing was built, since the underlying crypto
+  providers don't support real recurring debits); and any live Stripe/pricing changes.
+
 ### 2026-08-17 — Phase 4.T continued: neutral account ownership + generic Product entitlement (v1.21.1)
 - **Corrects the resource-ownership model so Watch is no longer architecturally underneath Panel/Forge**,
   per explicit spec. Investigated the exact coupling first (per explicit instruction): confirmed EVERY Virtual
