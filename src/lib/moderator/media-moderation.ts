@@ -144,7 +144,7 @@ export async function classifySampledFrames(
 export function decideMediaEnforcement(input: {
   result: MediaClassificationResult;
   priorWarningCount: number;
-}): ModerationEnforcement {
+}): Exclude<ModerationEnforcement, { kind: "DELETE_KICK" }> {
   if (!input.result.ok) return { kind: "ALLOW" };
 
   const { verdict, confidence } = input.result;

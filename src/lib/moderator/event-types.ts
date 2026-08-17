@@ -67,6 +67,10 @@ export type CommunityAction =
       origin: EventOrigin;
       interactionDepth: number;
       causationMessageId: string | null;
+      /** Set only for deterministic, pre-escaped template text (e.g. scam-
+       *  strike warnings using a Telegram-native tg://user mention) — every
+       *  other caller omits this and gets plain-text sendMessage, unchanged. */
+      parseMode?: "HTML";
     }
   /** bot-ack-social-behavior-spec.md — closes a bot-to-bot exchange by
    *  redirecting attention to the human community rather than continuing the
@@ -89,9 +93,14 @@ export type CommunityAction =
    *  bot needs delete rights in that community). */
   | { kind: "DELETE_MESSAGE"; targetDeploymentId: string; targetMessageId: string }
   /** Removes the violating user from the community. `mode: "BAN"` is
-   *  permanent (Telegram banChatMember); v1 only ever issues BAN — KICK
-   *  (temporary) is reserved for a future policy knob, not used yet. */
-  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN" };
+   *  permanent (Telegram banChatMember). `mode: "KICK"` is REMOVABLE, not
+   *  permanent -- implemented as banChatMember immediately followed by
+   *  unbanChatMember (Telegram's own documented kick idiom; there is no
+   *  separate "kick" API method), used for the second confirmed scam/
+   *  phishing offense within the active strike window. Further/rejoin
+   *  abuse escalates to the existing `mode: "BAN"` path, never a new
+   *  parallel punishment mechanism. */
+  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN" | "KICK" };
 
 /* --------------------------------------------------- sender classification ---- */
 // Pure decision given already-resolved facts (spec §2/§3) — the DB lookups

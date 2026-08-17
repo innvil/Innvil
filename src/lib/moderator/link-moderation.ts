@@ -115,9 +115,35 @@ export interface LinkWarningState {
   recentLinkHash: string | null;
   recentLinkAt: string | null;
   recentLinkCountInWindow: number;
+  /** Scam/phishing-specific strike count — structurally SEPARATE from
+   *  warningCount (which is unsolicited-promotion's own 3-strike counter).
+   *  A scam strike is a distinct, stronger signal and must never be
+   *  conflated with an ordinary promotion warning. */
+  scamStrikeCount: number;
+  /** Timestamp of the most recent scam strike — the basis for the 30-day
+   *  expiry window (effectiveScamStrikeCount below), not a permanent
+   *  lifetime counter. */
+  scamStrikeAt: string | null;
 }
 
-export const EMPTY_WARNING_STATE: LinkWarningState = { warningCount: 0, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0 };
+export const EMPTY_WARNING_STATE: LinkWarningState = {
+  warningCount: 0, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0,
+  scamStrikeCount: 0, scamStrikeAt: null,
+};
+
+/** Finite strike window, not a permanent lifetime punishment (spec: "no
+ *  further scam within 30 days -> strike expires/resets"). */
+export const SCAM_STRIKE_WINDOW_MS = 30 * 24 * 60 * 60_000;
+
+/** The scam strike count actually in effect RIGHT NOW — expired strikes
+ *  read as 0 (a scam offense outside the window is treated as a fresh
+ *  first offense, never accumulated). Pure/testable independent of the
+ *  stored state's age. */
+export function effectiveScamStrikeCount(storedCount: number, storedAt: string | null, now: Date): number {
+  if (!storedAt) return 0;
+  if (now.getTime() - new Date(storedAt).getTime() >= SCAM_STRIKE_WINDOW_MS) return 0;
+  return storedCount;
+}
 
 function withinFloodWindow(recentLinkAt: string | null, now: Date): boolean {
   if (!recentLinkAt) return false;
@@ -145,8 +171,13 @@ export function isFloodRepeat(observedState: LinkWarningState): boolean {
 
 export type ModerationEnforcement =
   | { kind: "ALLOW" }
-  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "explicit_content_borderline" }
-  | { kind: "DELETE_BAN"; reason: "explicit_content" | "phishing" | "flood" | "repeated_unsolicited_promotion" | "repeated_explicit_content" };
+  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "explicit_content_borderline" | "scam_or_phishing" }
+  /** Second confirmed high-confidence scam/phishing offense within the
+   *  active strike window — removes (kicks) the user, but is NOT a
+   *  permanent ban. Structurally distinct from DELETE_BAN so a caller can
+   *  never confuse "temporary removal, can rejoin" with "permanent". */
+  | { kind: "DELETE_KICK"; reason: "repeated_scam_or_phishing" }
+  | { kind: "DELETE_BAN"; reason: "explicit_content" | "flood" | "repeated_unsolicited_promotion" | "repeated_explicit_content" | "repeated_scam_or_phishing" };
 
 /** 3 confirmed unsolicited-promotion violations get a warning each; the
  *  NEXT one after that (the 4th) escalates to removal (spec §25/§57). */
@@ -163,9 +194,27 @@ export function decideLinkEnforcement(input: {
   isAdminOrTrusted: boolean;
   floodRepeat: boolean;
   priorWarningCount: number;
+  /** Already expiry-resolved via effectiveScamStrikeCount — this function
+   *  stays pure and never reasons about time itself. */
+  priorScamStrikeCount: number;
 }): ModerationEnforcement {
   if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_BAN", reason: "explicit_content" };
-  if (input.category === "PHISHING_OR_SCAM" && input.confidence === "high") return { kind: "DELETE_BAN", reason: "phishing" };
+
+  // Scam/phishing gets a GRADUATED response, never an instant permanent ban
+  // on a single offense — first confirmed high-confidence offense is
+  // DELETE+WARN, the second within the active strike window is DELETE+KICK
+  // (removable, not permanent), and only a third+ offense falls back to the
+  // existing stronger DELETE_BAN path. Never role-exempt (a safety
+  // question, same principle as EXPLICIT_CONTENT above) and never
+  // escalated by borderline/uncertain confidence (spec: "only sufficiently
+  // high-confidence scam/phishing/malicious-wallet-link detections should
+  // contribute to this stronger escalation behavior").
+  if (input.category === "PHISHING_OR_SCAM" && input.confidence === "high") {
+    const nextScamCount = input.priorScamStrikeCount + 1;
+    if (nextScamCount === 1) return { kind: "DELETE_WARN", warningNumber: nextScamCount, reason: "scam_or_phishing" };
+    if (nextScamCount === 2) return { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing" };
+    return { kind: "DELETE_BAN", reason: "repeated_scam_or_phishing" };
+  }
 
   if (
     input.category === "SAFE_RELEVANT_LINK" ||
@@ -199,4 +248,34 @@ export function decideLinkEnforcement(input: {
   const nextCount = input.priorWarningCount + 1;
   if (nextCount > PROMOTION_WARNING_LIMIT) return { kind: "DELETE_BAN", reason: "repeated_unsolicited_promotion" };
   return { kind: "DELETE_WARN", warningNumber: nextCount, reason: nextCount === 1 ? "unsolicited_promotion" : "repeated_unsolicited_promotion" };
+}
+
+/* ------------------------------------------------------- scam warning text ---- */
+// Deterministic/template-based ONLY -- a scam/phishing warning must never
+// depend on a model call (never Claude/DeepSeek), and must never reproduce
+// the malicious URL itself.
+
+function escapeTelegramHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** A stable Telegram-native mention via user id (`tg://user?id=...`),
+ *  never `@username` — usernames can change or be absent entirely, but a
+ *  numeric platform user id is permanent. Requires `parse_mode: "HTML"` on
+ *  the outgoing sendMessage call. */
+export function telegramMentionHtml(platformUserId: string, displayName: string | null): string {
+  const safeName = escapeTelegramHtml((displayName ?? "").trim() || "there");
+  return `<a href="tg://user?id=${platformUserId}">${safeName}</a>`;
+}
+
+/** First confirmed high-confidence scam/phishing offense -- warn only,
+ *  never ban. The malicious URL is deliberately never included. */
+export function scamFirstOffenseWarningHtml(mentionHtml: string): string {
+  return `${mentionHtml}, your message was removed because it contained a suspected scam/phishing link. Do not post scam, wallet-drainer, or fake reward links. Repeated violations may result in removal from this community.`;
+}
+
+/** Second confirmed high-confidence scam/phishing offense within the
+ *  active strike window -- accompanies a DELETE_KICK. */
+export function scamRepeatOffenseWarningHtml(mentionHtml: string): string {
+  return `${mentionHtml}, another scam/phishing link was detected. You have been removed from this community.`;
 }

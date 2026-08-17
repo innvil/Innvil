@@ -27,6 +27,7 @@ import {
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, PROMOTION_WARNING_LIMIT, type LinkWarningState,
+  effectiveScamStrikeCount, telegramMentionHtml, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
@@ -468,10 +469,12 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
   }
 
   if (action.kind === "SEND_TEXT" || action.kind === "COMMUNITY_HANDOFF") {
+    const parseMode = action.kind === "SEND_TEXT" ? action.parseMode : undefined;
     const res = await telegramApiCall<{ message_id: number }>(token, "sendMessage", {
       chat_id: chatId,
       text: action.text,
       reply_to_message_id: action.replyToMessageId ?? undefined,
+      ...(parseMode ? { parse_mode: parseMode } : {}),
     });
     return { sentMessageId: res.ok ? String(res.result.message_id) : null, ok: res.ok, error: res.ok ? undefined : res.error };
   }
@@ -482,7 +485,18 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
   }
 
   if (action.kind === "RESTRICT_USER") {
-    // BAN only in v1 (see event-types.ts's CommunityAction doc comment).
+    if (action.mode === "KICK") {
+      // Telegram has no dedicated "kick" method -- its own documented idiom
+      // is banChatMember immediately followed by unbanChatMember (removes
+      // the user, but does NOT leave them permanently banned -- they can
+      // rejoin via a fresh invite). `only_if_banned` makes the unban a
+      // no-op rather than an error if something upstream already banned
+      // this user by other means.
+      const banRes = await telegramApiCall(token, "banChatMember", { chat_id: chatId, user_id: action.targetPlatformUserId });
+      if (!banRes.ok) return { sentMessageId: null, ok: false, error: banRes.error };
+      const unbanRes = await telegramApiCall(token, "unbanChatMember", { chat_id: chatId, user_id: action.targetPlatformUserId, only_if_banned: true });
+      return { sentMessageId: null, ok: unbanRes.ok, error: unbanRes.ok ? undefined : unbanRes.error };
+    }
     const res = await telegramApiCall(token, "banChatMember", { chat_id: chatId, user_id: action.targetPlatformUserId });
     return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
   }
@@ -1064,7 +1078,7 @@ async function routeConversationTask(
 async function loadLinkWarningState(admin: SupabaseClient, communityId: string, platformUserId: string): Promise<LinkWarningState> {
   const { data } = await admin
     .from("moderator_link_warning_state")
-    .select("warning_count, recent_link_hash, recent_link_at, recent_link_count_in_window")
+    .select("warning_count, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at")
     .eq("community_id", communityId)
     .eq("platform_user_id", platformUserId)
     .maybeSingle();
@@ -1074,6 +1088,8 @@ async function loadLinkWarningState(admin: SupabaseClient, communityId: string, 
     recentLinkHash: data.recent_link_hash ?? null,
     recentLinkAt: data.recent_link_at ?? null,
     recentLinkCountInWindow: data.recent_link_count_in_window ?? 0,
+    scamStrikeCount: data.scam_strike_count ?? 0,
+    scamStrikeAt: data.scam_strike_at ?? null,
   };
 }
 
@@ -1094,6 +1110,8 @@ async function persistLinkWarningState(
       recent_link_hash: state.recentLinkHash,
       recent_link_at: state.recentLinkAt,
       recent_link_count_in_window: state.recentLinkCountInWindow,
+      scam_strike_count: state.scamStrikeCount,
+      scam_strike_at: state.scamStrikeAt,
       ...(violation ? { last_violation_at: violation.now.toISOString(), last_violation_kind: violation.kind } : {}),
     },
     { onConflict: "community_id,platform_user_id" }
@@ -1159,29 +1177,42 @@ async function runLinkModeration(
   const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
   const isAdminOrTrusted = token ? await isSenderAdminOrTrusted(token, chatId, senderPlatformId) : false;
 
+  const priorScamStrikeCount = effectiveScamStrikeCount(priorState.scamStrikeCount, priorState.scamStrikeAt, now);
+
   const enforcement = decideLinkEnforcement({
     category: classification.category,
     confidence: classification.confidence,
     isAdminOrTrusted,
     floodRepeat,
     priorWarningCount: priorState.warningCount,
+    priorScamStrikeCount,
   });
 
   await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", enforcement.kind, classification.category, {
     confidence: classification.confidence,
     floodRepeat,
     isAdminOrTrusted,
+    scamStrikeCount: priorScamStrikeCount,
   });
 
   if (enforcement.kind === "ALLOW") {
     // Still persist the flood-window observation (needed for the NEXT
-    // message's flood detection) -- but never touch warningCount on an ALLOW.
-    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, { ...observedState, warningCount: priorState.warningCount }, null);
+    // message's flood detection) -- but never touch warningCount/scam
+    // strike state on an ALLOW.
+    await persistLinkWarningState(
+      admin, panelId, community.id, senderPlatformId,
+      { ...observedState, warningCount: priorState.warningCount, scamStrikeCount: priorState.scamStrikeCount, scamStrikeAt: priorState.scamStrikeAt },
+      null
+    );
     return { handled: false, collabRoutable: COLLAB_ROUTABLE_CATEGORIES.has(classification.category) };
   }
 
-  // DELETE_WARN or DELETE_BAN from here -- the message is being removed, so
-  // nothing further should try to task-route or chat about its now-gone content.
+  const isScamEnforcement = enforcement.reason === "scam_or_phishing" || enforcement.reason === "repeated_scam_or_phishing";
+
+  // DELETE_WARN, DELETE_KICK, or DELETE_BAN from here -- the message is
+  // being removed FIRST (spec: "the original malicious link should
+  // disappear as quickly as possible"), so nothing further should try to
+  // task-route or chat about its now-gone content.
   if (token) {
     const deleteResult = await executeAction(admin, chatId, { kind: "DELETE_MESSAGE", targetDeploymentId: enforcer.deploymentId, targetMessageId: event.messageId });
     if (!deleteResult.ok) console.error("[telegram/community] link moderation DELETE_MESSAGE failed", deleteResult.error);
@@ -1192,15 +1223,70 @@ async function runLinkModeration(
       const banResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "BAN" });
       if (!banResult.ok) console.error("[telegram/community] link moderation RESTRICT_USER failed", banResult.error);
     }
-    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, observedState, { kind: enforcement.reason, now });
+    const nextState: LinkWarningState = isScamEnforcement
+      ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
+      : observedState;
+    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
     return { handled: true, collabRoutable: false };
   }
 
-  // DELETE_WARN
-  const nextState: LinkWarningState = { ...observedState, warningCount: enforcement.warningNumber };
+  if (enforcement.kind === "DELETE_KICK") {
+    // Second confirmed high-confidence scam/phishing offense within the
+    // active strike window -- REMOVES the user (kick), never a permanent
+    // ban on its own (see event-types.ts's RESTRICT_USER doc comment).
+    if (token) {
+      const kickResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "KICK" });
+      if (!kickResult.ok) console.error("[telegram/community] link moderation RESTRICT_USER (kick) failed", kickResult.error);
+    }
+    // Strike is recorded regardless of whether the kick itself succeeded --
+    // per spec "Kick failure: preserve the second strike" (a duplicate
+    // webhook delivery of the SAME message never reaches here a second
+    // time at all, since recordCommunityMessage's claim already made this
+    // whole function run at most once per real message).
+    const nextState: LinkWarningState = { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() };
+    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
+
+    const mention = telegramMentionHtml(senderPlatformId, event.sender.displayName);
+    const warningText = scamRepeatOffenseWarningHtml(mention);
+    if (token) {
+      const sendResult = await executeAction(admin, chatId, {
+        kind: "SEND_TEXT",
+        text: warningText,
+        targetDeploymentId: enforcer.deploymentId,
+        replyToMessageId: null,
+        origin: "HUMAN",
+        interactionDepth: 0,
+        causationMessageId: event.messageId,
+        parseMode: "HTML",
+      });
+      if (sendResult.sentMessageId) {
+        await admin.from("community_messages").insert({
+          panel_id: panelId,
+          community_id: community.id,
+          platform_message_id: sendResult.sentMessageId,
+          sender_type: "INNVIL_MODERATOR",
+          sender_platform_id: null,
+          sender_display_name: enforcer.moderatorName,
+          deployment_id: enforcer.deploymentId,
+          text: warningText,
+        });
+      }
+    }
+    return { handled: true, collabRoutable: false };
+  }
+
+  // DELETE_WARN -- either ordinary unsolicited-promotion escalation (AI-
+  // phrased, unchanged) or a FIRST confirmed scam/phishing offense
+  // (deterministic/template-based ONLY -- never a model call, never
+  // reproduces the malicious URL).
+  const nextState: LinkWarningState = isScamEnforcement
+    ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
+    : { ...observedState, warningCount: enforcement.warningNumber };
   await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
 
-  const warningText = await generateModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT);
+  const warningText = isScamEnforcement
+    ? scamFirstOffenseWarningHtml(telegramMentionHtml(senderPlatformId, event.sender.displayName))
+    : await generateModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT);
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -1210,6 +1296,7 @@ async function runLinkModeration(
       origin: "HUMAN",
       interactionDepth: 0,
       causationMessageId: event.messageId,
+      ...(isScamEnforcement ? { parseMode: "HTML" as const } : {}),
     });
     if (sendResult.sentMessageId) {
       await admin.from("community_messages").insert({

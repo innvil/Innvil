@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, PROMOTION_WARNING_LIMIT,
+  effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, telegramMentionHtml, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -115,6 +116,7 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
     isAdminOrTrusted: false,
     floodRepeat: false,
     priorWarningCount: 0,
+    priorScamStrikeCount: 0,
     ...over,
   });
 }
@@ -141,8 +143,42 @@ test("REQUIRED (§54.5): high-confidence explicit/pornographic link -> immediate
   assert.deepEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "high" }), { kind: "DELETE_BAN", reason: "explicit_content" });
 });
 
-test("high-confidence phishing/scam link -> immediate DELETE_BAN", () => {
-  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high" }), { kind: "DELETE_BAN", reason: "phishing" });
+test("REQUIRED (scenario 1): first confirmed high-confidence scam/phishing offense -> DELETE_WARN, never an instant ban", () => {
+  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high" }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" });
+});
+
+test("REQUIRED (scenario 2): second confirmed high-confidence scam offense within the strike window -> DELETE_KICK", () => {
+  assert.deepEqual(
+    decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount: 1 }),
+    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing" }
+  );
+});
+
+test("a third confirmed high-confidence scam offense falls back to the existing stronger DELETE_BAN path, not a new punishment engine", () => {
+  assert.deepEqual(
+    decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount: 2 }),
+    { kind: "DELETE_BAN", reason: "repeated_scam_or_phishing" }
+  );
+});
+
+test("REQUIRED: scam strike escalation is never role-exempt -- an admin/trusted sender still gets the graduated response", () => {
+  assert.deepEqual(
+    decide({ category: "PHISHING_OR_SCAM", confidence: "high", isAdminOrTrusted: true }),
+    { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" }
+  );
+  assert.deepEqual(
+    decide({ category: "PHISHING_OR_SCAM", confidence: "high", isAdminOrTrusted: true, priorScamStrikeCount: 1 }),
+    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing" }
+  );
+});
+
+test("REQUIRED (scenario 9): borderline/uncertain (medium or low confidence) scam classification never triggers strike escalation", () => {
+  assert.notEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "medium", priorScamStrikeCount: 1 }).kind, "DELETE_KICK");
+  assert.notEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "low", priorScamStrikeCount: 1 }).kind, "DELETE_KICK");
+});
+
+test("REQUIRED (scenario 13): ordinary UNSOLICITED_PROMOTION escalation is completely unaffected by the new scam strike counter", () => {
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", priorWarningCount: 0, priorScamStrikeCount: 5 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion" });
 });
 
 test("LOW-confidence explicit/phishing does NOT auto-ban -- confidence gates severe enforcement too", () => {
@@ -193,4 +229,82 @@ test("an APPROVED_PARTNER_LINK is always ALLOW", () => {
 
 test("a PARTNERSHIP_REQUEST is ALLOW, same as COLLABORATION_REQUEST/AMA_REQUEST", () => {
   assert.deepEqual(decide({ category: "PARTNERSHIP_REQUEST" }), { kind: "ALLOW" });
+});
+
+/* ------------------------------------------------------- scam strike expiry ---- */
+
+test("REQUIRED (scenario 3): a strike well outside the 30-day window reads as 0 -- a later scam offense behaves as first offense again", () => {
+  const strikeAt = "2026-01-01T00:00:00Z";
+  const now = new Date(new Date(strikeAt).getTime() + SCAM_STRIKE_WINDOW_MS + 1);
+  assert.equal(effectiveScamStrikeCount(1, strikeAt, now), 0);
+});
+
+test("a strike still within the 30-day window is fully in effect", () => {
+  const strikeAt = "2026-01-01T00:00:00Z";
+  const now = new Date(new Date(strikeAt).getTime() + SCAM_STRIKE_WINDOW_MS - 1);
+  assert.equal(effectiveScamStrikeCount(1, strikeAt, now), 1);
+});
+
+test("no prior strike at all (never violated) -> 0, regardless of stored count", () => {
+  assert.equal(effectiveScamStrikeCount(1, null, new Date()), 0);
+});
+
+test("exactly at the window boundary is treated as expired (strict less-than, same convention as the flood window)", () => {
+  const strikeAt = "2026-01-01T00:00:00Z";
+  const now = new Date(new Date(strikeAt).getTime() + SCAM_STRIKE_WINDOW_MS);
+  assert.equal(effectiveScamStrikeCount(1, strikeAt, now), 0);
+});
+
+test("SCAM_STRIKE_WINDOW_MS is 30 days", () => {
+  assert.equal(SCAM_STRIKE_WINDOW_MS, 30 * 24 * 60 * 60_000);
+});
+
+test("REQUIRED (scenario 3, end-to-end via decide()): an expired strike means the next scam offense is treated as a fresh first offense (DELETE_WARN, not DELETE_KICK)", () => {
+  const strikeAt = "2026-01-01T00:00:00Z";
+  const now = new Date(new Date(strikeAt).getTime() + SCAM_STRIKE_WINDOW_MS + 1);
+  const priorScamStrikeCount = effectiveScamStrikeCount(1, strikeAt, now);
+  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" });
+});
+
+/* --------------------------------------------------- scam warning templates ---- */
+
+test("REQUIRED: telegramMentionHtml uses a stable tg://user id-based mention, never @username", () => {
+  const mention = telegramMentionHtml("123456789", "Alice");
+  assert.match(mention, /^<a href="tg:\/\/user\?id=123456789">Alice<\/a>$/);
+  assert.ok(!mention.includes("@"));
+});
+
+test("telegramMentionHtml falls back to a generic label when the sender has no display name", () => {
+  const mention = telegramMentionHtml("123456789", null);
+  assert.match(mention, /^<a href="tg:\/\/user\?id=123456789">there<\/a>$/);
+});
+
+test("REQUIRED: telegramMentionHtml escapes HTML-significant characters in a user-controlled display name", () => {
+  const mention = telegramMentionHtml("1", '<script>alert("x")</script>');
+  assert.ok(!mention.includes("<script>"));
+  assert.match(mention, /&lt;script&gt;/);
+});
+
+test("REQUIRED (scenario 7): the first-offense scam warning never includes a URL", () => {
+  const text = scamFirstOffenseWarningHtml(telegramMentionHtml("1", "Alice"));
+  assert.ok(!/https?:\/\//i.test(text));
+  assert.match(text, /suspected scam\/phishing link/i);
+  assert.match(text, /removal from this community/i);
+});
+
+test("the first-offense warning mentions the sender via the mention HTML, verbatim", () => {
+  const mention = telegramMentionHtml("42", "Bob");
+  const text = scamFirstOffenseWarningHtml(mention);
+  assert.ok(text.startsWith(mention));
+});
+
+test("REQUIRED (scenario 7): the second-offense (kick) warning never includes a URL either", () => {
+  const text = scamRepeatOffenseWarningHtml(telegramMentionHtml("1", "Alice"));
+  assert.ok(!/https?:\/\//i.test(text));
+  assert.match(text, /removed from this community/i);
+});
+
+test("first-offense and repeat-offense warning texts are distinct (never the same message for both tiers)", () => {
+  const mention = telegramMentionHtml("1", "Alice");
+  assert.notEqual(scamFirstOffenseWarningHtml(mention), scamRepeatOffenseWarningHtml(mention));
 });

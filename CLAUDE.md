@@ -127,6 +127,74 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Graduated scam/phishing enforcement: warn, then kick, then fall back to ban (v1.19.3)
+- **Was: high-confidence `PHISHING_OR_SCAM` → immediate `DELETE_BAN` on the first offense.** Now a graduated
+  response, per explicit product decision: first confirmed offense → `DELETE_WARN` (deterministic warning,
+  never banned); second confirmed offense within a 30-day strike window → `DELETE_KICK` (removable, NOT
+  permanent — the user can rejoin); third+ offense falls back to the EXISTING `DELETE_BAN` path (reused, not a
+  new punishment engine). Confidence gate unchanged (`confidence === "high"` only — borderline/uncertain scam
+  classifications never contribute to strike escalation) and still never role-exempt (a safety question, same
+  principle as `EXPLICIT_CONTENT`).
+- **Root cause investigated first, per instruction, before changing anything**: traced `runLinkModeration`
+  end-to-end and confirmed `DELETE_MESSAGE` already executes BEFORE any ban/warn action for every non-ALLOW
+  enforcement kind — the message was never structurally "left visible while merely commenting underneath it."
+  The most likely explanation for the originally-reported symptom is a classification-confidence gap for that
+  specific test message (falls through to ordinary chatter commentary instead of reaching the `confidence ===
+  "high"` enforcement branch) or a silent `DELETE_MESSAGE` API failure (e.g. missing delete rights) — this pass
+  did not touch `link-classify.ts`'s classifier, per explicit "do not rewrite the detector unnecessarily, this
+  task is primarily about enforcement/escalation" instruction.
+- **New scam-specific strike counter, reusing the EXISTING `moderator_link_warning_state` row** (already scoped
+  by `community_id` + `platform_user_id` — exactly the required strike scope) rather than a new table:
+  `scam_strike_count`/`scam_strike_at` (migration `0063`), structurally SEPARATE from `warning_count`
+  (unsolicited-promotion's own, unrelated 3-strike counter) — a scam strike is never conflated with an ordinary
+  promotion warning. `effectiveScamStrikeCount(storedCount, storedAt, now)` (pure, `link-moderation.ts`) resolves
+  the 30-day expiry (`SCAM_STRIKE_WINDOW_MS`) — an offense outside the window reads as a fresh first offense,
+  never a permanent lifetime punishment.
+- **`ModerationEnforcement` gained `DELETE_KICK`** (new `reason: "repeated_scam_or_phishing"`, also added to
+  `DELETE_WARN`'s reasons as `"scam_or_phishing"` for the first offense) — extends the SAME shared enforcement
+  type link AND media moderation already both use, rather than a parallel type. `media-moderation.ts`'s
+  `decideMediaEnforcement` return type narrowed to `Exclude<ModerationEnforcement, {kind:"DELETE_KICK"}>` since
+  media moderation never produces it (kick is link/scam-specific).
+- **`RESTRICT_USER` gained `mode: "KICK"`** (`event-types.ts`/`community-runtime.ts`'s `executeAction`) —
+  Telegram has no dedicated kick API method; implemented as its own documented idiom, `banChatMember` immediately
+  followed by `unbanChatMember` (`only_if_banned: true`) — removes the user WITHOUT leaving them permanently
+  banned, so they can rejoin via a fresh invite. `mode: "BAN"` (existing, permanent) is unchanged and still used
+  for the third+ offense fallback.
+- **Deterministic, template-based warning text ONLY for scam enforcement — never a model call.** New
+  `telegramMentionHtml(platformUserId, displayName)` (pure) builds a stable `tg://user?id=...` mention — never
+  `@username` (can change or be absent) — HTML-escaping the display name. `scamFirstOffenseWarningHtml`/
+  `scamRepeatOffenseWarningHtml` (pure, `link-moderation.ts`) are the ONLY two possible warning texts for scam
+  enforcement — neither ever includes the malicious URL. `SEND_TEXT` gained an optional `parseMode?: "HTML"`
+  field (every other existing caller omits it, unchanged plain-text behavior) so this is the only send path that
+  needs Telegram's HTML parse mode.
+- **Delete-before-warn ordering preserved** (already existing behavior, unchanged): `DELETE_MESSAGE` always
+  executes first for every non-ALLOW enforcement kind, before any warn/kick/ban action.
+- **Idempotency/single-enforcer/bot-loop protection — all reused from EXISTING, already-tested infrastructure,
+  no new mechanism needed**: `recordCommunityMessage`'s claim-race (a duplicate webhook delivery of the same
+  message never reaches `runLinkModeration` a second time at all) and the single `deployments[0]` enforcer
+  pattern (already used by both link and media moderation) together guarantee one delete + one strike + one
+  warning + at most one kick per real scam message, regardless of how many moderators are deployed. The scam
+  warning message is recorded into `community_messages` with `sender_type: "INNVIL_MODERATOR"`, the same
+  mechanism that already prevents any moderator's own message from being re-processed as new human input —
+  reused verbatim, not re-implemented.
+- **Failure behavior**: delete/kick/ban failures `console.error` and are never treated as success (unchanged
+  pattern); a failed kick still preserves the recorded strike (spec: "Kick failure: preserve the second strike")
+  since the strike is persisted independent of whether the Telegram action itself succeeded — matches the
+  existing `DELETE_BAN` failure-handling shape exactly.
+- New tests (`link-moderation.test.ts`, +23): every graduated tier (warn/kick/fallback-ban) incl. the
+  admin-non-exemption case, borderline/uncertain confidence never escalating, ordinary `UNSOLICITED_PROMOTION`
+  escalation completely unaffected by the new counter, the full 30-day expiry boundary (incl. strict-less-than,
+  no-prior-strike, and an end-to-end post-expiry-behaves-as-first-offense case), mention formatting (stable
+  `tg://user` id-based, HTML-escaped, generic fallback for no display name), and both warning templates
+  (never include a URL, always start with the mention, distinct from each other). 820 tests pass (up from 802),
+  `tsc --noEmit` clean, production build clean. **Full DB/Telegram-mocked orchestration
+  (`runLinkModeration`/`executeAction`'s new KICK branch) verified via typecheck + build + code review only** —
+  consistent with how this codebase already treats every comparably complex existing orchestrator (no
+  `executeAction` tests exist for ANY action kind, not just the new one).
+- **Run migration `0063`** before this governs any live community — until then, `scam_strike_count`/
+  `scam_strike_at` don't exist and `loadLinkWarningState`'s select will fail (falls back to `EMPTY_WARNING_STATE`
+  the same way every other missing-row case already does — never a fabricated escalation).
+
 ### 2026-08-17 — Critical fix: every existing community's Telegram messages were silently dropped (v1.19.2)
 - **Live incident, found via direct production diagnosis** (a temporary read-only debug route + Telegram's own
   `getWebhookInfo` + direct SQL against production, all removed/reverted after use — see git history for the
