@@ -127,6 +127,22 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Video moderation unblocked: ffmpeg-static confirmed working live on Vercel (v1.19.6)
+- **Follow-up to v1.19.5.** That fix (npm `allowScripts` approval) got the ffmpeg binary onto disk during
+  Vercel's build (`path exists: true` at build time, confirmed via a guaranteed-visible build-log check), but
+  the deployed FUNCTION still couldn't find it at runtime (`ENOENT`) — a second, separate bug: `ffmpeg-static`
+  resolves its binary path dynamically (based on `process.platform`/`arch`), so static require()/import
+  analysis can never determine which file is needed, and Turbopack's own bundling/tracing was silently
+  excluding it from the deployed bundle even though `outputFileTracingIncludes` was configured.
+- **Fix**: `serverExternalPackages: ['ffmpeg-static']` in `next.config.js` — the officially documented Next.js
+  mechanism for native-binary packages a bundler shouldn't try to process; keeps it a genuine `node_modules`
+  require at runtime instead. **Verified live**: the real `ffmpeg -version` output (`ffmpeg version 7.0.2-static`)
+  now runs successfully on Vercel's Linux runtime. `outputFileTracingIncludes` (added mid-investigation, not the
+  actual fix) was removed — redundant once `serverExternalPackages` alone resolved it.
+- 827 tests pass (unchanged, no logic changed), `tsc --noEmit` clean, production build clean.
+- **`MEDIA_MODERATION_VIDEO_ENABLED` is still OFF** — the technical blocker (ffmpeg on Vercel) is now fully
+  cleared and verified; flipping the flag remains a separate, explicit decision.
+
 ### 2026-08-17 — Root-cause fix: video moderation's ffmpeg binary was silently blocked on every deploy (v1.19.5)
 - **Live investigation while verifying #2 of the post-Sightengine queue** ("verify ffmpeg-static on Vercel's
   Linux runtime before enabling video moderation"). A temporary diagnostic route confirmed
