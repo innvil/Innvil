@@ -45,7 +45,14 @@ export async function classifyManagerMessageIntent(messageText: string): Promise
       messages: [{ role: "user", content: messageText }],
       model,
       effort,
-      maxTokens: 32,
+      // 32 was too tight -- live incident: the model's real "INTENT: ...\n
+      // CONFIDENCE: ..." answer was getting cut off mid-response before the
+      // CONFIDENCE line ever completed, so the regex below never matched and
+      // this silently fell back to UNRELATED/0 confidence for every message,
+      // including unambiguous ones ("How much does Innvil cost?"). Matches
+      // link-classify.ts's own budget for the same two-line CATEGORY/
+      // CONFIDENCE response shape.
+      maxTokens: 64,
       automation: "BOT_MANAGER_INTENT_CLASSIFY",
     });
     const intentMatch = raw.match(/INTENT:\s*(INNVIL_PRODUCT_QUESTION|UNRELATED)/i);
