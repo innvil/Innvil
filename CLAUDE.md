@@ -127,6 +127,77 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-17 — Phase 4.T continued: neutral account ownership + generic Product entitlement (v1.21.1)
+- **Corrects the resource-ownership model so Watch is no longer architecturally underneath Panel/Forge**,
+  per explicit spec. Investigated the exact coupling first (per explicit instruction): confirmed EVERY Virtual
+  Moderator table (`virtual_moderators`/`telegram_bot_integrations`/`communities`/`moderator_deployments`/
+  `moderator_spam_hits`/`moderator_activity_log`) has `panel_id NOT NULL` — `panel_id` was acting as BOTH
+  "which Panel" AND "which tenant owns this" at once, with no account-level ownership path that skips a panel.
+  `projects` was the shallowest, correct insertion point for the fix — it sits directly under "Watch → Projects"
+  in the target architecture diagram, and unlike Communities/Watchers, changing its ownership model doesn't
+  require touching the deep Telegram/moderation runtime.
+- **Neutral owner = the EXISTING account concept (`profiles.id`), not a new organizations/workspaces table.**
+  `panels.owner_id` already references `profiles(id)` — the "Innvil Account" the architecture asked for already
+  existed, just never referenced directly from `projects`. Per the explicit "do not create a new system just
+  because the names sound cleaner" instruction, no new tenant entity was invented.
+- **Migration `0066_neutral_ownership.sql` (NEW), additive + backfilled, no destructive drops**:
+  `projects.account_id` (uuid → `profiles(id)`) backfilled deterministically from `panels.owner_id` via the
+  existing `panels.panel_id` FK (every legacy project resolves unambiguously — `panels.owner_id` is NOT NULL,
+  so nothing was guessed or defaulted), then set `NOT NULL` once backfilled. `projects.panel_id` becomes
+  **nullable** (was NOT NULL since migration 0057) — the one schema change that actually unlocks a Panel-less
+  project. New trigger `validate_project_owner_consistency()` rejects any write where a project has BOTH
+  `account_id` and `panel_id` set but they disagree (`panels.owner_id <> projects.account_id`) — prevents the
+  exact "project.account_id = Account A, project.panel_id = Panel owned by Account B" ambiguity called out in
+  the spec, enforced at the DB level, not just in application code.
+- **New generic `product_entitlements` table** (`account_id`, `product_id` → `products`, `status`
+  active/trial/inactive/cancelled, optional `subscription_ref` pointer, unique on `(account_id, product_id)`)
+  — answers "does this account have access to this official Product?" identically for Forge/Watch/Herald/future
+  products. Deliberately NOT a second billing system — `subscription_ref` only POINTS at product-specific
+  billing/plan state (which stays entirely in that product's own existing tables); this table never duplicates
+  it. Customer-specific entitlement state was deliberately kept OFF the `products` catalog row itself, per the
+  explicit "the products row describes the official product, customer ownership must be represented separately"
+  instruction.
+- **`src/lib/products/ownership.ts` (NEW)** — `hasProductAccess(admin, accountId, productSlug)`: checks
+  `product_entitlements` first (the new, generic, account-level source of truth); for Watch specifically, falls
+  back to the EXISTING Panel-based check (`hasVirtualModerator` on any panel this account owns) so an
+  already-working Panel-distributed Watch subscriber keeps resolving as entitled through this same resolver —
+  this is the "existing Panel-owner Watch distribution channel," not a new "owning a Panel grants Watch" rule
+  (a Panel with no active moderator addon grants nothing, proven by test). **`createStandaloneProject(admin,
+  accountId, name)`** — creates a Project with `account_id` set and `panel_id = null`, gated on an active Watch
+  entitlement first: the concrete, working proof that a Watch-entitled account can create a Project with **no
+  commercial SMM Panel at all**. `projectBelongsToAccount()` — pure cross-tenant guard.
+- **Honest scope boundary, stated plainly (not hidden): this pass stops at Project.** Communities and
+  Watchers/`moderator_deployments` still require `panel_id NOT NULL` today — wiring THOSE through account-only
+  ownership (so a Watch-only Project can actually hold a Community/Watcher with zero Panel) is the documented
+  next step, not built this pass. Rewiring the entire Virtual Moderator runtime (`community-runtime.ts`,
+  `actions/moderator.ts`, `actions/customer-moderator.ts`, autopost, knowledge retrieval — all still
+  panel-scoped throughout) in one pass was explicitly out of scope ("do not attempt to convert every current
+  feature to the new architecture at once").
+- **Two existing call sites updated for compatibility** (the only application-code changes, both required —
+  `projects.account_id` is now `NOT NULL`, so any existing insert omitting it would break): `community-runtime.ts`'s
+  `finalizeCommunityConnection()` (the shared core behind BOTH the owner-authed `connectCommunity` action and
+  the Phase 4.O `/start`-driven auto-connect) now inserts `account_id: ownerId` alongside the existing
+  `panel_id`; `actions/knowledge.ts`'s owner-facing `createProject()` now inserts `account_id: ctx.user.id`
+  (the already-verified panel owner). Both are additive field additions to an existing insert — no behavior
+  change for existing Panel-backed project creation, confirmed by the full existing test suite passing
+  unchanged.
+- **`watch.innvil.cloud` is unaffected by this pass** — hostname was never treated as an ownership/entitlement
+  signal before this change and still isn't; `hasProductAccess`/`createStandaloneProject` take an explicit,
+  server-resolved `accountId`, never anything derived from the request host.
+- New tests: `src/lib/products/ownership.test.ts` (+10 — a direct `product_entitlements` grant works with zero
+  Panel/Forge involvement, trial-status also grants access, cancelled does not, a Panel with NO moderator addon
+  grants nothing (Forge ownership ≠ Watch), an existing Panel-distributed Watch subscriber still resolves as
+  entitled (legacy compatibility), entitlement never leaks across accounts, a standalone Panel-less Project is
+  actually created end-to-end with `panel_id: null`, a non-entitled account is rejected and writes nothing,
+  empty-name rejection, and the cross-tenant `projectBelongsToAccount` guard). 886 tests pass (up from 876),
+  `tsc --noEmit` clean, production build clean. **Run migration `0066`** before this governs anything live —
+  until then `projects.account_id` doesn't exist and every insert into `projects` will fail.
+- **Deliberately not built this pass** (documented, not silently skipped, per the spec's own phasing): Community/
+  Watcher-level account ownership (still Panel-scoped), any Watch-only customer-facing onboarding/checkout UI
+  ("the backend ownership model must make it possible," not that every UI already exists), a broad rewrite of
+  the existing panel-scoped Virtual Moderator action layer, Forge/Herald adoption of this same model, and any
+  live billing/Stripe changes.
+
 ### 2026-08-17 — Phase 4.T: Innvil multi-product architecture — Phase 1+2, Watch-first (v1.21.0)
 - **New top-level architecture, per explicit spec**: Innvil (parent ecosystem) → official products (Innvil Forge =
   the white-label SMM panel product, Innvil Watch = community moderation, Innvil Herald = future campaigns/

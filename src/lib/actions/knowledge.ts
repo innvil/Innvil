@@ -90,7 +90,7 @@ export async function createProject(panelId: string, name: string): Promise<Resu
   if (!ctx) return { ok: false, error: "Not authorized." };
   const trimmed = name.trim().slice(0, 200);
   if (!trimmed) return { ok: false, error: "Project name can't be empty." };
-  const { data, error } = await ctx.admin.from("projects").insert({ panel_id: panelId, name: trimmed }).select("id, name").single();
+  const { data, error } = await ctx.admin.from("projects").insert({ panel_id: panelId, account_id: ctx.user.id, name: trimmed }).select("id, name").single();
   if (error || !data) return { ok: false, error: "Couldn't create the project." };
   return { ok: true, data: { id: data.id, name: data.name } };
 }

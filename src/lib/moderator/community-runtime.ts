@@ -336,7 +336,10 @@ export async function finalizeCommunityConnection(
   if (!projectId) {
     const { data: project, error: projectError } = await admin
       .from("projects")
-      .insert({ panel_id: panelId, name: membership.chat.title ?? membership.chat.username ?? "Project" })
+      // account_id = the panel owner (projects.account_id is the canonical
+      // neutral owner, migration 0066); panel_id is kept as the Forge
+      // distribution-channel reference, not the owner.
+      .insert({ panel_id: panelId, account_id: ownerId, name: membership.chat.title ?? membership.chat.username ?? "Project" })
       .select("id")
       .single();
     if (projectError || !project) return { ok: false, error: projectError?.message ?? "Could not create a project for this community." };
