@@ -164,12 +164,13 @@ const ORDER_STATUS_LABEL: Record<string, string> = {
   failed: "Failed", refunded: "Refunded", duplicate: "Duplicate",
 };
 const PROVIDER_AUTH_FAILURE_RE = /provider authentication failed|invalid api|api key|unauthorized|authori[sz]ed|access denied|permission/i;
+const PROVIDER_BALANCE_FAILURE_RE = /provider balance|insufficient.*balance|balance.*insufficient|low balance|not enough balance/i;
 
 function canResendOrder(o: AdminOrderVM): boolean {
   if (o.providerOrderId) return false;
   if (o.status === "pending" || o.status === "duplicate") return true;
   if (o.status !== "failed" && o.status !== "refunded") return false;
-  return PROVIDER_AUTH_FAILURE_RE.test(o.failReason ?? "");
+  return PROVIDER_AUTH_FAILURE_RE.test(o.failReason ?? "") || PROVIDER_BALANCE_FAILURE_RE.test(o.failReason ?? "");
 }
 
 function OrderStatusPill({ status }: { status: OrderStatus }) {
@@ -2248,7 +2249,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
             ? "Mark Selected Orders Completed"
             : "Cancel & Refund Selected Orders"}
         message={confirmAction.kind === "bulkResend"
-          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Eligible: pending/duplicate and failed/refunded orders caused by provider authentication failure.`
+          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Eligible: pending/duplicate and failed/refunded orders caused by provider authentication or provider balance shortage.`
           : confirmAction.kind === "bulkComplete"
             ? `Mark ${confirmAction.ids.length} selected order(s) as completed?`
             : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}

@@ -13,14 +13,15 @@
  *
  * Payment provider status (checked before writing this, not assumed):
  * Cryptomus and NOWPayments both implement a real `createCheckout` (hosted
- * invoice + redirect) and `verifyWebhook` — genuinely usable here. Binance
- * Pay's adapter (`adapters/binance.ts`) is deliberately transaction-id-based
- * (`createCheckout` THROWS by design, `verifyWebhook` always returns
- * `paid:false`) — it exists only so the owner's CONNECT form can reuse the
- * shared credential-storage UI, never for an actual checkout. Binance Pay is
- * therefore NOT offered here; it would need its own bespoke claim-by-
- * transaction-id flow (like the existing panel-level Binance Pay feature)
- * to support Watch, which is not built this pass.
+ * invoice + redirect) and `verifyWebhook` — genuinely usable here through
+ * this generic flow. Binance Pay's adapter (`adapters/binance.ts`) is
+ * deliberately transaction-id-based (`createCheckout` THROWS by design,
+ * `verifyWebhook` always returns `paid:false`) — it exists only so the
+ * owner's CONNECT form can reuse the shared credential-storage UI, and is
+ * therefore NOT part of THIS generic hosted-checkout flow. Binance Pay IS
+ * supported for direct Watch, through its own dedicated claim-by-
+ * transaction-id flow — see `watch-binance.ts` (`createWatchBinanceDeposit`/
+ * `claimWatchBinancePayment`, migration 0068).
  */
 
 import { getAuthedAdmin } from "@/src/lib/auth";
@@ -32,8 +33,9 @@ import { WATCH_PRODUCT_SLUG } from "./watch";
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
-/** Providers actually usable for a real Watch hosted checkout — Binance Pay
- *  is deliberately excluded (see file doc comment above). */
+/** Providers usable through THIS generic hosted-checkout flow — Binance Pay
+ *  is handled separately (see file doc comment above), not because it's
+ *  unsupported, but because its claim shape is structurally different. */
 export const WATCH_DIRECT_PAYMENT_GATEWAYS = ["cryptomus", "nowpayments"] as const;
 
 export async function createDirectWatchCheckout(
@@ -101,15 +103,21 @@ export async function createDirectWatchCheckout(
   }
 }
 
-/** Which providers can actually be offered right now — configured AND on
- *  the direct-checkout-capable allowlist above. Never claims a provider
- *  works without checking its stored credentials exist. */
+/** Which providers can actually be offered right now — configured AND
+ *  either on the direct-checkout-capable allowlist above OR Binance Pay
+ *  (its own dedicated claim-by-transaction-id flow, watch-binance.ts).
+ *  Never claims a provider works without checking its stored credentials
+ *  actually exist. */
 export async function listAvailableDirectWatchGateways(): Promise<string[]> {
   const admin = createAdminClient();
   const available: string[] = [];
   for (const gateway of WATCH_DIRECT_PAYMENT_GATEWAYS) {
     const ctx = await getPlatformGatewayContext(gateway);
     if (ctx && Object.keys(ctx.secrets).length > 0) available.push(gateway);
+  }
+  const binanceCtx = await getPlatformGatewayContext("binance_pay");
+  if (binanceCtx && binanceCtx.config.payId && binanceCtx.secrets.apiKey && binanceCtx.secrets.apiSecret) {
+    available.push("binance_pay");
   }
   return available;
 }

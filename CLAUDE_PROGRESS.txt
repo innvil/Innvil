@@ -3,6 +3,14 @@
 # (Renamed Ledgerline → Veyra → **Innvil** on 2026-07-09; older entries below keep
 #  the old names as a historical record.)
 
+## Session: Watch direct payment groundwork + provider-balance resend reachability (v1.22.1)
+
+### v1.22.1 — Allowed failed/refunded provider-balance orders to be resent back to the provider.
+- Orders resend eligibility now includes failed/refunded rows whose provider response indicates a balance shortage, not only auth failures. Updated [src/lib/actions/admin-orders.ts](src/lib/actions/admin-orders.ts) so `resendOrder`/`bulkResendOrders` accept provider-balance failures when `provider_error_category === "provider_low_balance"` or the error text matches a balance-shortage pattern.
+- Admin Orders UI now mirrors that logic in [src/components/panels/admin/AdminTabs.tsx](src/components/panels/admin/AdminTabs.tsx), so failed/refunded balance-shortage rows show the resend action and the bulk resend confirmation copy mentions provider balance shortage explicitly.
+- Also in the current worktree: Watch direct payment groundwork remains staged in [supabase/migrations/0067_watch_direct_payment.sql](supabase/migrations/0067_watch_direct_payment.sql) and related Watch payment files, including the new migration `0068_watch_binance_pay.sql`.
+- Validation after the slice: targeted file diagnostics clean for the touched resend files. No migration was created by the resend patch itself.
+
 ## Session: Binance Pay tier bonus restored on manual Order-ID credit (v1.18.3)
 
 ## Session: Deploy unblock hotfix — duplicate function removal (v1.18.4)

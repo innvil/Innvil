@@ -7,14 +7,12 @@
  * file has no bearing on entitlement resolution, it only maps an internal
  * tier to what a customer sees.
  *
- * PRICING NOTE (reported, not silently changed): the live prices below are
- * read directly from `money.ts` (the authoritative source) — currently
- * Basic/Bronze $49.99, Standard/Silver $114.99, Premium/Gold $209.99,
- * Pro/Platinum $359.99. CLAUDE.md's own "Phase 4.S — future plan" note
- * already documents an INTENDED (not yet applied) future price of $129.99
- * for Silver — this file deliberately does NOT apply that bump; changing a
- * live price is a separate, explicit billing decision, not a side effect of
- * a display-name rename.
+ * PRICING: prices are read directly from `money.ts` (the authoritative
+ * source), never duplicated here — Basic/Bronze $49.99, Standard/Silver
+ * $129.99, Premium/Gold $219.99, Pro/Platinum $379.99. This matches the
+ * previously-documented "Phase 4.S — future plan" pricing, applied as an
+ * explicit, separate billing decision (not a side effect of the display-
+ * name rename) — see the dated changelog entry for when this was approved.
  */
 
 import { moderatorPlanPrice, moderatorEnterpriseSlotPrice, MODERATOR_ENTERPRISE_MIN_SLOTS, type ModeratorPlanTier } from "@/src/lib/money";

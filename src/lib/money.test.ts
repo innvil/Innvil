@@ -19,17 +19,17 @@ import { CAPACITY, TRIAL_CAPACITY } from "./moderator/plan";
 
 test("REQUIRED: canonical AI Moderator prices match the approved pricing table", () => {
   assert.equal(MODERATOR_BASIC_PRICE, 49.99);
-  assert.equal(MODERATOR_STANDARD_PRICE, 114.99);
-  assert.equal(MODERATOR_PREMIUM_PRICE, 209.99);
-  assert.equal(MODERATOR_PRO_PRICE, 359.99);
+  assert.equal(MODERATOR_STANDARD_PRICE, 129.99);
+  assert.equal(MODERATOR_PREMIUM_PRICE, 219.99);
+  assert.equal(MODERATOR_PRO_PRICE, 379.99);
 });
 
 test("moderatorPlanPrice resolves each tier to its canonical price", () => {
   const cases: Array<[ModeratorPlanTier, number]> = [
     ["basic", 49.99],
-    ["standard", 114.99],
-    ["premium", 209.99],
-    ["pro", 359.99],
+    ["standard", 129.99],
+    ["premium", 219.99],
+    ["pro", 379.99],
   ];
   for (const [tier, price] of cases) assert.equal(moderatorPlanPrice(tier), price);
 });
@@ -56,12 +56,12 @@ test("REQUIRED: Enterprise's minimum slot count (21) is one $15 slot above the P
   assert.equal(moderatorEnterpriseSlotPrice(MODERATOR_ENTERPRISE_MIN_SLOTS), MODERATOR_PRO_PRICE + 15);
 });
 
-test("REQUIRED: Enterprise worked example -- 50 total slots = 359.99 + 30*15 = 809.99/mo", () => {
-  assert.equal(moderatorEnterpriseSlotPrice(50), 809.99);
+test("REQUIRED: Enterprise worked example -- 50 total slots = 379.99 + 30*15 = 829.99/mo", () => {
+  assert.equal(moderatorEnterpriseSlotPrice(50), 829.99);
 });
 
-test("REQUIRED: Enterprise worked example -- 75 total slots = 359.99 + 30*15 + 25*13 = 1134.99/mo", () => {
-  assert.equal(moderatorEnterpriseSlotPrice(75), 1134.99);
+test("REQUIRED: Enterprise worked example -- 75 total slots = 379.99 + 30*15 + 25*13 = 1154.99/mo", () => {
+  assert.equal(moderatorEnterpriseSlotPrice(75), 1154.99);
 });
 
 test("Enterprise band boundary: 51st slot switches from $15/slot to $13/slot", () => {

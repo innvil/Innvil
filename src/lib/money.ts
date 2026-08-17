@@ -40,9 +40,9 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
  *  ModeratorCapacity table in moderator/plan.ts (CAPACITY) exactly — same tier
  *  names, same numbers, reused rather than duplicated. */
 export const MODERATOR_BASIC_PRICE = 49.99;
-export const MODERATOR_STANDARD_PRICE = 114.99;
-export const MODERATOR_PREMIUM_PRICE = 209.99;
-export const MODERATOR_PRO_PRICE = 359.99;
+export const MODERATOR_STANDARD_PRICE = 129.99;
+export const MODERATOR_PREMIUM_PRICE = 219.99;
+export const MODERATOR_PRO_PRICE = 379.99;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
 
 /** Direct/resell mode ONLY (see ModeratorCommercialMode in moderator/plan.ts):
@@ -80,8 +80,8 @@ export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
 /** Enterprise (21+ Active Moderator Slots) monthly price. Direct-contact/
  *  direct-Innvil sale only -- Enterprise revenue is 100% Innvil's, no
  *  panel-owner commission/rental split ever applies to it.
- *  Worked examples (from spec): 50 slots -> 359.99 + 30*15 = 809.99;
- *  75 slots -> 359.99 + 30*15 + 25*13 = 1134.99. */
+ *  Worked examples: 50 slots -> 379.99 + 30*15 = 829.99;
+ *  75 slots -> 379.99 + 30*15 + 25*13 = 1154.99. */
 export function moderatorEnterpriseSlotPrice(totalSlots: number): number {
   const slots = Math.max(MODERATOR_ENTERPRISE_MIN_SLOTS, Math.round(totalSlots));
   const extra = slots - MODERATOR_ENTERPRISE_BASE_SLOTS;
