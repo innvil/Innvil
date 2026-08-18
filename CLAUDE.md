@@ -127,6 +127,33 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Real Security section — Change Password, zero new backend (v1.41.0)
+- **Fourth and final pick from the Settings investigation** (Notifications v1.38.0, General v1.39.0, Moderation
+  Defaults v1.40.0). Completes the original 8-section wishlist — every section in Settings now maps to
+  something real: General/Profile/Notifications/Moderation Defaults/Security/Support.
+- **Investigated first, per the same rule as every prior pick — and found something genuinely already real.**
+  `src/lib/actions/account.ts`'s `updatePassword(currentPassword, newPassword)` already exists, already ships in
+  production, and already powers the main Innvil owner app's Account Settings — re-authenticates with the
+  current password before allowing a change (so a hijacked session token alone can't reset it), enforces an
+  8-character minimum, all via the shared Supabase Auth session every Innvil product (including Watch) already
+  uses. **Zero new backend was needed** — this pass is a UI-only addition wiring an existing, already-tested,
+  already-secure action into the Watch Settings surface for the first time.
+- **New "Security" tab in Settings** (now General/Profile/Notifications/Moderation Defaults/Security/Support) —
+  new `SecuritySettingsCard.tsx`: a real Change Password form (current/new/confirm, client-side match check
+  before submit) calling `updatePassword()` directly, plus a read-only "Sign-in method: Email & password" line
+  (confirmed via code review — no OAuth provider exists anywhere in this codebase, so this is a factual
+  statement, never a "manage sign-in methods" control with nothing to manage).
+- **Deliberately did NOT add a session list/revocation control** — no session-tracking/listing mechanism exists
+  anywhere in this codebase; a "Sessions" section would have been exactly the "control with nothing behind it"
+  fabrication every prior pass in this series has explicitly avoided.
+- **No new tests** — `updatePassword()` itself is pre-existing, unmodified, already-shipped logic; this pass
+  added no new pure logic of its own to test, only a new UI consumer of it. 1097 tests pass (unchanged from
+  v1.40.0), `tsc --noEmit` clean, production build clean.
+- **Verified live** (`Host: watch.localhost`): the Security tab renders correctly (Sign-in method line + the
+  full Change Password form). **Did not submit a real password change** — that would alter the actual test
+  account's live credentials, which isn't appropriate to do just to verify UI wiring; confirmed instead that the
+  form correctly calls the existing, already-production-proven `updatePassword` action.
+
 ### 2026-08-18 — Real Moderation Defaults — new Watchers inherit an account-level default persona (v1.40.0)
 - **Third pick from the same Settings investigation** (Notifications v1.38.0, General v1.39.0). User chose
   Moderation Defaults over Security (the latter would need a whole session-tracking subsystem that doesn't
