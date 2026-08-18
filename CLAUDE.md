@@ -127,6 +127,66 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Real "Needs Attention" email notifications + Settings restructured into tabs (v1.38.0)
+- **Investigated first, per the user's own explicit rule ("only expose sections backed by real functionality")
+  before building anything.** Grepped the schema for every capability in the user's proposed 8-section Settings
+  structure (General, Notifications, Telegram, Moderation Defaults, Auto-Posting, Security) — confirmed there is
+  **no account-level timezone/date-format storage, no notification-preferences table, no default-persona
+  inheritance mechanism, no account-scoped Auto-Posting at all, and no session/security-management backend**
+  anywhere in this codebase. Building UI for any of those would have been exactly the "control with nothing
+  behind it" fabrication this codebase's conventions forbid. Reported this back to the user with the real
+  finding instead of guessing which one to build, and asked which to prioritize — user chose **Notifications**.
+- **Scoped Notifications to the ONE signal this codebase can honestly compute today: Needs Attention** (a
+  Community with no active Watcher, or Watcher/Community capacity nearing the plan limit — the same real data
+  `listAccountAttentionItems` already surfaces on Overview). Deliberately did NOT add toggles for "failed
+  Auto-Posts" or "billing notices" from the user's own suggested list — neither has any real trigger anywhere in
+  this codebase (Auto-Posting has no account-scoped backend at all; no subscription-lifecycle event fires
+  today) — a toggle for either would be fake.
+- **New migration `0074_watch_notification_preferences.sql`** — `watch_notification_preferences` (account_id
+  PK, `attention_alerts_enabled` boolean default true, `last_digest_sent_at`; service-role only, no RLS
+  policies, same convention as every other Watch runtime table). **Run migration `0074`.**
+- **New `src/lib/products/watch-notifications.ts`** — `getNotificationPreferences()` (lazily creates the
+  default-enabled row on first read, so a brand-new account has a real persisted preference immediately, not a
+  client-only default) / `setNotificationPreferences()` / **`sweepAttentionNotifications()`** — the real delivery
+  sweep: for every account with alerts enabled, skips it if a digest was already sent within the last 24h
+  (persisted via `last_digest_sent_at`, not merely a cron-schedule assumption), calls the SAME
+  `listAccountAttentionItems()` Overview already uses (never a second attention-detection implementation), and
+  sends an email **only when there's real, current attention data** — never a scheduled "all clear" email. Reuses
+  the existing `sendEmail`/`simpleEmail` Resend helpers (already used elsewhere in this codebase) rather than a
+  new email pipeline. Best-effort per account — one account's email/lookup failure never blocks the rest of the
+  sweep.
+- **New cron `app/api/cron/watch-notifications`** + **migration `0075_supabase_watch_notifications_cron.sql`**
+  (hourly pg_cron schedule, mirrors the established 0015/0026/0027/0034/0036/0056/0061 pattern exactly — vault
+  `app_url`/`cron_secret`). Hourly is safe specifically because the sweep itself enforces the real 24h-per-account
+  minimum, not the cron cadence — nobody gets emailed hourly. **Run migration `0075`** (and schedule/verify the
+  `innvil-watch-notifications` pg_cron job).
+- **New action file `src/lib/actions/watch-notifications.ts`** — thin `getAuthedAdmin()`-wrapped actions over the
+  above, same pattern as every other Watch action file.
+- **Settings restructured from two stacked cards into real tabs** (reuses the existing `WatchTabs` component —
+  the same top-tab pattern already used on every Project/Community/Watcher detail page, rather than inventing a
+  new left-nav sub-navigation pattern for just 3 items, which would have been inconsistent with how every other
+  multi-section page in this CRM already works): **Profile** (unchanged pointer link, no duplicated identity
+  card), **Notifications** (the new real toggle, default tab), **Support** (the existing contact form, now its
+  own section instead of half the page). New `NotificationsSettingsCard.tsx` (client) — an accessible toggle
+  switch (`role="switch"`, `aria-checked`, not color-only — labeled text alongside it) with optimistic UI and
+  rollback on a failed save.
+- New tests (`watch-notifications.test.ts`, +11, new file — a dedicated `fakeAdmin` covering exactly what this
+  module touches): default-enabled + persists on first read, saved-preference-not-re-derived, cross-account
+  isolation, zero-send when nothing is enabled, **zero-send when there are no real attention items** (the "no
+  scheduled all-clear email" requirement), a real attention item triggering a real send + `last_digest_sent_at`
+  recorded, the within-24h skip, the past-24h re-eligibility, per-account isolation (one account's real item
+  never causes another quiet account to be emailed), and a missing-email account failing safely (skipped, not a
+  thrown error). 1071 tests pass (up from 1060), `tsc --noEmit` clean, production build clean (confirmed
+  `/api/cron/watch-notifications` in the build output).
+- **Not verified live this pass** — the Browser preview tool was unavailable for the whole of this pass
+  (navigation denied for any URL, not host-specific — matches a known intermittent outage documented earlier in
+  this session's own history); verified instead via `tsc --noEmit` + full test suite + production build + code
+  review, consistent with how this codebase handles the same tooling gap when it recurs.
+- **Deliberately not built this pass** (documented, not silently skipped): General/timezone/date-format,
+  Moderation Defaults inheritance, Auto-Posting defaults, and Security/sessions sections — all explicitly
+  reported to the user as having zero backend today; each is a separate, differently-sized project, not a
+  Settings-page addition.
+
 ### 2026-08-18 — Native (Panel-independent) Telegram account verification from Profile — "Connect Telegram" (v1.37.0)
 - **Closes the exact gap flagged as the "next safe step" at the end of v1.36.0**: Profile's Telegram identity
   card was previously read-only, and the ONLY way an account ever got a linked identity was migration 0071's
