@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { User, Bell, LifeBuoy, Settings as SettingsIcon } from "lucide-react";
+import { User, Bell, LifeBuoy, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getNotificationPreferences } from "@/src/lib/products/watch-notifications";
 import { getAccountPreferences } from "@/src/lib/products/watch-account-preferences";
+import { getModerationDefaults } from "@/src/lib/products/watch-moderation-defaults";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { SupportContactForm } from "@/src/components/watch/SupportContactForm";
 import { NotificationsSettingsCard } from "@/src/components/watch/NotificationsSettingsCard";
 import { GeneralSettingsCard } from "@/src/components/watch/GeneralSettingsCard";
+import { ModerationDefaultsCard } from "@/src/components/watch/ModerationDefaultsCard";
 
 export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -17,18 +19,20 @@ export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: 
 // "who the account is" -- Settings is "how Watch behaves". Only sections
 // backed by real functionality are shown here: General (timezone/time
 // format, migration 0076), a Profile pointer (never a duplicate identity
-// card), real Notification preferences (one signal this codebase can
-// honestly compute -- Needs Attention), and Support. Moderation Defaults
-// and Auto-Posting defaults are NOT shown -- neither has any backend today
-// (no default-persona inheritance mechanism, no account-scoped Auto-Posting
-// at all) -- building UI for them would be exactly the "control with
-// nothing behind it" fabrication this codebase's conventions forbid.
+// card), real Notification preferences (Needs Attention, migration 0074),
+// Moderation Defaults (the real persona a NEW Watcher starts from,
+// migration 0077 -- see createAccountWatcher in watch-runtime.ts), and
+// Support. Auto-Posting defaults are still NOT shown -- there is no
+// account-scoped Auto-Posting backend at all yet -- building UI for it
+// would be exactly the "control with nothing behind it" fabrication this
+// codebase's conventions forbid.
 export default async function SettingsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [shell, prefs, generalPrefs] = await Promise.all([
+  const [shell, prefs, generalPrefs, moderationDefaults] = await Promise.all([
     getWatchShellContext(admin, accountId),
     getNotificationPreferences(admin, accountId),
     getAccountPreferences(admin, accountId),
+    getModerationDefaults(admin, accountId),
   ]);
 
   const tabs: WatchTab[] = [
@@ -65,6 +69,16 @@ export default async function SettingsPage() {
         <div className="w-card p-5">
           <SectionHeader icon={Bell} title="Notifications" />
           <NotificationsSettingsCard initialEnabled={prefs.attentionAlertsEnabled} />
+        </div>
+      ),
+    },
+    {
+      id: "moderation-defaults",
+      label: "Moderation Defaults",
+      content: (
+        <div className="w-card p-5">
+          <SectionHeader icon={ShieldCheck} title="Moderation Defaults" />
+          <ModerationDefaultsCard initial={moderationDefaults} />
         </div>
       ),
     },

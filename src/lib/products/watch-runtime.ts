@@ -3,7 +3,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
-import { DEFAULT_MODERATOR_PERSONA, normalizeModeratorPersona, type ModeratorPersona } from "@/src/lib/moderator/domain";
+import { normalizeModeratorPersona, type ModeratorPersona } from "@/src/lib/moderator/domain";
+import { getModerationDefaults } from "./watch-moderation-defaults";
 import { projectBelongsToAccount, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 
@@ -148,9 +149,15 @@ export async function createAccountWatcher(admin: SupabaseClient, accountId: str
     return { ok: false, error: `You've reached the limit of ${maxSaved} Watcher(s) for your current plan.` };
   }
 
+  // Real Moderation Defaults inheritance (migration 0077): a new Watcher
+  // starts from THIS account's own configured default persona (Settings ->
+  // Moderation Defaults) when one is set, falling back to the platform
+  // DEFAULT_MODERATOR_PERSONA otherwise -- never a second hardcoded copy.
+  const startingPersona = await getModerationDefaults(admin, accountId);
+
   const { data, error } = await admin
     .from("virtual_moderators")
-    .insert({ account_id: accountId, panel_id: null, name: trimmed, status: "active", persona: DEFAULT_MODERATOR_PERSONA })
+    .insert({ account_id: accountId, panel_id: null, name: trimmed, status: "active", persona: startingPersona })
     .select("id, name, account_id, provisioning_status, persona")
     .single();
   if (error || !data) return { ok: false, error: error?.message ?? "Could not create the Watcher." };

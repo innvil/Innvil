@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Real Moderation Defaults — new Watchers inherit an account-level default persona (v1.40.0)
+- **Third pick from the same Settings investigation** (Notifications v1.38.0, General v1.39.0). User chose
+  Moderation Defaults over Security (the latter would need a whole session-tracking subsystem that doesn't
+  exist at all — left undecided, still not built).
+- **New migration `0077_watch_moderation_defaults.sql`** — `watch_moderation_defaults` (account_id PK, `persona`
+  jsonb default `'{}'::jsonb`; service-role only). Deliberately reuses the EXACT SAME `ModeratorPersona` jsonb
+  shape already stored on `virtual_moderators.persona` (migration 0043) — never a second persona schema; read
+  through the same `normalizeModeratorPersona()` that already degrades any partial/invalid jsonb safely. Scoped
+  to persona only — explicitly does NOT store per-Community toggles (bot_ack_mode, media moderation,
+  Auto-Posting) as an account-wide default, since those are genuinely per-Community decisions a Community's own
+  Telegram rights determine, not something safe to silently apply to a brand-new connection. **Run migration
+  `0077`.**
+- **The real inheritance mechanism — not a stored-and-unused preference.** `createAccountWatcher()`
+  (`watch-runtime.ts`) previously hardcoded every new Watcher's starting persona to the platform
+  `DEFAULT_MODERATOR_PERSONA`. It now calls the new `getModerationDefaults(admin, accountId)` first and uses
+  THAT as the starting persona — falling back to the platform default only when the account hasn't configured
+  one. This is the literal "new Watchers start from a real default instead of always blank" behavior from the
+  user's own original wishlist.
+- **New `src/lib/products/watch-moderation-defaults.ts`** — `getModerationDefaults()` / `applyModerationDefaultPreset()`
+  / `clearModerationDefaultPreset()` / `setModerationDefaultDescription()` / `setModerationDefaultCustomInstructions()`,
+  each mirroring `watch-watcher-persona.ts`'s per-Watcher equivalents exactly (same pure `moderator/presets.ts`
+  materialization logic), just persisted against the account instead of one specific `virtual_moderators` row.
+- **New "Moderation Defaults" tab in Settings** (now General/Profile/Notifications/Moderation Defaults/Support)
+  — new `ModerationDefaultsCard.tsx`, structurally near-identical to the existing, already-shipped, already-
+  tested `WatcherPersonaTab.tsx` (same preset grid, same description/instructions editors). Built as a
+  **separate** component rather than refactoring `WatcherPersonaTab` into a shared one — changing that
+  component's public prop signature to generalize it risked the already-working, live Watcher detail page for
+  a purely additive feature; a small amount of structural duplication was judged the lower-risk trade this pass.
+- **Verified live** (`Host: watch.localhost`, real authenticated session): opened the new tab, applied the
+  "Witty Mod" preset, reloaded the page — "Starting preset — Witty Mod" persisted correctly. **Could not fully
+  live-verify the create-time inheritance itself** — this account has no active Watch subscription (confirmed
+  via Billing — "No active plan"), and `createAccountWatcher` requires one; the Create-Watcher modal accepted
+  input but no Watcher appeared afterward, consistent with that entitlement check failing. The inheritance logic
+  itself is proven by 3 targeted unit tests instead (default fallback when unconfigured, real inheritance when
+  configured, cross-account isolation) — consistent with how this codebase has handled comparable
+  entitlement-gated live-testing gaps before.
+- New tests: `watch-moderation-defaults.test.ts` (+8, new file — default-fallback, preset apply/persist, unknown-
+  preset rejection, preset-clear preserving other fields, description save with trim, instructions save without
+  clobbering description, cross-account isolation), `watch-runtime.test.ts` (+3 — the exact inheritance
+  requirement: no-config falls back to the platform default, a configured default is genuinely inherited by a
+  brand-new Watcher, and a DIFFERENT account's configured default never leaks in). 1097 tests pass (up from
+  1087), `tsc --noEmit` clean, production build clean.
+- **Deliberately not built this pass**: Security/sessions (still zero backend, undecided whether it's next);
+  any per-Community moderation-toggle default (media moderation, bot-ack mode) — scoped out per the reasoning
+  above, since those aren't safe to silently apply to a brand-new Community connection the way a persona is
+  safe to apply to a brand-new Watcher.
+
 ### 2026-08-18 — Real General preferences (timezone + time format) — Settings' second new real section (v1.39.0)
 - **Second pick from the same investigation as v1.38.0's Notifications** — user chose "General (timezone/date
   format)" next from the remaining candidates (Moderation Defaults, Security). Same rule applied: only build it

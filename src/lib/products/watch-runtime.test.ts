@@ -22,7 +22,7 @@ type Row = Record<string, unknown>;
 function fakeAdmin(seed: {
   products?: Row[]; product_entitlements?: Row[]; projects?: Row[];
   virtual_moderators?: Row[]; communities?: Row[]; moderator_deployments?: Row[];
-  moderator_activity_log?: Row[];
+  moderator_activity_log?: Row[]; watch_moderation_defaults?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     products: seed.products ?? [],
@@ -32,6 +32,7 @@ function fakeAdmin(seed: {
     communities: seed.communities ?? [],
     moderator_deployments: seed.moderator_deployments ?? [],
     moderator_activity_log: seed.moderator_activity_log ?? [],
+    watch_moderation_defaults: seed.watch_moderation_defaults ?? [],
   };
   let idCounter = 0;
 
@@ -135,6 +136,38 @@ test("REQUIRED: an entitled account with ZERO Panels can create a Watcher", asyn
     const row = admin.__store.virtual_moderators.find((r: Row) => r.id === result.data.id);
     assert.equal(row?.panel_id, null);
   }
+});
+
+test("REQUIRED: a new Watcher starts from the platform default persona when the account has no Moderation Default configured", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD] });
+  const result = await createAccountWatcher(admin, "acct-1", "Kwan");
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.data.persona.presetId, null);
+});
+
+test("REQUIRED: a new Watcher inherits the account's configured Moderation Default persona (migration 0077)", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [ENTITLED_STANDARD],
+    watch_moderation_defaults: [{ account_id: "acct-1", persona: { description: "Friendly and concise.", presetId: "witty_mod" } }],
+  });
+  const result = await createAccountWatcher(admin, "acct-1", "Kwan");
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.data.persona.description, "Friendly and concise.");
+    assert.equal(result.data.persona.presetId, "witty_mod");
+  }
+});
+
+test("REQUIRED: a different account's Moderation Default never leaks into this account's new Watcher", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [ENTITLED_STANDARD],
+    watch_moderation_defaults: [{ account_id: "acct-2", persona: { description: "Someone else's default" } }],
+  });
+  const result = await createAccountWatcher(admin, "acct-1", "Kwan");
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.data.persona.description, "");
 });
 
 test("createAccountWatcher rejects a non-entitled account", async () => {
