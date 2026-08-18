@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 /**
  * Simple, layered Watch anti-abuse identity model (migration 0067).
@@ -39,7 +39,7 @@ export type LinkTelegramIdentityResult = { ok: true } | { ok: false; error: stri
  * caught and reported the same way below) — never silently transfers an
  * already-linked identity to a new account.
  */
-export async function linkTelegramIdentity(admin: SupabaseClient, accountId: string, telegramUserId: number): Promise<LinkTelegramIdentityResult> {
+export async function linkTelegramIdentity(admin: SupabaseClient, accountId: string, telegramUserId: number, telegramUsername?: string | null): Promise<LinkTelegramIdentityResult> {
   const elsewhere = await telegramIdentityLinkedElsewhere(admin, accountId, telegramUserId);
   if (elsewhere.length > 0) {
     return { ok: false, error: "This Telegram account is already linked to another Innvil account.", alreadyLinkedToAnotherAccount: true };
@@ -47,7 +47,10 @@ export async function linkTelegramIdentity(admin: SupabaseClient, accountId: str
 
   const { error } = await admin
     .from("watch_telegram_links")
-    .upsert({ account_id: accountId, telegram_user_id: telegramUserId }, { onConflict: "account_id,telegram_user_id" });
+    .upsert(
+      { account_id: accountId, telegram_user_id: telegramUserId, telegram_username: telegramUsername ?? null },
+      { onConflict: "account_id,telegram_user_id" }
+    );
 
   if (error) {
     // Unique-violation on the telegram_user_id-only constraint == a
@@ -82,29 +85,135 @@ export async function telegramIdentityLinkedElsewhere(admin: SupabaseClient, acc
 
 export interface AccountTelegramIdentity {
   telegramUserId: number;
+  telegramUsername: string | null;
   verifiedAt: string;
 }
 
 /** The account's own linked Telegram identity, for customer-facing Profile
  *  presentation ONLY — reads the exact same canonical `watch_telegram_links`
  *  table the anti-abuse checks above use, never a second identity model.
- *  Returns null when nothing is linked (the common case today — see the
- *  module doc: `linkTelegramIdentity` has no live callers yet, so this table
- *  is currently populated only by migration 0071's one-time backfill for
- *  accounts whose leftover private-chat Community/Project were cleaned up).
- *  `watch_telegram_links` has no username/handle column (never captured it —
- *  confirmed by schema, migration 0067) — callers must use the numeric id as
- *  the canonical display fallback, never invent a username. */
+ *  Returns null when nothing is linked. `telegram_username` (migration 0073)
+ *  is nullable — a pre-existing link from migration 0071's historical
+ *  backfill, or a Telegram person with no username, genuinely has none;
+ *  callers must fall back to the numeric id for display, never invent one. */
 export async function getAccountTelegramIdentity(admin: SupabaseClient, accountId: string): Promise<AccountTelegramIdentity | null> {
   const { data } = await admin
     .from("watch_telegram_links")
-    .select("telegram_user_id, verified_at")
+    .select("telegram_user_id, telegram_username, verified_at")
     .eq("account_id", accountId)
     .order("verified_at", { ascending: true })
     .limit(1)
     .maybeSingle();
   if (!data) return null;
-  return { telegramUserId: data.telegram_user_id as number, verifiedAt: data.verified_at as string };
+  return {
+    telegramUserId: data.telegram_user_id as number,
+    telegramUsername: (data.telegram_username as string | null) ?? null,
+    verifiedAt: data.verified_at as string,
+  };
+}
+
+/* ============================================================
+   Native (Panel-independent) account -> Telegram verification. The durable
+   identity link is still written via linkTelegramIdentity() above -- this
+   section only manages the SHORT-LIVED verification attempt (token
+   generation, expiry, single-use consumption) that proves the account owns
+   a real Telegram person before that link is created.
+   ============================================================ */
+
+const VERIFICATION_TOKEN_TTL_MINUTES = 15;
+
+function hashVerificationToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export interface TelegramVerificationAttempt {
+  token: string; // plaintext -- returned ONLY at creation, never stored
+  expiresAt: string;
+}
+
+/** Starts a new account-native Telegram verification attempt: generates a
+ *  short-lived, single-use, cryptographically random token (never derived
+ *  from the account id itself, so it can't be guessed or reconstructed from
+ *  a leaked account id), stores only its hash, and cancels any of this
+ *  account's own still-pending attempts first (so starting a new attempt
+ *  never leaves a stale/zombie pending token — the account can only ever
+ *  have one live attempt at a time). The caller builds the actual `/start`
+ *  deep link from the returned plaintext token. */
+export async function createTelegramVerificationAttempt(admin: SupabaseClient, accountId: string): Promise<TelegramVerificationAttempt> {
+  await admin.from("watch_telegram_verification_attempts").update({ status: "cancelled" }).eq("account_id", accountId).eq("status", "pending");
+
+  const token = randomBytes(24).toString("base64url");
+  const expiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MINUTES * 60_000).toISOString();
+  await admin.from("watch_telegram_verification_attempts").insert({
+    account_id: accountId,
+    token_hash: hashVerificationToken(token),
+    status: "pending",
+    expires_at: expiresAt,
+  });
+  return { token, expiresAt };
+}
+
+export interface PendingTelegramVerification {
+  expiresAt: string;
+}
+
+/** Whether this account has a currently-live (pending, not yet expired)
+ *  verification attempt — powers Profile's polling "waiting for
+ *  verification" state without exposing the token itself. */
+export async function getPendingTelegramVerification(admin: SupabaseClient, accountId: string): Promise<PendingTelegramVerification | null> {
+  const { data } = await admin
+    .from("watch_telegram_verification_attempts")
+    .select("expires_at")
+    .eq("account_id", accountId)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+  return data ? { expiresAt: data.expires_at as string } : null;
+}
+
+export async function cancelPendingTelegramVerification(admin: SupabaseClient, accountId: string): Promise<void> {
+  await admin.from("watch_telegram_verification_attempts").update({ status: "cancelled" }).eq("account_id", accountId).eq("status", "pending");
+}
+
+export type ConsumeTelegramVerificationResult =
+  | { ok: true; accountId: string }
+  | { ok: false; reason: "invalid_or_expired" }
+  | { ok: false; reason: "already_linked_elsewhere" };
+
+/** Consumes a verification token presented via the official bot's `/start
+ *  <token>` — the ONLY place a Telegram numeric user id becomes trusted:
+ *  `telegramUserId`/`telegramUsername` must come from Telegram's own
+ *  webhook `from.id`/`from.username`, never a client-submitted value.
+ *  Single-use via a conditional UPDATE keyed on `status = 'pending'`
+ *  (mirrors the proven `telegram_setup_sessions` consumption pattern,
+ *  migration 0064) — a concurrent/duplicate delivery of the same `/start`
+ *  can only ever win this race once; every other attempt (including a
+ *  reused or already-expired token) fails closed. On success, delegates to
+ *  the SAME `linkTelegramIdentity()` every other identity-link path uses —
+ *  the account-uniqueness/anti-abuse constraint is enforced there, not
+ *  duplicated here. */
+export async function consumeTelegramVerificationAttempt(
+  admin: SupabaseClient,
+  token: string,
+  telegramUserId: number,
+  telegramUsername: string | null
+): Promise<ConsumeTelegramVerificationResult> {
+  const tokenHash = hashVerificationToken(token);
+  const now = new Date().toISOString();
+  const { data: claimed } = await admin
+    .from("watch_telegram_verification_attempts")
+    .update({ status: "consumed", consumed_at: now })
+    .eq("token_hash", tokenHash)
+    .eq("status", "pending")
+    .gt("expires_at", now)
+    .select("account_id")
+    .maybeSingle();
+  if (!claimed) return { ok: false, reason: "invalid_or_expired" };
+
+  const accountId = claimed.account_id as string;
+  const linkResult = await linkTelegramIdentity(admin, accountId, telegramUserId, telegramUsername);
+  if (!linkResult.ok) return { ok: false, reason: "already_linked_elsewhere" };
+  return { ok: true, accountId };
 }
 
 export type WatchAbuseType = "trial_consumed" | "promo_consumed" | "payment_failed" | "flagged_pattern";

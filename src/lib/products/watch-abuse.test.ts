@@ -1,29 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   linkTelegramIdentity, telegramIdentityLinkedElsewhere, recordAbuseSignal, eligibleForOneTimeOffer, hashIp,
-  getAccountTelegramIdentity,
+  getAccountTelegramIdentity, createTelegramVerificationAttempt, getPendingTelegramVerification,
+  cancelPendingTelegramVerification, consumeTelegramVerificationAttempt,
 } from "./watch-abuse";
 
 type Row = Record<string, unknown>;
 
-function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: Row[] }) {
+function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: Row[]; watch_telegram_verification_attempts?: Row[] }) {
   const store: Record<string, Row[]> = {
     watch_telegram_links: seed.watch_telegram_links ?? [],
     watch_abuse_signals: seed.watch_abuse_signals ?? [],
+    watch_telegram_verification_attempts: seed.watch_telegram_verification_attempts ?? [],
   };
   return {
     __store: store,
     from(table: string) {
-      const filters: Array<[string, unknown, "eq" | "neq"]> = [];
+      type Op = "eq" | "neq" | "gt";
+      const filters: Array<[string, unknown, Op]> = [];
       const rowsMatching = () =>
         (store[table] ?? []).filter((r) =>
-          filters.every(([c, v, op]) => (op === "eq" ? r[c] === v : r[c] !== v))
+          filters.every(([c, v, op]) => (op === "eq" ? r[c] === v : op === "neq" ? r[c] !== v : String(r[c]) > String(v)))
         );
       const builder: Record<string, unknown> = {
         select() { return builder; },
         eq(col: string, val: unknown) { filters.push([col, val, "eq"]); return builder; },
         neq(col: string, val: unknown) { filters.push([col, val, "neq"]); return builder; },
+        gt(col: string, val: unknown) { filters.push([col, val, "gt"]); return builder; },
         order() { return builder; },
         limit() { return builder; },
         async maybeSingle() { return { data: rowsMatching()[0] ?? null, error: null }; },
@@ -51,6 +56,34 @@ function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: R
           }
           store[table] = [...(store[table] ?? []), { id: `gen-${table}-${(store[table] ?? []).length + 1}`, ...row }];
           return Promise.resolve({ data: null, error: null });
+        },
+        // update(...).eq()...eq()/gt() is either awaited directly (patches
+        // every matching row, no return value needed -- e.g. "cancel every
+        // pending attempt for this account") or chained with
+        // .select().maybeSingle() for an ATOMIC single-row conditional claim
+        // (only the FIRST matching row is patched and returned -- simulates
+        // the real DB's single-row UPDATE ... WHERE ... RETURNING semantics,
+        // which is what makes the token-consumption race test meaningful:
+        // once one row's status flips away from 'pending', a second
+        // "consume" attempt's filter simply matches nothing).
+        update(patch: Row) {
+          let wantSelect = false;
+          const updateBuilder: Record<string, unknown> = {
+            eq(col: string, val: unknown) { filters.push([col, val, "eq"]); return updateBuilder; },
+            gt(col: string, val: unknown) { filters.push([col, val, "gt"]); return updateBuilder; },
+            select() { wantSelect = true; return updateBuilder; },
+            async maybeSingle() {
+              const match = rowsMatching()[0];
+              if (!match) return { data: null, error: null };
+              Object.assign(match, patch);
+              return { data: match, error: null };
+            },
+            then(resolve: (v: { data: null; error: null }) => void) {
+              if (!wantSelect) for (const r of rowsMatching()) Object.assign(r, patch);
+              resolve({ data: null, error: null });
+            },
+          };
+          return updateBuilder;
         },
         then(resolve: (v: { data: Row[]; error: null }) => void) {
           resolve({ data: rowsMatching(), error: null });
@@ -239,10 +272,149 @@ test("REQUIRED: getAccountTelegramIdentity never leaks a different account's lin
   assert.equal(await getAccountTelegramIdentity(admin, "acct-1"), null);
 });
 
-test("getAccountTelegramIdentity's return shape carries no username field -- watch_telegram_links has never stored one (migration 0067)", async () => {
+test("getAccountTelegramIdentity's telegramUsername is null (not fabricated) for a pre-migration-0073 row with no username stored", async () => {
   const admin = fakeAdmin({
     watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 6952824285, verified_at: "2026-08-01T00:00:00.000Z" }],
   });
   const identity = await getAccountTelegramIdentity(admin, "acct-1");
-  assert.deepEqual(identity ? Object.keys(identity).sort() : [], ["telegramUserId", "verifiedAt"]);
+  assert.equal(identity?.telegramUsername, null);
+});
+
+test("getAccountTelegramIdentity returns the real username when the row has one (migration 0073)", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 6952824285, telegram_username: "KSolDegen", verified_at: "2026-08-01T00:00:00.000Z" }],
+  });
+  const identity = await getAccountTelegramIdentity(admin, "acct-1");
+  assert.equal(identity?.telegramUsername, "KSolDegen");
+});
+
+/* ------------------------------- native account Telegram verification ---- */
+// Panel-independent verification-attempt lifecycle (migration 0073) — the
+// server-side half of Profile's "Connect Telegram" flow. The durable link
+// is still created via linkTelegramIdentity (tested above); this section
+// covers the short-lived, single-use token that proves the account owns a
+// real Telegram person before that link is ever written.
+
+test("REQUIRED: createTelegramVerificationAttempt never stores the plaintext token -- only its hash", async () => {
+  const admin = fakeAdmin({});
+  const attempt = await createTelegramVerificationAttempt(admin, "acct-1");
+  assert.ok(attempt.token.length > 0);
+  const row = admin.__store.watch_telegram_verification_attempts[0];
+  assert.notEqual(row.token_hash, attempt.token, "the stored hash must never equal the plaintext token");
+  assert.equal(row.status, "pending");
+  assert.equal(row.account_id, "acct-1");
+});
+
+test("REQUIRED: starting a new verification attempt cancels this account's own still-pending attempt -- never leaves a zombie", async () => {
+  const admin = fakeAdmin({});
+  await createTelegramVerificationAttempt(admin, "acct-1");
+  await createTelegramVerificationAttempt(admin, "acct-1");
+  const rows = admin.__store.watch_telegram_verification_attempts;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].status, "cancelled");
+  assert.equal(rows[1].status, "pending");
+});
+
+test("getPendingTelegramVerification returns null when nothing is pending", async () => {
+  const admin = fakeAdmin({});
+  assert.equal(await getPendingTelegramVerification(admin, "acct-1"), null);
+});
+
+test("getPendingTelegramVerification returns the live attempt's expiry", async () => {
+  const admin = fakeAdmin({});
+  const attempt = await createTelegramVerificationAttempt(admin, "acct-1");
+  const pending = await getPendingTelegramVerification(admin, "acct-1");
+  assert.ok(pending);
+  assert.equal(pending?.expiresAt, attempt.expiresAt);
+});
+
+test("REQUIRED: an expired pending attempt is not reported as pending", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_verification_attempts: [
+      { account_id: "acct-1", token_hash: "abc", status: "pending", expires_at: "2000-01-01T00:00:00.000Z" },
+    ],
+  });
+  assert.equal(await getPendingTelegramVerification(admin, "acct-1"), null);
+});
+
+test("cancelPendingTelegramVerification marks the attempt cancelled -- no longer reported as pending", async () => {
+  const admin = fakeAdmin({});
+  await createTelegramVerificationAttempt(admin, "acct-1");
+  await cancelPendingTelegramVerification(admin, "acct-1");
+  assert.equal(await getPendingTelegramVerification(admin, "acct-1"), null);
+  assert.equal(admin.__store.watch_telegram_verification_attempts[0].status, "cancelled");
+});
+
+test("REQUIRED: a real Telegram /start payload successfully verifies and links the account -- username persisted (migration 0073)", async () => {
+  const admin = fakeAdmin({});
+  const attempt = await createTelegramVerificationAttempt(admin, "acct-1");
+  const result = await consumeTelegramVerificationAttempt(admin, attempt.token, 6952824285, "KSolDegen");
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.accountId, "acct-1");
+  const link = admin.__store.watch_telegram_links.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(link?.telegram_user_id, 6952824285);
+  assert.equal(link?.telegram_username, "KSolDegen");
+});
+
+test("REQUIRED: an unknown/invalid token is rejected -- never links any account", async () => {
+  const admin = fakeAdmin({});
+  const result = await consumeTelegramVerificationAttempt(admin, "not-a-real-token", 111, "someone");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "invalid_or_expired");
+  assert.equal(admin.__store.watch_telegram_links.length, 0);
+});
+
+test("REQUIRED: an expired token is rejected even though it was genuinely issued", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_verification_attempts: [
+      { account_id: "acct-1", token_hash: createHash("sha256").update("real-token").digest("hex"), status: "pending", expires_at: "2000-01-01T00:00:00.000Z" },
+    ],
+  });
+  const result = await consumeTelegramVerificationAttempt(admin, "real-token", 111, null);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "invalid_or_expired");
+});
+
+test("REQUIRED: a token can only ever be consumed once -- the second attempt fails (single-use / race protection)", async () => {
+  const admin = fakeAdmin({});
+  const attempt = await createTelegramVerificationAttempt(admin, "acct-1");
+  const first = await consumeTelegramVerificationAttempt(admin, attempt.token, 555, "first_try");
+  const second = await consumeTelegramVerificationAttempt(admin, attempt.token, 555, "first_try");
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, false);
+  if (!second.ok) assert.equal(second.reason, "invalid_or_expired");
+});
+
+test("REQUIRED: a token always resolves to the account that created it, never a different one", async () => {
+  const admin = fakeAdmin({});
+  const attemptA = await createTelegramVerificationAttempt(admin, "acct-A");
+  const attemptB = await createTelegramVerificationAttempt(admin, "acct-B");
+  const resultA = await consumeTelegramVerificationAttempt(admin, attemptA.token, 111, "userA");
+  const resultB = await consumeTelegramVerificationAttempt(admin, attemptB.token, 222, "userB");
+  assert.equal(resultA.ok && resultA.accountId, "acct-A");
+  assert.equal(resultB.ok && resultB.accountId, "acct-B");
+});
+
+test("REQUIRED (race): two accounts try to verify the SAME Telegram person -- exactly one succeeds, the other gets a safe conflict, neither leaks the other's identity", async () => {
+  const admin = fakeAdmin({});
+  const attemptA = await createTelegramVerificationAttempt(admin, "acct-A");
+  const attemptB = await createTelegramVerificationAttempt(admin, "acct-B");
+  const SAME_TG_USER_ID = 999888777;
+
+  const resultA = await consumeTelegramVerificationAttempt(admin, attemptA.token, SAME_TG_USER_ID, "shared_person");
+  const resultB = await consumeTelegramVerificationAttempt(admin, attemptB.token, SAME_TG_USER_ID, "shared_person");
+
+  assert.equal(resultA.ok, true);
+  assert.equal(resultB.ok, false);
+  if (!resultB.ok) assert.equal(resultB.reason, "already_linked_elsewhere");
+  assert.equal(admin.__store.watch_telegram_links.filter((r: Row) => r.telegram_user_id === SAME_TG_USER_ID).length, 1);
+});
+
+test("REQUIRED: connecting a Telegram person creates no Project/Community/Watcher rows -- consumeTelegramVerificationAttempt never touches those tables", async () => {
+  const admin = fakeAdmin({});
+  const attempt = await createTelegramVerificationAttempt(admin, "acct-1");
+  await consumeTelegramVerificationAttempt(admin, attempt.token, 111, "person");
+  assert.equal(Object.keys(admin.__store).includes("projects"), false);
+  assert.equal(Object.keys(admin.__store).includes("communities"), false);
+  assert.equal(Object.keys(admin.__store).includes("virtual_moderators"), false);
 });

@@ -127,6 +127,89 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Native (Panel-independent) Telegram account verification from Profile — "Connect Telegram" (v1.37.0)
+- **Closes the exact gap flagged as the "next safe step" at the end of v1.36.0**: Profile's Telegram identity
+  card was previously read-only, and the ONLY way an account ever got a linked identity was migration 0071's
+  one-time historical backfill of leftover Panel-flow artifacts. A brand-new standalone Watch account (zero
+  Panels, zero prior Telegram activity) had no way to link Telegram at all. `linkTelegramIdentity()` now has a
+  real, live, Panel-independent caller for the first time.
+- **Investigated first, per explicit instruction.** Confirmed the existing "official Innvil bot" infrastructure
+  (`innvil_bot_manager`, Phase 4.Q/v1.20.0 — a single, platform-wide bot identity, `INNVIL_OFFICIAL_BOT_TOKEN`,
+  its own webhook `/api/webhooks/telegram/innvil-bot-manager`) was the right thing to extend — it already had zero
+  `/start` handling, so adding account verification there doesn't touch its existing reactive-Q&A behavior at
+  all. Confirmed `telegram_setup_sessions` (migration 0064) is **Panel-scoped** (bound to a `panel_id` + a
+  Watcher's own bot integration, for the GROUP-add flow) — deliberately NOT reused, since conflating "verify a
+  person" with "connect a bot to a group" is exactly what this whole session's identity work has been
+  untangling. A new, structurally separate, account-scoped table was the correct call.
+- **New migration `0073_watch_account_telegram_verification.sql`** — `watch_telegram_verification_attempts`
+  (account_id, `token_hash` — sha256 of the actual token, never the plaintext — status pending/consumed/
+  cancelled, expires_at, consumed_at; service-role only, no RLS policies, same convention as every other
+  runtime table) + `watch_telegram_links.telegram_username` (nullable text — the FIRST time this column exists;
+  the account's own linked identity now has real username data to store, since this pass is the first genuine
+  live caller of `linkTelegramIdentity`). **Run migration `0073`.**
+- **Verification flow** (`watch-abuse.ts`): `createTelegramVerificationAttempt()` generates a 24-byte
+  cryptographically random token (`randomBytes(24).toString("base64url")`, never derived from the account id),
+  cancels the account's own prior pending attempt first (so an account can only ever have ONE live attempt —
+  no zombie pending links), stores only the hash, 15-minute TTL. `consumeTelegramVerificationAttempt()` is the
+  ONLY place a numeric Telegram user id becomes trusted — called exclusively from the bot webhook with Telegram's
+  own `from.id`/`from.username`, never client-submitted — and claims the token via a **conditional UPDATE keyed
+  on `status = 'pending' AND expires_at > now()`**, mirroring the already-proven `telegram_setup_sessions`
+  single-use consumption pattern (migration 0064): a reused, expired, or unknown token always fails closed, and
+  exactly one of two concurrent claims on the same token can ever win. On success it delegates to the existing,
+  already-tested `linkTelegramIdentity()` — the one-Telegram-person-per-account uniqueness/anti-abuse
+  enforcement is NOT duplicated here, it's the same single source of truth as before.
+- **`bot-manager-runtime.ts`**: new `handleAccountVerificationStart()` — checked FIRST in `handleBotManagerUpdate`
+  (before duplicate-chat recording and the reactive-support intent classification), only matches a `/start
+  <token>` sent in a **private** chat (reuses the existing `START_COMMAND_RE` from `community-runtime.ts` rather
+  than a second regex), replies with a plain confirmation/failure message, and always short-circuits — a
+  verification attempt never falls through to reactive Q&A. New `getBotManagerUsername()` (mirrors `manager.ts`'s
+  `getManagerBotUsername()` exactly, different bot/credential) resolves the bot's own `@username` live via
+  `getMe` to build the deep link — no new env var needed.
+- **New action file `src/lib/actions/watch-telegram-identity.ts`** — `getWatchTelegramState()` / `
+  startWatchTelegramVerification()` / `cancelWatchTelegramVerification()`, thin auth wrappers over the above
+  (same `getAuthedAdmin()` pattern as every other Watch action file). **Deliberately did NOT `export type`** the
+  state union from this `"use server"` file — this codebase has broken its entire server-actions bundle on that
+  exact mistake before (v1.23.4) — consumers infer the shape via `Awaited<ReturnType<typeof
+  getWatchTelegramState>>` instead.
+- **New `ConnectTelegramCard.tsx`** (client) — drives the full not-connected → pending → verified lifecycle:
+  "Connect Telegram" button starts a real attempt and opens the `t.me/<bot>?start=<token>` deep link in a new
+  tab; a pending state polls `getWatchTelegramState()` every 3s (stops on unmount or once no longer pending) and
+  offers Cancel; the verified state is unchanged from v1.36.0's card (username-or-fallback + numeric ID + Copy).
+  **No fake connect state anywhere** — the browser never sets "verified" itself; every state transition is a
+  server read reflecting the real DB row.
+- **Resource separation preserved, by construction, not by a special-case guard**: `consumeTelegramVerificationAttempt`
+  and everything it calls touch exactly `watch_telegram_verification_attempts` and `watch_telegram_links` — it
+  has no import of, or reference to, `projects`/`communities`/`virtual_moderators` anywhere in its call chain, so
+  a verified personal Telegram identity structurally cannot create a Project/Community/Watcher/deployment.
+- New tests (`watch-abuse.test.ts`, +14, plus the local `fakeAdmin` test harness extended with `update()`/`gt()`
+  chain support to simulate atomic conditional claims): token hash never equals the plaintext, starting a new
+  attempt cancels the account's own stale pending one, pending/expired states, cancel, a full successful
+  verify-and-link with username persisted, unknown token rejected, expired token rejected, single-use (a token
+  can never be consumed twice), a token always resolves to its OWN creating account, the full two-account race
+  for the SAME Telegram person (exactly one wins, the loser gets a safe conflict, no identity leak), and a
+  dedicated test proving verification touches zero Project/Community/Watcher tables. Also fixed one now-outdated
+  existing test from v1.36.0 that asserted `AccountTelegramIdentity` carries no username field — that was
+  correct before this migration, now updated to assert `telegramUsername` is `null` (not fabricated) for a
+  pre-0073 row and real when actually stored. 1060 tests pass (up from 1046), `tsc --noEmit` clean, production
+  build clean.
+- **Verified live** (`Host: watch.localhost`, real authenticated session): `/profile`'s already-linked identity
+  (from migration 0071's historical backfill) still renders correctly, unaffected by this pass — confirming
+  legacy links are recognized without forcing a reconnect, exactly as required. Full connect→verify→link
+  round-trip for a genuinely fresh zero-link account was **not** live-clicked this pass (no second test account
+  available in this sandbox) — verified instead via the 14 new tests covering every step of that exact sequence
+  against the real claim/hash/expiry logic, consistent with how comparably security-critical flows are verified
+  elsewhere in this codebase when a live second account isn't available.
+- **Deliberately not built this pass** (documented, not silently skipped): relink/change-Telegram-account (no
+  safe reassignment flow designed yet — Profile stays read-only once connected, per the explicit "don't invent
+  one" instruction); Unlink (Telegram identity feeds anti-abuse/eligibility history, so removing it isn't just a
+  delete — needs its own security-reviewed design); QR code for the deep link (the `t.me` link itself already
+  works on both desktop and mobile Telegram — a QR adds cross-device convenience but wasn't judged essential
+  this pass); a "connection error"/explicit failed-attempt UI state beyond the existing not-connected
+  fallback (no distinct error condition exists yet beyond expiry, which pending's own timeout already covers).
+  **Remaining Panel coupling in personal Telegram identity linking: none** — grepped `watch-telegram-identity.ts`,
+  `bot-manager-runtime.ts`'s new verification path, and every function in `watch-abuse.ts` for `panel_id`/
+  `panelId`; zero references anywhere in this new code path.
+
 ### 2026-08-18 — Customer-facing Profile: Innvil account identity + connected Telegram identity, separated from the operational CRM (v1.36.0)
 - **New information architecture, per explicit product decision**: `Innvil Account → Profile → Connected
   identities → Telegram`, kept structurally separate from `Project → Community → Watcher/Deployment`. Profile is

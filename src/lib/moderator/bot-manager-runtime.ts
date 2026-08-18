@@ -5,7 +5,8 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
 import { retrieveProductKnowledge } from "./bot-manager-knowledge";
 import { classifyManagerMessageIntent, generateManagerSupportReply, MANAGER_INTENT_CONFIDENCE_THRESHOLD } from "./bot-manager-classify";
-import type { TelegramMessage, TelegramUpdate } from "./community-runtime";
+import { START_COMMAND_RE, type TelegramMessage, type TelegramUpdate } from "./community-runtime";
+import { consumeTelegramVerificationAttempt } from "@/src/lib/products/watch-abuse";
 
 /**
  * innvil_bot_manager — Innvil's own platform-wide product bot
@@ -33,6 +34,17 @@ export function botManagerWebhookSecret(): string {
   const secret = process.env.INNVIL_OFFICIAL_BOT_WEBHOOK_SECRET?.trim();
   if (!secret) throw new Error("INNVIL_OFFICIAL_BOT_WEBHOOK_SECRET is not set");
   return secret;
+}
+
+/** This bot's own Telegram @username, resolved live via getMe (mirrors
+ *  manager.ts's getManagerBotUsername -- same pattern, different bot/
+ *  credential) -- used to build the `/start` verification deep link. Not
+ *  cached: this is only called when a user clicks "Connect Telegram", far
+ *  from a hot path. */
+export async function getBotManagerUsername(): Promise<string> {
+  const res = await telegramApiCall<{ username?: string }>(botManagerToken(), "getMe");
+  if (!res.ok || !res.result?.username) throw new Error(res.ok ? "Innvil bot has no username" : res.error);
+  return res.result.username;
 }
 
 async function isDuplicateManagerUpdate(admin: SupabaseClient, updateId: number | undefined): Promise<boolean> {
@@ -78,6 +90,32 @@ function dlog(step: string, meta: Record<string, unknown> = {}) {
   console.log("[bot-manager-debug]", step, JSON.stringify(meta));
 }
 
+/** Native (Panel-independent) account -> Telegram verification: a `/start
+ *  <token>` sent to THIS bot in a PRIVATE chat is checked against the
+ *  account's own pending watch_telegram_verification_attempts row (never a
+ *  telegram_setup_sessions row -- that table is Panel-scoped group-connect
+ *  only, structurally unrelated). `from.id`/`from.username` are Telegram's
+ *  own trusted webhook fields -- never client-submitted. Returns true when
+ *  the message WAS a verification attempt (handled either way, success or
+ *  failure) so the caller never falls through to reactive Q&A for it. */
+async function handleAccountVerificationStart(admin: SupabaseClient, message: TelegramMessage, botToken: string): Promise<boolean> {
+  if (message.chat.type !== "private") return false;
+  const match = START_COMMAND_RE.exec((message.text ?? "").trim());
+  if (!match || !match[1]) return false;
+
+  const token = match[1];
+  const result = await consumeTelegramVerificationAttempt(admin, token, message.from!.id, message.from!.username ?? null);
+  dlog("account_verification", { ok: result.ok, reason: result.ok ? undefined : result.reason });
+
+  const reply = result.ok
+    ? "Your Telegram account is now verified and linked to your Innvil account. You can close this chat and return to Innvil Watch."
+    : result.reason === "already_linked_elsewhere"
+      ? "This Telegram account is already linked to a different Innvil account, so it can't be linked here too."
+      : "This verification link has expired or was already used. Go back to Innvil Watch Profile and click Connect Telegram again.";
+  await telegramApiCall(botToken, "sendMessage", { chat_id: message.chat.id, text: reply });
+  return true;
+}
+
 export async function handleBotManagerUpdate(update: TelegramUpdate): Promise<void> {
   const admin = createAdminClient();
   dlog("received", { updateId: update.update_id, keys: Object.keys(update) });
@@ -87,6 +125,8 @@ export async function handleBotManagerUpdate(update: TelegramUpdate): Promise<vo
   const message = update.message ?? update.edited_message;
   if (!message?.from || !message.chat) { dlog("stop:no_message_or_sender"); return; }
   if (message.from.is_bot) { dlog("stop:sender_is_bot"); return; } // never engage another bot, incl. accidental self-loops
+
+  if (await handleAccountVerificationStart(admin, message, botManagerToken())) { dlog("stop:handled_as_account_verification"); return; }
 
   await recordKnownChat(admin, message);
 
