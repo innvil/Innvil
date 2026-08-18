@@ -127,6 +127,60 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Customer-facing Profile: Innvil account identity + connected Telegram identity, separated from the operational CRM (v1.36.0)
+- **New information architecture, per explicit product decision**: `Innvil Account → Profile → Connected
+  identities → Telegram`, kept structurally separate from `Project → Community → Watcher/Deployment`. Profile is
+  "who the account is"; Settings stays "how Watch behaves". No new Telegram identity model — this reuses the
+  exact canonical `watch_telegram_links` table (migration 0067/0071) the anti-abuse checks already use, via one
+  new thin reader.
+- **New `getAccountTelegramIdentity(admin, accountId)`** (`watch-abuse.ts`) — the account's own linked identity
+  (numeric Telegram user id + `verified_at`), scoped strictly by `account_id`, returns `null` when nothing is
+  linked rather than fabricating one. **Confirmed by schema (migration 0067): `watch_telegram_links` has no
+  username/handle column at all** — it was never captured (this is why "KSolDegen" existed only as a `projects`
+  row before this session's earlier fix, never in this table). Profile presentation therefore uses the spec's
+  own documented no-username fallback ("Telegram account" + the numeric id as secondary technical identity),
+  not a fabricated username.
+- **New `/profile` route** (`app/profile/page.tsx`, same `requireWatchPage()`/`getWatchShellContext()` pattern
+  as every other Watch route) — an **Account** card (email, via the same `admin.auth.admin.getUserById` call
+  Settings used to make) and a **Connected identities** card (Telegram: Verified badge — icon + text, never
+  color alone — numeric Telegram ID with a small accessible copy button, new `CopyIdButton.tsx`). **No
+  Manage/Unlink button** — checked first, per explicit instruction not to ship a dead control: no relink/unlink
+  action exists anywhere in this codebase, and `linkTelegramIdentity()` itself still has zero live callers
+  (confirmed again this pass), so there is no real management workflow to surface yet. Anti-abuse mechanics stay
+  entirely internal — the copy is "Your verified Telegram account is linked to your Innvil account", never a
+  mention of trial/abuse tracking.
+- **`/settings` no longer shows the Account/email card** (moved to Profile, per the explicit "don't duplicate
+  the same identity card in both pages" instruction) — replaced with a single compact pointer link ("Account
+  identity → Email and connected accounts live on your Profile → Open Profile"). Settings keeps exactly what it
+  already had beyond that (Contact support) — nothing else was reworked.
+- **New sidebar entry**: "Profile" added to `WatchShell.tsx`'s existing **Account** nav group (Profile, Usage,
+  Billing, Settings — in that order), not a new top-level destination — matches the spec's own "matches the
+  existing shell better" guidance, since Usage/Billing/Settings are already presented exactly this way. No
+  separate topbar avatar dropdown was built — the sidebar entry is the stable, always-visible, no-JS-menu-
+  dependent access point, consistent with how every other Account-group page is already reached.
+- **Verified live** (`Host: watch.localhost`, real authenticated session): `/profile` renders the real account
+  email and — genuinely, not simulated — a real linked Telegram identity (`6952824285`, Verified), confirming
+  migration 0071's backfill has already run against the live database for this account; `/settings` no longer
+  shows email and correctly links to Profile; the sidebar shows "Profile" in the Account group.
+- **Re-verified Projects/Communities/Watchers remain untouched by this pass** — no Telegram identity data flows
+  into any of those pages; the only identity presentation surface is the new Profile page. No global CRM search
+  exists in this codebase yet (confirmed again, unchanged from every prior pass this session), so there was
+  nothing to gate Telegram identity out of there.
+- New tests (`watch-abuse.test.ts`, +4): no-identity-linked returns `null` (never fabricated), the account's own
+  linked identity is returned correctly from the canonical table, a different account's linked identity never
+  leaks across accounts, and the returned shape structurally carries no username field (pinning the "no
+  username column exists" fact so a future change can't silently assume one). 1046 tests pass (up from 1042),
+  `tsc --noEmit` clean, production build clean (confirmed `/profile` in the build route output).
+- **Deliberately not built this pass** (documented, not silently skipped): a topbar account-avatar dropdown menu
+  (the sidebar entry was judged sufficient and lower-risk); any relink/unlink/disconnect flow (no safe workflow
+  exists yet — surfacing one needs its own design pass, since unlinking interacts directly with the anti-abuse
+  uniqueness rule); capturing a username into `watch_telegram_links` going forward (would need widening
+  `linkTelegramIdentity`'s signature and, more importantly, an actual live caller — that function still has
+  none in production); Security/Sessions/Sign-in-methods sections (no such functionality exists to surface).
+  **Next safe step**: wire a real `linkTelegramIdentity` call into the live Telegram connect flow so Profile's
+  Connected Identities section reflects genuinely current links for every account, not only the ones covered by
+  migration 0071's one-time historical backfill.
+
 ### 2026-08-18 — Overview slot-label fix + record-depth pass (Project/Watcher stat cards + Settings tabs) + Watch favicon regression fixed on every Watch route + root cause + cleanup for the "KSolDegen" orphaned Project (v1.35.0)
 - **Four fixes/additions this pass, each independently verified.**
 - **(1) Overview "Watcher slots" stat was showing the wrong NUMBER for its own label when unsubscribed.**

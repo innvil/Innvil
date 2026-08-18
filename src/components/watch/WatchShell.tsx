@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutGrid, FolderKanban, Users, Bot, Activity,
-  CreditCard, Settings, LogOut, Menu, X, Plus,
+  CreditCard, Settings, LogOut, Menu, X, Plus, User,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
 import { withTimeout } from "@/src/lib/timeout";
@@ -37,7 +37,13 @@ const OPERATIONS_NAV: NavItem[] = [
   { id: "activity", label: "Activity", icon: Activity, href: "/activity", implemented: true },
 ];
 
+// Profile = who the account is (Innvil identity + connected Telegram
+// identity, app/profile/page.tsx). Distinct from Settings (how Watch
+// behaves) and from the operational Workspace resources above -- it belongs
+// in this same Account group, not a new top-level destination, since that
+// already matches how Usage/Billing/Settings are presented.
 const ACCOUNT_NAV: NavItem[] = [
+  { id: "profile", label: "Profile", icon: User, href: "/profile", implemented: true },
   { id: "usage", label: "Usage", icon: LayoutGrid, href: "/usage", implemented: true },
   { id: "billing", label: "Billing", icon: CreditCard, href: "/billing", implemented: true },
   { id: "settings", label: "Settings", icon: Settings, href: "/settings", implemented: true },

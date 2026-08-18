@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { linkTelegramIdentity, telegramIdentityLinkedElsewhere, recordAbuseSignal, eligibleForOneTimeOffer, hashIp } from "./watch-abuse";
+import {
+  linkTelegramIdentity, telegramIdentityLinkedElsewhere, recordAbuseSignal, eligibleForOneTimeOffer, hashIp,
+  getAccountTelegramIdentity,
+} from "./watch-abuse";
 
 type Row = Record<string, unknown>;
 
@@ -21,6 +24,8 @@ function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: R
         select() { return builder; },
         eq(col: string, val: unknown) { filters.push([col, val, "eq"]); return builder; },
         neq(col: string, val: unknown) { filters.push([col, val, "neq"]); return builder; },
+        order() { return builder; },
+        limit() { return builder; },
         async maybeSingle() { return { data: rowsMatching()[0] ?? null, error: null }; },
         async insert(row: Row) {
           const id = `gen-${table}-${(store[table] ?? []).length + 1}`;
@@ -203,4 +208,41 @@ test("REQUIRED: hashIp never returns the raw input", () => {
 test("hashIp is deterministic for the same input (needed for correlation) but differs across inputs", () => {
   assert.equal(hashIp("203.0.113.42"), hashIp("203.0.113.42"));
   assert.notEqual(hashIp("203.0.113.42"), hashIp("203.0.113.43"));
+});
+
+/* ------------------------------------------ getAccountTelegramIdentity ---- */
+// Profile presentation (app/profile/page.tsx) reads the account's linked
+// Telegram identity through this function -- confirms it's a thin read over
+// the SAME canonical watch_telegram_links table (never a second identity
+// model), correctly scoped, and correctly returns null (not a fabricated
+// identity) when nothing is linked.
+
+test("getAccountTelegramIdentity returns null when the account has no linked Telegram identity", async () => {
+  const admin = fakeAdmin({});
+  assert.equal(await getAccountTelegramIdentity(admin, "acct-1"), null);
+});
+
+test("REQUIRED: getAccountTelegramIdentity returns the account's own linked identity, from the canonical table", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 6952824285, verified_at: "2026-08-01T00:00:00.000Z" }],
+  });
+  const identity = await getAccountTelegramIdentity(admin, "acct-1");
+  assert.ok(identity);
+  assert.equal(identity?.telegramUserId, 6952824285);
+  assert.equal(identity?.verifiedAt, "2026-08-01T00:00:00.000Z");
+});
+
+test("REQUIRED: getAccountTelegramIdentity never leaks a different account's linked identity", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_links: [{ account_id: "acct-2", telegram_user_id: 111, verified_at: "2026-08-01T00:00:00.000Z" }],
+  });
+  assert.equal(await getAccountTelegramIdentity(admin, "acct-1"), null);
+});
+
+test("getAccountTelegramIdentity's return shape carries no username field -- watch_telegram_links has never stored one (migration 0067)", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 6952824285, verified_at: "2026-08-01T00:00:00.000Z" }],
+  });
+  const identity = await getAccountTelegramIdentity(admin, "acct-1");
+  assert.deepEqual(identity ? Object.keys(identity).sort() : [], ["telegramUserId", "verifiedAt"]);
 });

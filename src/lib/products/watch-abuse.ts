@@ -80,6 +80,33 @@ export async function telegramIdentityLinkedElsewhere(admin: SupabaseClient, acc
   return (data ?? []).map((r: { account_id: string }) => r.account_id);
 }
 
+export interface AccountTelegramIdentity {
+  telegramUserId: number;
+  verifiedAt: string;
+}
+
+/** The account's own linked Telegram identity, for customer-facing Profile
+ *  presentation ONLY — reads the exact same canonical `watch_telegram_links`
+ *  table the anti-abuse checks above use, never a second identity model.
+ *  Returns null when nothing is linked (the common case today — see the
+ *  module doc: `linkTelegramIdentity` has no live callers yet, so this table
+ *  is currently populated only by migration 0071's one-time backfill for
+ *  accounts whose leftover private-chat Community/Project were cleaned up).
+ *  `watch_telegram_links` has no username/handle column (never captured it —
+ *  confirmed by schema, migration 0067) — callers must use the numeric id as
+ *  the canonical display fallback, never invent a username. */
+export async function getAccountTelegramIdentity(admin: SupabaseClient, accountId: string): Promise<AccountTelegramIdentity | null> {
+  const { data } = await admin
+    .from("watch_telegram_links")
+    .select("telegram_user_id, verified_at")
+    .eq("account_id", accountId)
+    .order("verified_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!data) return null;
+  return { telegramUserId: data.telegram_user_id as number, verifiedAt: data.verified_at as string };
+}
+
 export type WatchAbuseType = "trial_consumed" | "promo_consumed" | "payment_failed" | "flagged_pattern";
 export type WatchAbuseScope = "account" | "telegram_identity" | "community" | "payment";
 
