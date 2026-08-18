@@ -127,6 +127,55 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Real General preferences (timezone + time format) — Settings' second new real section (v1.39.0)
+- **Second pick from the same investigation as v1.38.0's Notifications** — user chose "General (timezone/date
+  format)" next from the remaining candidates (Moderation Defaults, Security). Same rule applied: only build it
+  if it does something real, not just store an unused preference.
+- **New migration `0076_watch_account_preferences.sql`** — `watch_account_preferences` (account_id PK,
+  `timezone` text default `'UTC'`, `time_format` text default `'24h'` check in `('12h','24h')`; service-role
+  only). Explicitly documented as separate from `communities.timezone` (migration 0055, Auto-Posting's
+  per-Community scheduling input) — this is a personal display preference, never a scheduling input, and never
+  overrides a Community's own timezone. **Run migration `0076`.**
+- **New `src/lib/products/watch-datetime.ts`** (client-safe, no `server-only` — mirrors the `watch-status.ts`
+  extraction pattern from earlier this session) — the pure formatting layer: `formatAccountDateTime(iso, prefs)`
+  (real usage, not stored-and-unused — see below), `COMMON_TIMEZONES` (a curated ~36-zone list spanning every
+  UTC offset, not the full ~400-zone IANA database), `timezoneLabel(tz)` (live UTC-offset label via
+  `Intl.DateTimeFormat`, never a hardcoded/stale offset string), `currentTimeExample(timezone, format)`.
+- **Live-caught UX bug in the same pass**: the Time format dropdown's own example text ("24-hour (14:30)" /
+  "12-hour (2:30 PM)") was a static hardcoded string — never actually reflected the timezone selected in the
+  dropdown right above it, exactly the "the time format is not adapted from the selected timezone" complaint.
+  Fixed by computing the example live from `currentTimeExample(timezone, format)`, recomputed on every render
+  (cheap, since it's just an `Intl` call) — changing the Timezone dropdown now visibly shifts both Time-format
+  examples by the real UTC-offset difference. Verified live: switching Asia/Manila → UTC moved the shown
+  example from `06:38`/`6:38 AM` to `22:39`/`10:39 PM`, an exact 8-hour shift.
+- **New `src/lib/products/watch-account-preferences.ts`** — `getAccountPreferences()` (lazily creates the
+  default UTC/24h row on first read) / `setAccountPreferences()` (validates via the SAME `new
+  Intl.DateTimeFormat("en-US",{timeZone})`-throws pattern already used for `setCommunityTimezone` in
+  `actions/autopost.ts` — never a duplicated validation rule).
+- **Genuinely wired into a real display, not just stored and unused**: Profile's `ConnectTelegramCard` now
+  shows "Connected to your Innvil account on {formatAccountDateTime(...)}" using the account's own timezone/
+  format preference — the first real consumer of this preference, so setting it visibly changes something.
+- **General added as a new first tab in Settings** (`app/settings/page.tsx`, now General/Profile/Notifications/
+  Support) — `GeneralSettingsCard.tsx` (client): a **dropdown** (not free text, per live user correction) over
+  `COMMON_TIMEZONES`, with the account's own already-saved timezone always included as an option even if it
+  falls outside the curated list (never silently discards a real, valid, already-saved value); a Time-format
+  dropdown with the now-live example; Save with inline validation-error/success feedback.
+- **Verified live end-to-end**: General tab loads with real UTC/24h defaults; saved `Asia/Manila` persisted
+  across a full page reload (confirmed via direct DOM read of the select's value, not just optimistic client
+  state); the Time-format examples update live when the timezone selection changes, confirmed via the exact
+  8-hour Manila→UTC shift.
+- New tests: `watch-datetime.test.ts` (+10 — 12h/24h rendering, cross-timezone rendering of the same instant,
+  invalid-timezone fallback never throwing, every `COMMON_TIMEZONES` entry independently proven to be a real
+  IANA zone, `timezoneLabel`'s live-offset correctness and invalid-zone safety, and the exact regression class
+  for the live-caught bug — `currentTimeExample` proven to actually change when the timezone changes, and to
+  respect 12h/24h for the same zone), `watch-account-preferences.test.ts` (+6 — default-on-first-read incl.
+  persistence, saved-value-not-re-derived, cross-account isolation, invalid-timezone rejection never persisting,
+  a valid save round-tripping correctly, whitespace trimming). 1087 tests pass (up from 1081), `tsc --noEmit`
+  clean, production build clean.
+- **Deliberately not built this pass**: Moderation Defaults and Security remain undecided/not built (still zero
+  backend for either) — this was scoped to General only, per the same one-real-thing-at-a-time approach as
+  Notifications.
+
 ### 2026-08-18 — Real "Needs Attention" email notifications + Settings restructured into tabs (v1.38.0)
 - **Investigated first, per the user's own explicit rule ("only expose sections backed by real functionality")
   before building anything.** Grepped the schema for every capability in the user's proposed 8-section Settings

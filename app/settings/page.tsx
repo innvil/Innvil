@@ -1,35 +1,47 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { User, Bell, LifeBuoy } from "lucide-react";
+import { User, Bell, LifeBuoy, Settings as SettingsIcon } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getNotificationPreferences } from "@/src/lib/products/watch-notifications";
+import { getAccountPreferences } from "@/src/lib/products/watch-account-preferences";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { SupportContactForm } from "@/src/components/watch/SupportContactForm";
 import { NotificationsSettingsCard } from "@/src/components/watch/NotificationsSettingsCard";
+import { GeneralSettingsCard } from "@/src/components/watch/GeneralSettingsCard";
 
 export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
 // Account identity (email, connected Telegram identity) lives on /profile --
 // "who the account is" -- Settings is "how Watch behaves". Only sections
-// backed by real functionality are shown here: a Profile pointer (never a
-// duplicate identity card), real Notification preferences (one signal this
-// codebase can honestly compute -- Needs Attention), and Support. General
-// preferences, Moderation Defaults, and Auto-Posting defaults are NOT
-// shown -- none has any backend today (no account-level timezone/date-
-// format storage, no default-persona inheritance, no account-scoped
-// Auto-Posting at all) -- building UI for them would be exactly the
-// "control with nothing behind it" fabrication this codebase's conventions
-// forbid.
+// backed by real functionality are shown here: General (timezone/time
+// format, migration 0076), a Profile pointer (never a duplicate identity
+// card), real Notification preferences (one signal this codebase can
+// honestly compute -- Needs Attention), and Support. Moderation Defaults
+// and Auto-Posting defaults are NOT shown -- neither has any backend today
+// (no default-persona inheritance mechanism, no account-scoped Auto-Posting
+// at all) -- building UI for them would be exactly the "control with
+// nothing behind it" fabrication this codebase's conventions forbid.
 export default async function SettingsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [shell, prefs] = await Promise.all([
+  const [shell, prefs, generalPrefs] = await Promise.all([
     getWatchShellContext(admin, accountId),
     getNotificationPreferences(admin, accountId),
+    getAccountPreferences(admin, accountId),
   ]);
 
   const tabs: WatchTab[] = [
+    {
+      id: "general",
+      label: "General",
+      content: (
+        <div className="w-card p-5">
+          <SectionHeader icon={SettingsIcon} title="General" />
+          <GeneralSettingsCard initial={generalPrefs} />
+        </div>
+      ),
+    },
     {
       id: "profile",
       label: "Profile",
@@ -73,9 +85,9 @@ export default async function SettingsPage() {
       <div className="space-y-6">
         <div>
           <h1 className="w-display text-xl mb-1">Settings</h1>
-          <p className="text-sm w-text-dim">Notifications, account identity, and support.</p>
+          <p className="text-sm w-text-dim">General preferences, notifications, account identity, and support.</p>
         </div>
-        <WatchTabs tabs={tabs} defaultTab="notifications" />
+        <WatchTabs tabs={tabs} defaultTab="general" />
       </div>
     </WatchShell>
   );

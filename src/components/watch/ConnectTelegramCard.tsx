@@ -6,6 +6,7 @@ import {
   getWatchTelegramState, startWatchTelegramVerification, cancelWatchTelegramVerification,
 } from "@/src/lib/actions/watch-telegram-identity";
 import { CopyIdButton } from "./CopyIdButton";
+import { formatAccountDateTime, type AccountPreferences } from "@/src/lib/products/watch-datetime";
 
 type State = Awaited<ReturnType<typeof getWatchTelegramState>>;
 
@@ -16,8 +17,11 @@ const POLL_INTERVAL_MS = 3000;
  *  authenticated Innvil account only. The numeric Telegram user id is never
  *  self-asserted by the browser; it only ever appears here after the
  *  server confirms a real Telegram `/start` verification (see
- *  bot-manager-runtime.ts's handleAccountVerificationStart). */
-export function ConnectTelegramCard({ initial }: { initial: State }) {
+ *  bot-manager-runtime.ts's handleAccountVerificationStart). The "Connected
+ *  on" date is the first real usage of Settings' new General timezone/
+ *  time-format preference (migration 0076) — formatted per the account's
+ *  own preference, never a hardcoded locale/timezone. */
+export function ConnectTelegramCard({ initial, preferences }: { initial: State; preferences: AccountPreferences }) {
   const [state, setState] = useState<State>(initial);
   const [connecting, setConnecting] = useState(false);
   const [deepLink, setDeepLink] = useState<string | null>(null);
@@ -77,7 +81,7 @@ export function ConnectTelegramCard({ initial }: { initial: State }) {
           </div>
           <CopyIdButton value={String(identity.telegramUserId)} label="Telegram ID" />
         </div>
-        <p className="text-xs w-text-faint mt-3">Connected to your Innvil account.</p>
+        <p className="text-xs w-text-faint mt-3">Connected to your Innvil account on {formatAccountDateTime(identity.verifiedAt, preferences)}.</p>
       </div>
     );
   }

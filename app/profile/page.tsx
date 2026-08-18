@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { User, Link2 } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getAccountTelegramIdentity, getPendingTelegramVerification, type AccountTelegramIdentity } from "@/src/lib/products/watch-abuse";
+import { getAccountPreferences } from "@/src/lib/products/watch-account-preferences";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { ConnectTelegramCard } from "@/src/components/watch/ConnectTelegramCard";
@@ -10,10 +11,11 @@ export const metadata: Metadata = { title: "Profile — Innvil Watch", robots: {
 
 export default async function ProfilePage() {
   const { accountId, admin } = await requireWatchPage();
-  const [shell, { data: userRes }, telegram] = await Promise.all([
+  const [shell, { data: userRes }, telegram, preferences] = await Promise.all([
     getWatchShellContext(admin, accountId),
     admin.auth.admin.getUserById(accountId),
     getAccountTelegramIdentity(admin, accountId),
+    getAccountPreferences(admin, accountId),
   ]);
   const email = userRes.user?.email ?? null;
 
@@ -46,7 +48,7 @@ export default async function ProfilePage() {
 
         <div className="w-card p-5">
           <SectionHeader icon={Link2} title="Connected identities" />
-          <ConnectTelegramCard initial={initialTelegramState} />
+          <ConnectTelegramCard initial={initialTelegramState} preferences={preferences} />
         </div>
       </div>
     </WatchShell>
