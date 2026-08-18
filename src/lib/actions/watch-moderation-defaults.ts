@@ -3,7 +3,7 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import {
   getModerationDefaults, applyModerationDefaultPreset, clearModerationDefaultPreset,
-  setModerationDefaultDescription, setModerationDefaultCustomInstructions,
+  setModerationDefaultDescription, setModerationDefaultCustomInstructions, resetModerationDefaults,
 } from "@/src/lib/products/watch-moderation-defaults";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "@/src/lib/moderator/domain";
 
@@ -35,4 +35,10 @@ export async function setWatchModerationDefaultCustomInstructions(customInstruct
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false as const, error: "Not signed in." };
   return setModerationDefaultCustomInstructions(admin, user.id, customInstructions);
+}
+
+export async function resetWatchModerationDefaults() {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false as const, error: "Not signed in." };
+  return resetModerationDefaults(admin, user.id);
 }

@@ -53,3 +53,12 @@ export async function setModerationDefaultCustomInstructions(admin: SupabaseClie
   await writePersona(admin, accountId, { ...current, customInstructions: customInstructions.slice(0, 2000) });
   return { ok: true };
 }
+
+/** Resets this account's Moderation Defaults back to the real canonical
+ *  platform default (`DEFAULT_MODERATOR_PERSONA`, `moderator/domain.ts` —
+ *  the exact same values a brand-new Watcher gets when no account default
+ *  is configured at all), not a fabricated "factory reset" shape. */
+export async function resetModerationDefaults(admin: SupabaseClient, accountId: string): Promise<ModerationDefaultsResult> {
+  await writePersona(admin, accountId, { ...DEFAULT_MODERATOR_PERSONA });
+  return { ok: true };
+}

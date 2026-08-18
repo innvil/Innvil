@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   getModerationDefaults, applyModerationDefaultPreset, clearModerationDefaultPreset,
-  setModerationDefaultDescription, setModerationDefaultCustomInstructions,
+  setModerationDefaultDescription, setModerationDefaultCustomInstructions, resetModerationDefaults,
 } from "./watch-moderation-defaults";
 import { DEFAULT_MODERATOR_PERSONA } from "@/src/lib/moderator/domain";
 
@@ -84,4 +84,25 @@ test("REQUIRED: moderation defaults never leak across accounts", async () => {
   await applyModerationDefaultPreset(admin, "acct-1", "witty_mod");
   const other = await getModerationDefaults(admin, "acct-2");
   assert.equal(other.presetId, null);
+});
+
+test("REQUIRED: resetModerationDefaults restores the exact real canonical platform default, not a fabricated shape", async () => {
+  const admin = fakeAdmin({});
+  await applyModerationDefaultPreset(admin, "acct-1", "witty_mod");
+  await setModerationDefaultDescription(admin, "acct-1", "Something custom");
+  await setModerationDefaultCustomInstructions(admin, "acct-1", "Extra notes");
+
+  const result = await resetModerationDefaults(admin, "acct-1");
+  assert.equal(result.ok, true);
+  const persona = await getModerationDefaults(admin, "acct-1");
+  assert.deepEqual(persona, DEFAULT_MODERATOR_PERSONA);
+});
+
+test("resetModerationDefaults only affects the calling account", async () => {
+  const admin = fakeAdmin({});
+  await applyModerationDefaultPreset(admin, "acct-1", "witty_mod");
+  await applyModerationDefaultPreset(admin, "acct-2", "calm_professional");
+  await resetModerationDefaults(admin, "acct-1");
+  const other = await getModerationDefaults(admin, "acct-2");
+  assert.equal(other.presetId, "calm_professional");
 });

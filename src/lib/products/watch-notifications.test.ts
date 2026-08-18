@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getNotificationPreferences, setNotificationPreferences, sweepAttentionNotifications } from "./watch-notifications";
+import { getNotificationPreferences, setNotificationCategory, sweepAttentionNotifications, sendTestNotificationEmail } from "./watch-notifications";
 
 type Row = Record<string, unknown>;
 
@@ -76,45 +76,50 @@ function fakeAdmin(seed: {
   } as any;
 }
 
+const ALL_ON = { no_active_watcher_enabled: true, capacity_warning_enabled: true, watcher_status_enabled: true };
+const ALL_OFF = { no_active_watcher_enabled: false, capacity_warning_enabled: false, watcher_status_enabled: false };
+
 /* ---------------------------------------------------------- preferences ---- */
 
-test("REQUIRED: getNotificationPreferences defaults to enabled and persists the default on first read", async () => {
+test("REQUIRED: getNotificationPreferences defaults every category to enabled and persists the default on first read", async () => {
   const admin = fakeAdmin({});
   const prefs = await getNotificationPreferences(admin, "acct-1");
-  assert.equal(prefs.attentionAlertsEnabled, true);
+  assert.deepEqual(prefs, { noActiveWatcherEnabled: true, capacityWarningEnabled: true, watcherStatusEnabled: true });
   assert.equal(admin.__store.watch_notification_preferences.length, 1);
   assert.equal(admin.__store.watch_notification_preferences[0].account_id, "acct-1");
 });
 
-test("getNotificationPreferences returns the account's own already-saved preference, not a re-derived default", async () => {
-  const admin = fakeAdmin({ watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: false }] });
+test("getNotificationPreferences returns the account's own already-saved per-category values, not re-derived defaults", async () => {
+  const admin = fakeAdmin({ watch_notification_preferences: [{ account_id: "acct-1", no_active_watcher_enabled: false, capacity_warning_enabled: true, watcher_status_enabled: false }] });
   const prefs = await getNotificationPreferences(admin, "acct-1");
-  assert.equal(prefs.attentionAlertsEnabled, false);
+  assert.deepEqual(prefs, { noActiveWatcherEnabled: false, capacityWarningEnabled: true, watcherStatusEnabled: false });
 });
 
-test("setNotificationPreferences persists the new value and getNotificationPreferences reflects it", async () => {
+test("setNotificationCategory updates only the ONE category, leaving the others untouched", async () => {
   const admin = fakeAdmin({});
-  await setNotificationPreferences(admin, "acct-1", false);
-  assert.equal((await getNotificationPreferences(admin, "acct-1")).attentionAlertsEnabled, false);
+  await getNotificationPreferences(admin, "acct-1"); // seed the default row
+  await setNotificationCategory(admin, "acct-1", "capacityWarning", false);
+  const prefs = await getNotificationPreferences(admin, "acct-1");
+  assert.deepEqual(prefs, { noActiveWatcherEnabled: true, capacityWarningEnabled: false, watcherStatusEnabled: true });
 });
 
 test("REQUIRED: notification preferences never leak across accounts", async () => {
-  const admin = fakeAdmin({ watch_notification_preferences: [{ account_id: "acct-2", attention_alerts_enabled: false }] });
+  const admin = fakeAdmin({ watch_notification_preferences: [{ account_id: "acct-2", ...ALL_OFF }] });
   const prefs = await getNotificationPreferences(admin, "acct-1");
-  assert.equal(prefs.attentionAlertsEnabled, true, "acct-1 must get its own default, not acct-2's saved value");
+  assert.equal(prefs.noActiveWatcherEnabled, true, "acct-1 must get its own default, not acct-2's saved value");
 });
 
 /* -------------------------------------------------------------- sweep ---- */
 
-test("sweepAttentionNotifications sends nothing when no account has alerts enabled", async () => {
-  const admin = fakeAdmin({ watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: false }] });
+test("sweepAttentionNotifications sends nothing when every category is disabled", async () => {
+  const admin = fakeAdmin({ watch_notification_preferences: [{ account_id: "acct-1", ...ALL_OFF }] });
   const result = await sweepAttentionNotifications(admin);
   assert.equal(result.sent, 0);
 });
 
 test("REQUIRED: sweepAttentionNotifications never sends when the account has zero real attention items", async () => {
   const admin = fakeAdmin({
-    watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: true }],
+    watch_notification_preferences: [{ account_id: "acct-1", ...ALL_ON }],
     users: { "acct-1": "owner@example.com" },
     // no communities/watchers at all -- listAccountAttentionItems resolves to []
   });
@@ -122,9 +127,9 @@ test("REQUIRED: sweepAttentionNotifications never sends when the account has zer
   assert.equal(result.sent, 0, "no scheduled 'all clear' email");
 });
 
-test("REQUIRED: sweepAttentionNotifications sends when a real attention item exists, and records last_digest_sent_at", async () => {
+test("REQUIRED: sweepAttentionNotifications sends when a real HIGH attention item exists (noActiveWatcher category), and records last_digest_sent_at", async () => {
   const admin = fakeAdmin({
-    watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: true }],
+    watch_notification_preferences: [{ account_id: "acct-1", ...ALL_ON }],
     users: { "acct-1": "owner@example.com" },
     projects: [{ id: "proj-1", account_id: "acct-1" }],
     communities: [{ id: "c1", project_id: "proj-1", title: "No Watcher Community" }],
@@ -135,10 +140,22 @@ test("REQUIRED: sweepAttentionNotifications sends when a real attention item exi
   assert.ok(admin.__store.watch_notification_preferences[0].last_digest_sent_at);
 });
 
+test("REQUIRED: a disabled category's items are never sent, even while other categories stay on", async () => {
+  const admin = fakeAdmin({
+    watch_notification_preferences: [{ account_id: "acct-1", no_active_watcher_enabled: false, capacity_warning_enabled: true, watcher_status_enabled: true }],
+    users: { "acct-1": "owner@example.com" },
+    projects: [{ id: "proj-1", account_id: "acct-1" }],
+    communities: [{ id: "c1", project_id: "proj-1", title: "No Watcher Community" }],
+    // the only real attention item here is the HIGH "no active watcher" one -- muted
+  });
+  const result = await sweepAttentionNotifications(admin);
+  assert.equal(result.sent, 0, "the HIGH item's own category is disabled, so nothing is reported");
+});
+
 test("REQUIRED: an account digested within the last 24h is skipped even if it still has attention items", async () => {
   const recentIso = new Date(Date.now() - 60_000).toISOString(); // 1 minute ago
   const admin = fakeAdmin({
-    watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: true, last_digest_sent_at: recentIso }],
+    watch_notification_preferences: [{ account_id: "acct-1", ...ALL_ON, last_digest_sent_at: recentIso }],
     users: { "acct-1": "owner@example.com" },
     projects: [{ id: "proj-1", account_id: "acct-1" }],
     communities: [{ id: "c1", project_id: "proj-1", title: "No Watcher Community" }],
@@ -150,7 +167,7 @@ test("REQUIRED: an account digested within the last 24h is skipped even if it st
 test("REQUIRED: a digest sent more than 24h ago is eligible again", async () => {
   const oldIso = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
   const admin = fakeAdmin({
-    watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: true, last_digest_sent_at: oldIso }],
+    watch_notification_preferences: [{ account_id: "acct-1", ...ALL_ON, last_digest_sent_at: oldIso }],
     users: { "acct-1": "owner@example.com" },
     projects: [{ id: "proj-1", account_id: "acct-1" }],
     communities: [{ id: "c1", project_id: "proj-1", title: "No Watcher Community" }],
@@ -162,8 +179,8 @@ test("REQUIRED: a digest sent more than 24h ago is eligible again", async () => 
 test("sweepAttentionNotifications is per-account isolated: one account's attention items never affect another's send decision", async () => {
   const admin = fakeAdmin({
     watch_notification_preferences: [
-      { account_id: "acct-quiet", attention_alerts_enabled: true },
-      { account_id: "acct-needs-it", attention_alerts_enabled: true },
+      { account_id: "acct-quiet", ...ALL_ON },
+      { account_id: "acct-needs-it", ...ALL_ON },
     ],
     users: { "acct-quiet": "quiet@example.com", "acct-needs-it": "needs@example.com" },
     projects: [{ id: "proj-needs", account_id: "acct-needs-it" }],
@@ -176,11 +193,32 @@ test("sweepAttentionNotifications is per-account isolated: one account's attenti
 
 test("a real attention item is skipped, not fatal, when the account has no resolvable email", async () => {
   const admin = fakeAdmin({
-    watch_notification_preferences: [{ account_id: "acct-1", attention_alerts_enabled: true }],
+    watch_notification_preferences: [{ account_id: "acct-1", ...ALL_ON }],
     projects: [{ id: "proj-1", account_id: "acct-1" }],
     communities: [{ id: "c1", project_id: "proj-1", title: "No Watcher Community" }],
     // no users entry -> getUserById resolves user: null
   });
   const result = await sweepAttentionNotifications(admin);
   assert.equal(result.sent, 0);
+});
+
+/* --------------------------------------------------------- test email ---- */
+// RESEND_API_KEY is never set in this test environment -- these prove the
+// function fails HONESTLY (never a fake "sent" success) rather than
+// exercising real delivery, which is exactly what the missing-key guard is
+// for (sendEmail itself would otherwise silently no-op, which -- without
+// this explicit pre-check -- would look identical to a real send).
+
+test("REQUIRED: sendTestNotificationEmail reports a real failure when email delivery isn't configured, never a fake success", async () => {
+  const admin = fakeAdmin({ users: { "acct-1": "owner@example.com" } });
+  const result = await sendTestNotificationEmail(admin, "acct-1");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /configured/i);
+});
+
+test("REQUIRED: sendTestNotificationEmail fails honestly when the account has no resolvable email", async () => {
+  const admin = fakeAdmin({});
+  const result = await sendTestNotificationEmail(admin, "acct-1");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /no email/i);
 });

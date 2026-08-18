@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutGrid, FolderKanban, Users, Bot, Activity,
-  CreditCard, Settings, LogOut, Menu, X, Plus, User,
+  CreditCard, Settings, LogOut, Menu, X, Plus, User, HelpCircle,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
 import { withTimeout } from "@/src/lib/timeout";
@@ -120,6 +120,14 @@ function SidebarContent({ active, capacity, onNavigate }: { active: string; capa
           </p>
         </div>
       )}
+
+      <Link
+        href="/support"
+        aria-current={active === "support" ? "page" : undefined}
+        className={`flex items-center gap-2 px-4 py-3 mx-2.5 mb-2 text-xs shrink-0 ${active === "support" ? "w-teal font-medium" : "w-text-faint hover:w-text-dim"}`}
+      >
+        <HelpCircle size={14} /> Need help?
+      </Link>
     </div>
   );
 }

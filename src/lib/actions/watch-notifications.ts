@@ -1,17 +1,29 @@
 "use server";
 
 import { getAuthedAdmin } from "@/src/lib/auth";
-import { getNotificationPreferences, setNotificationPreferences } from "@/src/lib/products/watch-notifications";
+import {
+  getNotificationPreferences, setNotificationCategory, sendTestNotificationEmail,
+  type NotificationPreferences, type SendTestNotificationResult,
+} from "@/src/lib/products/watch-notifications";
 
-export async function getWatchNotificationPreferences(): Promise<{ attentionAlertsEnabled: boolean }> {
+export async function getWatchNotificationPreferences(): Promise<NotificationPreferences> {
   const { user, admin } = await getAuthedAdmin();
-  if (!user) return { attentionAlertsEnabled: true };
+  if (!user) return { noActiveWatcherEnabled: true, capacityWarningEnabled: true, watcherStatusEnabled: true };
   return getNotificationPreferences(admin, user.id);
 }
 
-export async function setWatchNotificationPreferences(attentionAlertsEnabled: boolean): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function setWatchNotificationCategory(
+  category: "noActiveWatcher" | "capacityWarning" | "watcherStatus",
+  enabled: boolean
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
-  await setNotificationPreferences(admin, user.id, attentionAlertsEnabled);
+  await setNotificationCategory(admin, user.id, category, enabled);
   return { ok: true };
+}
+
+export async function sendWatchTestNotification(): Promise<SendTestNotificationResult> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return sendTestNotificationEmail(admin, user.id);
 }

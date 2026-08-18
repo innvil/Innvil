@@ -1,14 +1,15 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { User, Bell, LifeBuoy, Settings as SettingsIcon, ShieldCheck, Lock } from "lucide-react";
+import { Bell, Settings as SettingsIcon, ShieldCheck, Lock } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getNotificationPreferences } from "@/src/lib/products/watch-notifications";
 import { getAccountPreferences } from "@/src/lib/products/watch-account-preferences";
 import { getModerationDefaults } from "@/src/lib/products/watch-moderation-defaults";
+import { timezoneLabel } from "@/src/lib/products/watch-datetime";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
-import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
-import { SupportContactForm } from "@/src/components/watch/SupportContactForm";
+import { SettingsSectionNav } from "@/src/components/watch/SettingsSectionNav";
+import { SettingsSummary } from "@/src/components/watch/SettingsSummary";
+import type { WatchTab } from "@/src/components/watch/WatchTabs";
 import { NotificationsSettingsCard } from "@/src/components/watch/NotificationsSettingsCard";
 import { GeneralSettingsCard } from "@/src/components/watch/GeneralSettingsCard";
 import { ModerationDefaultsCard } from "@/src/components/watch/ModerationDefaultsCard";
@@ -16,29 +17,35 @@ import { SecuritySettingsCard } from "@/src/components/watch/SecuritySettingsCar
 
 export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
-// Account identity (email, connected Telegram identity) lives on /profile --
-// "who the account is" -- Settings is "how Watch behaves". Only sections
-// backed by real functionality are shown here: General (timezone/time
-// format, migration 0076), a Profile pointer (never a duplicate identity
-// card), real Notification preferences (Needs Attention, migration 0074),
-// Moderation Defaults (the real persona a NEW Watcher starts from,
-// migration 0077 -- see createAccountWatcher in watch-runtime.ts),
-// Security (Change Password, reusing the SAME actions/account.ts action the
-// main Innvil owner app already uses -- zero new backend, Watch shares one
-// Supabase Auth account across every Innvil product), and Support.
-// Auto-Posting defaults and a session list/revocation control are still NOT
-// shown -- neither has any backend at all (no account-scoped Auto-Posting,
-// no session-tracking mechanism anywhere in this codebase) -- building UI
-// for either would be exactly the "control with nothing behind it"
-// fabrication this codebase's conventions forbid.
+// Settings = "how Watch behaves" only. Profile ("who you are") and Support
+// ("how you get help") stay OUT of here -- Profile has its own sidebar
+// entry, Support is its own /support route reachable via the sidebar's
+// "Need help?" link. Sections shown are only ones backed by real
+// functionality: General (timezone/time format, migration 0076),
+// Notifications (three real categories mapped onto listAccountAttentionItems's
+// own severity partition, migration 0078), Moderation (the real persona a
+// NEW Watcher starts from, migration 0077), and Security (Change Password +
+// real email-verification/sign-in-method state, zero new backend beyond the
+// existing actions/account.ts). No "Telegram" section exists yet --
+// investigated, no real account-level Telegram BEHAVIOR configuration
+// exists today (bot_ack_mode is per-Community only).
 export default async function SettingsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [shell, prefs, generalPrefs, moderationDefaults] = await Promise.all([
+  const [shell, notificationPrefs, generalPrefs, moderationDefaults, userRes] = await Promise.all([
     getWatchShellContext(admin, accountId),
     getNotificationPreferences(admin, accountId),
     getAccountPreferences(admin, accountId),
     getModerationDefaults(admin, accountId),
+    admin.auth.admin.getUserById(accountId),
   ]);
+
+  const notificationsEnabledCount = [
+    notificationPrefs.noActiveWatcherEnabled, notificationPrefs.capacityWarningEnabled, notificationPrefs.watcherStatusEnabled,
+  ].filter(Boolean).length;
+  const moderationConfigured = Boolean(
+    moderationDefaults.presetId || moderationDefaults.description.trim() || moderationDefaults.customInstructions.trim()
+  );
+  const emailVerified = Boolean(userRes.data.user?.email_confirmed_at);
 
   const tabs: WatchTab[] = [
     {
@@ -47,24 +54,9 @@ export default async function SettingsPage() {
       content: (
         <div className="w-card p-5">
           <SectionHeader icon={SettingsIcon} title="General" />
+          <p className="text-xs w-text-faint -mt-2 mb-4">Account-wide display and time preferences.</p>
           <GeneralSettingsCard initial={generalPrefs} />
         </div>
-      ),
-    },
-    {
-      id: "profile",
-      label: "Profile",
-      content: (
-        <Link href="/profile" className="w-card p-5 flex items-center justify-between gap-3 group hover:w-teal-border border border-transparent max-w-lg">
-          <span className="flex items-center gap-2.5">
-            <User size={15} className="w-teal" />
-            <span>
-              <span className="w-display text-sm block">Account identity</span>
-              <span className="text-xs w-text-faint">Email and connected accounts live on your Profile.</span>
-            </span>
-          </span>
-          <span className="text-xs w-teal group-hover:underline shrink-0">Open Profile</span>
-        </Link>
       ),
     },
     {
@@ -73,16 +65,18 @@ export default async function SettingsPage() {
       content: (
         <div className="w-card p-5">
           <SectionHeader icon={Bell} title="Notifications" />
-          <NotificationsSettingsCard initialEnabled={prefs.attentionAlertsEnabled} />
+          <p className="text-xs w-text-faint -mt-2 mb-4">Choose which account-wide operational alerts you want to receive.</p>
+          <NotificationsSettingsCard initial={notificationPrefs} />
         </div>
       ),
     },
     {
-      id: "moderation-defaults",
-      label: "Moderation Defaults",
+      id: "moderation",
+      label: "Moderation",
       content: (
         <div className="w-card p-5">
-          <SectionHeader icon={ShieldCheck} title="Moderation Defaults" />
+          <SectionHeader icon={ShieldCheck} title="Moderation" />
+          <p className="text-xs w-text-faint -mt-2 mb-4">Defaults applied when creating new Watchers.</p>
           <ModerationDefaultsCard initial={moderationDefaults} />
         </div>
       ),
@@ -93,17 +87,8 @@ export default async function SettingsPage() {
       content: (
         <div className="w-card p-5">
           <SectionHeader icon={Lock} title="Security" />
-          <SecuritySettingsCard />
-        </div>
-      ),
-    },
-    {
-      id: "support",
-      label: "Support",
-      content: (
-        <div className="w-card p-5 max-w-lg">
-          <SectionHeader icon={LifeBuoy} title="Contact support" />
-          <SupportContactForm />
+          <p className="text-xs w-text-faint -mt-2 mb-4">Manage authentication and account security.</p>
+          <SecuritySettingsCard emailVerified={emailVerified} />
         </div>
       ),
     },
@@ -114,9 +99,15 @@ export default async function SettingsPage() {
       <div className="space-y-6">
         <div>
           <h1 className="w-display text-xl mb-1">Settings</h1>
-          <p className="text-sm w-text-dim">General preferences, notifications, moderation defaults, security, and support.</p>
+          <p className="text-sm w-text-dim">Configure account-wide behavior for Innvil Watch.</p>
         </div>
-        <WatchTabs tabs={tabs} defaultTab="general" />
+        <SettingsSummary
+          timezone={timezoneLabel(generalPrefs.timezone)}
+          notificationsEnabledCount={notificationsEnabledCount}
+          notificationsTotalCount={3}
+          moderationConfigured={moderationConfigured}
+        />
+        <SettingsSectionNav tabs={tabs} defaultTab="general" />
       </div>
     </WatchShell>
   );

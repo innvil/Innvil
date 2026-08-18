@@ -127,6 +127,83 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Settings restructured into an admin-console control center: left-nav IA, Profile/Support moved out, `/support` route, and dense real-data polish (v1.42.0)
+- **Two combined passes, per explicit live product direction after seeing the v1.41.0 result.**
+- **(1) Information architecture correction.** Profile and Support tabs REMOVED from Settings — Profile already
+  has its own sidebar entry (duplicating it as a Settings tab confused the IA); Support moved to a new real
+  `/support` route (`app/support/page.tsx`, same `requireWatchPage()`/`WatchShell` pattern as every other Watch
+  route), reachable via a new **"Need help?"** link at the bottom of `WatchShell`'s sidebar. Settings now holds
+  exactly four sections: **General / Notifications / Moderation / Security**.
+- **(2) Layout: horizontal tabs → left sub-navigation + content pane.** New `SettingsSectionNav.tsx` — a
+  Settings-specific vertical nav (deliberately distinct from the horizontal `WatchTabs` used on Project/
+  Community/Watcher detail pages, per explicit instruction not to reuse that pattern here), visually quieter
+  than the main app sidebar (no icons/heavy borders), content pane capped at `max-w-2xl`. **Section state is
+  mirrored into the URL** (`?section=general|notifications|moderation|security`) via a shallow `router.replace`
+  — real deep-linking/refresh/support-link support, verified live (`/settings?section=security` loads directly
+  into Security).
+- **New `SettingsSummary.tsx`** — a real 4-up strip at the top (Timezone / Notifications "N of 3 enabled" /
+  Moderation defaults "Configured"/"Platform default" / Security "Email & password") — every value computed
+  server-side from the SAME data each section already reads, never a fabricated status. Security's line is a
+  static structural fact (no OAuth exists), not a dynamic timestamp this codebase can't truthfully produce.
+- **New shared `SettingsRow.tsx`** (label + description + real control) and `SettingsSwitch` — reused across
+  General/Notifications/Security instead of each section building its own stacked form, per explicit instruction
+  to reduce duplication without over-abstracting.
+- **General**: rebuilt on `SettingsRow`, Save button now genuinely **disabled until a value differs from the
+  last-persisted baseline** (tracked in separate `savedTimezone`/`savedTimeFormat` state, not by mutating the
+  `initial` prop), and shows "Saved at 7:24 AM" using a REAL client-side timestamp of the actual successful save
+  — never a fabricated audit log. Verified live: Save starts disabled, enables the instant the timezone value
+  changes, and the change was never persisted (never clicked Save during verification).
+- **Notifications**: rows rebuilt on `SettingsRow`/`SettingsSwitch` with imperative "Alert me when…" descriptions
+  (per explicit copy direction), a **"Delivery: Email"** row stating the one real channel that exists (never a
+  fabricated Email/Telegram/In-app menu), and a genuinely real **"Send test email"** button — new
+  `sendTestNotificationEmail()` (`watch-notifications.ts`) sends an ACTUAL email through the same `sendEmail`
+  path the digest sweep uses, bypassing the 24h/attention-item gating entirely (an explicit, on-demand, separate
+  send). Fails honestly (distinct "email delivery isn't configured"/"no email on this account" errors) rather
+  than reporting a fake success when `RESEND_API_KEY` is unset — `sendEmail` itself silently no-ops without a
+  key, which is exactly why this needed its own explicit pre-check. **Verified live**: Resend IS configured in
+  this environment, so clicking it sent a real email to the account's real address — confirmed via "Sent to
+  create.innvil@gmail.com" appearing in the UI.
+- **Moderation**: flattened from 3 stacked `w-card` blocks into ONE section surface with internal dividers (per
+  the explicit "card inside card inside card" complaint); a promoted **"Default moderation profile"** scope
+  callout (teal-bordered, states plainly: applied to new Watchers only, existing Watchers keep their own
+  persona, never retroactive); a compact **"Default for new Watchers"** preview row showing the real preset name
+  (or "Platform default"/"Custom") + a truncated real description excerpt — deliberately does NOT show fabricated
+  "Spam protection: Strict"/"Scam protection: Enabled" rows, since `ModeratorPersona` has no such fields at all
+  (those are separate moderation-enforcement mechanics, not persona config — inventing them would have been
+  exactly the kind of fabrication this whole series has avoided); new **"Reset to Innvil defaults"** (new
+  `resetModerationDefaults()`, restores the exact real `DEFAULT_MODERATOR_PERSONA` — not a fabricated shape) with
+  an inline confirm/cancel (shown only when the account has actually customized something, i.e. not already at
+  the default).
+- **Security**: rebuilt on `SettingsRow` — Password (row + a "Change password" button that expands the actual
+  form inline, collapsed by default so it doesn't dominate the section), **Email verification status** (new,
+  real — `admin.auth.admin.getUserById(...).user.email_confirmed_at`, a genuine Supabase Auth field never read
+  in this codebase before now), Sign-in method (static "Email & password" fact), and **Connected identities**
+  (a link to Profile — "Manage in Profile →" — never a duplicated Telegram identity card, per the explicit
+  "Security may link to Profile... should not duplicate the full Telegram account card" instruction). Session
+  list/2FA/login-history are still NOT shown — none of that exists anywhere in this codebase.
+- **Migration `0078_watch_notification_categories.sql`** was written in the immediately-prior pass (splitting the
+  single Notifications toggle into 3 real per-severity categories) — this pass's live testing confirmed it
+  **had not yet been applied**: a toggle appeared to reset after reload while General's already-applied migration
+  (0076) correctly persisted, isolating the cause to the specific unapplied migration rather than new code. The
+  user has since confirmed all migrations (through 0078) are now applied; this pass's own live verification (the
+  Moderation preset, General timezone, and Notification test-email round-trips) all behaved correctly against
+  the real database.
+- New tests: `watch-notifications.test.ts` (+2 — `sendTestNotificationEmail` fails honestly, never a fake
+  success, both when delivery isn't configured and when the account has no resolvable email),
+  `watch-moderation-defaults.test.ts` (+2 — `resetModerationDefaults` restores the exact real canonical default
+  via `deepEqual` against `DEFAULT_MODERATOR_PERSONA` itself, and only ever affects the calling account). 1102
+  tests pass (up from 1097), `tsc --noEmit` clean, production build clean.
+- **Verified live end-to-end**: summary strip shows real values; `?section=` deep-links load the correct section
+  on a hard navigation; General's Save button correctly starts disabled and enables on a real change (never
+  actually saved during this check); Moderation's scope callout, real preset preview, and Reset control all
+  render; Notifications' grouped rows, Delivery line, and Send test email (a genuine send, confirmed above) all
+  work; Security's row-based Password/Email/Sign-in-method/Connected-identities all render with real data.
+- **Deliberately not built this pass**: 2FA (no MFA infrastructure exists in this codebase to surface safely);
+  session list/revocation (no session-tracking mechanism exists anywhere); date-format/week-start General
+  preferences beyond timezone/time-format (no such schema exists, and none was added "solely to make General
+  look fuller," per the explicit instruction); a "Telegram" Settings category (still no real account-level
+  Telegram BEHAVIOR configuration exists, unchanged finding from v1.41.0).
+
 ### 2026-08-18 — Real Security section — Change Password, zero new backend (v1.41.0)
 - **Fourth and final pick from the Settings investigation** (Notifications v1.38.0, General v1.39.0, Moderation
   Defaults v1.40.0). Completes the original 8-section wishlist — every section in Settings now maps to

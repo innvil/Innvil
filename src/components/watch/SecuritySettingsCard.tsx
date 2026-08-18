@@ -1,22 +1,22 @@
 "use client";
 
 import React, { useState } from "react";
-import { KeyRound, ShieldCheck } from "lucide-react";
+import { CheckCircle2, AlertCircle } from "lucide-react";
+import Link from "next/link";
 import { updatePassword } from "@/src/lib/actions/account";
+import { SettingsRow } from "./SettingsRow";
 
-/** Real Security section — Change Password, reusing the EXISTING
- *  `updatePassword` action (`actions/account.ts`) that already powers the
- *  main Innvil owner app's Account Settings. Zero new backend: Watch shares
- *  the same Supabase Auth session/account as every other Innvil product, so
- *  this is purely a UI entry point onto already-proven, already-secure
- *  logic (re-authenticates with the current password before allowing a
- *  change). Sign-in method is shown read-only, never as a "manage" control
- *  — no OAuth provider exists anywhere in this codebase, so email/password
- *  is genuinely the only method there is. No session list/revocation is
- *  shown — that capability doesn't exist anywhere in this codebase; showing
+/** Real Security section — status rows for what's actually true about this
+ *  account (reusing the EXISTING `updatePassword` action from
+ *  `actions/account.ts`, already production-proven in the main Innvil owner
+ *  app), plus real Change Password. No session list/2FA/sign-in-method
+ *  management — none of that exists anywhere in this codebase, and showing
  *  it would be exactly the "control with nothing behind it" fabrication
- *  this codebase's conventions forbid. */
-export function SecuritySettingsCard() {
+ *  this codebase's conventions forbid. Telegram identity is never
+ *  duplicated here — it's canonically owned by Profile; this only links to
+ *  it. */
+export function SecuritySettingsCard({ emailVerified }: { emailVerified: boolean }) {
+  const [changingPassword, setChangingPassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -36,74 +36,93 @@ export function SecuritySettingsCard() {
     setCurrentPassword("");
     setNewPassword("");
     setConfirmPassword("");
+    setChangingPassword(false);
   };
 
   return (
-    <div className="space-y-6 max-w-lg">
-      <div className="w-surface-raised border w-line-soft rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-1">
-          <ShieldCheck size={14} className="w-teal" />
-          <p className="w-text text-sm font-medium">Sign-in method</p>
-        </div>
-        <p className="text-xs w-text-faint">Email & password. This is the only sign-in method on your Innvil account.</p>
+    <div className="max-w-md">
+      <div>
+        <SettingsRow label="Password" description="Applies to your whole Innvil account, not just Watch.">
+          {!changingPassword && (
+            <button
+              type="button"
+              onClick={() => setChangingPassword(true)}
+              className="text-xs w-teal hover:underline px-3 py-1.5 rounded-lg border w-line-soft"
+            >
+              Change password
+            </button>
+          )}
+        </SettingsRow>
+
+        <SettingsRow label="Email" description="Whether your account email has been confirmed.">
+          <span className={`text-xs flex items-center gap-1.5 ${emailVerified ? "w-green" : "w-amber"}`}>
+            {emailVerified ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+            {emailVerified ? "Verified" : "Not verified"}
+          </span>
+        </SettingsRow>
+
+        <SettingsRow label="Sign-in method" description="The only way to sign in to your Innvil account today.">
+          <span className="text-xs w-text-dim">Email & password</span>
+        </SettingsRow>
+
+        <SettingsRow label="Connected identities" description="Telegram and other connected accounts live on your Profile.">
+          <Link href="/profile" className="text-xs w-teal hover:underline">Manage in Profile →</Link>
+        </SettingsRow>
       </div>
 
-      <div className="w-card p-5">
-        <div className="flex items-center gap-2 mb-1">
-          <KeyRound size={14} className="w-teal" />
-          <h3 className="w-display text-sm">Change password</h3>
-        </div>
-        <p className="text-xs w-text-faint mb-3">Applies to your whole Innvil account, not just Watch.</p>
+      {changingPassword && (
+        <div className="w-surface-raised border w-line-soft rounded-lg p-4 mt-4">
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="security-current-password" className="text-xs w-text-dim block mb-1.5">Current password</label>
+              <input
+                id="security-current-password"
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full w-surface border w-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:w-teal-border"
+              />
+            </div>
+            <div>
+              <label htmlFor="security-new-password" className="text-xs w-text-dim block mb-1.5">New password</label>
+              <input
+                id="security-new-password"
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full w-surface border w-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:w-teal-border"
+              />
+            </div>
+            <div>
+              <label htmlFor="security-confirm-password" className="text-xs w-text-dim block mb-1.5">Confirm new password</label>
+              <input
+                id="security-confirm-password"
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full w-surface border w-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:w-teal-border"
+              />
+            </div>
+          </div>
 
-        <div className="space-y-3">
-          <div>
-            <label htmlFor="security-current-password" className="text-xs w-text-dim block mb-1.5">Current password</label>
-            <input
-              id="security-current-password"
-              type="password"
-              autoComplete="current-password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:w-teal-border"
-            />
+          <div className="flex items-center gap-3 mt-4">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={saving || !currentPassword || !newPassword}
+              className="w-btn-primary text-xs font-semibold px-3.5 py-2 rounded-lg disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Change password"}
+            </button>
+            <button type="button" onClick={() => setChangingPassword(false)} className="text-xs w-text-faint hover:w-text">Cancel</button>
+            {message && <span className="text-xs w-green">{message}</span>}
           </div>
-          <div>
-            <label htmlFor="security-new-password" className="text-xs w-text-dim block mb-1.5">New password</label>
-            <input
-              id="security-new-password"
-              type="password"
-              autoComplete="new-password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:w-teal-border"
-            />
-          </div>
-          <div>
-            <label htmlFor="security-confirm-password" className="text-xs w-text-dim block mb-1.5">Confirm new password</label>
-            <input
-              id="security-confirm-password"
-              type="password"
-              autoComplete="new-password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:w-teal-border"
-            />
-          </div>
+          {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
         </div>
-
-        <div className="flex items-center gap-3 mt-4">
-          <button
-            type="button"
-            onClick={submit}
-            disabled={saving || !currentPassword || !newPassword}
-            className="w-btn-primary text-xs font-semibold px-3.5 py-2 rounded-lg disabled:opacity-60"
-          >
-            {saving ? "Saving…" : "Change password"}
-          </button>
-          {message && <span className="text-xs w-green">{message}</span>}
-        </div>
-        {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
-      </div>
+      )}
     </div>
   );
 }
