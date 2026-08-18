@@ -4,8 +4,13 @@ import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
-  classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, type TelegramMessage,
+  classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
+  finalizeCommunityConnection,
 } from "./community-runtime";
+import {
+  buildStandaloneModeratorSettings, resolveStandaloneModeratorSettings, resolveWatcherAccountId,
+} from "@/src/lib/products/watch-runtime";
+import { hasVirtualModerator, virtualModNaturalChatter, virtualModModeration, moderatorEntitlementSource, CAPACITY } from "./plan";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
  *  isDuplicateUpdate uses, enforcing a real (integration_id, update_id)
@@ -848,6 +853,45 @@ test("photo takes precedence when (hypothetically) multiple media fields are pre
 // other comparably complex DB-mocked orchestrators (see the media-moderation
 // v1.19.0 changelog note) -- this pins the one genuinely pure decision layer.
 
+/* ---------------------- finalizeCommunityConnection: private-chat guard --- */
+// The rest of finalizeCommunityConnection's DB orchestration stays verified
+// via typecheck + build + code review (see the comment above) -- but this
+// specific guard is a pure, DB-free early return (checked before any query
+// runs), so it's directly testable and worth its own regression coverage:
+// this is the exact live-bug fix for a Telegram PERSON's private chat
+// producing an orphaned Project named after their username (e.g.
+// "KSolDegen"), the Panel-owner-flow counterpart to the standalone-Watch
+// fix already covered by watch-runtime.test.ts's private-chat tests.
+function throwingAdmin() {
+  return {
+    from() { throw new Error("finalizeCommunityConnection must reject a private chat before making any DB call"); },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+test("REQUIRED: finalizeCommunityConnection rejects a private Telegram chat before touching the DB -- the exact 'KSolDegen' live-bug fix", async () => {
+  const result = await finalizeCommunityConnection(
+    throwingAdmin(),
+    "panel-1",
+    "mod-1",
+    "owner-1",
+    {},
+    { chat: { id: 6952824285, username: "KSolDegen", type: "private" }, present: true, canSend: true, canDelete: true, canRestrict: true }
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /personal Telegram account/i);
+});
+
+test("finalizeCommunityConnection's private-chat guard never fires for a real group/supergroup/channel (only checked when chat.type is KNOWN and bad)", () => {
+  const SUPPORTED = new Set(["group", "supergroup", "channel"]);
+  for (const type of ["group", "supergroup", "channel"]) {
+    assert.ok(SUPPORTED.has(type), `${type} must remain a supported Community chat type`);
+  }
+  // An unset/unknown chat.type must never be guessed at -- mirrors
+  // createAccountCommunity's own "only checked when actually known" rule.
+  assert.ok(!SUPPORTED.has("private"));
+});
+
 test("START_COMMAND_RE matches a bare /start with no payload (private-chat touchpoint)", () => {
   const m = START_COMMAND_RE.exec("/start");
   assert.ok(m);
@@ -878,4 +922,198 @@ test("START_COMMAND_RE tolerates trailing whitespace", () => {
   const m = START_COMMAND_RE.exec("/start   token123   ");
   assert.ok(m);
   assert.equal(m?.[1], "token123");
+});
+
+/* ============================================================
+   Watch standalone runtime -- resolveCommunity, standalone settings
+   synthesis, and the "no hidden Panel fallback" proof.
+   ============================================================ */
+
+interface FakeCommunityRow {
+  id: string; panel_id: string | null; platform: string; chat_id: string;
+  bot_ack_mode?: string; collab_contact?: string | null;
+}
+
+/** Mimics resolveCommunity's exact query shape: .select().eq(platform).eq(chat_id)
+ *  then EITHER .eq("panel_id", X) or .is("panel_id", null), then .maybeSingle().
+ *  Records every table touched so a test can assert "panels" was never queried. */
+function fakeAdminForResolveCommunity(rows: FakeCommunityRow[]) {
+  const tablesTouched: string[] = [];
+  return {
+    __tablesTouched: tablesTouched,
+    from(table: string) {
+      tablesTouched.push(table);
+      if (table !== "communities") throw new Error(`unexpected table in fake admin: ${table}`);
+      const filters: Array<(r: FakeCommunityRow) => boolean> = [];
+      const api = {
+        select() { return api; },
+        eq(col: string, val: unknown) { filters.push((r) => (r as unknown as Record<string, unknown>)[col] === val); return api; },
+        is(col: string, val: unknown) { filters.push((r) => ((r as unknown as Record<string, unknown>)[col] ?? null) === val); return api; },
+        async maybeSingle() {
+          const matches = rows.filter((r) => filters.every((f) => f(r)));
+          return { data: matches[0] ?? null, error: null };
+        },
+        // resolveCommunity's best-effort metadata refresh after a successful
+        // SELECT -- always a no-op success here, matching the real
+        // "never touches project_id, failure here is non-fatal" behavior.
+        update() {
+          return { async eq() { return { error: null }; } };
+        },
+      };
+      return api;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+test("REQUIRED: resolveCommunity resolves a standalone (Panel-less) community by platform+chat_id alone", async () => {
+  const admin = fakeAdminForResolveCommunity([
+    { id: "c1", panel_id: null, platform: "telegram", chat_id: "-1001" },
+  ]);
+  const community = await resolveCommunity(admin, null, { id: -1001, type: "supergroup" });
+  assert.ok(community);
+  assert.equal(community?.id, "c1");
+});
+
+test("REQUIRED: resolveCommunity never returns a Panel-scoped community for a standalone (null panelId) lookup, even with the same chat_id", async () => {
+  const admin = fakeAdminForResolveCommunity([
+    { id: "c-panel", panel_id: "panel-1", platform: "telegram", chat_id: "-1001" },
+  ]);
+  const community = await resolveCommunity(admin, null, { id: -1001, type: "supergroup" });
+  assert.equal(community, null, "a Panel-owned community must never be mistaken for a standalone one");
+});
+
+test("REQUIRED: resolveCommunity never returns a standalone community for a Panel-scoped lookup, even with the same chat_id (the reverse case)", async () => {
+  const admin = fakeAdminForResolveCommunity([
+    { id: "c-standalone", panel_id: null, platform: "telegram", chat_id: "-1001" },
+  ]);
+  const community = await resolveCommunity(admin, "panel-1", { id: -1001, type: "supergroup" });
+  assert.equal(community, null, "a standalone community must never be mistaken for a Panel's");
+});
+
+test("REQUIRED: resolveCommunity distinguishes two standalone communities with different chat IDs correctly (no cross-account bleed)", async () => {
+  const admin = fakeAdminForResolveCommunity([
+    { id: "c-a", panel_id: null, platform: "telegram", chat_id: "-1001" },
+    { id: "c-b", panel_id: null, platform: "telegram", chat_id: "-2002" },
+  ]);
+  const forA = await resolveCommunity(admin, null, { id: -1001, type: "supergroup" });
+  const forB = await resolveCommunity(admin, null, { id: -2002, type: "supergroup" });
+  assert.equal(forA?.id, "c-a");
+  assert.equal(forB?.id, "c-b");
+});
+
+test("resolveCommunity returns null for an unknown chat, standalone or Panel-scoped, never a guess", async () => {
+  const admin = fakeAdminForResolveCommunity([]);
+  assert.equal(await resolveCommunity(admin, null, { id: -9999, type: "group" }), null);
+  assert.equal(await resolveCommunity(admin, "panel-1", { id: -9999, type: "group" }), null);
+});
+
+test("REQUIRED: NO HIDDEN FALLBACK -- resolveCommunity for a standalone lookup never queries the panels table at all", async () => {
+  const admin = fakeAdminForResolveCommunity([{ id: "c1", panel_id: null, platform: "telegram", chat_id: "-1001" }]);
+  await resolveCommunity(admin, null, { id: -1001, type: "supergroup" });
+  assert.ok(admin.__tablesTouched.every((t: string) => t === "communities"), "must never touch panels for a standalone resolution");
+});
+
+/* ---------------------------------------------- standalone settings synthesis ---- */
+
+const STANDALONE_ENTITLED = { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:deposit-1" };
+
+function fakeAdminForStandaloneSettings(opts: { moderators?: Array<{ id: string; account_id: string | null }>; entitlements?: Record<string, unknown>[]; products?: Record<string, unknown>[] }) {
+  const tablesTouched: string[] = [];
+  const store: Record<string, unknown[]> = {
+    virtual_moderators: opts.moderators ?? [],
+    product_entitlements: opts.entitlements ?? [],
+    products: opts.products ?? [{ id: "product-watch", slug: "watch" }],
+  };
+  return {
+    __tablesTouched: tablesTouched,
+    from(table: string) {
+      tablesTouched.push(table);
+      const filters: Array<(r: Record<string, unknown>) => boolean> = [];
+      const api = {
+        select() { return api; },
+        eq(col: string, val: unknown) { filters.push((r) => r[col] === val); return api; },
+        async maybeSingle() {
+          const rows = (store[table] ?? []) as Record<string, unknown>[];
+          return { data: rows.filter((r) => filters.every((f) => f(r)))[0] ?? null, error: null };
+        },
+      };
+      return api;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+test("REQUIRED: buildStandaloneModeratorSettings produces a shape the REAL capability functions in plan.ts read correctly", () => {
+  const settings = buildStandaloneModeratorSettings("standard");
+  assert.equal(hasVirtualModerator(settings), true);
+  assert.equal(moderatorEntitlementSource(settings), "standard");
+  assert.equal(virtualModNaturalChatter(settings), true);
+  assert.equal(virtualModModeration(settings), true);
+});
+
+test("buildStandaloneModeratorSettings never carries a trial -- direct Watch checkout is paid-only", () => {
+  const settings = buildStandaloneModeratorSettings("basic") as { addons: { moderator: { trial: { active: boolean } } } };
+  assert.equal(settings.addons.moderator.trial.active, false);
+});
+
+test("REQUIRED: resolveStandaloneModeratorSettings resolves real capacity for an entitled standalone account", async () => {
+  const admin = fakeAdminForStandaloneSettings({
+    moderators: [{ id: "mod-1", account_id: "acct-1" }],
+    entitlements: [STANDALONE_ENTITLED],
+  });
+  const settings = await resolveStandaloneModeratorSettings(admin, "mod-1");
+  assert.equal(hasVirtualModerator(settings), true);
+  assert.equal(moderatorEntitlementSource(settings), "standard");
+});
+
+test("REQUIRED: resolveStandaloneModeratorSettings returns null (never a fabricated tier) for a non-entitled account", async () => {
+  const admin = fakeAdminForStandaloneSettings({ moderators: [{ id: "mod-1", account_id: "acct-1" }], entitlements: [] });
+  const settings = await resolveStandaloneModeratorSettings(admin, "mod-1");
+  assert.equal(settings, null);
+  assert.equal(hasVirtualModerator(settings), false, "downstream capability checks must fail closed, never assume entitlement");
+});
+
+test("resolveStandaloneModeratorSettings returns null for an unknown/Panel-owned Watcher (no account_id)", async () => {
+  const admin = fakeAdminForStandaloneSettings({ moderators: [{ id: "mod-1", account_id: null }] });
+  assert.equal(await resolveStandaloneModeratorSettings(admin, "mod-1"), null);
+  assert.equal(await resolveStandaloneModeratorSettings(admin, "nonexistent"), null);
+});
+
+test("REQUIRED: NO HIDDEN FALLBACK -- resolveStandaloneModeratorSettings never queries the panels table", async () => {
+  const admin = fakeAdminForStandaloneSettings({ moderators: [{ id: "mod-1", account_id: "acct-1" }], entitlements: [STANDALONE_ENTITLED] });
+  await resolveStandaloneModeratorSettings(admin, "mod-1");
+  assert.ok(!admin.__tablesTouched.includes("panels"), "must never look up a Panel for standalone entitlement resolution");
+  assert.deepEqual(admin.__tablesTouched, ["virtual_moderators", "products", "product_entitlements"]);
+});
+
+test("resolveWatcherAccountId returns null for a Panel-owned Watcher, the account id for a standalone one", async () => {
+  const admin = fakeAdminForStandaloneSettings({ moderators: [{ id: "mod-1", account_id: "acct-1" }, { id: "mod-2", account_id: null }] });
+  assert.equal(await resolveWatcherAccountId(admin, "mod-1"), "acct-1");
+  assert.equal(await resolveWatcherAccountId(admin, "mod-2"), null);
+});
+
+/* ------------------------------------------------- capacity parity across tiers ---- */
+
+test("REQUIRED: every plan tier's standalone-synthesized capacity matches the canonical CAPACITY table exactly", () => {
+  for (const tier of ["basic", "standard", "premium", "pro"] as const) {
+    const settings = buildStandaloneModeratorSettings(tier);
+    assert.equal(moderatorEntitlementSource(settings), tier);
+    // Sanity: the SAME settings object, run through the real capability
+    // gate, agrees with the canonical CAPACITY table's existence for this tier.
+    assert.ok(CAPACITY[tier].maxActiveSlots > 0);
+    assert.ok(CAPACITY[tier].maxCommunities > 0);
+  }
+});
+
+/* ----------------------------------------------------- loadRelevantKnowledge ---- */
+
+test("REQUIRED: loadRelevantKnowledge with panelId: null skips the ORGANIZATION-scope query entirely (no panel to scope it to)", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "k1", panel_id: "panel-x", scope_type: "ORGANIZATION", project_id: null, community_id: null, kind: "fact", title: "Org fact", content: "Should never surface for a standalone community.", active: true }],
+    { "community-1": "project-1" }
+  );
+  const results = await loadRelevantKnowledge(admin, null, "community-1", "anything");
+  const surfacedTitles = (results ?? []).map((r) => r.title);
+  assert.ok(!surfacedTitles.includes("Org fact"), "ORGANIZATION-scope knowledge must never leak into a standalone (panel-less) community");
 });

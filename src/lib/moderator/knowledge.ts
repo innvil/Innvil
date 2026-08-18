@@ -47,7 +47,7 @@ export type KnowledgeScopeType = "ORGANIZATION" | "PROJECT" | "COMMUNITY";
 
 export interface KnowledgeSource {
   id: string;
-  panelId: string;
+  panelId: string | null; // legacy Panel attribution only, never used for scoring/isolation (see the module comment above)
   scopeType: KnowledgeScopeType;
   projectId: string | null;
   communityId: string | null;

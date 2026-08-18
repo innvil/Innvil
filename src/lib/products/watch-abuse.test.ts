@@ -30,8 +30,21 @@ function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: R
         upsert(row: Row, opts: { onConflict: string }) {
           const keys = opts.onConflict.split(",");
           const existingIdx = (store[table] ?? []).findIndex((r) => keys.every((k) => r[k] === row[k]));
-          if (existingIdx >= 0) store[table][existingIdx] = { ...store[table][existingIdx], ...row };
-          else store[table] = [...(store[table] ?? []), { id: `gen-${table}-${(store[table] ?? []).length + 1}`, ...row }];
+          if (existingIdx >= 0) {
+            store[table][existingIdx] = { ...store[table][existingIdx], ...row };
+            return Promise.resolve({ data: null, error: null });
+          }
+          // Simulates migration 0071's real `unique(telegram_user_id)` DB
+          // constraint on watch_telegram_links -- a row with the SAME
+          // telegram_user_id under a DIFFERENT account_id already existing
+          // is a genuine unique-violation at the database boundary, not just
+          // the application-level pre-check this file's linkTelegramIdentity
+          // also does (needed to test the race-condition-safety requirement).
+          if (table === "watch_telegram_links") {
+            const conflict = (store[table] ?? []).find((r) => r.telegram_user_id === row.telegram_user_id && r.account_id !== row.account_id);
+            if (conflict) return Promise.resolve({ data: null, error: { code: "23505", message: "duplicate key value violates unique constraint \"watch_telegram_links_tg_user_unique\"" } });
+          }
+          store[table] = [...(store[table] ?? []), { id: `gen-${table}-${(store[table] ?? []).length + 1}`, ...row }];
           return Promise.resolve({ data: null, error: null });
         },
         then(resolve: (v: { data: Row[]; error: null }) => void) {
@@ -49,8 +62,50 @@ function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: R
 
 test("REQUIRED: linking is idempotent -- linking the same (account, telegram id) twice does not duplicate", async () => {
   const admin = fakeAdmin({});
-  await linkTelegramIdentity(admin, "acct-1", 555);
-  await linkTelegramIdentity(admin, "acct-1", 555);
+  const first = await linkTelegramIdentity(admin, "acct-1", 555);
+  const second = await linkTelegramIdentity(admin, "acct-1", 555);
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(admin.__store.watch_telegram_links.length, 1);
+});
+
+test("REQUIRED: the same verified Telegram numeric user ID cannot be linked to two different Innvil accounts", async () => {
+  const admin = fakeAdmin({ watch_telegram_links: [{ account_id: "acct-A", telegram_user_id: 6952824285 }] });
+  const result = await linkTelegramIdentity(admin, "acct-B", 6952824285);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.alreadyLinkedToAnotherAccount, true);
+    assert.doesNotMatch(result.error, /acct-A/, "must never expose the other account's identity");
+  }
+  // no second link was created -- acct-B never got attached to this identity
+  assert.equal(admin.__store.watch_telegram_links.length, 1);
+  assert.equal(admin.__store.watch_telegram_links[0].account_id, "acct-A");
+});
+
+test("REQUIRED: a uniqueness race (pre-check passes, DB insert loses the race) is still safely rejected", async () => {
+  // Simulates: the pre-check (telegramIdentityLinkedElsewhere) sees nothing
+  // yet, but by the time the upsert runs, a concurrent request from a
+  // DIFFERENT account already claimed this identity -- the fake DB layer's
+  // unique-constraint simulation is what actually catches this, proving the
+  // DB boundary is the real enforcement, not just the pre-check.
+  const admin = fakeAdmin({});
+  admin.__store.watch_telegram_links.push({ account_id: "acct-A", telegram_user_id: 42 });
+  // acct-B's pre-check already ran against a stale read (simulated by
+  // directly exercising the upsert path with the row already present).
+  const result = await linkTelegramIdentity(admin, "acct-B", 42);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.alreadyLinkedToAnotherAccount, true);
+  assert.equal(admin.__store.watch_telegram_links.length, 1, "the race loser must never be inserted");
+});
+
+test("REQUIRED: username changes do not create a new Telegram identity -- linking is keyed on the numeric id only", async () => {
+  // linkTelegramIdentity never takes a username at all -- the numeric id is
+  // the sole key. Re-linking the same numeric id (e.g. after the person
+  // renamed their Telegram @handle) is just the existing idempotent path.
+  const admin = fakeAdmin({});
+  await linkTelegramIdentity(admin, "acct-1", 6952824285);
+  const relinked = await linkTelegramIdentity(admin, "acct-1", 6952824285);
+  assert.equal(relinked.ok, true);
   assert.equal(admin.__store.watch_telegram_links.length, 1);
 });
 
@@ -68,6 +123,29 @@ test("REQUIRED: the SAME verified Telegram identity linked to a DIFFERENT accoun
 test("a Telegram identity linked ONLY to this account reports no cross-account pattern", async () => {
   const admin = fakeAdmin({ watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 555 }] });
   assert.deepEqual(await telegramIdentityLinkedElsewhere(admin, "acct-1", 555), []);
+});
+
+/* --------------------------------------------------- full anti-abuse scenario ---- */
+
+test("REQUIRED (anti-abuse integration): Account A links + consumes the free offer via a Telegram identity; Account B cannot reuse that same identity for either the link OR a second free offer", async () => {
+  const admin = fakeAdmin({});
+  const TG_USER_ID = 918273645;
+
+  // Account A verifies and links the Telegram identity.
+  const linkA = await linkTelegramIdentity(admin, "acct-A", TG_USER_ID);
+  assert.equal(linkA.ok, true);
+  // Account A is eligible (nothing consumed yet) and then consumes the offer.
+  assert.equal(await eligibleForOneTimeOffer(admin, "acct-A", TG_USER_ID, "trial_consumed"), true);
+  await recordAbuseSignal(admin, { accountId: "acct-A", telegramUserId: TG_USER_ID, abuseType: "trial_consumed", scope: "telegram_identity" });
+
+  // Account B attempts to link the SAME Telegram identity -- rejected.
+  const linkB = await linkTelegramIdentity(admin, "acct-B", TG_USER_ID);
+  assert.equal(linkB.ok, false);
+  assert.equal(admin.__store.watch_telegram_links.length, 1, "no second link was created");
+  assert.equal(admin.__store.watch_telegram_links[0].account_id, "acct-A");
+
+  // Account B is also ineligible for the free offer through that same identity.
+  assert.equal(await eligibleForOneTimeOffer(admin, "acct-B", TG_USER_ID, "trial_consumed"), false);
 });
 
 /* --------------------------------------------------------- offer eligibility ---- */

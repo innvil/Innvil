@@ -35,8 +35,14 @@ type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
 /** Providers usable through THIS generic hosted-checkout flow — Binance Pay
  *  is handled separately (see file doc comment above), not because it's
- *  unsupported, but because its claim shape is structurally different. */
-export const WATCH_DIRECT_PAYMENT_GATEWAYS = ["cryptomus", "nowpayments"] as const;
+ *  unsupported, but because its claim shape is structurally different.
+ *  NOT exported: a `"use server"` file may only export async functions --
+ *  exporting this constant directly breaks Next's combined server-actions
+ *  bundle at module-evaluation time (taking down every OTHER server action
+ *  in the app as collateral damage, incl. totally unrelated ones like
+ *  signOutAction). Nothing outside this file needs it (verified: no other
+ *  module imports it), so it's simply kept internal. */
+const WATCH_DIRECT_PAYMENT_GATEWAYS = ["cryptomus", "nowpayments"] as const;
 
 export async function createDirectWatchCheckout(
   planName: Exclude<WatchPlanDisplayName, "Enterprise">,

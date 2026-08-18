@@ -278,10 +278,13 @@ body {
 
 .w-amber { color: var(--w-amber); }
 .w-amber-soft-bg { background: var(--w-amber-soft); }
+.w-amber-border { border-color: rgba(245, 166, 35, 0.35); }
 .w-green { color: var(--w-green); }
+.w-green-bg { background: var(--w-green); }
 .w-green-soft-bg { background: var(--w-green-soft); }
 .w-red { color: var(--w-red); }
 .w-red-soft-bg { background: var(--w-red-soft); }
+.w-red-border { border-color: rgba(248, 113, 113, 0.35); }
 
 .w-btn-primary {
   background: linear-gradient(120deg, var(--w-teal-light), var(--w-teal));
@@ -327,6 +330,15 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .w-pulse-dot { animation: none; }
+}
+
+/* Same pulse, usable on SVG shapes (opacity-only, so it applies to any
+   element) -- reused by the onboarding guide's signal-path connector. */
+.w-svg-pulse {
+  animation: w-pulse 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .w-svg-pulse { animation: none; }
 }
 
 /* Toggle component */

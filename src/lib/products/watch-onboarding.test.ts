@@ -54,19 +54,22 @@ test("REQUIRED: no step claims Forge/Panel ownership is required to use Watch di
   assert.ok(!/you (must|need to) (own|create|have) a panel/i.test(allText));
 });
 
-test("REQUIRED: the account step (01) states Watch does not require Panel/Forge ownership", () => {
+test("REQUIRED: normal Watch setup steps use plain product copy -- no Panel/Forge explanation, Watch reads as standalone by default", () => {
   const steps = watchOnboardingSteps();
-  const accountStep = steps[0];
-  const allText = [accountStep.summary, ...accountStep.body].join(" ").toLowerCase();
-  assert.ok(allText.includes("do not need to own") || allText.includes("independent"));
+  // Every step except the honest Telegram-connect limitation (04).
+  const normalSteps = steps.filter((s) => s.n !== "04");
+  const allText = normalSteps.flatMap((s) => [s.summary, ...s.body, ...s.callouts.map((c) => c.text)]).join(" ").toLowerCase();
+  assert.ok(!allText.includes("panel"), "normal Watch setup copy should never mention Panel");
+  assert.ok(!allText.includes("forge"), "normal Watch setup copy should never mention Forge");
 });
 
-test("the Telegram-connect step (04) honestly flags that self-serve Panel-less connection is still rolling out", () => {
+test("the Telegram-connect step (04) honestly flags that self-serve connection is still rolling out, without explaining Panels", () => {
   const steps = watchOnboardingSteps();
   const telegramStep = steps.find((s) => s.title.toLowerCase().includes("telegram"));
   assert.ok(telegramStep);
   const inProgress = telegramStep!.callouts.find((c) => c.kind === "in-progress");
   assert.ok(inProgress, "expected an honest in-progress callout on the Telegram-connect step");
+  assert.ok(!inProgress!.text.toLowerCase().includes("panel"), "the honest limitation must not be explained via Panel language");
 });
 
 test("every callout has a non-empty text field", () => {

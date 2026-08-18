@@ -15,7 +15,11 @@
  * name rename) — see the dated changelog entry for when this was approved.
  */
 
-import { moderatorPlanPrice, moderatorEnterpriseSlotPrice, MODERATOR_ENTERPRISE_MIN_SLOTS, type ModeratorPlanTier } from "@/src/lib/money";
+import {
+  moderatorPlanPrice, moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities,
+  MODERATOR_ENTERPRISE_MIN_SLOTS, MODERATOR_COMMUNITY_CAPACITY, type ModeratorPlanTier,
+} from "@/src/lib/money";
+import { CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 
 export type WatchPlanDisplayName = "Bronze" | "Silver" | "Gold" | "Platinum" | "Enterprise";
 
@@ -49,13 +53,39 @@ export interface WatchPlanOption {
   tier: ModeratorPlanTier;
   displayName: WatchPlanDisplayName;
   price: number;
+  /** Watcher slot allowance -- one slot = one active Watcher-to-Community
+   *  deployment (see CAPACITY in moderator/plan.ts, the same table
+   *  deployAccountWatcher/checkDeploymentSlotCaps enforce against). */
+  slots: number;
+  /** Telegram Community allowance included with the base subscription. */
+  communitiesIncluded: number;
+  /** How far this plan's Community allowance can be expanded before
+   *  needing another tier/Enterprise (money.ts's MODERATOR_COMMUNITY_
+   *  CAPACITY[tier].maxWithAddons -- the SAME ceiling
+   *  moderatorCommunityExpansionCeiling() in moderator/plan.ts reads).
+   *  Equal to `communitiesIncluded` for Bronze/Silver (hard-capped, no
+   *  expansion) and strictly greater for Gold/Platinum. */
+  communitiesMax: number;
 }
 
 /** The 4 self-serve plan options, in ascending order, for a plan picker —
- *  reads live prices from money.ts, never hardcodes a number here. */
+ *  reads live prices/slot/community allowances from money.ts and
+ *  moderator/plan.ts (the SAME canonical tables enforcement itself reads),
+ *  never a duplicated number. There is no real "Media Moderation Units"
+ *  allowance anywhere in this codebase yet (no media-usage metering system
+ *  exists -- see Phase 4.S in CLAUDE.md, explicitly documented as a future
+ *  plan, not implemented) -- deliberately not included here rather than
+ *  showing a fabricated number. */
 export function watchPlanOptions(): WatchPlanOption[] {
   const tiers: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro"];
-  return tiers.map((tier) => ({ tier, displayName: watchPlanDisplayName(tier), price: moderatorPlanPrice(tier) }));
+  return tiers.map((tier) => ({
+    tier,
+    displayName: watchPlanDisplayName(tier),
+    price: moderatorPlanPrice(tier),
+    slots: CAPACITY[tier].maxActiveSlots,
+    communitiesIncluded: CAPACITY[tier].maxCommunities,
+    communitiesMax: MODERATOR_COMMUNITY_CAPACITY[tier].maxWithAddons,
+  }));
 }
 
-export { moderatorEnterpriseSlotPrice, MODERATOR_ENTERPRISE_MIN_SLOTS };
+export { moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, MODERATOR_ENTERPRISE_MIN_SLOTS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY };

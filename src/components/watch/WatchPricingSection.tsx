@@ -52,6 +52,13 @@ export function WatchPricingSection({ options, authenticated }: { options: Watch
               </span>
               <p className="text-xs w-text-faint mb-4">{PLAN_BLURBS[plan]}</p>
               <p className="text-2xl w-display mb-1">${opt.price.toFixed(2)}<span className="text-sm w-text-faint">/mo</span></p>
+              <div className="text-[11px] w-text-dim space-y-0.5 mb-3">
+                <p>{opt.slots} Watcher slots</p>
+                <p>
+                  {opt.communitiesIncluded} communit{opt.communitiesIncluded === 1 ? "y" : "ies"}
+                  {opt.communitiesMax > opt.communitiesIncluded && <span> (up to {opt.communitiesMax})</span>}
+                </p>
+              </div>
               <button
                 onClick={() => subscribe(plan)}
                 className="mt-4 w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg"

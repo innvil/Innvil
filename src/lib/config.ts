@@ -34,6 +34,17 @@ export function storefrontBaseFromLocation(subdomain: string): string {
   return isAppHost ? `/p/${subdomain}` : "";
 }
 
+/**
+ * True when `host` is exactly Innvil Watch's own product domain. Pure and
+ * testable on its own -- the small explicit allowlist behind
+ * auth.ts's server-side redirect-origin resolution for password-reset
+ * emails (never trusts an arbitrary client-supplied host/URL, only this one
+ * alternate first-party domain).
+ */
+export function isTrustedWatchHost(host: string): boolean {
+  return host.trim().toLowerCase() === WATCH_ROOT_DOMAIN.toLowerCase();
+}
+
 /** The hostname shown for a panel (its custom domain if set, else its subdomain). */
 export function panelDisplayDomain(subdomain: string, customDomain?: string | null): string {
   return customDomain || `${subdomain}.${PANEL_ROOT_DOMAIN}`;

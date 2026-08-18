@@ -40,6 +40,7 @@ import { classifyImageBytes } from "./media-safety-provider";
 import { extractVideoFrames } from "./media-frame-extractor";
 import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
+import { resolveStandaloneModeratorSettings } from "@/src/lib/products/watch-runtime";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -162,7 +163,10 @@ async function resolveIntegration(admin: SupabaseClient, integrationId: string) 
     .select("id, panel_id, virtual_moderator_id, telegram_bot_id")
     .eq("id", integrationId)
     .maybeSingle();
-  return data as { id: string; panel_id: string; virtual_moderator_id: string; telegram_bot_id: number | null } | null;
+  // panel_id is nullable as of migration 0069 -- a standalone (direct-Watch,
+  // Panel-less) integration has panel_id: null; ownership then resolves via
+  // virtual_moderator_id -> virtual_moderators.account_id instead.
+  return data as { id: string; panel_id: string | null; virtual_moderator_id: string; telegram_bot_id: number | null } | null;
 }
 
 /** Resolves the community row for an inbound Telegram message. SELECT-then-
@@ -177,16 +181,23 @@ async function resolveIntegration(admin: SupabaseClient, integrationId: string) 
  *  row already existed.) A message from a chat with no matching row is
  *  simply not from a connected community -- communities are created only
  *  through the explicit connectCommunity flow (actions/moderator.ts), which
- *  supplies a real project_id, never implicitly on first message here. */
-async function resolveCommunity(admin: SupabaseClient, panelId: string, chat: TelegramChat) {
+ *  supplies a real project_id, never implicitly on first message here.
+ *
+ *  `panelId: null` is the standalone (direct-Watch, Panel-less) case --
+ *  looks up among communities with NO panel at all (`idx_communities_
+ *  standalone_chat`, migration 0069's partial unique index on
+ *  `(platform, chat_id) where panel_id is null`), never among Panel-scoped
+ *  ones. A Panel-scoped community with the same chat_id (a different
+ *  tenant's) can never be mistaken for a standalone one, or vice versa --
+ *  the two pools are disjoint by construction, not merely by convention. */
+export async function resolveCommunity(admin: SupabaseClient, panelId: string | null, chat: TelegramChat) {
   const chatId = String(chat.id);
-  const { data, error } = await admin
+  const base = admin
     .from("communities")
     .select("id, bot_ack_mode, collab_contact")
-    .eq("panel_id", panelId)
     .eq("platform", "telegram")
-    .eq("chat_id", chatId)
-    .maybeSingle();
+    .eq("chat_id", chatId);
+  const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
   if (error) {
     console.error("[telegram/community] resolveCommunity select failed", panelId, chatId, error.message, error.code);
     return null;
@@ -292,6 +303,22 @@ async function startModeratorTrialIfEligible(admin: SupabaseClient, ownerId: str
  * explicit "do not create a parallel moderator/deployment system"
  * instruction).
  */
+/** The only Telegram chat/resource types a Community connection may
+ *  represent — mirrors `watch-runtime.ts`'s `createAccountCommunity` guard
+ *  (the standalone-Watch creation path, fixed in migration 0071's identity
+ *  pass). `finalizeCommunityConnection` — the shared Panel-owner/`/start`
+ *  connect core — never had the equivalent check, which is exactly how a
+ *  private 1:1 chat with a Telegram PERSON (e.g. the account holder's own
+ *  conversation with their moderator's bot) could reach this function and
+ *  get treated as a real Community: a Project auto-created and named after
+ *  that person's Telegram username/display name (`membership.chat.title ??
+ *  membership.chat.username`), plus a `communities` row with `chat_type:
+ *  "private"`. Migration 0071 already cleaned up the resulting private
+ *  `communities` rows; migration 0072 cleans up the orphaned Projects left
+ *  behind by this exact gap. This checked EARLY (before the trial-start side
+ *  effect) closes the gap at its actual source going forward. */
+const SUPPORTED_TELEGRAM_COMMUNITY_CHAT_TYPES = new Set(["group", "supergroup", "channel"]);
+
 export async function finalizeCommunityConnection(
   admin: SupabaseClient,
   panelId: string,
@@ -300,6 +327,10 @@ export async function finalizeCommunityConnection(
   panelSettings: unknown,
   membership: ChatMembershipResult
 ): Promise<Result<CommunityDeploymentRow>> {
+  if (membership.chat.type && !SUPPORTED_TELEGRAM_COMMUNITY_CHAT_TYPES.has(membership.chat.type)) {
+    return { ok: false, error: "This is a personal Telegram account, not a group or channel. Add the bot to a Telegram group, supergroup, or channel instead." };
+  }
+
   // Past all Telegram verification — this connection attempt is real, so this
   // is the right moment to start the trial if this owner has never had one
   // (spec §45: trial starts on the first deployment actually going live, not
@@ -461,7 +492,7 @@ export const START_COMMAND_RE = /^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/i;
  */
 async function handleStartCommand(
   admin: SupabaseClient,
-  integration: { id: string; panel_id: string; virtual_moderator_id: string },
+  integration: { id: string; panel_id: string | null; virtual_moderator_id: string },
   message: TelegramMessage
 ): Promise<boolean> {
   const match = START_COMMAND_RE.exec((message.text ?? "").trim());
@@ -506,12 +537,20 @@ async function handleStartCommand(
  *  connection goes through. */
 async function completeGroupSetupSession(
   admin: SupabaseClient,
-  integration: { id: string; panel_id: string; virtual_moderator_id: string },
+  integration: { id: string; panel_id: string | null; virtual_moderator_id: string },
   message: TelegramMessage,
   setupToken: string,
   botToken: string,
   moderatorName: string
 ): Promise<void> {
+  // The /start deep-link setup-session flow (Phase 4.O) is created
+  // exclusively by the owner-side createTelegramSetupSession action, which
+  // is Panel-scoped -- a standalone (Panel-less) integration structurally
+  // can never have a real telegram_setup_sessions row to consume here.
+  // Standalone Telegram connection isn't wired to this flow yet (see
+  // watch-runtime.ts's createAccountCommunity, the DB/ownership layer for
+  // it); this is a safe no-op, never a crash, for that case.
+  if (!integration.panel_id) return;
   const now = new Date();
   const { data: session } = await admin
     .from("telegram_setup_sessions")
@@ -573,7 +612,7 @@ async function completeGroupSetupSession(
  *  name resolution fix — this is the ACTUAL source of the "@kwan_mod_bot in
  *  generated conversation" leak, so it needs its own direct test, not just a
  *  downstream one on the coordinator's template layer. */
-export async function classifySender(admin: SupabaseClient, panelId: string, communityId: string, from: TelegramUser): Promise<CommunityEvent["sender"]> {
+export async function classifySender(admin: SupabaseClient, panelId: string | null, communityId: string, from: TelegramUser): Promise<CommunityEvent["sender"]> {
   const platformUserId = String(from.id);
   if (!from.is_bot) {
     return { platformUserId, isBot: false, senderType: "HUMAN", displayName: from.first_name ?? from.username ?? null, username: from.username ?? null };
@@ -651,7 +690,7 @@ export async function classifySender(admin: SupabaseClient, panelId: string, com
  */
 async function recordCommunityMessage(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   communityId: string,
   message: TelegramMessage,
   sender: CommunityEvent["sender"]
@@ -712,7 +751,7 @@ export async function resolveEventOrigin(admin: SupabaseClient, communityId: str
  *  hits coordinator.ts's hard "no bot response to a handoff" gate. */
 async function recordBotAckReply(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   communityId: string,
   sentMessageId: string,
   action: Extract<CommunityAction, { kind: "SEND_TEXT" | "COMMUNITY_HANDOFF" }>
@@ -872,7 +911,7 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
 
 async function logActivity(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   communityId: string,
   deploymentId: string | null,
   eventType: string,
@@ -891,7 +930,7 @@ async function logActivity(
   });
 }
 
-async function logBotAckDecision(admin: SupabaseClient, panelId: string, communityId: string, event: CommunityEvent, action: CommunityAction) {
+async function logBotAckDecision(admin: SupabaseClient, panelId: string | null, communityId: string, event: CommunityEvent, action: CommunityAction) {
   await logActivity(admin, panelId, communityId, event.sender.deploymentId ?? null, "bot_message", action.kind, event.sender.senderType, {
     interactionDepth: event.interactionDepth,
     origin: event.origin,
@@ -957,15 +996,24 @@ async function loadProjectProfileRow(admin: SupabaseClient, projectId: string): 
  *  <this community's own resolved project>`), never by prompting alone.
  *  Returns undefined when nothing relevant is found at all, so the caller
  *  can omit the prompt block entirely. */
-export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string, communityId: string, query: string): Promise<KnowledgeContextEntry[] | undefined> {
+export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: string | null, communityId: string, query: string): Promise<KnowledgeContextEntry[] | undefined> {
   const projectId = await resolveCommunityProjectId(admin, communityId);
 
+  // ORGANIZATION scope is inherently panel-wide (shared across every
+  // Project a Panel owns) -- `knowledge_sources.panel_id` is still NOT NULL
+  // (unlike the ownership tables migration 0069 touched), so there's no way
+  // to even create a standalone ORGANIZATION-scope row today. A standalone
+  // (panelId: null) community simply has none -- skip the query entirely
+  // rather than pass a null panelId into a `.eq()` filter (which would
+  // never match anything anyway, but this is clearer and saves a query).
   const [communityRes, projectRes, organizationRes, profile] = await Promise.all([
     admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("community_id", communityId).eq("scope_type", "COMMUNITY").eq("active", true),
     projectId
       ? admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("project_id", projectId).eq("scope_type", "PROJECT").eq("active", true)
       : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
-    admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true),
+    panelId
+      ? admin.from("knowledge_sources").select(KNOWLEDGE_SELECT).eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
     projectId ? loadProjectProfileRow(admin, projectId) : Promise.resolve(null),
   ]);
 
@@ -1186,7 +1234,7 @@ export async function hasReactiveQuotaRemaining(admin: SupabaseClient, community
  *  read-then-write race between concurrent webhook deliveries. Never blocks
  *  the send that's already happened; a race that pushes the count slightly
  *  past the limit is a harmless, bounded overshoot, not a correctness bug. */
-export async function recordReactiveQuotaUse(admin: SupabaseClient, panelId: string, communityId: string, quotaDay: string): Promise<void> {
+export async function recordReactiveQuotaUse(admin: SupabaseClient, panelId: string | null, communityId: string, quotaDay: string): Promise<void> {
   await admin.rpc("increment_community_reactive_quota", { p_panel_id: panelId, p_community_id: communityId, p_quota_day: quotaDay });
 }
 
@@ -1236,7 +1284,7 @@ async function loadActiveTask(admin: SupabaseClient, communityId: string): Promi
  *  index (migration 0052) -- whichever insert loses simply gets a 23505 and
  *  is swallowed here; the winner's task is the community's one active task,
  *  never two silently coexisting ones. */
-async function insertTask(admin: SupabaseClient, panelId: string, communityId: string, task: ConversationTask): Promise<void> {
+async function insertTask(admin: SupabaseClient, panelId: string | null, communityId: string, task: ConversationTask): Promise<void> {
   const { error } = await admin.from("moderator_conversation_tasks").insert({
     panel_id: panelId,
     community_id: communityId,
@@ -1251,7 +1299,7 @@ async function persistTask(admin: SupabaseClient, id: string, task: Conversation
   await admin.from("moderator_conversation_tasks").update({ status: task.status, state: task }).eq("id", id);
 }
 
-async function logTaskActivity(admin: SupabaseClient, panelId: string, communityId: string, deploymentId: string | null, decision: string, reasonCode: string, meta: Record<string, unknown> = {}) {
+async function logTaskActivity(admin: SupabaseClient, panelId: string | null, communityId: string, deploymentId: string | null, decision: string, reasonCode: string, meta: Record<string, unknown> = {}) {
   await logActivity(admin, panelId, communityId, deploymentId, "conversation_task", decision, reasonCode, meta);
 }
 
@@ -1267,7 +1315,7 @@ async function logTaskActivity(admin: SupabaseClient, panelId: string, community
  *  never for anything the task itself can determine deterministically. */
 async function runModeratorTaskCascade(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   communityId: string,
   chatId: string,
   deployments: ChatterDeployment[],
@@ -1351,7 +1399,7 @@ async function runModeratorTaskCascade(
  *  case the caller proceeds with the existing chatter pipeline unchanged. */
 async function routeConversationTask(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   community: { id: string },
   chatId: string,
   event: CommunityEvent,
@@ -1459,7 +1507,7 @@ async function loadLinkWarningState(admin: SupabaseClient, communityId: string, 
 
 async function persistLinkWarningState(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   communityId: string,
   platformUserId: string,
   state: LinkWarningState,
@@ -1518,7 +1566,7 @@ async function isSenderAdminOrTrusted(token: string, chatId: string, platformUse
  *  own existing selection/quota governs whether anything is said. */
 async function runLinkModeration(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   community: { id: string },
   chatId: string,
   event: CommunityEvent,
@@ -1741,7 +1789,7 @@ async function loadMediaDedup(admin: SupabaseClient, communityId: string, fileUn
   return { enforcementKind: data.enforcement_kind as "ALLOW" | "DELETE_WARN" | "DELETE_BAN" };
 }
 
-async function recordMediaDedup(admin: SupabaseClient, panelId: string, communityId: string, fileUniqueId: string, verdict: "safe" | "uncertain" | "explicit" | "error", enforcementKind: "ALLOW" | "DELETE_WARN" | "DELETE_BAN") {
+async function recordMediaDedup(admin: SupabaseClient, panelId: string | null, communityId: string, fileUniqueId: string, verdict: "safe" | "uncertain" | "explicit" | "error", enforcementKind: "ALLOW" | "DELETE_WARN" | "DELETE_BAN") {
   await admin.from("moderator_media_dedup").upsert(
     { panel_id: panelId, community_id: communityId, file_unique_id: fileUniqueId, verdict, enforcement_kind: enforcementKind },
     { onConflict: "community_id,file_unique_id" }
@@ -1756,7 +1804,7 @@ async function recordMediaDedup(admin: SupabaseClient, panelId: string, communit
  *  task-route/chat about). */
 async function runMediaModeration(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   community: { id: string },
   chatId: string,
   message: TelegramMessage,
@@ -1868,7 +1916,7 @@ async function runMediaModeration(
 
 async function handleHumanMessage(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   community: { id: string; collab_contact?: string | null },
   message: TelegramMessage,
   event: CommunityEvent,
@@ -2113,7 +2161,7 @@ async function handleHumanMessage(
  *  the same message don't have to use an identical one. */
 async function reactAsDeployment(
   admin: SupabaseClient,
-  panelId: string,
+  panelId: string | null,
   communityId: string,
   chatId: string,
   targetMessageId: string,
@@ -2142,7 +2190,7 @@ async function reactAsDeployment(
  *  shape every time, just scoped to a different deployment + its own persona. */
 async function respondAsDeployment(params: {
   admin: SupabaseClient;
-  panelId: string;
+  panelId: string | null;
   communityId: string;
   chatId: string;
   event: CommunityEvent;
@@ -2322,8 +2370,19 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // Never routed into moderation/chatter/bot-ack either way.
   if (await handleStartCommand(admin, integration, message)) { timer.mark("start_command_handled"); return; }
 
-  const { data: panel } = await admin.from("panels").select("settings").eq("id", integration.panel_id).maybeSingle();
-  const settings = panel?.settings ?? null;
+  // Panel-backed: read panels.settings as before, unchanged. Standalone
+  // (direct-Watch, integration.panel_id: null): synthesize the SAME
+  // settings shape from the account's real product_entitlements tier, so
+  // every downstream virtualMod*(settings) capability check runs
+  // completely unmodified either way (see watch-runtime.ts's
+  // resolveStandaloneModeratorSettings).
+  let settings: unknown = null;
+  if (integration.panel_id) {
+    const { data: panel } = await admin.from("panels").select("settings").eq("id", integration.panel_id).maybeSingle();
+    settings = panel?.settings ?? null;
+  } else {
+    settings = await resolveStandaloneModeratorSettings(admin, integration.virtual_moderator_id);
+  }
 
   const community = await resolveCommunity(admin, integration.panel_id, message.chat);
   if (!community) { timer.mark("no_community", { chatId: message.chat.id, chatType: message.chat.type }); return; }

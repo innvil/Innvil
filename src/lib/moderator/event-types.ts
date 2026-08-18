@@ -44,7 +44,7 @@ export interface CommunitySender {
 }
 
 export interface CommunityEvent {
-  panelId: string; // tenant
+  panelId: string | null; // legacy Panel-distribution attribution only -- never canonical tenant identity (see communityId/the account chain resolved via project ownership)
   communityId: string;
   integrationId: string; // which subscriber bot's webhook delivered this
   messageId: string;
@@ -125,8 +125,8 @@ export type CommunityAction =
 // that PRODUCE these facts live in community-runtime.ts, not here.
 
 export interface KnownBotFacts {
-  /** A telegram_bot_integrations row exists for this numeric bot id, scoped to a specific panel. */
-  integration: { panelId: string; virtualModeratorId: string } | null;
+  /** A telegram_bot_integrations row exists for this numeric bot id -- panelId is optional legacy attribution, never part of the identity check below. */
+  integration: { panelId: string | null; virtualModeratorId: string } | null;
   /** That moderator has an ENABLED deployment in the community the event is happening in. */
   activeDeploymentInThisCommunity: { deploymentId: string } | null;
 }

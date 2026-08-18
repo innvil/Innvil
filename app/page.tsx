@@ -49,7 +49,20 @@ export default async function Home({
   // (host is presentation-only; Watch access is always resolved server-side).
   if (await isWatchHost()) {
     const access = await getWatchAccessState();
-    if (access.authenticated && access.entitled) return <WatchDashboard projects={access.projects} />;
+    if (access.authenticated && access.entitled) {
+      return (
+        <WatchDashboard
+          projects={access.projects}
+          watchers={access.watchers}
+          communities={access.communities}
+          capacity={access.capacity}
+          activity={access.activity}
+          moderationActionsLast7Days={access.moderationActionsLast7Days}
+          attentionItems={access.attentionItems}
+          communityStats={access.communityStats}
+        />
+      );
+    }
     return <WatchLanding authenticated={access.authenticated} />;
   }
 

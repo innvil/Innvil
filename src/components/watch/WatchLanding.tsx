@@ -1,11 +1,12 @@
 import React from "react";
 import Link from "next/link";
 import {
-  ShieldCheck, MessageSquare, Sparkles, Bot, ArrowRight, ScrollText, Activity,
+  ShieldCheck, MessageSquare, Gauge, Bot, ArrowRight, ScrollText, Activity,
   Radio, Zap, Users, Clock,
 } from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
 import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
+import { WatchLogoutButton } from "./WatchLogoutButton";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 
 /**
@@ -17,7 +18,7 @@ import { watchPlanOptions } from "@/src/lib/products/watch-plans";
  * PublicLanding.tsx's structure. Still visibly "by Innvil" via the shared
  * brand mark + explicit ecosystem links in the nav/footer.
  */
-function WatchNav() {
+function WatchNav({ authenticated }: { authenticated: boolean }) {
   return (
     <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0E11]/85 border-b w-line-soft">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -36,12 +37,16 @@ function WatchNav() {
           <a href="#pricing" className="hover:w-text">Pricing</a>
           <a href="https://innvil.cloud" className="hover:w-text flex items-center gap-1">← Innvil</a>
         </nav>
-        <div className="flex items-center gap-3">
-          <Link href="/login" className="text-sm w-text-dim">Log in</Link>
-          <Link href="/signup" className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
-            Start Watching <ArrowRight size={14} />
-          </Link>
-        </div>
+        {authenticated ? (
+          <WatchLogoutButton />
+        ) : (
+          <div className="flex items-center gap-3">
+            <Link href="/login" className="text-sm w-text-dim">Log in</Link>
+            <Link href="/signup" className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
+              Start Watching <ArrowRight size={14} />
+            </Link>
+          </div>
+        )}
       </div>
     </header>
   );
@@ -113,7 +118,7 @@ const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldC
   {
     label: "Operate",
     items: [
-      { icon: Sparkles, title: "Auto-Posting", body: "Schedule per-Watcher posting windows so your community stays active." },
+      { icon: Gauge, title: "Auto-Posting", body: "Schedule per-Watcher posting windows so your community stays active." },
       { icon: Activity, title: "Activity & status", body: "See what your Watcher is doing — always on, always watching." },
     ],
   },
@@ -126,13 +131,80 @@ const STEPS = [
   { n: "04", title: "Let it operate", body: "Your Watcher moderates, answers, and posts on schedule." },
 ];
 
+function StepCard({ step }: { step: (typeof STEPS)[number] }) {
+  return (
+    <div className="w-card p-4 w-44">
+      <span className="w-mono text-xs w-teal">{step.n}</span>
+      <p className="w-display text-sm mt-2 mb-1">{step.title}</p>
+      <p className="text-xs w-text-dim">{step.body}</p>
+    </div>
+  );
+}
+
+// Desktop floating-waveform composition: cards sit at independent vertical
+// offsets around a horizontal center line (01 slightly up, 02 down, 03
+// higher than 01, 04 back near center) rather than a downward staircase.
+// Percentages position the cards; the same coordinates (x10, viewBox 1000
+// wide) drive the connecting curve so the two stay in sync.
+const HOW_X_PCT = [10, 34, 60, 84];
+const HOW_Y_OFFSET = [-28, 35, -45, 5]; // px from the vertical center line
+const HOW_FLOW_HEIGHT = 340;
+const HOW_CENTER_Y = HOW_FLOW_HEIGHT / 2;
+
+function HowItWorksFlow({ steps }: { steps: typeof STEPS }) {
+  const anchors = HOW_X_PCT.map((xPct, i) => ({ x: xPct * 10, y: HOW_CENTER_Y + HOW_Y_OFFSET[i] }));
+  const [a1, a2, a3, a4] = anchors;
+  const path =
+    `M${a1.x},${a1.y} C${a1.x + 80},${a1.y + 18} ${a2.x - 80},${a2.y - 15} ${a2.x},${a2.y} ` +
+    `C${a2.x + 80},${a2.y + 15} ${a3.x - 120},${a3.y - 15} ${a3.x},${a3.y} ` +
+    `C${a3.x + 80},${a3.y - 10} ${a4.x - 80},${a4.y - 15} ${a4.x},${a4.y}`;
+
+  return (
+    <div className="relative hidden lg:block" style={{ height: HOW_FLOW_HEIGHT }}>
+      <svg viewBox={`0 0 1000 ${HOW_FLOW_HEIGHT}`} preserveAspectRatio="none" className="absolute inset-0 w-full h-full" aria-hidden="true">
+        <path d={path} fill="none" stroke="#2DD4BF" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
+        {/* Small nodes along the visible arcs between cards -- the signal
+            "moving through several nodes" the cards themselves sit on top of. */}
+        {[
+          { x: (a1.x + a2.x) / 2, y: (a1.y + a2.y) / 2 + 5 },
+          { x: (a2.x + a3.x) / 2, y: (a2.y + a3.y) / 2 + 6 },
+          { x: (a3.x + a4.x) / 2, y: (a3.y + a4.y) / 2 - 12 },
+        ].map((n, i) => <circle key={i} cx={n.x} cy={n.y} r="4" fill="#2DD4BF" opacity="0.75" />)}
+      </svg>
+      {steps.map((s, i) => (
+        <div
+          key={s.n}
+          className="absolute"
+          style={{ left: `${HOW_X_PCT[i]}%`, top: `calc(50% + ${HOW_Y_OFFSET[i]}px)`, transform: "translate(-50%, -50%)" }}
+        >
+          <StepCard step={s} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Mobile/tablet fallback -- four cards can't stay readable floating
+ *  horizontally on a narrow viewport, so they stack, but still connected
+ *  by the same flowing signal-path language (alternating curve direction)
+ *  rather than a plain vertical line. */
+function HowItWorksVerticalConnector({ flip }: { flip: boolean }) {
+  const path = flip ? "M24,4 C24,26 96,20 96,44" : "M96,4 C96,26 24,20 24,44";
+  return (
+    <div className="flex justify-center py-1 lg:hidden" aria-hidden="true">
+      <svg width="120" height="48" viewBox="0 0 120 48" className="overflow-visible">
+        <path d={path} fill="none" stroke="#2DD4BF" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
+      </svg>
+    </div>
+  );
+}
+
 const FAQ: Array<{ q: string; a: string }> = [
-  { q: "Do I need an SMM Panel to use Innvil Watch?", a: "No. Watch is an independently ownable Innvil product — you can subscribe and use it directly with just an Innvil account. Owning Innvil Forge (the SMM panel product) is one way to access Watch, never a requirement." },
   { q: "How many Watchers can I deploy?", a: "Your plan sets a total Watcher-slot allowance shared across every community you connect. Each individual community also has its own cap of up to 5 active Watchers, independent of your plan's total." },
   { q: "Can I use Watch in more than one community?", a: "Yes, up to your plan's community allowance — Bronze includes 1, Silver 2, Gold 3, Platinum 5. Each community is a separate connection with its own Watcher deployments." },
   { q: "What happens if I reach my plan limit?", a: "Innvil tells you clearly and blocks the specific action (deploying another Watcher, connecting another community) rather than silently failing or bypassing the limit." },
   { q: "Can I change my plan later?", a: "Yes — subscribing to a different plan updates your entitlement; nothing about your existing Projects, communities, or Watcher configuration is deleted." },
-  { q: "Does Watch work with my existing Innvil account?", a: "Yes. Product entitlements (Forge, Watch, and future products) all live on the same Innvil account — there's no separate Watch-only login." },
+  { q: "Does Watch work with my existing Innvil account?", a: "Yes. Every Innvil product you use lives on the same Innvil account — there's no separate Watch-only login." },
   { q: "What's the difference between a Project, a Community, and a Watcher?", a: "A Project is your identity and knowledge base. A Community is a specific Telegram group or channel you connect. A Watcher is the AI-powered Virtual Moderator you deploy into a Community — one Project can have multiple Communities, and Watchers are deployed per Community." },
 ];
 
@@ -159,7 +231,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
   const options = watchPlanOptions();
   return (
     <div id="top" className="watch-root min-h-screen">
-      <WatchNav />
+      <WatchNav authenticated={authenticated} />
 
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-16 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>
@@ -207,15 +279,23 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
 
       <section id="how" className="max-w-4xl mx-auto px-6 py-16">
         <h2 className="w-display text-2xl text-center mb-10">How it works</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {STEPS.map((s) => (
-            <div key={s.n} className="w-card p-4">
-              <span className="w-mono text-xs w-teal">{s.n}</span>
-              <p className="w-display text-sm mt-2 mb-1">{s.title}</p>
-              <p className="text-xs w-text-dim">{s.body}</p>
-            </div>
+
+        {/* Mobile/tablet: cards can't stay readable floating horizontally,
+            so they stack -- but still tied together by the same flowing
+            signal-path language, alternating curve direction. */}
+        <div className="lg:hidden flex flex-col items-center">
+          {STEPS.map((s, i) => (
+            <React.Fragment key={s.n}>
+              <StepCard step={s} />
+              {i < STEPS.length - 1 && <HowItWorksVerticalConnector flip={i % 2 === 0} />}
+            </React.Fragment>
           ))}
         </div>
+
+        {/* Desktop: a floating waveform -- cards sit above/below an
+            imaginary center line, joined by one smooth signal path that
+            weaves left to right instead of stepping downward. */}
+        <HowItWorksFlow steps={STEPS} />
       </section>
 
       <WatchOnboardingGuide />

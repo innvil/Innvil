@@ -8,19 +8,15 @@
  * real enforcement.
  *
  * HONEST STATE, checked against the actual codebase before writing this
- * (not assumed): Account creation, choosing a Watch plan, and creating a
- * standalone Project are genuinely self-serve today with NO Panel required
- * (`createStandaloneProject`/`createWatchProject`, gated on Watch
- * entitlement only). Connecting a Telegram community and creating/deploying
- * a Watcher are real, fully-implemented, tested capabilities — but as of
- * this pass they are only reachable through Innvil's existing owner-side
- * Virtual Moderator setup tooling (which is Panel-scoped:
- * `communities.panel_id`/`moderator_deployments.panel_id` are still NOT
- * NULL) — there is no zero-Panel self-serve UI for those steps yet, and the
- * customer-facing storefront surface for it (`AiModeratorSurface.tsx`) is
- * still explicitly gated behind `aiModeratorComingSoon` in
- * `app/p/[subdomain]/Storefront.tsx`. Steps 4 onward say so plainly rather
- * than promising a self-serve flow that doesn't exist yet.
+ * (not assumed): Account creation, choosing a Watch plan, creating a
+ * Project, and creating a Watcher are all genuinely self-serve today, fully
+ * owned by the account directly (`ownership.ts`/`watch-runtime.ts`, gated on
+ * Watch entitlement only). Connecting a Watcher to a live Telegram community
+ * is the one step not yet reachable from this dashboard — the ownership
+ * layer for it exists (`createAccountCommunity`/`deployAccountWatcher`), but
+ * the customer-facing Telegram bot-creation/verification flow isn't wired
+ * to it yet. Step 4 says so plainly rather than promising a flow that
+ * doesn't exist yet, without dwelling on why.
  */
 
 import { watchPlanOptions } from "./watch-plans";
@@ -62,11 +58,11 @@ export function watchOnboardingSteps(): OnboardingStep[] {
       title: "Create your Innvil account",
       summary: "One account, usable across every official Innvil product.",
       body: [
-        "Sign up (or log in if you already have an account) at innvil.cloud or right here on watch.innvil.cloud — it's the same Innvil account either way.",
-        "You do not need to own or create an SMM Panel (Innvil Forge) to use Watch directly. Watch is an independently ownable product — a Panel is only one of several ways to access it, not a requirement.",
+        "Create your Innvil account and start setting up Watch — the same account works whether you sign up here or at innvil.cloud.",
+        "You'll be signed in immediately and ready to choose a plan.",
       ],
       callouts: [
-        { kind: "good-to-know", text: "Watch entitlement is independent of Forge/Panel ownership — owning one never automatically grants or blocks the other." },
+        { kind: "good-to-know", text: "One Innvil account gives you access to Watch and any other Innvil products you choose to use." },
       ],
       cta: { label: "Create your account", href: "/signup" },
     },
@@ -107,7 +103,7 @@ export function watchOnboardingSteps(): OnboardingStep[] {
       callouts: [
         { kind: "community-limit", text: "Each community can hold at most 5 active Watchers, regardless of your plan's total slot count." },
         { kind: "required", text: "The bot must actually be present in the Telegram community — verified by Innvil before it goes live." },
-        { kind: "in-progress", text: "Self-serve Telegram connection for a Panel-less account is still rolling out. Contact support to get connected today." },
+        { kind: "in-progress", text: "Self-serve Telegram connection is still rolling out. Contact support to get connected today." },
       ],
       cta: { label: "Contact support", href: "/signup" },
     },

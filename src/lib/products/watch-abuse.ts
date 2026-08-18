@@ -17,6 +17,8 @@ import { createHash } from "node:crypto";
  * reasons only.
  */
 
+export type LinkTelegramIdentityResult = { ok: true } | { ok: false; error: string; alreadyLinkedToAnotherAccount: boolean };
+
 /**
  * Links an Innvil account to a Telegram numeric user id that has ALREADY
  * been verified elsewhere (e.g. the existing Telegram bot/community
@@ -25,11 +27,40 @@ import { createHash } from "node:crypto";
  * does not re-verify Telegram identity; it only records an
  * already-established link. Callers must never pass a raw, unverified,
  * client-submitted Telegram id into this.
+ *
+ * ONE verified Telegram person may be linked to at most ONE Innvil account
+ * (migration 0071's `unique(telegram_user_id)` on watch_telegram_links) —
+ * this is the specific rule that stops the same Telegram person from
+ * creating a second Innvil account to repeatedly obtain free/trial access.
+ * The pre-check below (`telegramIdentityLinkedElsewhere`) exists purely for
+ * a friendlier error message; the DB constraint is the ultimate,
+ * race-safe enforcement (a concurrent duplicate insert still fails on the
+ * constraint even if this pre-check raced past it, and that failure is
+ * caught and reported the same way below) — never silently transfers an
+ * already-linked identity to a new account.
  */
-export async function linkTelegramIdentity(admin: SupabaseClient, accountId: string, telegramUserId: number): Promise<void> {
-  await admin
+export async function linkTelegramIdentity(admin: SupabaseClient, accountId: string, telegramUserId: number): Promise<LinkTelegramIdentityResult> {
+  const elsewhere = await telegramIdentityLinkedElsewhere(admin, accountId, telegramUserId);
+  if (elsewhere.length > 0) {
+    return { ok: false, error: "This Telegram account is already linked to another Innvil account.", alreadyLinkedToAnotherAccount: true };
+  }
+
+  const { error } = await admin
     .from("watch_telegram_links")
     .upsert({ account_id: accountId, telegram_user_id: telegramUserId }, { onConflict: "account_id,telegram_user_id" });
+
+  if (error) {
+    // Unique-violation on the telegram_user_id-only constraint == a
+    // concurrent link from another account won the race between the
+    // pre-check above and this write. Never surface the raw DB error (which
+    // could hint at another account's data) — same customer-facing message
+    // either way.
+    if (error.code === "23505") {
+      return { ok: false, error: "This Telegram account is already linked to another Innvil account.", alreadyLinkedToAnotherAccount: true };
+    }
+    return { ok: false, error: "Could not link this Telegram account. Please try again.", alreadyLinkedToAnotherAccount: false };
+  }
+  return { ok: true };
 }
 
 /**

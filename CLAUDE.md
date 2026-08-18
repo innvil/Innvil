@@ -127,6 +127,1182 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-18 — Overview slot-label fix + record-depth pass (Project/Watcher stat cards + Settings tabs) + Watch favicon regression fixed on every Watch route + root cause + cleanup for the "KSolDegen" orphaned Project (v1.35.0)
+- **Four fixes/additions this pass, each independently verified.**
+- **(1) Overview "Watcher slots" stat was showing the wrong NUMBER for its own label when unsubscribed.**
+  Live-caught by the user: with no active plan, the card fell back to `activeWatcherCount` (distinct Watchers with
+  ≥1 enabled deployment — 2 in the live account) while still labeled "Watcher slots" — the same number Usage/
+  Billing correctly call "Watcher profiles"/"unique Watchers deployed", not slots. `WatchDashboard.tsx` now
+  computes `activeDeploymentCount` (real slots — one active deployment = one slot, same definition used
+  everywhere else) unconditionally from `communities`, and the stat card always shows THAT as its value
+  regardless of whether a plan is active — the distinct-Watcher count stays exactly where it already was, in the
+  card's sub-note ("N Watcher(s) deployed"). Verified live: now reads "4" with "2 Watchers deployed" underneath,
+  matching Usage/Billing exactly.
+- **(2) Record-depth pass on Project and Watcher detail pages** (Community detail was already close to the target
+  shape from v1.29.0 and was left alone, per the explicit "don't rework what's already working" instruction).
+  - **Project detail Overview** grew from 3 stat cards (Profile status/Communities/Watchers) to 5 — added
+    **Active deployments** and **Slots used**, computed the same way as everywhere else
+    (`communities.flatMap(c => c.watchers.filter(w => w.enabled)).length`) — so the canonical profile-vs-slot
+    distinction the whole session has been about is now visible at the Project level too, not just Overview/
+    Usage/Billing. "Watchers" card relabeled "Watcher profiles" for the same clarity reason as fix (1).
+  - **New Project "Settings" tab** — real read-only identity info (name, Project ID, community/watcher-profile
+    counts) plus an honest note that renaming a Project isn't available yet (checked first: no rename action
+    exists anywhere in this codebase — did not fabricate a pointer to one).
+  - **Watcher detail "Deployment" tab renamed "Deployments"**, and its table gained a real **Slot** column
+    ("1 slot" for an active deployment, "—" for a paused one — the same canonical unit used everywhere else,
+    not a new concept).
+  - **New Watcher "Settings" tab** — real identity info (name, Watcher ID, connection status, active-deployment
+    count) plus an honest note that renaming/deleting a Watcher isn't available yet (same check-first pattern).
+  - Verified live: Project detail's 5 stat cards render real, independently-computed numbers; Watcher detail's
+    Deployments tab shows "1 slot" per active row; both new Settings tabs render.
+  - **Deliberately not attempted this pass** — the much larger CRM-maturity list from the same request (global
+    record search, saved views, notes/tags, a Project scope selector, a command palette, recently-viewed/pinned
+    records, an Activity detail drawer, deeper Moderation/Knowledge/Auto-Posting record views, a functional
+    Project→Community→Watcher relationship panel beyond the tables that already exist). That list is
+    substantially larger than a single pass — see the follow-up plan communicated to the user; Auto-Posting CRM
+    depth specifically still has no account-scoped backend to build on (unchanged from every prior note on this).
+- **(3) Fixed a real, live favicon regression: every Watch route except `/` served the plain Innvil favicon
+  instead of the Watch app-tile icon.** Root cause: `app/page.tsx`'s `generateMetadata()` is the ONLY place that
+  sets `icons: { icon: "/watch/app-tile.svg" }` on the Watch host branch (v1.23.1) — every other Watch route
+  added since then (`/projects`, `/projects/[id]`, `/communities`, `/communities/[id]`, `/watchers`,
+  `/watchers/[id]`, `/activity`, `/usage`, `/billing`, `/settings`, and the four shared auth pages `/login`,
+  `/signup`, `/forgot-password`, `/reset-password`) defines its own static `metadata`/has no `generateMetadata`
+  at all, and Next.js falls back to the ROOT layout's icon for any field a page doesn't set — so navigating
+  anywhere except the landing page silently reverted the tab icon to plain Innvil's. This wasn't a "keeps getting
+  reverted by patches" issue so much as a gap that was never actually closed for anything built after v1.23.1 —
+  every one of the 10+ CRM routes built across this whole session (v1.28.0 onward) never had it. Fixed by adding
+  `icons: { icon: "/watch/app-tile.svg" }` to all 10 static Watch route metadata exports directly (these routes
+  are only ever reachable on the Watch host via `requireWatchPage()`, so no host-detection was needed), and by
+  adding a real `generateMetadata()` to all four shared auth pages that reads the already-existing host-aware
+  `getAuthProductContext()`/`AuthBrand.logoSrc` (the exact field that already carries `/watch/app-tile.svg` for
+  the Watch brand, v1.23.3) — the main-Innvil auth pages are unaffected (`logoSrc: null` there, so no `icons`
+  override is emitted, same as before). Verified live via a direct DOM check
+  (`document.querySelectorAll('link[rel*="icon"]')`) on `/watchers`: now correctly resolves to
+  `/watch/app-tile.svg`, not the root Innvil icon.
+- **(4) Root-caused and fixed the "KSolDegen" orphaned-Project bug** — `KSolDegen` (0 communities · 0 watchers)
+  was never a Telegram identity leaking into a query; it's a genuine `projects` row, deterministically traced to
+  a real gap in `finalizeCommunityConnection` (`community-runtime.ts`, the shared Panel-owner/`/start` connect
+  core BOTH `connectCommunity` and the `/start`-driven auto-connect call) — unlike `watch-runtime.ts`'s
+  `createAccountCommunity` (the standalone-Watch path, already fixed in migration 0071/v1.30.0), this function
+  never validated `membership.chat.type` before auto-creating a Project (named
+  `membership.chat.title ?? membership.chat.username ?? "Project"`) for a brand-new connection. A private 1:1
+  Telegram chat (`chat.type: "private"`, no `title`, `username` = the person's own handle — e.g. "KSolDegen")
+  could reach this exact path and get a Project auto-named after them, plus a `communities` row with
+  `chat_type: "private"` right alongside it. Migration 0071 already deleted every such `communities` row, but
+  it only ever touched `communities` — the Project created alongside it was left behind, orphaned. **This exact
+  gap was already flagged as a known, explicitly out-of-scope risk in the v1.30.0 changelog entry**
+  ("REMAINING IDENTITY RISK... the identical bug class also exists in the pre-existing... `finalizeCommunityConnection`
+  core... out of scope for 'the Innvil Watch Telegram identity model'") — this pass closes it.
+  - **Fix at the creation boundary**: `finalizeCommunityConnection` now rejects `chat.type: "private"` (mirrors
+    `createAccountCommunity`'s existing guard exactly — checked only when `chat.type` is actually known, never
+    guessed) BEFORE the trial-start side effect or any DB write, so this can never recur through either the
+    owner-authed `connectCommunity` action or the `/start`-driven auto-connect flow.
+  - **New migration `0072_orphaned_telegram_person_projects.sql`** — cleans up the leftover orphaned Projects,
+    gated on a genuinely deterministic signal (not a name match, per explicit instruction): grepped the entire
+    codebase and confirmed migration 0071 is the ONLY place a `communities` row is EVER deleted anywhere in this
+    application, and `projects.panel_id` is only ever set by `finalizeCommunityConnection`'s auto-create path
+    (which always creates exactly one Community in the same call under normal operation) — so a Panel-backed
+    Project with ZERO Communities today can only exist because of this exact bug class. Additionally gated on the
+    Project having genuinely NO content of its own (empty Profile fields — description/website/docs_url/overview/
+    contacts, migration 0058 — and zero Project Knowledge rows, `knowledge_sources.project_id`) so a Project a
+    customer had already started configuring before connecting a Community is never touched, even if it currently
+    shows 0 Communities for an unrelated reason. **The Telegram person's identity itself is untouched by this
+    migration** — it was already preserved into `watch_telegram_links` by migration 0071's own backfill at the
+    time the private `communities` row was removed. **Run migration `0072`** — this hasn't been applied in this
+    sandbox (no live Supabase network access, as with every migration this session); `KSolDegen` will keep
+    showing on `/projects` until it's run.
+  - New tests (`community-runtime.test.ts`, +2): the exact live-bug repro (a `chat.type: "private"` membership
+    with `username: "KSolDegen"` rejected with a clear error, proven via a fake admin whose `.from()` throws —
+    structurally proving zero DB calls happen before the rejection) and a guard-scope regression test (group/
+    supergroup/channel remain supported, private does not). 1042 tests pass (up from 1040), `tsc --noEmit`
+    clean, production build clean.
+  - **Investigated, per explicit instruction, whether "Innvil Test Community"/"new community" are also
+    suspect**: confirmed both are genuine — each has a real connected Community (matching name), 2 real deployed
+    Watchers, and real moderation activity in `moderator_activity_log`. Neither shows the "zero Communities"
+    signature the bug produces.
+- **Deliberately not built this pass** (documented, not silently skipped, per the same request's own explicit
+  scope list): global record search / command palette, saved views, Notes, Tags/labels, a Project scope
+  selector, recently-viewed/pinned records, an Activity detail drawer, and deeper Moderation/Knowledge/
+  Auto-Posting record views. Each is a genuinely separate, non-trivial addition — reported to the user as a
+  prioritized follow-up list rather than rushed into this same pass.
+
+### 2026-08-18 — Fix: `listAccountWatchers` disagreed with every other Watch metric — Watchers page showed "No Watchers yet" while Overview/Communities/Usage all showed 2 real deployed Watchers (v1.34.1)
+- **Found via a live click-through of the whole CRM this pass, then confirmed with a direct data-model
+  investigation before touching any code.** `listAccountWatchers()` (`watch-runtime.ts`) filtered strictly on
+  `virtual_moderators.account_id = accountId` — but `listAccountCommunities()` (the canonical source EVERY other
+  metric on this dashboard already builds on — capacity, slot breakdown, activity, attention) resolves a
+  Community's watchers via `moderator_deployments.moderator_id`, with **no ownership check on the moderator row
+  at all** beyond it being reachable through one of this account's own Communities. The two "Test"/"Kwan"
+  `virtual_moderators` rows in the live test account have `account_id: null, panel_id: <set>` — Panel-distributed
+  Watchers (the "existing Panel-owner Watch distribution channel" `ownership.ts`'s `hasProductAccess` already
+  treats as entitled) deployed into Communities whose Project's `account_id` resolves to this account. They were
+  fully visible everywhere that reads through `listAccountCommunities`, but invisible on `/watchers` and
+  `/watchers/[id]`, and undercounted in `getAccountCapacity`'s `watcherProfileCount` (was 0, should be 2).
+- **Fixed at the single canonical function, not with a UI patch.** `listAccountWatchers()` now returns the UNION
+  of directly-owned rows (`account_id = accountId`) and every Watcher reachable via a deployment into one of this
+  account's own Communities (via the same `listAccountCommunities()` call already used everywhere else) — bringing
+  the Watchers list/detail/count into agreement with Overview, Communities, and Usage, instead of a narrower,
+  independently-invented definition. This single fix propagates to `getAccountWatcherDetail`,
+  `listAccountAttentionItems`'s paused/undeployed-Watcher checks, and `getAccountCapacity.watcherProfileCount` all
+  at once, since all three already call `listAccountWatchers()` rather than re-deriving their own count.
+  `createAccountWatcher()`'s own creation-cap check was deliberately left reading only `account_id`-owned
+  rows — that's specifically "how many NEW Watcher profiles can THIS account create," a different concern from
+  total-watcher visibility, and conflating them could wrongly block a Watch-only account from creating its first
+  direct Watcher just because Panel-distributed Watchers are already visible.
+- **Verified live end-to-end after the fix** (`Host: watch.localhost`): `/watchers` now shows Kwan and Test, both
+  "Innvil Test Community, new community", both Active; `/usage` now shows Watcher Profiles: **2** (was 0), Watcher
+  Slots: 4, Communities: 2 — matching the canonical model exactly (2 profiles, 4 deployments/slots, 2 communities)
+  and agreeing with every other page for the first time.
+- New tests (`watch-runtime.test.ts`, +3): the exact live-bug regression (2 account_id-null/panel_id-set Watchers
+  reachable via deployment, both now listed), a reachable-watcher cross-account isolation guard (a different
+  account's Panel-distributed Watcher, reachable only through THEIR Community, never leaks in), and a canonical-
+  model-agreement test pinning `watchers.length === 2` and `capacity.watcherProfileCount === 2` together so they
+  can never silently drift apart again. 1040 tests pass (up from 1037), `tsc --noEmit` clean, production build
+  clean.
+- **This was flagged as the top-priority fix in a broader CRM-depth critique from the user** ("a CRM cannot be
+  trusted if Watchers page says 0... that is more important than more UI") — the remaining items in that critique
+  (real Project/Community/Watcher record detail pages with relationship data, a functional record-relationship
+  panel, Needs Attention as a true work queue, scoped/deep-linked timelines, list-page search/filter/sort, a
+  global Project scope selector) are a substantially larger, multi-pass body of work and are NOT built this pass —
+  see the follow-up plan communicated to the user.
+
+### 2026-08-18 — Innvil Watch Enterprise gets real, concrete pricing for both modes — BYO $599/$799 promoted from planning note to live Billing (v1.34.0)
+- **Investigated first, before writing any copy — found the source the user's request was referring to.** v1.33.0's
+  pass had searched CODE for "BYO" and correctly found nothing live; it did not surface `CLAUDE.md`'s own Phase 4.S
+  entry ("Future Enterprise BYO pricing... NOTED, not built"), which already recorded concrete figures: **BYO 50 =
+  $599/mo (up to 50 licensed deployments), BYO Unlimited = $799/mo**. That entry was explicitly marked "FUTURE
+  PLAN — DO NOT IMPLEMENT YET" and stated Managed Enterprise pricing itself was "not finalized" at the time it was
+  written. Two things have changed since: (1) `moderatorEnterpriseSlotPrice()`/`moderatorEnterpriseIncludedCommunities()`
+  in `money.ts` are now REAL, already-shipped, tested functions (confirmed: the existing "50 slots → $829.99"
+  worked example on Billing already used this live formula) — Managed pricing is no longer "not finalized," it's
+  live code; (2) **this pass's explicit instruction is the business decision to graduate the recorded BYO figures
+  from planning note to live customer-facing pricing** — treated as such, not silently assumed.
+- **Managed Enterprise pricing made concrete, not "Custom."** New `managedEnterprisePrice()`/
+  `managedEnterpriseCommunities()` in `watch-enterprise.ts` are thin passthroughs to the REAL canonical
+  `money.ts` functions (never a duplicated formula) — verified the "50 slots → $829.99" example against the
+  actual formula (Platinum base $379.99 + 30 slots × $15 = $829.99, confirmed exactly correct, not stale) and
+  surfaced the previously-uncalculated real Community-capacity formula too (50 slots → 8 included Communities,
+  from the existing `moderatorEnterpriseIncludedCommunities` band table). New `ManagedEnterpriseCalculator.tsx`
+  (client, pure client-side math — no server round-trip needed) lets the customer pick a slot count (25/30/40/
+  50/75/100/150) and see the real price + Community count update live, reusing the exact same formula
+  `deployAccountWatcher`'s own entitlement math is built on.
+- **BYO Enterprise pricing made concrete.** New `WATCH_ENTERPRISE_BYO_TIERS` in `watch-enterprise.ts` — the exact
+  two fixed tiers from the Phase 4.S note (BYO 50 = $599/mo / up to 50 deployments, BYO Unlimited = $799/mo),
+  now the canonical live source (not a hardcoded string in the component). **This is a fixed two-tier model, NOT
+  a per-slot formula** — deliberately not extrapolated into a continuous "$X/slot" rate, since no such rate was
+  ever recorded and inventing one would violate the explicit "do not invent a new price" instruction.
+- **Real, equivalent-capacity savings comparison — anchored to the ONE point where it's actually apples-to-apples.**
+  New `compareEnterpriseModesAtSlots(slots)` returns a real comparison ONLY when `slots` exactly matches a BYO
+  tier's own slot ceiling (currently only 50, matching BYO 50) — returns `null` for any other slot count,
+  including deliberately for BYO Unlimited (which has no Managed "unlimited" equivalent to compare against,
+  since Managed keeps scaling linearly per slot with no ceiling — computing a "% savings" there would be exactly
+  the misleading, non-equivalent-capacity comparison the task explicitly forbade). At 50 slots: Managed $829.99
+  vs. BYO $599 = **$230.99/mo (27.8%) Innvil-fee savings** — calculated, not hard-coded, and re-derived
+  independently in a dedicated test to guard against drift from either source constant.
+- **Cost disclosure kept explicit, not buried in FAQ** — the savings block itself (not just the FAQ) states the
+  comparison covers only the Innvil platform fee, that the customer's own provider usage is billed separately
+  through their provider account, and that this is not a guarantee of lower total spend.
+- **Vague copy removed.** The old "final capacity and pricing for either mode are set with you" line is gone from
+  the Enterprise section header — pricing is no longer vague; only final provisioning (a real remaining manual
+  step) is still described as "finalized with us."
+- **FAQ updated** to state the real Managed formula and BYO starting price instead of "custom Watcher slot and
+  Community capacity" placeholder language.
+- New tests: `watch-enterprise.test.ts` (+15, rewritten from v1.33.0's "no $/% anywhere" guard, which is now
+  correctly the OPPOSITE requirement — this pass intentionally introduces real pricing) — Managed pricing/
+  Community-count functions proven identical to the canonical `money.ts` formulas across multiple slot counts,
+  the $829.99 worked example pinned exactly, both BYO tier values pinned exactly, the 50-slot savings comparison
+  calculated and cross-checked against both raw source constants independently, and a REQUIRED test proving
+  `compareEnterpriseModesAtSlots` returns `null` (never a fabricated number) for any slot count without a real
+  matching BYO tier. 1037 tests pass (up from 1029), `tsc --noEmit` clean, production build clean.
+- **Not verified live this pass** — same sandbox limitation as every other Watch pass this session (no working
+  Supabase network access here); verification is typecheck + full test suite + production build + code review.
+- **Preserved, confirmed unchanged this pass**: Bronze/Silver/Gold/Platinum pricing, `BillingPlanPicker.tsx`
+  (self-serve checkout untouched, not in this pass's diff), the Watcher-slot education section/diagrams, and the
+  Community-expansion copy from v1.32.0.
+- **Deliberately not built this pass** (documented, not silently skipped): a BYO credentials-connection workflow
+  (still no per-account AI-provider-credential backend anywhere — a real, separate infrastructure project, not a
+  pricing-copy change); a continuous BYO "$X/slot" rate (never recorded anywhere, would be invented); a savings
+  comparison for BYO Unlimited (no equivalent-capacity Managed point exists to compare against).
+
+### 2026-08-18 — Innvil Watch Enterprise split into Managed vs. Bring Your Own Provider — two modes of the SAME product, no fabricated BYO pricing (v1.33.0)
+- **Investigated first, per explicit instruction, before writing any copy.** Grepped every "bring your own"/"BYO"
+  reference in the codebase — every existing one is about SMM order-fulfillment providers (the core Innvil
+  Forge/Panel "bring your own SMM provider" concept), never about AI/LLM providers for Virtual Moderator/Watch.
+  Also confirmed `getInnvilModelConfig()` (`src/lib/ai/client.ts`) hard-requires Claude Sonnet 5 platform-wide via
+  env vars — there is **no per-account/per-customer AI-provider-credential mechanism anywhere** (no table, no
+  action, not even a stub). This confirms BYO Enterprise for Watch is a genuinely new commercial concept with zero
+  backend today — informed every decision below.
+- **New `src/lib/products/watch-enterprise.ts`** — the single source of truth for the two modes (`managed`/`byo`),
+  their labels/taglines/inquiry-subject lines. Deliberately pure/testable (no I/O) rather than inline strings in
+  the client component, so the exact subject line and the "never contains a fabricated $ or %" invariant are
+  directly unit-tested rather than only visually inspected.
+- **New `EnterpriseModeCards.tsx`** — two related cards ("Managed Enterprise" / "Bring Your Own Provider") inside
+  the SAME Enterprise section on `app/billing/page.tsx`, not separate sections/pages/products. Selecting a mode
+  swaps the pre-filled subject/body of the SAME existing `SupportContactForm`/`sendOwnerSupportMessage` inquiry
+  channel (remounted via `key={mode}` for clean re-initialization) — no second contact mechanism, no fake
+  "Connect Provider" button (there's no real BYO credentials backend to connect to, so this stays inquiry-only,
+  exactly like Managed already was).
+- **No fabricated BYO pricing/savings, per explicit repeated instruction.** No canonical BYO price exists anywhere
+  in this codebase, so nothing here claims a specific dollar or percentage savings, and no "Compare Enterprise
+  options" pricing table was built (a table with a real number on one side and "Contact us" on the other isn't a
+  real comparison). Instead, the UI states the **economic mechanism** honestly: BYO can lower the Innvil platform
+  fee specifically because provider usage is billed directly through the customer's own provider account, paired
+  with an explicit non-guarantee that this doesn't mean lower TOTAL spend (Innvil fee + the customer's own
+  provider usage). Managed Enterprise keeps the existing real `moderatorEnterpriseSlotPrice(50)` worked example
+  unchanged (genuine formula-computed math, not fabricated) — that number was never in question, only the BYO one.
+- **FAQ extended** (+6 questions: what is Managed, what is BYO, why BYO can be cheaper, same dashboard confirmation,
+  who pays provider usage) — every answer grounded in the actual investigated architecture, none inventing SLAs,
+  dedicated infrastructure, account managers, or provider failover that don't exist.
+- **Standalone/single-product confirmed intact**: both modes stay on `watch.innvil.cloud`, the same Watch CRM,
+  Projects, Communities, Watchers, deployments, and slot semantics — no `enterprise.watch.*`/`byo.innvil.*`
+  subdomain, no second product catalog entry, no Panel/Forge terminology (grepped the new/changed files
+  specifically for this).
+- New tests: `watch-enterprise.test.ts` (+7, new file — exactly two modes exist, both inquiry subjects correctly
+  say "Innvil Watch Enterprise —" not a separate product name, the exact Managed/BYO subject strings, a REQUIRED
+  test asserting no `$`/`%` character ever appears in the mode metadata, inquiry-body composition preserves
+  caller-supplied usage context verbatim, and no internal id ever leaks into the inquiry body). 1029 tests pass
+  (up from 1022), `tsc --noEmit` clean, production build clean.
+- **Not verified live this pass** — same sandbox limitation as every other Watch pass this session (no working
+  Supabase network access here); verification is typecheck + full test suite + production build + code review.
+- **Deliberately not built this pass** (documented, not silently skipped): any BYO credentials-connection UI or
+  backend (no secure-secrets architecture exists yet for a per-account third-party AI credential — building one
+  is a real, separate infrastructure project, not a Billing copy change); a BYO savings calculator/capacity
+  selector (explicitly gated on real canonical pricing existing, which it doesn't); an inquiry-form dropdown
+  beyond the two mode cards themselves (the cards already unambiguously set the inquiry context — a redundant
+  third "not sure" option was judged unnecessary since Managed is a reasonable, harmless default selection).
+
+### 2026-08-18 — CRM continuation: real Activity graph + Community expansion/Enterprise Billing refinement (v1.32.0)
+- **Two focused passes this release, both scoped explicitly to avoid the previous Billing work.**
+- **Part 1 — Billing refinement (Community expansion + Enterprise), Billing NOT redesigned.** Investigated first:
+  confirmed Gold/Platinum really do support expandable Community capacity (`MODERATOR_COMMUNITY_CAPACITY` in
+  `money.ts`: premium/Gold `included:3, maxWithAddons:5`; pro/Platinum `included:5, maxWithAddons:10`) but that
+  expansion is **not currently purchasable** anywhere — `MODERATOR_ADDITIONAL_COMMUNITY_PRICE`/`_WITH_AUTOPOST_PRICE`
+  exist as constants but are wired to zero real purchase actions (grepped every `.ts`/`.tsx` file). Per the explicit
+  "don't imply extra Communities are automatically free... if pricing isn't implemented yet, say 'Expandable up to
+  N' and point to the real existing contact channel" instruction, Billing now shows **both** the included allowance
+  and the expansion ceiling (`WatchPlanOption` gained `communitiesIncluded`/`communitiesMax`, read from the same
+  canonical `MODERATOR_COMMUNITY_CAPACITY` table `moderatorCommunityExpansionCeiling()` itself reads) with a real
+  accessible info popover (`CommunityExpansionInfoPopover`, click/tap/keyboard, not hover-only) — shown only for
+  Gold/Platinum, since Bronze/Silver are genuinely hard-capped (`max === included`) and showing an "Up to N" line
+  for them would fabricate an expansion path that doesn't exist.
+- **Enterprise section rebuilt** (`app/billing/page.tsx`): "Custom Watcher slot capacity" / "Custom Community
+  capacity" two-column header (never presenting the illustrative `moderatorEnterpriseSlotPrice(50)` worked example
+  as if it were the flat price — it's real math from a genuine formula, kept as a small supporting caption, not the
+  headline), a real trigger line naming Platinum's actual ceilings (`platinum.slots`/`platinum.communitiesMax`,
+  never hardcoded), and the SAME existing `SupportContactForm`/`sendOwnerSupportMessage` inquiry channel — now
+  pre-filled with the account's real current plan + slot/Community usage (`SupportContactForm` gained an optional
+  `defaultBody` prop, additive, existing callers unaffected).
+- **Part 2 — CRM continuation.** Investigated the "Watchers Overview shows 'No Watchers yet' despite real
+  profiles" concern raised in the spec — confirmed via code review this is NOT currently reproducible:
+  `listAccountWatchers()` (the sole source for `/watchers`) filters only by `account_id`, with no `panel_id`/
+  deployment-state condition to go stale. No fix needed; documented as verified-not-broken rather than silently
+  assumed fine.
+- **New real Activity graph** (`app/activity/page.tsx`, explicitly REQUIRED) — `getAccountActivityTrend()`
+  (`watch-runtime.ts`) reuses the EXACT SAME community/project/watcher scoping model as `listAccountActivity`
+  (never a second, potentially-incompatible query shape — proven by a dedicated test asserting the event list's
+  count and the graph's bucket-sum agree under every filter combination), bucketed by real UTC calendar day, with
+  every requested day present INCLUDING zero-count days (a real quiet period is genuine information, never
+  silently omitted). Rendered via `ActivityTrendChart.tsx` (Recharts, already a dependency — a real line chart with
+  an accessible tooltip, not a static image), with a compact summary strip (Total actions / Warnings / Removals —
+  only shown when non-zero, never a fabricated category) computed from the SAME filtered dataset, and an honest
+  "No activity in this period" empty state instead of a placeholder curve.
+- **Activity deep-links added** — every event row across the global Activity page, Project Activity tab, and
+  Community Overview/Moderation now links its Watcher (when known) to `/watchers/[id]` and its Community to
+  `/communities/[id]`, instead of routing everything back to Overview. `AccountActivityItem` gained a real
+  `watcherId` field (was `watcherName`-only) to make this possible — populated from the same deployment lookup the
+  description text already used, no new query.
+- **Community Health relationship visibility** — the Overview Community Health table and the `/communities` list
+  now show real Watcher NAMES (new `WatcherNamesCell` in `WatchUI.tsx` — plain visible links, deliberately not a
+  hover-only tooltip, so the relationship reads without a pointer; active deployments sorted first, "+N" for
+  overflow) instead of a bare count.
+- **Per-Community deployment usage surfaced** — Community detail's Overview tab now shows "X / 5 max" (reading the
+  real `MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY` constant via `watch-plans.ts`, never a duplicated `5`), replacing the
+  bare "N active" figure.
+- New tests: `watch-plans.test.ts` (+5 — Gold/Platinum's real expansion ceilings, Bronze/Silver's hard cap proven
+  by `max === included`, `communitiesMax` traced to the canonical table), `watch-runtime.test.ts` (+5 — the graph's
+  7-day/30-day bucket counts, zero-count days present, real events bucketed onto the correct UTC day with non-
+  decision events excluded, and the REQUIRED filter-synchronization test proving the event list and the graph agree
+  under community/project/watcher filters). 1022 tests pass (up from 1014), `tsc --noEmit` clean, production build
+  clean.
+- **Not verified live this pass** — same sandbox limitation as every other Watch pass this session (no working
+  Supabase network access here); verification is typecheck + full test suite + production build + code review.
+- **Deliberately not built this pass** (documented, not silently skipped): a global Project-scope selector (the
+  per-page server-fetch architecture still doesn't cleanly support one without threading a scope param through
+  every page — unchanged assessment from earlier passes); global cross-entity search (every list page's data is
+  still small enough that a search box wasn't judged high-value yet); an Activity event-type filter dropdown
+  (every currently-persisted decision maps to the SAME single "moderation" kind — a dropdown with one real option
+  would be exactly the "decorative filter" the spec explicitly forbids); pagination/"Load more" on the Projects/
+  Communities/Watchers lists (Activity was already capped at 100 rows; the other lists are real but typically
+  small at this product's current scale — a real future need, not simulated now); Auto-Posting/deeper Knowledge
+  records (still no account-scoped backend, unchanged from prior passes); Community-detail per-Community-limit
+  error-message wording tightening beyond what already shipped in v1.31.0.
+
+### 2026-08-18 — Watch Billing/capacity fix: a real Watcher-slot vs. Watcher-profile bug found and corrected, canonical slot semantics now consistent everywhere (v1.31.0)
+- **Investigated backend enforcement FIRST, per explicit instruction, before touching any UI copy.** Confirmed
+  `deployAccountWatcher`'s own slot-cap check (`checkDeploymentSlotCaps` in `moderator/plan.ts`) already counts
+  only `enabled: true` deployments as "active slot usage" — a paused deployment consumes zero slots, exactly
+  matching the requested canonical model (Watcher profile = reusable identity; deployment = Watcher↔Community
+  relationship; slot = one ACTIVE deployment). **No backend enforcement change was needed** — the bug was
+  entirely in what the UI/read-layer displayed as "used."
+- **Found and fixed a real correctness bug in `getAccountCapacity()`** (`watch-runtime.ts`), the single function
+  every capacity display (sidebar, Overview, Usage, Billing) already reads from: `watchersUsed` was computed
+  as the SAVED WATCHER PROFILE count (`watchers.length`) while `watchersTotal` was the plan's SLOT allowance
+  (`CAPACITY[tier].maxActiveSlots`) — two different units compared as one ratio. Concretely: 3 saved Watcher
+  profiles with only 1 actually deployed showed as "3/5 slots used" against a 5-slot plan, when only 1 slot was
+  truly consumed. `AccountCapacity` restructured to `watcherProfileCount` (saved identities) +
+  `activeDeploymentCount` (= real slots used, computed as the raw count of ENABLED deployments across the
+  account — NOT deduped by Watcher, since the same Watcher deployed to 2 Communities correctly consumes 2
+  slots) + `slotsTotal`, matching the backend's own `activeSlotCount` computation exactly. Every one of the 8
+  call sites across the sidebar/Overview/Usage/Billing/tests updated to the corrected fields — confirmed via
+  `tsc --noEmit` surfacing every stale reference, none missed.
+- **New `getAccountSlotBreakdown()`** — "which Watchers/Communities are actually consuming slots?", built from
+  the SAME `listAccountCommunities` data every other metric already reads (no second query shape). Powers new
+  "Slots by Watcher" / "Slots by Community" tables on the Usage page.
+- **Usage page**: no longer hides real numbers behind "No active plan found" — Watcher profile count, active
+  deployment count, and Community count are now always shown (real, regardless of subscription state), with
+  the plan-relative capacity bars shown only when a plan exists. Overview's KPI row and Plan & Capacity card,
+  and the sidebar's compact plan summary, all updated to the same corrected `activeDeploymentCount`/`slotsTotal`
+  fields — confirmed consistent (same source function) rather than each recalculating independently.
+- **`WatchPlanOption` (`watch-plans.ts`) extended** with real `slots`/`communities` fields, read directly from
+  the same canonical `CAPACITY` table (`moderator/plan.ts`) enforcement itself checks — verified exact values
+  against the task's own worked examples: Bronze 2 slots/1 community, Silver 5/2, Gold 10/3, Platinum 20/5, all
+  matching byte-for-byte. **Discrepancy found and reported, not silently fabricated**: the task's example plan
+  cards also showed "Media Moderation Units" (500/2,000/5,000/10,000) — no such constant, metering, or
+  accounting system exists anywhere in this codebase (Phase 4.S's plan for one is explicitly documented as a
+  future plan, not built) — omitted entirely from both plan cards and the Usage page rather than showing an
+  invented number.
+- **Billing page rebuilt** (`app/billing/page.tsx`): plan cards now show slot + Community allowance per plan
+  (`BillingPlanPicker.tsx`) alongside a real, accessible slot-info affordance (`SlotInfoPopover.tsx` — a
+  click/tap/keyboard-toggleable popover with `aria-expanded`/`aria-label`/Escape-to-close, deliberately NOT
+  hover-only, since hover alone doesn't serve touch or keyboard users). New dedicated **"Understanding Watcher
+  slots"** section (not just an FAQ line) with a Watcher-profile/slot/Community-allowance distinction block, 4
+  real rendered SVG diagrams (`SlotDiagram.tsx` — actual connector lines between Watcher and Community nodes,
+  never literal ASCII art) matching the task's 4 worked examples exactly (1 Watcher→1 Community = 1 slot; 1
+  Watcher→2 Communities = 2 slots; 2 Watchers→1 Community = 2 slots; 2 Watchers×2 Communities = 4 slots), a
+  labeled hypothetical Community-distribution example (explicitly marked as an example, never presented as the
+  customer's real usage), and the real per-Community deployment limit
+  (`MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY = 5`, read from `moderator/plan.ts`, re-exported through
+  `watch-plans.ts` rather than duplicated). New "No active plan" state shows real active-deployment/Community
+  counts instead of a blank card. New FAQ (10 questions, answers grounded in the actual audited enforcement —
+  paused deployments free their slot, removed deployments free their slot, profile creation itself doesn't
+  consume one).
+- **Community-allowance error message tightened** (Watch-only, `createAccountCommunity` in `watch-runtime.ts`):
+  "Your plan supports up to N communities. Upgrade your plan to connect another Community." — matches the
+  task's requested wording exactly. **The Watcher-slot-limit and per-Community-deployment-limit error messages
+  (`deploymentSlotCheckErrorMessage` in `moderator/plan.ts`) were deliberately LEFT UNCHANGED** — that function
+  is shared with the pre-existing Panel-owner/customer-storefront Virtual Moderator flows (confirmed via
+  `grep`), so rewriting its customer-facing text would also change wording on a live, unrelated production
+  surface this pass wasn't scoped to touch; flagged as a remaining gap rather than silently done or silently
+  skipped.
+- New tests: `watch-runtime.test.ts` (+7 — the exact 3-saved/1-deployed profile-vs-slot bug as a regression
+  test, the CRITICAL INTEGRATION scenario from the task spec (Aegis→C1, Aegis→C2: 1 profile, 2 deployments, 2
+  slots, agreeing across `getAccountCapacity` AND `getAccountSlotBreakdown`), two-different-Watchers-same-
+  Community (profiles=2, slots=2), a paused deployment consuming zero slots, and the previously-passing
+  "capacity nearing limit" test corrected to actually deploy Watchers rather than merely save profiles — it was
+  unknowingly validating the OLD buggy semantics), `watch-plans.test.ts` (+2 — every plan's slots/communities
+  traced byte-for-byte to the canonical `CAPACITY` table, the exact Bronze/Silver/Gold/Platinum worked values).
+  1014 tests pass (up from 1007), `tsc --noEmit` clean, production build clean.
+- **Not verified live this pass** — same sandbox limitation as every other Watch pass this session (no working
+  Supabase network access here); verification is typecheck + full test suite + production build + code review.
+- **Deliberately not built this pass** (documented, not silently skipped): rewriting the shared
+  `deploymentSlotCheckErrorMessage` wording (see above — shared with the Panel-owner product, out of scope);
+  a live deploy-flow "this will use 1 slot / 2→3 of 10" pre-confirmation message (the task made this explicitly
+  optional — "only if capacity can be resolved reliably" — and the existing `WatcherConnectModal`/
+  `DeploymentToggle` flows already surface the backend's own real error on rejection, satisfying the safety
+  requirement without new UI); per-Community-detail "X/5 slots consumed here" display (Community detail already
+  shows the deployed-Watchers table; adding the numeric X/5 header is a small follow-up, not done this pass to
+  keep this change focused on the capacity-calculation bug itself).
+
+### 2026-08-18 — Telegram identity model fix: a Telegram PERSON can no longer become a Watch Community (v1.30.0)
+- **Live bug report: a customer's own Telegram numeric user id (`6952824285`, from Telegram's own `getChat`
+  reporting `chat.type: "private"`) appeared as a "Community" — with a "no active Watcher" Needs Attention
+  warning attached to it.** Root cause, found by tracing the actual creation path rather than guessing:
+  `connectAccountCommunity` (`watch-moderator.ts`) already resolves the target chat's real Telegram-reported
+  `chat.type` via `checkChatMembership`'s trusted `getChat` call and stores it as `communities.chat_type` — but
+  **nothing anywhere ever validated that value**. Any chat/user `checkChatMembership` could resolve (including a
+  customer's own private 1:1 chat with their Watcher's bot) silently became a `communities` row.
+- **Fixed at the actual creation function, not with a UI filter** (per explicit instruction). New
+  `SUPPORTED_TELEGRAM_COMMUNITY_CHAT_TYPES = {group, supergroup, channel}` check inside
+  `createAccountCommunity()` (`watch-runtime.ts`) — the single canonical Community-creation path — rejects
+  `chat_type: "private"` with a clear customer-facing error, and is checked ONLY when `chat_type` is actually
+  known (never guessed from `chat_id` sign/shape/username presence, per explicit instruction — an unset
+  `chatType` still passes through unchanged, preserving every existing call site that doesn't supply it).
+  `deployAccountWatcher()` gained the SAME independent check (a private-chat row that somehow already exists
+  can never be a deployment target either — defense in depth, not reachable in normal operation once creation
+  is blocked, but a second guard costs nothing).
+- **`listAccountCommunities()` — the ONE canonical query every Watch metric already derives from — now excludes
+  `chat_type = 'private'` rows.** Since Community count, Community Health, Needs Attention, capacity/usage, and
+  Watcher-deployment targeting all already build on this single function (established in v1.28.0/v1.29.0's
+  "reuse the same list function, never a second query shape" architecture), this ONE fix propagates correctness
+  everywhere at once — no metric needed its own separate patch. **Filtered in application code, not a DB-level
+  `.neq("chat_type", "private")`** — Postgres's three-valued NULL logic would silently exclude every
+  NULL-chat_type row too (pre-existing Communities created before this field existed), which would have
+  destroyed real data the fix must never touch. `createAccountCommunity`'s own community-count-toward-plan-cap
+  query got the identical fix (was a `head:true` exact count with no type filter at all — a leftover private row
+  would have inflated a customer's community usage against their plan limit).
+- **Anti-abuse: one verified Telegram person → at most one Innvil account, now a hard DB constraint, not just a
+  detection signal.** Investigated first: `watch_telegram_links` (migration 0067) already existed with the
+  exact account↔telegram_user_id shape needed, but was deliberately `unique(account_id, telegram_user_id)` —
+  by design, ALLOWING the same Telegram identity to link to multiple accounts as a fraud-detection signal, not
+  preventing it. Per explicit product decision this pass, that's now a hard prevention rule: migration `0071`
+  adds `unique(telegram_user_id)` alone. **Confirmed safe to add directly** — grepped every caller of
+  `linkTelegramIdentity`; it has none outside its own test file, so this table has never actually been written
+  to in production. `linkTelegramIdentity()` (`watch-abuse.ts`) rewritten from a fire-and-forget `void` upsert
+  into a `Result`-returning function: pre-checks `telegramIdentityLinkedElsewhere` for a friendly rejection
+  message, AND catches a `23505` unique-violation from the upsert itself (the real DB constraint is the
+  race-safe ultimate enforcement, per explicit instruction — the pre-check alone is not trusted as sufficient).
+  Neither path ever exposes the other account's identity in the error message.
+- **Existing bad data migration (`0071`), deterministic-only, never guessed.** Only acts on `communities` rows
+  with `chat_type = 'private'` explicitly persisted — real, trusted metadata captured directly from Telegram's
+  own `getChat` response at creation time, never inferred. For each: (1) links the Telegram identity
+  (`chat_id`, that person's numeric Telegram user id) to the account that owned the misclassified row, via
+  `ON CONFLICT (telegram_user_id) DO NOTHING` — never silently overwrites/transfers an identity already linked
+  elsewhere; (2) deletes the invalid `communities` row — every dependent table (`moderator_deployments`,
+  `community_messages`, `moderator_activity_log`, and 5 others) already has `on delete cascade` on its
+  `community_id` FK (verified against migrations 0043/0047/0050/0052/0053/0054/0055/0059 before writing the
+  migration, not assumed), so this cleans up safely with no manual cascade needed. Rows with `chat_type IS NULL`
+  (created before this field existed — no trustworthy signal either way) are left completely untouched, per the
+  explicit "if classification cannot be determined confidently, do not guess" instruction.
+- New migration `0071_watch_telegram_identity_integrity.sql` also adds a `communities` CHECK constraint
+  (`platform <> 'telegram' OR chat_type IS NULL OR chat_type IN ('group','supergroup','channel')`) — DB-level
+  backstop matching the application-level guard, scoped to `platform = 'telegram'` only so a future non-Telegram
+  platform's own type vocabulary is never constrained by this. **Run migration `0071`.**
+- New tests: `watch-runtime.test.ts` (+9 — the exact live repro rejected at creation, group/supergroup/channel
+  all accepted, an unset chatType still passes through unchanged, the private row excluded from
+  `listAccountCommunities`/capacity/Needs-Attention/Watcher-deployment-targeting all in one integration-style
+  test, a NULL-chat_type pre-existing row preserved, the community-cap-count fix), `watch-abuse.test.ts` (+5 —
+  cross-account link rejection without exposing the other account's identity, a simulated DB-constraint race
+  loss via a new `23505`-error simulation added to the test's fake DB layer, username-change-keeps-same-identity,
+  and a full account-A-consumes/account-B-rejected anti-abuse integration scenario covering both the link AND
+  the free-offer-eligibility check). 1007 tests pass (up from 996), `tsc --noEmit` clean, production build clean.
+- **Not verified live this pass** — same sandbox limitation as every other Watch pass this session (no working
+  Supabase/Telegram network access here); verification is typecheck + full test suite + production build + code
+  review + migration safety review (FK cascade behavior confirmed by reading every referencing migration).
+- **REMAINING IDENTITY RISK, explicitly flagged per the report's own required structure — not fixed this
+  pass.** The identical bug class (`checkChatMembership`'s resolved `chat.type` captured but never validated)
+  also exists in the PRE-EXISTING, unrelated Panel-owner and storefront-customer Virtual Moderator flows —
+  `actions/moderator.ts`'s `connectCommunity`, `actions/customer-moderator.ts`'s `connectCustomerCommunity`, and
+  the shared `finalizeCommunityConnection` core in `community-runtime.ts` that both call. These are a
+  structurally separate, older, Panel-scoped product surface (confirmed: `connectAccountCommunity` in
+  `watch-moderator.ts`, the standalone Watch path this pass fixed, deliberately does NOT reuse
+  `finalizeCommunityConnection` at all) — fixing them means touching a live, revenue-generating system serving
+  existing Panel-owner customers, unverifiable in this sandbox, and was explicitly out of scope for "the Innvil
+  Watch Telegram identity model." Flagged here rather than silently left broken.
+- **No live private-chat Telegram IDENTITY VERIFICATION UX was built this pass** (a customer proving "I am
+  Telegram user X" via a deep-link + webhook flow, then seeing "Telegram: @handle, Verified" in Settings) — the
+  `watch_telegram_links`/`linkTelegramIdentity` infrastructure this pass hardened is real and tested, but still
+  has no live entry point wiring it up; this was judged a genuinely new feature (on the scale of the existing
+  Telegram bot-provisioning system) rather than part of fixing the reported "Telegram person shown as a
+  Community" bug, which is now fully fixed without it. See NEXT SAFE STEP.
+
+### 2026-08-18 — Innvil Watch becomes a real Community Operations CRM: resource depth inside each world, not just navigation to it (v1.29.0)
+- **Direct continuation of v1.28.0's "each feature is a world" pass.** That pass built real routes; this
+  pass builds real DEPTH inside them — nested tabs, an actionable Needs Attention worklist with severity, an
+  operational Community Health table, a genuinely account-scoped Project Knowledge editor, and a Watcher
+  Persona editor — per explicit instruction that the CRM feeling must come from resource depth and connected
+  entity relationships, never decorative cards/fake graphs/fake percentages.
+- **Watcher data-consistency semantics re-verified, not re-broken.** "Active Watchers" (Overview KPI) is
+  DISTINCT Watchers with ≥1 enabled deployment (`new Set(...).size`, fixed in v1.28.0) — confirmed this pass to
+  still agree with the Watchers table/list everywhere it's shown (Overview, Usage, Watchers list). The ONE new
+  case added this pass (a Watcher deployed-but-every-deployment-paused) is now surfaced as its OWN distinct
+  LOW-severity Needs Attention fact ("X is paused"), deliberately separate from "not deployed anywhere" — two
+  different real states, never merged into one ambiguous label.
+- **Needs Attention is now a real severity-ranked worklist, not a flat list.** New `AttentionSeverity`
+  ("high"/"medium"/"low") + `actionLabel` on every `AttentionItem`. Conditions, each backed by real
+  already-queryable state (documented in `watch-runtime.ts`'s own doc comment which conditions are
+  DELIBERATELY excluded and why — Telegram permission health, failed Auto-Posts, media-allowance limits, none
+  of which this codebase persists yet): HIGH — a Community has no ACTIVE Watcher; MEDIUM — Watcher or
+  Community capacity ≥90% of the plan limit (`CAPACITY_ATTENTION_THRESHOLD`); LOW — a Watcher is paused
+  (deployed, but every deployment disabled) or undeployed entirely. Items sort high→medium→low. Rendered with
+  a `SeverityTag` + the item's own action label linking straight to the fix (`WatchUI.tsx`).
+- **Community Health (Overview + `/communities` list) is now an operational table, not a 4-column stub.**
+  New `communityOperationalStatus()` (healthy/needs_attention/paused, pure, deterministic — extracted into a
+  new client-safe `src/lib/products/watch-status.ts` since `watch-runtime.ts` is `server-only` and can't be
+  imported from the Overview's "use client" component; a real Next build failure caught this and is now fixed)
+  + new `getCommunityOperationalStats()` (real per-Community "last activity" + "moderation actions in the last
+  24h", ONE grouped query over `moderator_activity_log` reduced in JS, not N per-row queries). `/communities`
+  gained a real status filter (All/Healthy/Needs attention/Paused, functional query-param links).
+- **Project world restructured into real tabs** (`WatchTabs.tsx`, a lightweight client visibility-only
+  switcher — all tab content is fetched server-side up front, so switching tabs never re-fetches or flashes
+  loading): Overview (profile-status/communities/watchers stat cards, in-Project Needs Attention, recent
+  activity) · **Knowledge** (genuinely real — see below) · Communities · Watchers (deduped across the
+  Project's Communities) · Activity (`listAccountActivity` gained a `projectId` filter option, reusing the
+  same function every other Activity view already uses).
+- **Project Knowledge is now real, not omitted.** Investigated first: `projects.description/website/docs_url/
+  overview/contacts` columns already exist (migration `0058`, from the Panel-era "Project Profile" work) and
+  — critically — the LIVE Telegram runtime's `loadProjectProfileRow` (`community-runtime.ts`) already reads
+  them by bare project id with **zero `panel_id` filter at all**. This meant the only real gap was an editor:
+  new account-scoped `src/lib/actions/watch-project-profile.ts` (`getAccountProjectProfile`/
+  `updateAccountProjectProfile`/`setAccountProjectContact`, mirrors `actions/project-profile.ts` exactly, just
+  scoped by `projects.account_id` instead of panel ownership) + new `ProjectKnowledgeTab.tsx`. Saving here
+  takes effect on a deployed Watcher's very next real Q&A answer — no runtime changes needed at all.
+- **Watcher world restructured into real tabs**: Overview (status/deployed-to/moderation-today/last-activity
+  stat cards, deployments table, recent activity) · **Persona** (real, new) · Deployment (the same
+  pause/resume table) · Activity. Header keeps the existing provisioning-status-aware Connect CTA.
+- **Watcher Persona is now real, not omitted.** `virtual_moderators.persona` was already readable for a
+  standalone Watcher, but every EDITING action (`applyModeratorPersonaPreset` etc., `actions/moderator.ts`) was
+  panel-scoped only (`ownedModerator()` requires a `panels` row). New account-scoped
+  `src/lib/actions/watch-watcher-persona.ts` (mirrors those exactly, scoped by `virtual_moderators.account_id`)
+  + new `WatcherPersonaTab.tsx` reusing the SAME `MODERATOR_PERSONA_PRESETS` catalog and
+  materialize-onto-persona-fields mechanism (`moderator/presets.ts`) the owner-side picker already uses —
+  never a second preset system. `AccountWatcherRow` gained a real `persona` field (`listAccountWatchers`/
+  `createAccountWatcher` now select it).
+- **Community world restructured into real tabs**: Overview (active-watchers/moderation-7d/last-activity stat
+  cards, watchers table, recent moderation) · Watchers (pause/resume) · **Moderation** (real, new — filterable
+  by Watcher + date range via `CommunityModerationFilters.tsx`, pushes `?watcher=&days=&tab=moderation`, server
+  page re-queries `listAccountActivity` with the new `since` option) · Settings (read-only connection info:
+  platform/chat id/Project, pointing at the real Watchers-page reconnect flow rather than a second unverified
+  connection form). Header shows the real `OperationalStatusBadge`. Deliberately did NOT add a separate
+  "Activity" tab alongside "Moderation" — with no non-moderation event stream in this codebase, they'd be the
+  identical table twice, which the spec explicitly said not to do.
+- **Global Activity explorer**: gained a real date-range filter (24h/7d/30d, `since` piped through
+  `listAccountActivity`) alongside the existing Community/Watcher filters, and now groups results into
+  Today/Yesterday/Earlier sections for scanability.
+- **Sidebar cleaned up**: Knowledge and Auto-Posting removed from the global nav entirely (not left disabled).
+  Knowledge doesn't belong there anymore — it's genuinely real now, but Project-scoped, so it lives as a tab
+  inside each Project instead of a global destination with nothing to point at. Auto-Posting still has zero
+  account-scoped backend (`actions/autopost.ts` is still hard Panel-owner-scoped, `auto_post_windows.panel_id`
+  is still `NOT NULL`) — omitted per the explicit "no disabled-looking navigation" rule, rather than shown
+  greyed out.
+- New tests (`watch-runtime.test.ts`, +19): every new Needs Attention condition (capacity-nearing-limit at
+  exactly the 90% threshold and just under it, severity sort order, the paused-vs-undeployed distinction now
+  producing two separate real facts), `communityOperationalStatus`'s full 3-state truth table incl. the
+  any-enabled-wins case, `getCommunityOperationalStats`'s 24h-window boundary and no-activity-yet case, and
+  `listAccountActivity`'s new `projectId`/`since` filters (incl. cross-Project isolation). 996 tests pass (up
+  from 978 — 26 from v1.28.0 + 19 from this pass, 1 updated for the new paused-Watcher behavior), `tsc --noEmit`
+  clean, production build clean (all 10 routes present; a real server/client boundary bug —
+  `communityOperationalStatus` imported at runtime into the "use client" Overview, pulling `server-only`
+  `watch-runtime.ts`'s whole module graph including Supabase admin into the client bundle — was caught by the
+  build itself and fixed by extracting the pure function into the new client-safe `watch-status.ts`).
+- **Not verified live this pass** — same sandbox limitation as every other Watch pass this session (no working
+  Supabase network access here); verification is typecheck + full test suite + production build + code review.
+- **Deliberately not built this pass** (documented, not silently skipped): Auto-Posting world (no account-scoped
+  backend — would need its own migration + scheduler, a separate build of comparable size to this whole pass);
+  Media Safety as its own surfaced concept (no media-usage metering/accounting exists anywhere in this codebase
+  yet — Phase 4.S's plan for one is explicitly documented as not built, so there's no real number to show
+  beyond the moderation-action counts already surfaced); Telegram connection health detail on the Community
+  Health table (`moderator_deployments.health` is recorded once at connect-time with real
+  canSend/canDelete/canRestrict data but isn't re-checked live or surfaced on the summary row yet); Billing
+  invoice/payment history (no `platform_deposits` list-by-account action exists for direct Watch subscriptions);
+  a global Project-scope selector near the topbar (the current per-page server-fetch architecture doesn't
+  cleanly support one without threading a scope param through every page — a real future step, not a decorative
+  add now); global cross-entity search (Projects/Communities/Watchers search — every list page already has real
+  data small enough that a search box wasn't judged high-value yet at typical account scale).
+
+### 2026-08-18 — Each Watch feature area is now a real "world": dedicated Projects/Communities/Watchers/Activity/Usage/Billing/Settings routes replace in-page anchors, plus a real Overview data-consistency fix (v1.28.0)
+- **Direct continuation of v1.26.0's own "no fake pages" limitation.** That pass built the CRM-style Overview
+  with sidebar links pointing at in-page anchors (`#communities`, `#watchers`, ...) specifically because no
+  dedicated routes existed yet. This pass builds the real routes: **`/projects`, `/projects/[id]`,
+  `/communities`, `/communities/[id]`, `/watchers`, `/watchers/[id]`, `/activity`, `/usage`, `/billing`,
+  `/settings`** — each a genuine list+detail (or single) page with its own real data, not a shallow wrapper
+  that repeats Overview's widgets. `WatchShell.tsx`'s sidebar now links to these real paths (`next/link`
+  throughout, was plain `<a>` anchors) instead of `#anchor`s.
+- **Deliberately scoped OUT this pass, honestly disabled rather than pointed at empty pages: Knowledge and
+  Auto-Posting.** Investigated first — confirmed neither `actions/knowledge.ts` nor `actions/autopost.ts` has
+  any account-scoped (Panel-less) path; both are still hard Panel-owner-scoped end to end (`ownedProject()`/
+  `ownedCommunity()` checks keyed off `panels.settings`, DB tables keyed by `panel_id`). Building a
+  Panel-less Knowledge base and Auto-Posting scheduler is a backend build of comparable size to this whole
+  pass, not a page — the sidebar items stay `implemented: false` ("coming soon"), each with a code comment
+  explaining exactly why, rather than linking to a route with nothing real behind it.
+- **New `src/lib/watch-page.ts`** — `requireWatchPage()` (host/auth/entitlement guard, shared by every new
+  route so it isn't repeated 10 times) + `getWatchShellContext()` (capacity + a real "needs attention" count,
+  so every page's sidebar/topbar agrees on the same two numbers).
+- **`watch-runtime.ts` gained the detail-page read layer**: `getAccountProjectDetail`/`getAccountCommunityDetail`/
+  `getAccountWatcherDetail` — each REUSES the existing list functions (`listAccountProjects`/
+  `listAccountCommunities`/`listAccountWatchers`/`listAccountActivity`) filtered down to one resource, rather
+  than writing a second query shape, so a detail page can never disagree with its own list page about what's
+  real. `listAccountActivity` gained filter options (`communityId`/`watcherId`) for the new Activity page and
+  the two detail pages' own scoped activity feeds. New `listAccountAttentionItems()` — a "Needs Attention"
+  list computed entirely from real, already-queryable state (no notification table, no fabricated conditions):
+  exactly two genuine operational gaps — a Community with no active Watcher, and a Watcher not deployed
+  anywhere.
+- **Real Overview data-consistency bug fixed, per explicit live report ("Active Watchers = 4" contradicting
+  the Watchers panel showing "No Watchers yet").** Root cause: "Active Watchers" was computed as a COUNT OF
+  ENABLED DEPLOYMENTS (`communities.reduce((sum,c) => sum + c.watchers.filter(w=>w.enabled).length, 0)`) —
+  double-counting any Watcher deployed to more than one Community — while the Watchers table below it renders
+  from the separate, correct `AccountWatcherRow[]` list. Fixed to count DISTINCT Watchers with at least one
+  enabled deployment (`new Set(communities.flatMap(...)).size`) — the same definition a reasonable person
+  reading "Active Watchers" would expect, and the same one the Watchers table itself implies.
+- **Projects world**: list page (grid of cards, community/watcher counts, "New Project" modal via new
+  `ProjectsClient.tsx`) + detail page (this Project's Communities table, links out to each Community). Project
+  detail deliberately does NOT expose a raw "create Community" form — real Community creation requires actual
+  Telegram membership verification (`connectAccountCommunity` in `watch-moderator.ts`), so the detail page
+  points to the Watchers page's real connect flow instead of building a second, unverified creation path.
+- **Communities world**: list page (table across every Project) + detail page (deployed Watchers with a real
+  pause/resume toggle via new `DeploymentToggle.tsx`, scoped Activity feed).
+- **Watchers world**: list page (new `WatchersClient.tsx` — create + connect, reusing the EXISTING
+  `WatcherConnectModal` unchanged) + detail page (provisioning-status-aware "Connect" CTA via new
+  `WatcherDetailClient.tsx`, deployments table with pause/resume, scoped Activity feed).
+- **Activity world**: full list (100-row cap) with real Community/Watcher filters (new `ActivityFilters.tsx`,
+  pushes `?community=&watcher=` into the URL so the server page re-queries — no client-side data fetching of
+  its own).
+- **Usage world**: real capacity (Watchers/Communities used vs. plan total) + real moderation-action counts at
+  both 7-day and 30-day windows (`countRecentModerationActions` called twice with different windows) — no
+  fabricated charts/trends, only numbers this codebase can actually compute today.
+- **Billing world**: current plan (tier, price from `watchPlanOptions()` — never a duplicated number),
+  capacity bars, and a real "Change plan"/"Subscribe" picker (new `BillingPlanPicker.tsx`) that reuses the
+  EXISTING `WatchCheckout` component (the same real Cryptomus/NOWPayments/Binance Pay checkout the
+  pre-authenticated pricing flow already uses — never a fabricated "success" state). Enterprise section states
+  the real `MODERATOR_ENTERPRISE_MIN_SLOTS` threshold and a real worked price example
+  (`moderatorEnterpriseSlotPrice(50)`), with a genuine contact form.
+- **Settings world**: real account email (via `admin.auth.admin.getUserById`) + a contact-support form. Both
+  the Enterprise contact form and Settings' support form reuse the EXISTING `sendOwnerSupportMessage` action
+  (`actions/platform-support.ts`) — confirmed it's already account-scoped via `getAuthedAdmin()`, not
+  Panel-owner-scoped, so no second support channel was invented.
+- **New shared `src/components/watch/WatchUI.tsx`** — `StatCard`/`StatusDot`/`SectionHeader`/`EmptyRow`/
+  `CapacityRow`/`Breadcrumbs`/`relTime`, extracted from `WatchDashboard.tsx` (which previously defined them
+  inline) so all 10+ new pages stay visually consistent without duplicating primitives. `WatchDashboard.tsx`
+  (Overview) now imports from this file, links its Community/Watcher/Project rows to the new real detail
+  routes, renders a "Needs Attention" panel, and passes a real `attentionCount` into `WatchShell`'s topbar
+  badge.
+- **`WatchShell.tsx`**: sidebar Workspace items (Projects/Communities/Watchers) and Activity now link to real
+  routes; Account section expanded from a single "Billing" anchor into three real items (Usage/Billing/
+  Settings); plain `<a>` tags replaced with `next/link`; new `attentionCount` prop renders an amber
+  "N need(s) attention" pill in the topbar (linking to Overview), shown only when count > 0. New `.w-amber-border`/
+  `.w-red-border` CSS utilities added to `globals.css`, matching the existing `.w-teal-border` pattern.
+- New tests (`watch-runtime.test.ts`, +26): every new detail-fetcher's cross-resource isolation (a different
+  Project's Community/a different Watcher's activity never leaks into a detail page), null-for-nonexistent/
+  unowned cases, and every `listAccountAttentionItems` condition (Community with no active Watcher, Watcher
+  not deployed, both-clear empty case, and the "paused-but-still-deployed" case correctly NOT double-flagging
+  the same gap from both angles). 988 tests pass (up from 978), `tsc --noEmit` clean, production build clean
+  (confirmed all 10 new routes appear in the build output: `/projects`, `/projects/[id]`, `/communities`,
+  `/communities/[id]`, `/watchers`, `/watchers/[id]`, `/activity`, `/usage`, `/billing`, `/settings`).
+- **Not verified live this pass** — same sandbox limitation as every other authenticated-Watch-dashboard pass
+  this session (no working Supabase network access here); verification is typecheck + full test suite +
+  production build + code review, consistent with how comparably complex Watch UI work has been verified
+  throughout this branch.
+- **Deliberately not built this pass** (documented, not silently skipped): Knowledge/Auto-Posting worlds (no
+  account-scoped backend exists yet — see above); a raw manual "create Community" form on the Project detail
+  page (real Community creation requires live Telegram membership verification, already exists via the
+  Watchers connect flow — building a second, unverified path would be a shortcut around a real safety check);
+  billing/invoice HISTORY (no `platform_deposits` list-by-account action exists yet for direct Watch
+  subscriptions — Billing shows current plan + a real change-plan flow, not a fabricated transaction history).
+
+### 2026-08-18 — Self-serve Telegram provisioning for standalone Watch — the last v1.25.0 gap closed (v1.27.0)
+- **Direct continuation of the "NEXT SAFE STEP" flagged at the end of both v1.25.0 and v1.26.0** — a direct
+  Watch customer can now connect a Watcher to Telegram entirely themselves, no support ticket required. Mirrors
+  the EXISTING, already-working customer-facing flow (`actions/customer-moderator.ts`, itself mirroring the
+  owner flow in `actions/moderator.ts`) via the SAME auth-agnostic Telegram helpers in `moderator/manager.ts` —
+  nothing about how Innvil talks to Telegram was duplicated.
+- **New `src/lib/actions/watch-moderator.ts`** — `requestCustomerTelegramCreation` (reserve a username, hand
+  back the Managed Bots deep link), `getCustomerModeratorProvisioning` (poll target),
+  `cancelCustomerTelegramProvisioning`, `connectCustomerBotToken` (BotFather-token fallback),
+  `connectAccountCommunity` (verifies REAL Telegram membership via `checkChatMembership`, never assumed, then
+  reuses `watch-runtime.ts`'s already-capacity-checked `createAccountCommunity`/`deployAccountWatcher`),
+  `setCustomerDeploymentEnabled`. Every export re-derives the account from the authenticated session via a new
+  `ctxModerator()` (mirrors `customer-moderator.ts`'s own helper, scoped by `virtual_moderators.account_id`
+  instead of `customer_id`) — never a client-supplied id.
+- **Deliberately did NOT reuse the `/start` add-to-group deep link** (`buildAddToGroupDeepLink`) that the
+  owner/Panel flow offers when a bot isn't yet present in a chat. Traced its completion path
+  (`completeGroupSetupSession`) before wiring anything: it only ever consumes a `telegram_setup_sessions` row,
+  created EXCLUSIVELY by the owner-side `createTelegramSetupSession` action (Panel-scoped) — a standalone
+  integration structurally can never have one. Offering that link here would have been a dead end (the bot
+  would show "this setup link has expired or was already used"). Instead, a failed membership check just tells
+  the user to add the bot to the group directly in Telegram by its known username.
+- **`watch-runtime.ts` extended, not duplicated**: `AccountCommunityInput`/`AccountCommunityRow` gained
+  `chatType`/`title` (matching the real Telegram data the owner/customer flows already capture — was
+  previously dropped), `deployAccountWatcher` gained an optional `health` parameter (real
+  `canSend`/`canDelete`/`canRestrict` from the membership check, not fabricated `{}` — default unchanged for
+  every existing caller/test). `AccountWatcherRow` gained `provisioningStatus` (`listAccountWatchers`/
+  `createAccountWatcher` now select it) so the dashboard can show real per-Watcher connection state instead of
+  a blanket "still rolling out" note.
+- **Dashboard wired up**: `WatchDashboard.tsx`'s Watchers table now has a real "Connect" / "Connect community"
+  action per Watcher with no active deployment, opening the new `WatcherConnectModal.tsx` — a state-machine
+  modal (create bot → poll confirmation → connect community → success) driven entirely by the Watcher's real
+  `provisioningStatus`, calling the new actions directly. No fake "coming soon" UI remains for this flow.
+- New tests: `watch-runtime.test.ts` (existing 28 unaffected by the type additions — `health`/`chatType` default
+  safely for every prior call site). **No dedicated test file for `watch-moderator.ts` itself** — confirmed
+  neither the owner flow (`actions/moderator.ts`) nor its closest existing analog (`actions/customer-
+  moderator.ts`) has one either; this orchestrates already-tested pure functions (`validateRequestedUsername`,
+  `buildManagedBotDeepLink`, `checkChatMembership`) and already-tested `watch-runtime.ts` functions
+  (`createAccountCommunity`, `deployAccountWatcher`), verified via `tsc --noEmit` + production build + code
+  review, consistent with this codebase's established convention for comparably complex Telegram-orchestrating
+  action files. 978 tests pass (unchanged), `tsc --noEmit` clean, production build clean.
+- **Still not built this pass** (documented, not hidden): a live end-to-end click-test (this sandbox has no
+  working Telegram/Supabase network access, confirmed in earlier sessions); the `/start` add-to-group flow for
+  standalone accounts (would need its OWN setup-session mechanism, not the Panel-scoped one); Enterprise/rental
+  distribution paths (unrelated to this pass).
+
+### 2026-08-18 — Watch dashboard rebuilt as a CRM-style operations console + a real runtime data-write bug fixed (v1.26.0)
+- **Fixed a real gap in v1.25.0's own runtime rewire before touching any UI.** That pass widened every
+  `panelId` parameter in the live Telegram pipeline to `string | null` and correctly branched the two READ
+  queries that needed it (`resolveCommunity`, the `ORGANIZATION`-knowledge lookup) — but never checked whether
+  the tables those functions actually WRITE to would accept a `null` `panel_id`. They didn't:
+  `community_messages`, `moderator_activity_log`, `moderator_link_warning_state`, `community_reactive_quota`,
+  `moderator_media_dedup`, and `moderator_conversation_tasks` were all still `panel_id NOT NULL`. In practice
+  this meant a standalone deployment's very first inbound message would fail at `recordCommunityMessage`
+  (early in the pipeline, right after sender classification) with a constraint violation — silently, since the
+  webhook route's outer `try/catch` swallows the error and still returns 200 to Telegram. Found by tracing what
+  the new dashboard's Activity feed would actually need to read, not from a live incident. **New migration
+  `0070_watch_standalone_runtime_state.sql`** — makes `panel_id` nullable on all six tables; each was verified
+  first to have no unique constraint or primary key involving `panel_id` (a plain denormalized attribution
+  column only), same pattern already used for the tables `0069` fixed. No application code changes needed —
+  the runtime code already passed `null` through correctly once the columns can actually accept it.
+- **The dashboard itself: replaced the "create a Project / create a Watcher" CRUD-test-harness page with a
+  real operations console.** New `src/components/watch/WatchShell.tsx` — persistent sidebar (Overview +
+  Workspace: Projects/Communities/Watchers + Operations: Activity/Knowledge/Auto-Posting + Account:
+  Billing/Settings) + top bar (page title, primary quick-create action, account/logout) + a wider `1400px`
+  content canvas. Sidebar items route to in-page anchors on the single Overview page — **no fake new routes
+  were created**; `/projects`, `/communities`, `/watchers` don't exist as dedicated pages yet, and the explicit
+  instruction was "do not create fake pages merely to satisfy this list" — anchors are an honest interim IA,
+  not a placeholder. Knowledge/Auto-Posting/Settings render visibly disabled ("coming soon") rather than as
+  dead links, since those genuinely don't have a UI yet. Mobile: the sidebar becomes a drawer (hamburger
+  trigger, backdrop click / Escape to close, focus-visible nav items).
+- **New real data layer in `watch-runtime.ts`** — `listAccountCommunities` (Communities owned via this
+  account's Projects, each with its assigned Watchers/deployment status), `getAccountCapacity` (real
+  used/total against the canonical `CAPACITY` table from `moderator/plan.ts` — never a duplicated number),
+  `listAccountActivity` (recent `moderator_activity_log` rows scoped to this account's own community ids,
+  filtered to ONLY genuinely customer-facing moderation events — `DELETE_WARN`/`DELETE_BAN`/`DELETE_KICK` —
+  and translated to plain text like "removed a member for a policy violation"; routine internal bookkeeping
+  like `SILENCE`/`GENERATION_STARTED`/`ALLOW` is never surfaced, and raw event/decision codes never leak into
+  the description text), `countRecentModerationActions` (a real `count: "exact"` query for the 7-day stat card,
+  independent of the activity feed's own display limit, so the number is accurate even when there's more
+  history than the feed shows).
+- **No fabricated metrics.** Considered and explicitly DROPPED a "Media Usage" stat card the spec's own examples
+  suggested — there is no media-moderation-unit accounting system in this codebase yet (Phase 4.S's plan for
+  one is explicitly documented as NOT built) — showing it would mean inventing a number. The 4 real stat cards
+  shown are: Active Watchers (used/total + slots-available note + progress bar), Communities (same shape),
+  Moderation actions (real 7-day count), Projects (real count). `getWatchAccessState()` (`watch-dashboard.ts`)
+  now returns `communities`, `capacity`, `activity`, and `moderationActionsLast7Days` alongside the existing
+  `projects`/`watchers` — all fetched in parallel.
+- **Overview structure**: header ("Community operations" / "Monitor your Communities, Watchers, activity, and
+  usage.") + primary CTA ("+ Create Watcher" in the top bar) → stat row → two-column (Community health table +
+  Plan & capacity panel) → two-column (Watchers table + Recent activity feed) → a compact Projects section
+  (name + chevron, not a permanent creation form). Community/Watcher tables use a real `<table>` with semantic
+  `<th>` headers, a small status dot (never color-only — always paired with "Active"/"Paused" text) instead of
+  large colored pills, and horizontal scroll on narrow viewports rather than page overflow.
+- **Conditional dashboard, not a forced empty CRM.** `hasAnyResource` (any Project, Watcher, or Community)
+  gates between the full operational view and `OnboardingEmptyState` (the existing 4-step setup list — Project
+  → Community → Watcher → Deploy — with a single "Start setup" CTA that opens the Create-Project modal). A
+  brand-new account never sees an empty table grid with nothing in it.
+- **Creation UX**: the two large permanent forms are gone. `+ New Project`/`+ New Watcher` now open a small
+  shared `Modal` component (name field, Enter-to-submit, inline error) that calls the EXACT SAME
+  `createWatchProject`/`createWatcher` server actions as before — zero backend logic changed, confirmed by
+  reusing the imports unmodified. Community connection stays in its existing honest "still rolling out —
+  contact support" state (unchanged copy) since there's still no live Telegram verification UI behind it —
+  exposing a working-looking "Connect Community" button here would be exactly the kind of UI-implies-a-backend
+  fabrication this codebase's own conventions already forbid.
+- **No Panel/Forge language anywhere in the new shell/Overview** — grepped the new/changed Watch files for
+  "panel"/"Panel"/"Forge"/"SMM" after writing them; the only appearances are in code comments explaining the
+  architecture (e.g. "no Panel required" in a doc comment), never in rendered copy.
+- **Visual system**: reuses the existing `.watch-root`/`w-*` tokens throughout (no new design-token layer) —
+  `w-card` for the 3 structural panel levels (stat card, table panel, modal), a small `StatusDot` micro-status
+  primitive, `w-teal-bg`/progress-bar fills for capacity. One missing CSS utility (`w-green-bg`, needed for the
+  "Active" status dot) added to `globals.css`, matching the existing `w-teal-bg` pattern exactly.
+- New tests: `watch-runtime.test.ts` (+28 — `listAccountCommunities` cross-account isolation incl. two accounts
+  sharing a Project *name*, `getAccountCapacity` reading real numbers from the canonical `CAPACITY` table for a
+  live-resolved tier, `null` for no entitlement, `listAccountActivity`'s ALLOW/routine-event filtering and
+  raw-code-leak guard, `countRecentModerationActions`'s exact count vs. the feed's own truncation limit and its
+  7-day window boundary). 978 tests pass (up from 967), `tsc --noEmit` clean, production build clean.
+- **Not verified live this pass** — this sandbox has no working Supabase network access (confirmed in earlier
+  sessions), so the authenticated dashboard couldn't be click-tested end-to-end; verification is typecheck +
+  full test suite + production build + code review, consistent with how comparably complex Watch UI work has
+  been verified in this sandbox before.
+- **Deliberately not built this pass**: dedicated `/projects`/`/communities`/`/watchers` routes (anchors on the
+  single Overview page instead, per the explicit "no fake pages" instruction); a Knowledge/Auto-Posting/Settings
+  UI (none exists yet — sidebar items render disabled); a live "Connect Community" flow (still blocked on the
+  same Telegram-verification UI gap documented since v1.20.0).
+
+### 2026-08-18 — Live Telegram runtime rewired for standalone Watch — the explicitly-deferred v1.24.0 gap is closed (v1.25.0)
+- **Direct continuation of v1.24.0's own documented "NEXT SAFE STEP"** — that pass built standalone ownership
+  (Project→Community→Watcher→Deployment can be CREATED with zero Panels) but explicitly left the LIVE Telegram
+  webhook message-processing pipeline entirely `panel_id`-keyed, since rewiring it touches production traffic
+  for every existing paying customer and couldn't be verified live in this sandbox. This pass closes that gap.
+- **Traced the full live chain before touching anything, per explicit instruction**: `app/api/webhooks/telegram
+  /bots/[integrationId]/route.ts` → `handleCommunityWebhook(integrationId, raw, headers)` → `handleCommunityUpdate
+  (integrationId, update)`. Critical finding, confirmed by reading the code rather than assumed: **the webhook
+  is already keyed by `integrationId` (the `telegram_bot_integrations` row id), never by a panel** — `panelId`
+  only enters the picture ONE line into `handleCommunityUpdate`, via `resolveIntegration()`'s `integration
+  .panel_id`. This meant the real fix was narrower than it looked: correct the ONE place `panel_id` gets pulled
+  out of the integration row, then thread the (now-nullable) value through — not a rewrite of the entry point.
+- **Full dependency map (grep-verified, not guessed)**: of ~20 functions in `community-runtime.ts` accepting a
+  `panelId` parameter, only **3 total** actually use it as a `.eq("panel_id", ...)` WHERE-filter anywhere in the
+  file — `resolveCommunity` (the webhook's community lookup), and the `ORGANIZATION`-scope knowledge query
+  (appears twice, once in `loadRelevantKnowledge`). Every other occurrence (`classifySender`,
+  `recordCommunityMessage`, `logBotAckDecision`, `recordBotAckReply`, `logActivity`, `recordReactiveQuotaUse`,
+  `insertTask`, `logTaskActivity`, `recordMediaDedup`, `respondAsDeployment`, and others) only ever uses it as a
+  plain INSERT/UPSERT attribute — confirmed safe with `null` by checking every relevant table's actual
+  constraints (`moderator_spam_hits`'s PK doesn't include `panel_id`, per v1.24.0's fix; `community_reactive_quota`/
+  `moderator_link_warning_state` were ALREADY correctly keyed without it; `community_messages` has no unique
+  constraint on it at all). `classifySender` in particular required ZERO changes — it already fetches candidate
+  bot integrations by `telegram_bot_id` alone (no panel filter) and matches in application code, which already
+  works correctly for a `null` panel id on both sides of the comparison.
+- **`resolveCommunity()` now branches**: `panelId` truthy → `.eq("panel_id", panelId)` (byte-identical to
+  before); `panelId: null` → `.is("panel_id", null)`, matching the exact partial unique index
+  (`idx_communities_standalone_chat`) v1.24.0's migration `0069` already added. The two pools are structurally
+  disjoint — a Panel-scoped community can never be mistaken for a standalone one sharing the same `chat_id`, or
+  vice versa (both directions directly tested).
+- **The deeper unlock: entitlement/capability gating doesn't need a second system.** Every `virtualMod*(settings)`
+  capability check throughout `moderator/plan.ts` (`hasVirtualModerator`, `virtualModNaturalChatterActive`,
+  `virtualModModeration`, `virtualModBotAcknowledgement`, etc.) is ultimately just a function of
+  `settings.addons.moderator.{tier,commercialMode,trial,...}` — confirmed by reading every one of them, not
+  assumed. New `src/lib/products/watch-runtime.ts` exports `buildStandaloneModeratorSettings(tier)`, which
+  synthesizes that EXACT shape from a direct account's real `product_entitlements` tier (trial always `false` —
+  direct Watch checkout is paid-only), and `resolveStandaloneModeratorSettings(admin, virtualModeratorId)`
+  (resolves the owning account via the new `resolveWatcherAccountId`, then the tier, then synthesizes). The
+  result: **the entire existing capability-gating/moderation/chatter system runs completely unmodified for a
+  standalone deployment** — no parallel settings/config model was invented, exactly per the explicit "one
+  runtime, not a duplicated backend" instruction.
+- **`handleCommunityUpdate`'s settings resolution now branches**: `integration.panel_id` set → reads
+  `panels.settings` exactly as before (byte-identical); `null` → calls `resolveStandaloneModeratorSettings`
+  instead. Everything downstream (bot-ack gating, Natural Chatter gating, moderation, media moderation) reads
+  from the SAME `settings` variable either way, unaware of which branch produced it.
+- **`loadRelevantKnowledge`'s `ORGANIZATION`-scope query now skips entirely when `panelId` is null** —
+  `knowledge_sources.panel_id` is still `NOT NULL` (unlike the ownership tables `0069` touched), so there is
+  literally no way to create a standalone `ORGANIZATION`-scope row today; querying with a null id would just
+  return nothing anyway, but skipping the query is both clearer and saves a round trip. `COMMUNITY`/`PROJECT`
+  scope retrieval (the two that actually matter for a standalone deployment) are completely unaffected — they
+  were already derived from `community_id`/`project_id`, never `panel_id`.
+- **Type-widened `panelId: string` → `string | null` across ~20 signatures** in `community-runtime.ts`
+  (`resolveIntegration`'s return shape, `CommunityEvent.panelId`, `KnownBotFacts.integration.panelId` in
+  `event-types.ts`, `KnowledgeSource.panelId` in `knowledge.ts`, and every runtime function reachable from
+  `handleCommunityUpdate`) — a mechanical, low-risk change once the 3 real query-filter fixes were identified,
+  verified by re-running `tsc --noEmit` after each step to catch every true incompatibility rather than guessing
+  which call sites needed updates. **`finalizeCommunityConnection`/`startModeratorTrialIfEligible` (the
+  owner-only Panel-distribution connect flow) were deliberately left `panelId: string` (non-nullable), completely
+  untouched** — they're never reached from the standalone path; widening them would have been unjustified scope.
+- **The `/start` deep-link setup-session flow (Phase 4.O) is honestly left un-rewired**: `completeGroupSetupSession`
+  now type-checks against a nullable `panel_id` (since it's called from `handleStartCommand` with the same
+  `integration` object `resolveIntegration` returns) but bails out immediately (safe no-op, not a crash) when
+  `integration.panel_id` is null — `telegram_setup_sessions` rows are created exclusively by the owner-side
+  `createTelegramSetupSession` action, so a standalone integration structurally can never have one to consume.
+  Standalone Telegram connection still isn't wired to a live `/start`-based flow (only the DB/ownership layer,
+  `watch-runtime.ts`'s `createAccountCommunity`, exists) — unchanged from v1.24.0, not a new gap introduced here.
+- **Auto-Posting deliberately NOT touched this pass** — `auto_post_windows.panel_id` is still `NOT NULL` (v1.24.0's
+  migration `0069` didn't include it), and its entitlement resolution (`autopost-runtime.ts`) fetches a
+  `settingsByPanel` map keyed entirely by panel. This is a separate, currently-disabled-in-production
+  (`AUTO_POSTING_ENABLED=false`) CRON-DRIVEN system, not part of the live webhook path this pass was scoped to
+  fix — rewiring it needs its own migration (making `auto_post_windows.panel_id` nullable) and its own
+  account-scoped window-creation action, neither of which exist yet. Documented, not silently skipped.
+- **Regression safety**: the entire pre-existing `community-runtime.test.ts` suite (which exercises Panel-backed
+  scenarios extensively) **passes unchanged** after this refactor — strong evidence legacy behavior is fully
+  preserved, not just asserted.
+- New tests (`community-runtime.test.ts`, +15): `resolveCommunity` — standalone resolution, Panel-scoped
+  resolution unaffected, the two pools never cross-contaminate in EITHER direction (a Panel-owned community with
+  a colliding `chat_id` is never returned for a standalone lookup, and the reverse), two different standalone
+  chats never bleed into each other, unknown chats return null in both modes, and a dedicated **NO HIDDEN
+  FALLBACK** test proving a standalone resolution never queries the `panels` table at all. `watch-runtime.ts`
+  additions — `buildStandaloneModeratorSettings`'s shape is fed through the REAL `moderator/plan.ts` capability
+  functions (not reimplemented assertions) and produces correct results for every tier, trial is always off,
+  `resolveStandaloneModeratorSettings` resolves real entitlement end-to-end and returns `null` (never a
+  fabricated tier) for a non-entitled or Panel-owned Watcher, plus its own **NO HIDDEN FALLBACK** test. A
+  capacity-parity test confirms all four tiers' synthesized settings agree with the canonical `CAPACITY` table.
+  `loadRelevantKnowledge` confirmed to never surface `ORGANIZATION`-scope knowledge for a standalone community.
+  967 tests pass (up from 952), `tsc --noEmit` clean, production build clean (all API/webhook routes, including
+  `/api/webhooks/telegram/bots/[integrationId]`, unchanged in the build output).
+- **REMAINING COUPLING, explicit per the report's own required structure**: exactly 2 functions in the entire
+  live-reachable file still require a non-null `panelId` — `finalizeCommunityConnection` and
+  `startModeratorTrialIfEligible`, both exclusively the owner-side Panel-distribution connect flow, never called
+  from the standalone runtime path. Auto-Posting (a separate, disabled cron system) still requires one, honestly
+  documented above. **Beyond those two named, explicitly-justified exceptions and the disabled Auto-Posting
+  system: the direct Watch live Telegram runtime has no Panel dependency.**
+- **NEXT SAFE STEP**: wire a live `/start`-based (or equivalent) Telegram bot-creation/verification flow for
+  standalone accounts, calling the ALREADY-BUILT `watch-runtime.ts` `createAccountCommunity`/`deployAccountWatcher`
+  instead of `finalizeCommunityConnection` — this is the last piece between "the runtime can process a standalone
+  message" (now true) and "a real customer can get a standalone Watcher connected to Telegram at all" (still not
+  self-serve). Verify live against a real Telegram bot before enabling, same caution as every other live-runtime
+  change in this codebase's history.
+
+### 2026-08-18 — Watch ownership extended past Project to Community/Watcher/Deployment — genuinely standalone creation, deliberately scoped short of the live runtime rewire (v1.24.0)
+- **Explicit large-scope request: make Watch "genuinely standalone" — Account → Watch entitlement → Project → Community →
+  Watcher → deployment/runtime with NO Panel required anywhere in that path, while preserving Forge/Panel
+  distribution as an optional commercial channel into the SAME resources/runtime.** Investigated first, per
+  explicit instruction: read every relevant migration (`0043`, `0047`, `0050`–`0057`, `0066`), grepped every
+  Watch-related `panel_id` reference, and classified each occurrence before changing anything (full audit below).
+  **This pass deliberately does NOT complete the entire spec** — the live Telegram webhook message-processing
+  pipeline (`community-runtime.ts`'s `resolveCommunity` and everything downstream of it: moderation execution,
+  chatter generation, knowledge retrieval, activity logging) is NOT rewired to work without a panel_id in this
+  pass. That is real production code processing live Telegram traffic for every existing paying panel-backed
+  customer, untestable in this environment (confirmed: outbound network calls to Supabase/Telegram fail in this
+  sandbox), and a mistake there would break a working, revenue-generating system. What THIS pass delivers is the
+  full OWNERSHIP/CREATION layer underneath it — real, tested, and the concrete foundation the runtime rewire
+  builds on next. Scope boundary stated explicitly, not hidden — see "REMAINING COUPLING" below.
+- **PANEL DEPENDENCY AUDIT.** Classified every Watch-related `panel_id NOT NULL` table found via migration grep:
+  - **(B) Legacy tenant/ownership assumption — REMOVED this pass**: `virtual_moderators.panel_id`,
+    `telegram_bot_integrations.panel_id`, `telegram_provisioning_attempts.panel_id`, `communities.panel_id`,
+    `moderator_deployments.panel_id` all made nullable (migration `0069`) — these were the actual blockers to
+    creating a Watcher/Community/Deployment without a Panel.
+  - **(C) Redundant lookup, corrected as a genuine consistency fix**: `moderator_spam_hits`'s PRIMARY KEY
+    included `panel_id` even though `community_id` alone already uniquely determines the owning tenant — fixed
+    to `primary key (community_id, sender_platform_id)`. `community_reactive_quota`/`moderator_link_warning_state`
+    were ALREADY correctly keyed without `panel_id` in their primary keys (checked, not assumed) — only their
+    plain denormalized `panel_id` columns exist, safe as-is.
+  - **(A) Real Forge commercial relationship — KEPT, untouched**: `ownership.ts`'s `hasProductAccess()` legacy
+    fallback (an existing Panel-distributed Watch subscriber — `panels.settings.addons.moderator` — still
+    resolves as entitled through the same resolver); every existing owner-side Virtual Moderator action
+    (`moderator.ts`, `finalizeCommunityConnection`, the entire Telegram runtime) — zero changes, confirmed via
+    diff review.
+  - **(D) Optional distribution context — the design going forward**: every Watch runtime table now allows
+    `panel_id: null` for a standalone resource while every existing Panel-backed row keeps its `panel_id`
+    completely unchanged. Nothing was backfilled/reassigned; nothing destructive.
+- **Migration `0069_watch_standalone_runtime.sql`** — additive/backfill-free (no existing row is touched).
+  `virtual_moderators` gained `account_id` (nullable, references `profiles`) as its neutral owner, parallel to
+  `panel_id`, with a `virtual_moderators_owner_check` CHECK requiring at least one of the two (never orphaned).
+  `communities`/`moderator_deployments`/`telegram_bot_integrations`/`telegram_provisioning_attempts.panel_id` all
+  made nullable — ownership for these derives from their PARENT (`communities`→`project_id`→`projects.account_id`;
+  `moderator_deployments`→`moderator_id`→`account_id`; `telegram_bot_integrations`/`telegram_provisioning_attempts`
+  →`virtual_moderator_id`, already unique/NOT NULL) — per the explicit "prefer parent-derived ownership, don't add
+  `account_id` indiscriminately" instruction, no new column was added to any of these four. Since Postgres treats
+  every `NULL` as distinct in a plain `UNIQUE` constraint, the pre-existing `unique(panel_id, platform, chat_id)`
+  (communities) and `unique(panel_id, telegram_bot_id)` (bot integrations) don't protect the standalone case —
+  added `idx_communities_standalone_chat`/`idx_telegram_bot_integrations_standalone_bot`, partial unique indexes
+  scoped to `where panel_id is null`, so a given Telegram chat/bot can still only ever be ONE standalone
+  resource, exactly mirroring the protection the Panel-scoped case already had. **No fake/hidden Panel was
+  created anywhere** — confirmed by a dedicated test asserting zero rows in `panels` after a full standalone
+  create→deploy flow. **Run migration `0069`.**
+- **New `src/lib/products/watch-runtime.ts`** — the ownership/creation layer for Communities, Watchers, and
+  Deployments, extending `ownership.ts`'s `createStandaloneProject` (which explicitly stopped at Project) one
+  layer deeper. `resolveAccountWatchTier()` (parses the account's paid tier from `product_entitlements
+  .subscription_ref`, format `"<tier>:<depositId>"` — direct Watch has no trial concept, checkout is paid-only,
+  so this never branches on a trial state). `createAccountWatcher()` (a Watcher is owned by the account
+  directly — `virtual_moderators` has no `project_id`, matching the existing Panel-backed shape where a
+  moderator belongs to the owner, not to one Project either), `createAccountCommunity()` (creates/reuses a
+  standalone community under an owned Project — takes an already-resolved chat identity, since this is the
+  DB/ownership layer, not the live Telegram membership-verification step, mirroring how the EXISTING
+  `finalizeCommunityConnection` receives an already-fetched `ChatMembershipResult` rather than calling Telegram
+  itself), `deployAccountWatcher()` (creates/re-enables a `moderator_deployments` row), and
+  `resolveDeploymentTenant()` — the runtime-context resolver proving deployment → community → project → account
+  resolves fully with zero Panel involvement (returns `null` for an actually-Panel-backed deployment; it's
+  specifically the standalone-only proof, not a replacement for the existing Panel-scoped resolution). **Reuses
+  the EXISTING pure capacity/cap-checking functions from `moderator/plan.ts` verbatim** (`CAPACITY`,
+  `communityCountExceeded`, `checkDeploymentSlotCaps`, `deploymentSlotCheckErrorMessage`) — never a second
+  capacity model; the same tier→slot/community-count table and the same flat 5-per-community cap apply
+  identically whether a deployment is Panel-backed or standalone.
+- **New account-scoped thin auth-wrapper actions** (`src/lib/actions/watch-dashboard.ts`): `createWatcher`,
+  `getWatchers`, `createCommunity`, `deployWatcher` — every one re-derives the account from the authenticated
+  session (never a client-supplied id), same established pattern as the file's existing `createWatchProject`.
+- **`WatchDashboard.tsx` now has a real "Your Watchers" section** (create + list), alongside the existing
+  Projects section — not just a schema change with no UI, since a Watcher genuinely can be created end-to-end
+  today. Community connection/deployment intentionally still has NO exposed UI control (only an honest note:
+  "Connecting a Watcher to a Telegram community is still rolling out — contact support to get connected
+  today.") — the ownership layer for it is real and tested, but there's no live Telegram bot-creation/
+  verification flow wired to it yet, and shipping a UI button with nothing real behind it would be exactly the
+  kind of fabrication this codebase's own conventions explicitly forbid.
+- **Customer-facing copy swept for defensive Panel/Forge explanation, per explicit instruction** ("once Watch
+  is genuinely standalone, stop constantly explaining Panels to Watch users"). Removed: the "No Forge required"
+  onboarding-guide chip (→ "Watch access" / "Secure workspace", real product concepts); the account step's "you
+  do not need to own or create an SMM Panel (Innvil Forge)" paragraph (→ plain "Create your Innvil account and
+  start setting up Watch"); the FAQ entry "Do I need an SMM Panel to use Innvil Watch?" (removed outright, not
+  reworded — a normal Watch FAQ isn't the "specific commercial comparison page" the instruction carved out as
+  the one legitimate place for that comparison); `WatchDashboard.tsx`'s "no commercial Panel required" line and
+  "that part of Watch still requires a Panel today" (both reworded to plain, Panel-free language — the latter
+  is also now more accurate, since Watcher creation genuinely doesn't require one anymore). **Kept**: the
+  Telegram-connect step's honest "still rolling out, contact support" disclosure (reworded to drop "Panel-less"
+  phrasing specifically, but the disclosure itself stays — it's a true statement about feature availability, not
+  Panel-explaining) and the "one Innvil account gives you access to Watch and other Innvil products" FAQ answer
+  (factual account-sharing info, not defensive Panel-justification).
+- **Also fixed while in this file, per a separate live report**: two `Sparkles` (generic "AI magic" icon)
+  placeholders on the Auto-Posting feature card (`WatchLanding.tsx`'s feature grid and
+  `WatchOnboardingGuide.tsx`'s Step 7 module) replaced with `Gauge` (the Innvil meter/gauge glyph) — per the
+  standing instruction that any Innvil placeholder icon should be the brand's own mark, never a generic
+  AI-tell sparkle.
+- New tests: `src/lib/products/watch-runtime.test.ts` (+17, NEW file — tier resolution, Watcher creation/cap
+  enforcement, Community creation/cap enforcement/dedup-by-chat/cross-Project-conflict/never-colliding-with-a-
+  Panel-owned-community-of-the-same-chat-id, deployment/cap enforcement/ownership rejection, and the
+  **CRITICAL INTEGRATION TEST**: create Watcher → create Community → deploy → `resolveDeploymentTenant` resolves
+  the full account→project→community→moderator chain, asserting **zero rows in `panels`** at the end). Updated
+  `watch-onboarding.test.ts` (the account-step assertion now requires NO Panel/Forge mention at all across every
+  normal step, replacing the old assertion that required defensive "independent of Forge/Panel" language — the
+  point of this pass is that such language is no longer needed). 952 tests pass (up from 935), `tsc --noEmit`
+  clean, production build clean. Verified live via `Host: watch.localhost` — confirmed the removed copy is
+  genuinely gone and the new copy renders.
+- **REMAINING COUPLING, stated explicitly per the report's own required structure — not hidden**: the LIVE
+  Telegram runtime pipeline is still entirely `panel_id`-keyed. `resolveCommunity()` (the webhook entry point)
+  looks up a community via `.eq("panel_id", panelId)`, and `panelId` itself is resolved from
+  `telegram_bot_integrations.panel_id` earlier in the webhook handler chain — meaning even though a standalone
+  Watcher/Community/Deployment can now be CREATED with `panel_id: null`, a real incoming Telegram message for
+  it cannot currently be PROCESSED end-to-end (moderation, chatter, knowledge retrieval, activity logging,
+  auto-posting, media moderation, link-warning state, and the reactive-quota counter all still read/write
+  through `panel_id` throughout `community-runtime.ts` and its sibling runtime modules). This is the single
+  largest remaining piece of coupling, and the explicit next safe step (below) — not attempted this pass because
+  it means rewriting the actual webhook entrypoint against live production Telegram traffic, unverifiable in
+  this sandbox. Billing/UI/navigation/URL routing were NOT audited or changed beyond what's described above
+  (Watch already had no Panel-scoped routes/URLs and already used direct payment independent of Panel wallet,
+  confirmed via re-reading `watch-checkout.ts` — no change was needed there).
+- **NEXT SAFE STEP**: rewire `resolveCommunity()` and its caller chain (the Telegram webhook route handler) to
+  resolve tenant identity via `telegram_bot_id` → `virtual_moderator_id` → (`account_id` OR `panel_id`) instead
+  of requiring a `panelId` up front, with a live-Telegram-bot-token verification pass before it's trusted for
+  production traffic — the same order-of-operations caution already used for every other live-runtime change in
+  this codebase's history (ship behind a flag, verify live, then enable).
+
+### 2026-08-18 — Critical fix: an invalid `"use server"` export was silently breaking EVERY server action app-wide + Watch logout now fails visibly instead of hanging (v1.23.4)
+- **Live bug report chain, in order**: (1) the new Watch logout button (v1.23.3) got stuck showing "Signing
+  out…" forever — no timeout, no error handling; (2) fixed that first, so a real underlying failure could
+  actually surface instead of hanging silently; (3) with that fix in place, the SAME action now failed visibly,
+  revealing the real bug — a **500 on the server action endpoint itself**, unrelated to logout at all.
+- **Bounded logout so it can never hang indefinitely again, regardless of cause.** New `src/lib/timeout.ts` —
+  `withTimeout(promise, ms, label?)`, a small generic bound. `WatchDashboard.tsx` and `WatchLogoutButton.tsx`
+  both wrap `signOutAction()` in `withTimeout(..., 8000, "Sign out")`; on timeout OR a genuine rejection, the
+  button re-enables and shows a visible error (`console.error` + on-screen message) instead of hanging silently.
+  Also switched both buttons' post-logout navigation from `router.refresh()` to a hard `window.location.href =
+  "/"` — guarantees a genuinely fresh server render against the now-cleared cookie with no dependency on the
+  client router cache. New `src/lib/timeout.test.ts` (+4 — resolves-before-timeout wins, a never-resolving
+  promise is bounded via fake timers not a real wait, a rejection propagates as itself not a generic timeout
+  message, timer cleanup on fast resolve).
+- **Root cause of the 500, found from the actual browser error, not guessed**: `Error: A "use server" file can
+  only export async functions, found object. ... at module evaluation (watch-checkout.ts:123:1`. Next/Turbopack
+  bundles every `"use server"` module across the whole app into ONE combined actions-loader chunk; if any single
+  file in that bundle has an invalid export, the WHOLE chunk throws at module-evaluation time — so a broken,
+  unrelated file (`src/lib/products/watch-checkout.ts`, added in v1.22.0) was silently taking down **every
+  server action in the entire app**, including totally unrelated ones like `signOutAction`/`signInAction`/
+  `placeOrder`/etc. `watch-checkout.ts` has file-level `"use server"` (every export becomes a server action, so
+  every export MUST be an async function) but also had `export const WATCH_DIRECT_PAYMENT_GATEWAYS = [...] as
+  const` — a plain value export, which Next explicitly rejects. Same class of mistake the codebase's own
+  established rule already warns about ("never `export type` from a `"use server"` file" — 2026-07-25 entry) —
+  except `export const`, an even more direct violation, since a type export at least gets erased before runtime
+  and never actually reaches this check.
+- **Fix**: dropped `export` — verified first (grep) that NOTHING outside this one file ever imported the
+  constant, so this is a pure internal-visibility change with zero external impact; `createDirectWatchCheckout`/
+  `listAvailableDirectWatchGateways` (the file's actual, correctly-async, legitimately-exported actions) are
+  completely unaffected.
+- **Proactively swept the rest of the codebase for the same bug class** (not just patched the one reported
+  instance) — grepped every `"use server"` file for `export const`/`export class`/`export enum`/a non-`async`
+  `export function` at module scope. Found and fixed exactly one instance (`watch-checkout.ts`); every other
+  `export interface`/`export type` across 30+ action files is safe (type-only exports are erased entirely before
+  this runtime check ever runs — TypeScript strips them at compile time, so they were never actually at risk;
+  confirmed this distinction explicitly rather than assuming it).
+- **Lesson for future `"use server"` files**: never export a plain constant/array/object/class/enum from a file
+  that has file-level `"use server"` — put shared constants in a plain (non-`"use server"`) module instead, or
+  keep them unexported/internal to the action file if nothing else needs them.
+- 935 tests pass (up from 931), `tsc --noEmit` clean, production build clean. The `"use server"`-export fix has
+  no testable pure-logic surface of its own — verified via typecheck + production build + the live error trace
+  pointing at the exact now-fixed line, plus a confirmed diff review that nothing else changed shape.
+
+### 2026-08-18 — Product-aware Watch-branded auth (login/signup/forgot/reset), same shared Innvil account (v1.23.3)
+- **Also this pass: floating-waveform "How it works" section + a horizontal connecting/breaking signal-path
+  connector on the Watch landing** (`WatchLanding.tsx`) — supersedes the earlier flat 4-column grid. Desktop:
+  `HowItWorksFlow` positions the 4 step cards at independent vertical offsets around a center line (01 up, 02
+  down, 03 the highest, 04 near center) via absolute positioning + percentage coordinates, joined by one smooth
+  SVG cubic-bezier path (`preserveAspectRatio="none"`, viewBox matched to the same coordinate space the cards
+  use) that weaves left-to-right instead of stepping downward, with 3 small nodes at the visible arcs between
+  cards. Mobile/tablet (`lg:hidden`) falls back to a vertical stack joined by the same alternating-curve
+  connector language (`HowItWorksVerticalConnector`, flip per index) rather than a plain line. Also extended the
+  Getting Started guide's own vertical connector (`WatchOnboardingGuide.tsx`) across two live-caught bugs:
+  (1) `flex-1`/grid layout collision fixed by rebuilding every step as a **two-part alternating composition** —
+  a substantial visual/stat card (distinct per step: account checklist, plan numbers, project-profile mockup,
+  community-connection diagram, Watcher identity + capacity, Project→Community→Watcher relationship diagram,
+  feature-module grid, mini status dashboard) + the real guide text, alternating which side the stat card sits
+  on per step (was: identical text-left/pills-right template for all 8 steps); (2) the connector's inactive
+  segments were nearly invisible (dark, low-opacity stroke against a dark background, so only the
+  first-in-view segment ever looked "on") — fixed to one consistent teal stroke end-to-end with only a subtle
+  opacity nudge (not a blinking pulse, which is reserved for "online" status dots) marking already-scrolled-past
+  segments, so the full step-1-to-8 path reads as continuously connected regardless of scroll position.
+- **Explicit product decision: Innvil Watch gets a fully Watch-branded auth experience — login, signup, forgot-
+  password, reset-password — while every one of them authenticates the SAME Supabase Auth account, `profiles`
+  row, and server actions as the main site.** This is presentation-only; no second user/password/session/OAuth
+  system was created, per explicit instruction.
+- **Investigated the actual auth architecture before touching anything** (per explicit instruction): `/login`,
+  `/signup`, `/forgot-password`, `/reset-password` were four `"use client"` pages, each wrapping a shared
+  `AuthShell` (hardcoded `fp-*`/gold theme, `InnvilBrandMark`, `Link href="/"`) and calling the SAME
+  `src/lib/actions/auth.ts` (`signInAction`/`signUpAction`/`requestPasswordReset`) or the browser Supabase client
+  directly (`signInWithPassword`, `updateUser` for reset). Post-login/signup/reset all already `router.replace
+  ("/")` — and since `app/page.tsx` is ALREADY host-aware (`isWatchHost()` branches into `WatchLanding`/
+  `WatchDashboard`), this redirect already lands a Watch-origin visitor back on Watch automatically, entitlement-
+  checked, with **zero extra `returnTo` plumbing needed** — confirmed by reading `app/page.tsx` before assuming
+  new redirect logic was required. `proxy.ts` already reserves the `watch` subdomain out of the storefront-
+  rewrite path, so `watch.innvil.cloud/login` renders the plain app route (owner-side session cookie), not a
+  storefront route — also confirmed before writing code, not assumed.
+- **New `src/lib/auth/product-brand.ts`** — the single centralized product-aware auth resolver, deliberately
+  NOT scattered `if (isWatch) ... else ...` checks across every page. `AuthBrand` (name/eyebrow/logoSrc + a full
+  set of precomputed design-token class strings — root/panel/display/mono/text/accent/input/button/icon — so
+  each page only ever references `brand.*`, never a raw `fp-`/`w-` literal) + `resolveAuthBrand(isWatch)` (pure)
+  + `getAuthProductContext()` (the canonical resolver, wraps `isWatchHost()`). Built explicitly future-proof for
+  a sibling product (e.g. `herald.innvil.cloud/login`) — adding one is a new `AuthBrand` entry, not a new
+  special-case branch threaded through 4+ files.
+- **`AuthShell` (`src/components/auth/AuthShell.tsx`) now takes a `brand` prop** and renders the Watch logo
+  (`/watch/app-tile.svg`, the real delivered asset) + `watch-root`/`w-*` tokens, or the default `InnvilBrandMark`
+  + `fp-*` tokens — same shell, same structure, only the design-token/logo/copy inputs differ. The old exported
+  `authInputCls` constant is gone; every input/button/label class now comes from `brand.*` instead.
+- **Each of the 4 auth pages split into a thin async Server Component + a Client Component**, mirroring the
+  EXACT pattern `app/page.tsx`/`HomeClient.tsx` already established for Watch: `app/login/page.tsx` now just
+  calls `getAuthProductContext()` and renders `<LoginPageClient brand={brand} />` (same for signup/forgot/reset).
+  **The auth LOGIC inside each `*PageClient.tsx` is byte-identical to before** — same `signInWithPassword`/
+  `signUpAction`/`requestPasswordReset`/`exchangeCodeForSession`/`updateUser` calls, same validation, same
+  `router.replace("/")` — only className/copy/logo now read from `brand` instead of being hardcoded. Per-brand
+  copy (title/subtitle/footer prompt) lives in a small `COPY` record colocated in each client component, not a
+  speculative generic copy-config framework.
+- **Watch-specific copy, per the explicit spec wording**: login subtitle "Sign in to manage your Projects,
+  Communities, and Watchers." + a small supporting note "Your Innvil account works across Innvil products.";
+  signup title "Create your Innvil account for Watch" (never "create a Watch account" — the result is an
+  Innvil-wide account) + subtitle "One Innvil account gives you access to Watch and other Innvil products you
+  choose to use."; footer prompt "New to Watch?" (vs. "New to Innvil?"). Forgot/reset-password keep the same
+  copy as the main site (the spec only required them to stay visually Watch-branded, not reworded) — fully
+  re-themed via `brand.*` all the same.
+- **Fixed a real, previously-existing product gap: `requestPasswordReset` always emailed a reset link back to
+  the single fixed `NEXT_PUBLIC_APP_URL` origin, regardless of which host the request actually came from** — a
+  reset requested from `watch.innvil.cloud/forgot-password` would have emailed a link to the MAIN site's
+  `/reset-password`, breaking Watch branding at exactly the step the spec called out. New
+  `resolveAuthRedirectOrigin()` (`src/lib/actions/auth.ts`) derives the redirect origin from the actual request
+  host via `headers()` (server-only, never a client-supplied parameter) gated through a new pure, directly
+  tested allowlist — `isTrustedWatchHost(host)` (`src/lib/config.ts`) — an explicit single-domain allowlist
+  (exact match on `WATCH_ROOT_DOMAIN`, case-insensitive), never "trust whatever the client says." Anything not
+  matching that one alternate first-party domain falls back to the exact same `NEXT_PUBLIC_APP_URL` behavior as
+  before — no regression for the main site. **Documented, not silently assumed working: this also requires
+  `https://watch.innvil.cloud/reset-password` to be added to Supabase Auth's own Redirect URLs allowlist in the
+  dashboard** — Supabase itself rejects/ignores a `redirectTo` that isn't allowlisted there regardless of what
+  this function returns; this is a manual one-time dashboard step, same category as the custom-domain/Vercel
+  manual steps already documented elsewhere in this file.
+- **Owner-signup email confirmation is honestly left unchanged** — `signUpAction`'s `supabase.auth.signUp()` call
+  has no `emailRedirectTo` at all (relies on Supabase's dashboard-configured Site URL) and there is no in-app
+  code-exchange callback route for it (unlike reset-password's explicit `?code=` handling) — making THAT
+  Watch-aware would mean either adding a new callback route or reworking Supabase's Site-URL-based confirmation
+  entirely, a materially bigger change than "wire up the redirect param that already exists," so it was
+  deliberately NOT attempted this pass. Flagged as a known follow-up rather than silently left broken.
+- **Session/cookie scope investigated, deliberately left unchanged.** No `cookieOptions.domain` is set anywhere
+  in `src/lib/supabase/{client,server,middleware}.ts` — cookies are host-only (browser default), so a session on
+  `innvil.cloud` is NOT currently sent to `watch.innvil.cloud` or vice versa; a user must sign in separately on
+  each host. Per the explicit "only change cookie scope if compatible/secure/appropriate for all first-party
+  subdomains... if shared session cookies are risky or unnecessary, keeping separate sessions with the SAME
+  account credentials is acceptable — the hard requirement is shared identity/credentials, not one cookie"
+  instruction, this was NOT changed — modifying cookie domain scope is a cross-cutting, security-sensitive
+  change touching every Supabase client in the app, and the same-credentials requirement is already fully
+  satisfied without it (confirmed live: the identical email/password authenticates on both hosts, since it's
+  the same `auth.users` row either way — only the browser session itself is separate per host).
+- **Entitlement is untouched and was never bypassed** — `getAuthProductContext()`/`AuthShell`/the four
+  `*PageClient.tsx` files only ever determine PRESENTATION; `app/page.tsx`'s existing `getWatchAccessState()` (→
+  `hasProductAccess`) still runs after every login/signup/reset redirect and is what actually decides
+  dashboard-vs-landing-vs-checkout — authenticating through Watch grants exactly nothing beyond what it already
+  granted before this pass.
+- **Middleware/proxy/API/webhook safety verified, not assumed**: `proxy.ts`'s matcher/passthrough logic is
+  completely unchanged (no edits to `proxy.ts` in this pass); confirmed live that
+  `/api/webhooks/telegram/manager` still responds (403 on an unauthenticated POST, its normal pre-existing
+  behavior) and every API/cron/webhook route still appears in the production build output.
+- New tests: `src/lib/auth/product-brand.test.ts` (+8 — host→brand resolution both directions, a curated-token
+  check proving the Watch brand only ever uses `watch-root`/`w-*` tokens and the Innvil brand only ever uses
+  `fp-*` — never cross-contaminated, avoiding a naive `w-` prefix regex since Tailwind's own core utilities like
+  `w-full` legitimately start with `w-` too — real Watch logo asset path, `homeHref` always `"/"` on both
+  brands, purity), `src/lib/config.test.ts` (+5, NEW file — `isTrustedWatchHost`'s exact-match allowlist incl.
+  case-insensitivity and, critically, that a lookalike/attacker-controlled host like
+  `evil-watch.innvil.cloud`/`watch.innvil.cloud.evil.com` is never trusted). 931 tests pass (up from 918), `tsc
+  --noEmit` clean, production build clean (confirmed `/login`, `/signup`, `/forgot-password`, `/reset-password`
+  now correctly build as dynamic routes, since they now read `headers()` via `isWatchHost()` — expected, not a
+  regression). **Verified live via `Host: watch.localhost`/`Host: localhost` requests**: Watch host renders
+  `watch-root` + "Innvil Watch" + the real logo + the Watch-specific copy on all four auth pages; the plain host
+  still renders `fp-root` + the original Innvil copy unchanged. **No dedicated React-rendering component tests**
+  were added (this codebase has no React Testing Library/jsdom infra — all 931 tests are pure `node:test`
+  assertions on server actions/lib functions, consistent with its established convention); the four
+  `*PageClient.tsx` files' actual JSX/interaction behavior was verified via `tsc --noEmit` + production build +
+  the live host-based curl checks above, matching how every other comparably complex Watch UI component in this
+  codebase has been verified (no dev-server screenshot tooling available in this environment this session).
+- **Deliberately not built this pass** (documented, not silently skipped): shared session cookies across
+  `innvil.cloud`/`watch.innvil.cloud` (see above — explicitly judged unnecessary risk given the shared-
+  credentials requirement is already met); Watch-aware signup email confirmation (needs a new callback route or
+  Supabase Site-URL rework); OAuth/social-login branding (no OAuth provider exists in this codebase today to
+  brand); a generic multi-product copy-configuration framework beyond the small per-page `COPY` records (judged
+  unnecessary for exactly one sibling product today, per the explicit "don't over-engineer a complete design
+  framework if a simple typed configuration solves it" instruction).
+- **Follow-up same pass: added a working logout control** — there was previously NO way to sign out from Watch
+  at all (`WatchDashboard.tsx`'s header had no control, and `WatchLanding`'s nav always showed "Log in"/"Start
+  Watching" even for an authenticated-but-not-yet-entitled visitor). `WatchDashboard` header gained a "Log out"
+  button (calls the existing `signOutAction()` then `router.refresh()`, same pattern already used for owner-app
+  logout). New `src/components/watch/WatchLogoutButton.tsx` — a small client island so the mostly server-
+  rendered `WatchLanding` can offer the same control without converting the whole landing page to a client
+  component; `WatchNav` now takes an `authenticated` prop and swaps in this button instead of Login/Signup when
+  true. Verified live (`Host: watch.localhost`) that the unauthenticated landing still shows "Log in", not
+  "Log out"; the authenticated branches were verified via `tsc --noEmit` + production build (no live
+  authenticated session available to curl-test in this environment). 931 tests unaffected (no new test —
+  this is UI wiring around an already-tested existing action, not new logic).
+
 ### 2026-08-18 — Real "Getting Started" guide on the Watch landing page + honest onboarding-gap disclosure (v1.23.2)
 - **Investigated the actual current onboarding sequence before writing any copy, per explicit instruction** —
   found a real, important gap: account creation, choosing a Watch plan, and creating a standalone Project

@@ -1,7 +1,9 @@
 "use server";
 
+import { headers } from "next/headers";
 import { createClient } from "@/src/lib/supabase/server";
 import { ensureProfile } from "@/src/lib/auth";
+import { isTrustedWatchHost } from "@/src/lib/config";
 import type { UserRole } from "@/src/types/db";
 
 type AuthResult =
@@ -48,10 +50,34 @@ export async function signUpAction(
   return { ok: true, needsConfirmation: true };
 }
 
+/**
+ * Resolves the origin the reset-password redirect link should use, derived
+ * from the ACTUAL incoming request host (never a client-supplied value) --
+ * a small, explicit allowlist of exactly one alternate first-party product
+ * domain, not "trust whatever the client says". A request on
+ * watch.innvil.cloud gets a link back to watch.innvil.cloud/reset-password
+ * (so the reset flow stays Watch-branded end to end); anything else falls
+ * back to the configured canonical app URL, matching the prior behavior.
+ *
+ * NOTE: for this to actually work in production, `https://watch.innvil.cloud
+ * /reset-password` must also be added to Supabase Auth's Redirect URLs
+ * allowlist (dashboard) -- Supabase itself rejects/ignores a redirectTo that
+ * isn't allowlisted there, regardless of what this function returns.
+ */
+async function resolveAuthRedirectOrigin(): Promise<string | undefined> {
+  const h = await headers();
+  const host = (h.get("x-forwarded-host") ?? h.get("host") ?? "").toLowerCase().split(":")[0];
+  if (isTrustedWatchHost(host)) {
+    const proto = h.get("x-forwarded-proto") ?? "https";
+    return `${proto}://${host}`;
+  }
+  return process.env.NEXT_PUBLIC_APP_URL?.trim() || undefined;
+}
+
 /** Email a password-reset link. The link lands on /reset-password to set a new one. */
 export async function requestPasswordReset(email: string): Promise<AuthResult> {
   const supabase = await createClient();
-  const origin = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  const origin = await resolveAuthRedirectOrigin();
   const { error } = await supabase.auth.resetPasswordForEmail(
     email.trim().toLowerCase(),
     origin ? { redirectTo: `${origin}/reset-password` } : undefined
