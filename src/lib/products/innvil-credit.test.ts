@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   getInnvilCreditBalance, listInnvilCreditActivity, creditInnvilCreditTopUp, purchaseWatchWithCredit,
+  purchaseCommunityExpansionWithCredit, scheduleCommunityExpansionRemoval,
 } from "./innvil-credit";
 import { WATCH_PRODUCT_SLUG } from "./watch";
+import { getAccountCapacity } from "./watch-runtime";
 
 type Row = Record<string, unknown>;
 
@@ -20,13 +22,19 @@ type Row = Record<string, unknown>;
  */
 function fakeAdmin(seed: {
   innvil_credit_accounts?: Row[]; innvil_credit_transactions?: Row[];
-  products?: Row[]; product_entitlements?: Row[];
+  products?: Row[]; product_entitlements?: Row[]; watch_subscription_addons?: Row[];
+  projects?: Row[]; communities?: Row[]; virtual_moderators?: Row[]; moderator_deployments?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     innvil_credit_accounts: seed.innvil_credit_accounts ?? [],
     innvil_credit_transactions: seed.innvil_credit_transactions ?? [],
     products: seed.products ?? [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
     product_entitlements: seed.product_entitlements ?? [],
+    watch_subscription_addons: seed.watch_subscription_addons ?? [],
+    projects: seed.projects ?? [],
+    communities: seed.communities ?? [],
+    virtual_moderators: seed.virtual_moderators ?? [],
+    moderator_deployments: seed.moderator_deployments ?? [],
   };
   let idCounter = 0;
 
@@ -69,13 +77,14 @@ function fakeAdmin(seed: {
       return { data: row, error: null };
     },
     from(table: string) {
-      const filters: Array<[string, unknown]> = [];
-      const rowsMatching = () => (store[table] ?? []).filter((r) => filters.every(([c, v]) => r[c] === v));
-      return {
-        select() { return this; },
-        eq(col: string, val: unknown) { filters.push([col, val]); return this; },
-        order() { return this; },
-        limit() { return this; },
+      const filters: Array<(r: Row) => boolean> = [];
+      const rowsMatching = () => (store[table] ?? []).filter((r) => filters.every((f) => f(r)));
+      const builder: Record<string, unknown> = {
+        select() { return builder; },
+        eq(col: string, val: unknown) { filters.push((r) => r[col] === val); return builder; },
+        in(col: string, vals: unknown[]) { filters.push((r) => vals.includes(r[col])); return builder; },
+        order() { return builder; },
+        limit() { return builder; },
         async maybeSingle() {
           const rows = rowsMatching();
           const sorted = [...rows].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
@@ -88,11 +97,36 @@ function fakeAdmin(seed: {
           store[table] = [...(store[table] ?? []), { ...row }];
           return Promise.resolve({ data: null, error: null });
         },
+        async insert(row: Row) {
+          // Simulates the real partial unique index on (account_id, addon_type)
+          // where status='active' for watch_subscription_addons -- a second
+          // concurrent active-row insert for the same account fails 23505.
+          if (table === "watch_subscription_addons" && row.status !== "removed") {
+            const conflict = (store[table] ?? []).some((r) => r.account_id === row.account_id && r.addon_type === row.addon_type && r.status === "active");
+            if (conflict) return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } };
+          }
+          idCounter += 1;
+          const newRow = { id: `gen-${table}-${idCounter}`, ...row };
+          store[table] = [...(store[table] ?? []), newRow];
+          return { data: newRow, error: null };
+        },
+        update(patch: Row) {
+          const updateFilters: Array<(r: Row) => boolean> = [...filters];
+          const updateBuilder: Record<string, unknown> = {
+            eq(col: string, val: unknown) { updateFilters.push((r) => r[col] === val); return updateBuilder; },
+            then(resolve: (v: { data: null; error: null }) => void) {
+              store[table] = (store[table] ?? []).map((r) => (updateFilters.every((f) => f(r)) ? { ...r, ...patch } : r));
+              resolve({ data: null, error: null });
+            },
+          };
+          return updateBuilder;
+        },
         then(resolve: (v: { data: Row[]; error: null }) => void) {
           const sorted = [...rowsMatching()].sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
           resolve({ data: sorted, error: null });
         },
       };
+      return builder;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -279,4 +313,311 @@ test("REQUIRED (trial -> annual): a trial customer can upgrade directly to an an
   // This test's fake admin has no watch_trial_claims table -- trial-consumption
   // durability itself is covered by watch-trial.test.ts; this proves the
   // annual purchase path itself doesn't require or touch trial state.
+});
+
+/* ---------------------------------------------- community expansion add-on ---- */
+
+const GOLD_ENTITLEMENT = { id: "e-gold", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1" };
+const PLATINUM_ENTITLEMENT = { id: "e-plat", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-1" };
+const SILVER_ENTITLEMENT = { id: "e-silver", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1" };
+const BASIC_ENTITLEMENT = { id: "e-basic", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "basic:dep-1" };
+
+test("REQUIRED (eligibility): Bronze cannot purchase Community Expansion -- rejected server-side, not just hidden in UI", async () => {
+  const admin = fakeAdmin({ product_entitlements: [BASIC_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, false);
+  assert.equal(admin.__store.watch_subscription_addons.length, 0);
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.equal(balance.balanceCents, 100000, "nothing may be debited for a rejected purchase");
+});
+
+test("REQUIRED (eligibility): Silver cannot purchase Community Expansion", async () => {
+  const admin = fakeAdmin({ product_entitlements: [SILVER_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, false);
+  assert.equal(admin.__store.watch_subscription_addons.length, 0);
+});
+
+test("REQUIRED (eligibility): an account with no active paid Watch subscription (trial or none) cannot purchase Community Expansion", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, false);
+});
+
+test("REQUIRED (eligibility): Gold can purchase Community Expansion", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+});
+
+test("REQUIRED (eligibility): Platinum can purchase Community Expansion", async () => {
+  const admin = fakeAdmin({ product_entitlements: [PLATINUM_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+});
+
+test("REQUIRED (pricing): Gold Community Expansion debits the exact discounted price ($12.34 -- the existing 5% monthly credit rule) once, and grants real capacity", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 1234);
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 5, "Gold's expanded max");
+  assert.equal(capacity?.communityExpansionActive, true);
+});
+
+test("REQUIRED (pricing): Platinum Community Expansion debits the exact discounted price ($18.99)", async () => {
+  const admin = fakeAdmin({ product_entitlements: [PLATINUM_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 1899);
+});
+
+test("REQUIRED (pricing): an annual Gold subscriber pays the annual Community Expansion price ($140.29), not the monthly one", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{ ...GOLD_ENTITLEMENT, billing_interval: "annual" }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 14029);
+});
+
+test("REQUIRED (payment): insufficient credit activates nothing and debits nothing", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 500 }] });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, false);
+  assert.equal(admin.__store.watch_subscription_addons.length, 0);
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.equal(balance.balanceCents, 500);
+});
+
+test("REQUIRED (payment): a second purchase attempt while already active never double-charges -- safe, idempotent no-op", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const first = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(first.ok, true);
+  const second = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.balanceCents, first.ok ? first.balanceCents : -1, "the second call must not debit anything further");
+  assert.equal(admin.__store.watch_subscription_addons.filter((r: Row) => r.status === "active").length, 1, "never two active add-on rows");
+});
+
+test("REQUIRED (payment): race safety -- two concurrent purchase attempts (ample balance for both debits) still activate the add-on exactly once, via the DB-level partial-unique-index guard", async () => {
+  // Balance covers TWO debits, so the race is exercised at the INSERT step
+  // (the real partial unique index on account_id+addon_type+status='active')
+  // rather than the debit step -- the loser's charge is reversed and it
+  // reports the already-active state, never a hard failure or a double
+  // charge left standing.
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const [a, b] = await Promise.all([
+    purchaseCommunityExpansionWithCredit(admin, "acct-1"),
+    purchaseCommunityExpansionWithCredit(admin, "acct-1"),
+  ]);
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true, "the loser of the DB-level race gets refunded and reports the already-active state, never a hard failure");
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.equal(balance.balanceCents, 100000 - 1234, "exactly ONE net charge survives -- the loser's debit was fully reversed");
+  assert.equal(admin.__store.watch_subscription_addons.filter((r: Row) => r.status === "active").length, 1, "exactly one active add-on, never a double-charge or double-activation");
+});
+
+test("REQUIRED (renewal): a renewal of the SAME tier with an active add-on folds the add-on price into ONE combined debit and ONE period extension", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const before = admin.__store.product_entitlements[0].current_period_end as string;
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  // Gold base credit price ($208.99) + Gold expansion credit price ($12.34) = $221.33, ONE debit.
+  assert.equal(result.balanceCents, 100000 - (20899 + 1234));
+  assert.notEqual(result.paidThrough, before, "the period must have been extended");
+  const txs = admin.__store.innvil_credit_transactions.filter((t: Row) => t.type === "subscription_renewal");
+  assert.equal(txs.length, 1, "must be exactly ONE combined debit, never two separate charges");
+});
+
+test("a renewal of a DIFFERENT tier (plan change) does not fold in the add-on price -- addon pricing only applies to a same-tier renewal", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 36099, "only Platinum's own credit price -- no addon fold on a tier change");
+});
+
+test("REQUIRED (renewal): a removal-pending add-on is NOT charged on the next renewal, and is finalized (removed) by it", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: true }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 20899, "base Gold price only -- the removal-pending addon must never be charged for one more period");
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, false, "the addon must be finalized to 'removed' by this renewal");
+  assert.equal(capacity?.communitiesTotal, 3, "capacity reverts to Gold's included cap once the addon is finalized as removed");
+});
+
+/* --------------------------------------------------------------- removal ---- */
+
+test("REQUIRED (removal): scheduling removal is blocked when current Community usage exceeds the plan's INCLUDED cap", async () => {
+  const communities = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: `-${i}` }));
+  const admin = fakeAdmin({
+    product_entitlements: [PLATINUM_ENTITLEMENT], // Platinum included=5, expanded=10; 8 connected exceeds included
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities,
+  });
+  const result = await scheduleCommunityExpansionRemoval(admin, "acct-1");
+  assert.equal(result.ok, false);
+  const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.cancel_at_period_end, false, "removal must not be scheduled while usage exceeds the included cap");
+});
+
+test("REQUIRED (removal): scheduling removal succeeds when usage is within the included cap -- capacity stays expanded until the next renewal finalizes it (no immediate cut, no refund)", async () => {
+  const communities = [
+    { id: "c0", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-0" },
+    { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1" },
+  ];
+  const admin = fakeAdmin({
+    product_entitlements: [GOLD_ENTITLEMENT], // Gold included=3 -- 2 connected is within it
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities,
+  });
+  const result = await scheduleCommunityExpansionRemoval(admin, "acct-1");
+  assert.equal(result.ok, true);
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 5, "still the expanded max -- already paid for, remains available until the period actually ends");
+  assert.equal(capacity?.communityExpansionActive, true, "still active (scheduled, not yet finalized)");
+});
+
+test("scheduling removal with no active add-on at all is rejected", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT] });
+  const result = await scheduleCommunityExpansionRemoval(admin, "acct-1");
+  assert.equal(result.ok, false);
+});
+
+test("scheduling removal a second time is a safe idempotent no-op", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [GOLD_ENTITLEMENT],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: true }],
+  });
+  const result = await scheduleCommunityExpansionRemoval(admin, "acct-1");
+  assert.equal(result.ok, true);
+});
+
+/* --------------------------------------------------- plan-change transitions ---- */
+
+test("REQUIRED (plan change): Gold+expansion -> Platinum finalizes (removes) the add-on -- never carries a Gold-priced add-on into Platinum for free", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities: [{ id: "c0", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-0" }], // 1 community -- fits Platinum's included cap of 5
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 36099, "only Platinum's own base price -- the Gold-priced add-on is never carried over/re-charged");
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, false, "the add-on must be finalized (removed) on the tier change");
+  assert.equal(capacity?.communitiesTotal, 5, "Platinum's own included cap -- no expansion carried over");
+});
+
+test("REQUIRED (plan change / downgrade safety): Platinum+expansion (10 cap, 8 connected) -> Gold (max 5 even expanded) is BLOCKED until usage is reduced", async () => {
+  const communities = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: `-${i}` }));
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "pro:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities,
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
+  assert.equal(result.ok, false);
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.equal(balance.balanceCents, 100000, "a blocked plan change must debit nothing");
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(entitlement?.subscription_ref, "pro:dep-1", "the account must remain on Platinum -- the change never took effect");
+  const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.status, "active", "the add-on must remain untouched -- never finalized for a change that was itself blocked");
+});
+
+test("REQUIRED (plan change / downgrade safety): the SAME Platinum+expansion -> Gold downgrade succeeds once usage is reduced within Gold's included cap", async () => {
+  const communities = [
+    { id: "c0", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-0" },
+    { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1" },
+  ]; // 2 connected -- fits Gold's included cap of 3
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "pro:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities,
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 20899, "Gold's own base price only");
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, false, "the Platinum-priced add-on must be finalized, not silently kept active under Gold");
+  assert.equal(capacity?.communitiesTotal, 3, "Gold's plain included cap");
+});
+
+test("a plan change with NO active add-on at all is completely unaffected by any of this logic", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000 - 36099);
+});
+
+test("REQUIRED: un-cancelling a removal-pending add-on via a fresh purchase call never re-charges the customer", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [GOLD_ENTITLEMENT],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: true }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 100000, "no charge for un-cancelling an already-paid-for add-on");
+  const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.cancel_at_period_end, false, "removal must be un-scheduled");
 });

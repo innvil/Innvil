@@ -2,11 +2,14 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { activateWatchEntitlement } from "./ownership";
-import { getAccountPaidPlan } from "./watch-runtime";
+import { getAccountPaidPlan, listAccountCommunities, resolveAccountWatchTier } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
-import { watchPlanOptions, watchTierFromDisplayName, type WatchPlanDisplayName } from "./watch-plans";
+import { watchPlanOptions, watchPlanDisplayName, watchTierFromDisplayName, type WatchPlanDisplayName } from "./watch-plans";
 import { creditPriceCents, annualCreditPriceCents, ANNUAL_ELIGIBLE_TIERS } from "./innvil-credit-pricing";
 import type { WatchBillingInterval } from "./watch-billing-period";
+import { getCommunityExpansionState, finalizeAddonsOnRenewal, finalizeAddonsOnTierChange } from "./watch-community-expansion";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
+import { CAPACITY } from "@/src/lib/moderator/plan";
 
 /**
  * Innvil Credit — a reusable, account-owned (never Panel-owned), USD-
@@ -139,16 +142,55 @@ export async function purchaseWatchWithCredit(
 
   const existingPlan = await getAccountPaidPlan(admin, accountId);
   const type = existingPlan ? "subscription_renewal" : "subscription_purchase";
-  const priceCents = billingInterval === "annual" ? annualCreditPriceCents(option.price) : creditPriceCents(option.price, tier);
+  let priceCents = billingInterval === "annual" ? annualCreditPriceCents(option.price) : creditPriceCents(option.price, tier);
+
+  // Community Expansion renews TOGETHER with the base subscription, one
+  // atomic combined debit -- never a second/independent charge. Only
+  // folded in on a RENEWAL of the SAME tier the addon is already active
+  // under (a brand-new purchase has no addon yet), and only when it's not
+  // scheduled for removal (cancel_at_period_end) -- a removal-pending
+  // addon is finalized (see finalizeAddonsOnRenewal below) and simply
+  // isn't charged for this final time.
+  let addonFolded = false;
+  let addonToFinalizeOnTierChange = false;
+  if (existingPlan && existingPlan.tier === tier && isCommunityExpansionEligibleTier(tier)) {
+    const expansion = await getCommunityExpansionState(admin, accountId);
+    if (expansion && !expansion.cancelAtPeriodEnd) {
+      const addonRegular = COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
+      priceCents += billingInterval === "annual" ? annualCreditPriceCents(addonRegular) : creditPriceCents(addonRegular, tier);
+      addonFolded = true;
+    }
+  } else if (existingPlan && existingPlan.tier !== tier) {
+    // A plan CHANGE to a different tier never carries an active Community
+    // Expansion add-on across tiers -- see finalizeAddonsOnTierChange's own
+    // doc comment for why. Blocked here (not just hidden in UI) if current
+    // Community usage would exceed the NEW tier's plain INCLUDED capacity --
+    // the effective capacity the account will have once the add-on is
+    // finalized below.
+    const expansion = await getCommunityExpansionState(admin, accountId);
+    if (expansion) {
+      const communities = await listAccountCommunities(admin, accountId);
+      const includedCap = CAPACITY[tier as ModeratorPlanTier].maxCommunities;
+      if (communities.length > includedCap) {
+        return {
+          ok: false,
+          error: `You have ${communities.length} Communities connected — more than the ${includedCap} included in ${option.displayName}. Disconnect down to ${includedCap} or fewer before changing plans (Community Expansion doesn't carry over to a new plan automatically).`,
+        };
+      }
+      addonToFinalizeOnTierChange = true;
+    }
+  }
 
   const debit = await applyCreditChange(admin, accountId, -priceCents, type, {
     productId: product.id as string,
-    description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}`.replace(/\s+/g, " ").trim(),
+    description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}${addonFolded ? " (incl. Community Expansion)" : ""}`.replace(/\s+/g, " ").trim(),
   });
   if (!debit.ok) return { ok: false, error: debit.error };
 
   try {
     await activateWatchEntitlement(admin, accountId, tier, `credit:${debit.data.id}`, billingInterval);
+    await finalizeAddonsOnRenewal(admin, accountId);
+    if (addonToFinalizeOnTierChange) await finalizeAddonsOnTierChange(admin, accountId);
   } catch (e) {
     // Compensating reversal -- the debit already committed; refund it in
     // full rather than leave the customer charged with no active
@@ -163,4 +205,103 @@ export async function purchaseWatchWithCredit(
 
   const paidPlan = await getAccountPaidPlan(admin, accountId);
   return { ok: true, paidThrough: paidPlan?.currentPeriodEnd ?? null, balanceCents: debit.data.balance_after_cents };
+}
+
+export type CommunityExpansionPurchaseResult =
+  | { ok: true; balanceCents: number; active: true }
+  | { ok: false; error: string };
+
+/**
+ * Purchases (or, if already active, safely no-ops / un-cancels) Community
+ * Expansion for the account's CURRENT Gold/Platinum tier -- Innvil Credit
+ * only in this function; the direct-crypto monthly path lives in
+ * watch-checkout.ts's `createCommunityExpansionCheckout`. Priced at the
+ * account's own billing interval (monthly credit price, or the annual
+ * price if the base subscription is annual) via the SAME canonical
+ * creditPriceCents/annualCreditPriceCents functions the base plan uses --
+ * never a duplicated discount formula.
+ */
+export async function purchaseCommunityExpansionWithCredit(admin: SupabaseClient, accountId: string): Promise<CommunityExpansionPurchaseResult> {
+  const tier = await resolveAccountWatchTier(admin, accountId);
+  if (!tier) return { ok: false, error: "An active paid Watch subscription is required." };
+  if (!isCommunityExpansionEligibleTier(tier)) return { ok: false, error: "Community Expansion is only available on Gold and Platinum." };
+
+  const existing = await getCommunityExpansionState(admin, accountId);
+  if (existing) {
+    // Already active -- if it was scheduled for removal, un-cancel it (no
+    // re-charge; the customer already paid for the period it's still in).
+    if (existing.cancelAtPeriodEnd) {
+      await admin.from("watch_subscription_addons").update({ cancel_at_period_end: false, updated_at: new Date().toISOString() })
+        .eq("account_id", accountId).eq("addon_type", "community_expansion").eq("status", "active");
+    }
+    const balance = await getInnvilCreditBalance(admin, accountId);
+    return { ok: true, balanceCents: balance.balanceCents, active: true };
+  }
+
+  const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
+  if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
+
+  const paidPlan = await getAccountPaidPlan(admin, accountId);
+  const billingInterval = paidPlan?.billingInterval ?? "monthly";
+  const regular = COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
+  const priceCents = billingInterval === "annual" ? annualCreditPriceCents(regular) : creditPriceCents(regular, tier);
+  const planName = watchPlanDisplayName(tier);
+
+  const debit = await applyCreditChange(admin, accountId, -priceCents, "subscription_purchase", {
+    productId: product.id as string,
+    description: `${planName} Community Expansion${billingInterval === "annual" ? " (annual)" : ""}`,
+  });
+  if (!debit.ok) return { ok: false, error: debit.error };
+
+  const { error } = await admin.from("watch_subscription_addons").insert({ account_id: accountId, addon_type: "community_expansion", status: "active" });
+  if (error) {
+    // A concurrent purchase already activated it (23505 on the partial
+    // unique index), or a genuine failure -- either way, reverse this
+    // debit; never leave a charge with nothing to show for it.
+    await applyCreditChange(admin, accountId, priceCents, "adjustment", {
+      productId: product.id as string,
+      paymentRef: `reversal:${debit.data.id}`,
+      description: error.code === "23505" ? "Reversal: Community Expansion already active" : "Reversal: Community Expansion activation failed",
+    });
+    if (error.code === "23505") {
+      const balance = await getInnvilCreditBalance(admin, accountId);
+      return { ok: true, balanceCents: balance.balanceCents, active: true };
+    }
+    return { ok: false, error: "Could not activate Community Expansion. Your credit was refunded." };
+  }
+
+  const balance = await getInnvilCreditBalance(admin, accountId);
+  return { ok: true, balanceCents: balance.balanceCents, active: true };
+}
+
+export type ScheduleRemovalResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Schedules Community Expansion for removal at the end of the CURRENT
+ * paid period -- never an immediate capacity cut, never a refund for
+ * unused time. Blocked server-side (never just hidden in UI) if current
+ * Community usage already exceeds the plan's INCLUDED (non-expanded) cap
+ * -- removing the add-on would otherwise leave the account over its own
+ * effective capacity.
+ */
+export async function scheduleCommunityExpansionRemoval(admin: SupabaseClient, accountId: string): Promise<ScheduleRemovalResult> {
+  const tier = await resolveAccountWatchTier(admin, accountId);
+  if (!tier || !isCommunityExpansionEligibleTier(tier)) return { ok: false, error: "No active Community Expansion to remove." };
+
+  const existing = await getCommunityExpansionState(admin, accountId);
+  if (!existing) return { ok: false, error: "No active Community Expansion to remove." };
+  if (existing.cancelAtPeriodEnd) return { ok: true }; // already scheduled -- idempotent
+
+  const communities = await listAccountCommunities(admin, accountId);
+  const includedCap = CAPACITY[tier as ModeratorPlanTier].maxCommunities;
+  if (communities.length > includedCap) {
+    return {
+      ok: false,
+      error: `You have ${communities.length} Communities connected — more than the ${includedCap} included in ${watchPlanDisplayName(tier)}. Disconnect down to ${includedCap} or fewer before removing Community Expansion.`,
+    };
+  }
+
+  await admin.from("watch_subscription_addons").update({ cancel_at_period_end: true, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("addon_type", "community_expansion").eq("status", "active");
+  return { ok: true };
 }

@@ -7,6 +7,7 @@ import {
   MODERATOR_AUTOPOST_INCLUDED_PER_DAY, MODERATOR_AUTOPOST_MAX_PER_DAY, MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE,
   MODERATOR_AI_RESPONSE_POOL,
   moderatorPlanPrice, moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, moderatorAutopostFrequencyAddonPrice,
+  COMMUNITY_EXPANSION_ELIGIBLE_TIERS, COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier,
   type ModeratorPlanTier,
 } from "./money";
 import { CAPACITY, TRIAL_CAPACITY } from "./moderator/plan";
@@ -171,4 +172,27 @@ test('REQUIRED: Enterprise cannot flow into normal tier billing -- "enterprise" 
 
 test("trial capacity is unaffected by the pricing update (still 1 slot)", () => {
   assert.equal(TRIAL_CAPACITY.maxActiveSlots, 1);
+});
+
+/* ------------------------------------------------------- community expansion ---- */
+
+test("REQUIRED: only Gold (premium) and Platinum (pro) are Community-Expansion-eligible -- never Bronze/Silver", () => {
+  assert.deepEqual([...COMMUNITY_EXPANSION_ELIGIBLE_TIERS].sort(), ["premium", "pro"]);
+});
+
+test("REQUIRED: isCommunityExpansionEligibleTier rejects Bronze/Silver and accepts Gold/Platinum", () => {
+  assert.equal(isCommunityExpansionEligibleTier("basic"), false);
+  assert.equal(isCommunityExpansionEligibleTier("standard"), false);
+  assert.equal(isCommunityExpansionEligibleTier("premium"), true);
+  assert.equal(isCommunityExpansionEligibleTier("pro"), true);
+});
+
+test("REQUIRED: Gold Community Expansion is $12.99/month, Platinum is $19.99/month -- the exact fixed-package prices", () => {
+  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, 12.99);
+  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro, 19.99);
+});
+
+test("REQUIRED: Community Expansion capacity ceilings are the SAME MODERATOR_COMMUNITY_CAPACITY.maxWithAddons already shown on Plans -- never a duplicated number", () => {
+  assert.equal(MODERATOR_COMMUNITY_CAPACITY.premium.maxWithAddons, 5, "Gold expands to 5");
+  assert.equal(MODERATOR_COMMUNITY_CAPACITY.pro.maxWithAddons, 10, "Platinum expands to 10");
 });

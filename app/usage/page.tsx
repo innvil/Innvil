@@ -5,15 +5,19 @@ import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import {
   getAccountCapacity, countRecentModerationActions, listAccountCommunities, listAccountWatchers, getAccountSlotBreakdown,
 } from "@/src/lib/products/watch-runtime";
+import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
+import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 import { WatchShell } from "@/src/components/watch/WatchShell";
+import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier } from "@/src/lib/money";
 
 export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
 export default async function UsagePage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, actions7d, actions30d, communities, watchers, breakdown, shell] = await Promise.all([
+  const [capacity, actions7d, actions30d, communities, watchers, breakdown, shell, expansion, gateways] = await Promise.all([
     getAccountCapacity(admin, accountId),
     countRecentModerationActions(admin, accountId, 7),
     countRecentModerationActions(admin, accountId, 30),
@@ -21,6 +25,8 @@ export default async function UsagePage() {
     listAccountWatchers(admin, accountId),
     getAccountSlotBreakdown(admin, accountId),
     getWatchShellContext(admin, accountId),
+    getCommunityExpansionState(admin, accountId),
+    listAvailableDirectWatchGateways(),
   ]);
 
   const activeWatcherCount = new Set(communities.flatMap((c) => c.watchers.filter((w) => w.enabled).map((w) => w.watcherId))).size;
@@ -81,6 +87,19 @@ export default async function UsagePage() {
             <p className="text-xs w-text-faint mt-4">Counts real warn/kick/ban decisions made by your Watchers — not routine chatter or silence.</p>
           </div>
         </div>
+
+        {capacity && capacity.communityExpansionEligible && (
+          <CommunityExpansionCard
+            tier={capacity.tier as CommunityExpansionEligibleTier}
+            billingInterval={capacity.billingInterval}
+            active={expansion != null}
+            cancelAtPeriodEnd={expansion?.cancelAtPeriodEnd ?? false}
+            included={MODERATOR_COMMUNITY_CAPACITY[capacity.tier as CommunityExpansionEligibleTier].included}
+            max={MODERATOR_COMMUNITY_CAPACITY[capacity.tier as CommunityExpansionEligibleTier].maxWithAddons}
+            used={communities.length}
+            availableGateways={gateways}
+          />
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <div className="w-card p-5">

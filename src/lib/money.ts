@@ -121,9 +121,36 @@ export const MODERATOR_COMMUNITY_CAPACITY: Record<ModeratorPlanTier, ModeratorCo
 
 /** Additional-community pricing (non-Enterprise tiers, within maxWithAddons
  *  above). Buying the plain $9.99 community does NOT enable auto-posting
- *  there -- that's the separate $14.99 option (access + 1 auto-post/day). */
+ *  there -- that's the separate $14.99 option (access + 1 auto-post/day).
+ *  NEVER WIRED TO A PURCHASE ACTION -- an old, still-unused Phase 4.N-era
+ *  per-Community pricing concept, deliberately superseded (not reused) by
+ *  the fixed-package Community Expansion add-on below, which is the real,
+ *  live, purchasable model. Kept only because other display copy still
+ *  references it; do not build a new purchase flow on top of this constant. */
 export const MODERATOR_ADDITIONAL_COMMUNITY_PRICE = 9.99;
 export const MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE = 14.99;
+
+/**
+ * Community Expansion -- a real, purchasable, FIXED-package Watch
+ * subscription add-on (not per-Community pricing). Gold (premium) and
+ * Platinum (pro) only -- Bronze/Standard/Basic are hard-capped
+ * (MODERATOR_COMMUNITY_CAPACITY[tier].included === maxWithAddons already
+ * enforces this structurally, since there's nothing to expand INTO).
+ * Purchasing it raises effective Community capacity from `included` to
+ * the SAME canonical `maxWithAddons` ceiling already displayed on Plans --
+ * never a separate/duplicated number.
+ */
+export const COMMUNITY_EXPANSION_ELIGIBLE_TIERS = ["premium", "pro"] as const;
+export type CommunityExpansionEligibleTier = (typeof COMMUNITY_EXPANSION_ELIGIBLE_TIERS)[number];
+
+export const COMMUNITY_EXPANSION_MONTHLY_PRICE: Record<CommunityExpansionEligibleTier, number> = {
+  premium: 12.99, // Gold
+  pro: 19.99,     // Platinum
+};
+
+export function isCommunityExpansionEligibleTier(tier: ModeratorPlanTier): tier is CommunityExpansionEligibleTier {
+  return (COMMUNITY_EXPANSION_ELIGIBLE_TIERS as readonly string[]).includes(tier);
+}
 
 /** Auto-posting: every community with it enabled gets this many AI-generated
  *  posts/day included; extra daily frequency is priced per additional

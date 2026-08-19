@@ -4,6 +4,7 @@ import {
   creditPriceUsd, creditSavingsUsd, INNVIL_CREDIT_DISCOUNT, toCents,
   annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_ELIGIBLE_TIERS,
 } from "./innvil-credit-pricing";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE } from "@/src/lib/money";
 
 /* --------------------------------------------------------------- discount ---- */
 
@@ -99,4 +100,38 @@ test("REQUIRED (test 10): savings is computed against 12x the REGULAR monthly pr
 test("annual pricing works for a tier with NO monthly credit discount (Bronze) -- the two discounts are independent", () => {
   assert.equal(INNVIL_CREDIT_DISCOUNT.basic, 0);
   assert.ok(annualSavingsUsd(49.99) > 0, "Bronze still gets the annual 10% discount even though its monthly credit discount is 0%");
+});
+
+/* ------------------------------------ Community Expansion add-on pricing ---- */
+// The add-on reuses these SAME canonical creditPriceUsd/annualCreditPriceUsd
+// functions applied to COMMUNITY_EXPANSION_MONTHLY_PRICE -- no separate
+// pricing formula was written for it, so these tests double as regression
+// coverage for that reuse.
+
+test("REQUIRED: Gold monthly Community Expansion regular price is $12.99", () => {
+  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, 12.99);
+});
+test("REQUIRED: Platinum monthly Community Expansion regular price is $19.99", () => {
+  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro, 19.99);
+});
+
+test("REQUIRED: Gold Community Expansion monthly Innvil Credit price uses the existing 5% monthly discount rule", () => {
+  assert.equal(creditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, "premium"), 12.34);
+});
+test("Platinum Community Expansion monthly Innvil Credit price uses the existing 5% monthly discount rule", () => {
+  assert.equal(creditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro, "pro"), 18.99);
+});
+
+test("REQUIRED: Gold annual Community Expansion = 10% off 12 x $12.99 -- matches the exact spec worked example ($140.29/year)", () => {
+  assert.equal(annualCreditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium), 140.29);
+});
+test("REQUIRED: Platinum annual Community Expansion = 10% off 12 x $19.99 -- matches the exact spec worked example ($215.89/year)", () => {
+  assert.equal(annualCreditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro), 215.89);
+});
+
+test("REQUIRED: the annual Community Expansion price never stacks the monthly 5% discount on top of the annual 10% -- it's computed from the REGULAR $12.99/$19.99, not the discounted monthly-credit price", () => {
+  const viaRegular = annualCreditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium);
+  const viaDiscountedMonthly = Math.round(creditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, "premium") * 12 * 0.9 * 100) / 100;
+  assert.notEqual(viaRegular, viaDiscountedMonthly);
+  assert.equal(viaRegular, 140.29);
 });

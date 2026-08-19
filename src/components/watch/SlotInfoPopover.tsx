@@ -60,7 +60,7 @@ export function SlotInfoPopover() {
 export function CommunityExpansionInfoPopover({ included, max }: { included: number; max: number }) {
   return (
     <InfoPopover label="Learn how Community expansion works">
-      <p>Your plan includes {included} communit{included === 1 ? "y" : "ies"}. Additional Community capacity can be added up to this plan's maximum of {max}.</p>
+      <p>Your plan includes {included} communit{included === 1 ? "y" : "ies"}. Add the Community Expansion package (see the price below) to raise your Community capacity to this plan's maximum of {max} — it never changes your Watcher slot allowance.</p>
     </InfoPopover>
   );
 }

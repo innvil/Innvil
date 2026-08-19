@@ -7,7 +7,9 @@ import { getWatchTrialState } from "@/src/lib/products/watch-trial";
 import { watchPlanOptions, watchAccessLabel, watchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import { listWatchPaymentHistory, listAvailableDirectWatchGateways, getPendingWatchPayment } from "@/src/lib/products/watch-checkout";
 import { getInnvilCreditBalance, listInnvilCreditActivity } from "@/src/lib/products/innvil-credit";
+import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { annualCreditPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { RenewWatchButton } from "@/src/components/watch/RenewWatchButton";
@@ -33,7 +35,7 @@ function formatDate(iso: string): string {
  *  here auto-charges anything. */
 export default async function BillingPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, trial, paidPlan, history, availableGateways, pending, creditBalance, creditActivity, shell] = await Promise.all([
+  const [capacity, trial, paidPlan, history, availableGateways, pending, creditBalance, creditActivity, shell, expansion] = await Promise.all([
     getAccountCapacity(admin, accountId),
     getWatchTrialState(admin, accountId),
     getAccountPaidPlan(admin, accountId),
@@ -43,12 +45,21 @@ export default async function BillingPage() {
     getInnvilCreditBalance(admin, accountId),
     listInnvilCreditActivity(admin, accountId),
     getWatchShellContext(admin, accountId),
+    getCommunityExpansionState(admin, accountId),
   ]);
 
   const options = watchPlanOptions();
   const isPaidActive = capacity && capacity.tier !== "trial";
   const isTrialActive = capacity?.tier === "trial";
   const price = isPaidActive && capacity && capacity.tier !== "trial" ? options.find((o) => o.tier === capacity.tier)?.price : null;
+  // Community Expansion renews TOGETHER with the base subscription -- shown
+  // as part of the SAME "current subscription" total, never a second/
+  // separate billing line, since it has no billing period of its own.
+  const expansionActive = expansion != null && !expansion.cancelAtPeriodEnd
+    && capacity && capacity.tier !== "trial" && isCommunityExpansionEligibleTier(capacity.tier)
+    ? COMMUNITY_EXPANSION_MONTHLY_PRICE[capacity.tier]
+    : null;
+  const combinedPrice = price != null ? price + (expansionActive ?? 0) : null;
 
   return (
     <WatchShell active="billing" capacity={shell.capacity} attentionCount={shell.attentionCount}>
@@ -67,15 +78,20 @@ export default async function BillingPage() {
                   <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier)}</p>
                   <p className="text-xs w-text-faint mt-0.5">
                     {capacity.billingInterval === "annual" ? (
-                      <>${annualCreditPriceUsd(options.find((o) => o.tier === capacity.tier)?.price ?? 0).toFixed(2)}/year</>
+                      <>
+                        ${(annualCreditPriceUsd(options.find((o) => o.tier === capacity.tier)?.price ?? 0)
+                          + (expansionActive != null ? annualCreditPriceUsd(expansionActive) : 0)).toFixed(2)}/year
+                      </>
                     ) : (
-                      price != null && <>${price.toFixed(2)}/mo</>
+                      combinedPrice != null && <>${combinedPrice.toFixed(2)}/mo</>
                     )}
+                    {expansionActive != null && <span className="w-text-faint"> (incl. Community Expansion)</span>}
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
                   <span className="w-pill w-surface-raised w-text-faint text-[11px] capitalize">{capacity.billingInterval}</span>
+                  {expansionActive != null && <span className="w-pill w-surface-raised w-text-faint text-[11px]">+ Community Expansion</span>}
                 </div>
               </div>
               {capacity.paidThrough ? (
@@ -181,7 +197,10 @@ export default async function BillingPage() {
                   {history.map((p) => (
                     <tr key={p.id} className="border-t w-line-soft">
                       <td className="py-2.5 px-1 w-text-dim whitespace-nowrap">{new Date(p.createdAt).toLocaleDateString()}</td>
-                      <td className="py-2.5 px-1 w-text capitalize">{p.plan ?? "—"}</td>
+                      <td className="py-2.5 px-1 w-text capitalize">
+                        {p.plan ? watchPlanDisplayName(p.plan as ModeratorPlanTier) : "—"}
+                        {p.purpose === "watch_addon_purchase" && <span className="w-text-faint"> · Community Expansion</span>}
+                      </td>
                       <td className="py-2.5 px-1 w-text-dim">{GATEWAY_LABEL[p.gateway] ?? p.gateway}</td>
                       <td className="py-2.5 px-1 w-text-dim whitespace-nowrap">{p.amount.toFixed(2)} {p.currency}</td>
                       <td className="py-2.5 px-1">

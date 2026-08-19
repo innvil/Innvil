@@ -7,6 +7,7 @@ import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-peri
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
 import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier } from "@/src/lib/money";
 
 type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -109,6 +110,14 @@ export function BillingPlanPicker({
                       {expandable && <span className="block w-text-faint font-normal">Up to {o.communitiesMax}</span>}
                     </span>
                   </div>
+                  {expandable && isCommunityExpansionEligibleTier(o.tier) && (
+                    <p className="text-[11px] w-text-faint text-right">
+                      Community Expansion:{" "}
+                      {billingInterval === "annual"
+                        ? <>+${annualCreditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier]).toFixed(2)}/year <span className="w-teal">Innvil Credit only</span></>
+                        : <>+${COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier].toFixed(2)}/mo</>}
+                    </p>
+                  )}
                 </div>
               </div>
               {isCurrent ? (

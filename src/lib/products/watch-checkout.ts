@@ -28,8 +28,12 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAdapter } from "@/src/lib/payments/adapters";
 import { getPlatformGatewayContext } from "@/src/lib/payments/platform";
-import { watchPlanOptions, type WatchPlanDisplayName, watchTierFromDisplayName } from "./watch-plans";
+import { watchPlanOptions, type WatchPlanDisplayName, watchTierFromDisplayName, watchPlanDisplayName } from "./watch-plans";
 import { WATCH_PRODUCT_SLUG } from "./watch";
+import { getAccountPaidPlan, listAccountCommunities } from "./watch-runtime";
+import { getCommunityExpansionState } from "./watch-community-expansion";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
+import { CAPACITY } from "@/src/lib/moderator/plan";
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -119,8 +123,36 @@ export async function createDirectWatchCheckout(
   if (pending) return { ok: false, error: "You already have a pending payment for this subscription. Complete or wait for it to clear before starting another." };
 
   const tier = watchTierFromDisplayName(planName);
-  const price = watchPlanOptions().find((o) => o.tier === tier)?.price;
-  if (!price) return { ok: false, error: "Unknown plan." };
+  const basePrice = watchPlanOptions().find((o) => o.tier === tier)?.price;
+  if (!basePrice) return { ok: false, error: "Unknown plan." };
+
+  // Community Expansion renews TOGETHER with the base subscription -- if
+  // this is a renewal (same tier already held) with an active, non-
+  // removal-pending addon, its price is folded into this SAME checkout,
+  // never a second/independent crypto charge.
+  let price = basePrice;
+  const existingPlan = await getAccountPaidPlan(admin, user.id);
+  if (existingPlan && existingPlan.tier === tier && isCommunityExpansionEligibleTier(tier)) {
+    const expansion = await getCommunityExpansionState(admin, user.id);
+    if (expansion && !expansion.cancelAtPeriodEnd) price += COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
+  } else if (existingPlan && existingPlan.tier !== tier) {
+    // A plan CHANGE never carries Community Expansion across tiers (see
+    // watch-community-expansion.ts's finalizeAddonsOnTierChange doc comment)
+    // -- block the checkout itself (never just hide it in UI) if current
+    // Community usage would exceed the NEW tier's included capacity once the
+    // add-on is finalized on settlement (platform.ts's webhook handler).
+    const expansion = await getCommunityExpansionState(admin, user.id);
+    if (expansion) {
+      const communities = await listAccountCommunities(admin, user.id);
+      const includedCap = CAPACITY[tier as ModeratorPlanTier].maxCommunities;
+      if (communities.length > includedCap) {
+        return {
+          ok: false,
+          error: `You have ${communities.length} Communities connected — more than the ${includedCap} included in this plan. Disconnect down to ${includedCap} or fewer before changing plans (Community Expansion doesn't carry over to a new plan automatically).`,
+        };
+      }
+    }
+  }
 
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
   if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
@@ -172,6 +204,92 @@ export async function createDirectWatchCheckout(
   }
 }
 
+/**
+ * Standalone direct-crypto purchase of Community Expansion (Gold/Platinum,
+ * MONTHLY only -- annual is Innvil-Credit-only by product rule, and this
+ * function never accepts a billing-interval parameter at all, the same
+ * "structurally impossible" pattern used for the base annual plan). A
+ * distinct purpose (`watch_addon_purchase`, migration 0083) so the webhook
+ * activates the ADD-ON, never re-extends/misinterprets the base
+ * subscription period.
+ */
+export async function createCommunityExpansionCheckout(gateway: string): Promise<Result<{ url: string }>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+
+  if (!(WATCH_DIRECT_PAYMENT_GATEWAYS as readonly string[]).includes(gateway)) {
+    return { ok: false, error: "That payment method isn't available for Community Expansion." };
+  }
+
+  const paidPlan = await getAccountPaidPlan(admin, user.id);
+  if (!paidPlan || paidPlan.expired) return { ok: false, error: "An active paid Watch subscription is required." };
+  if (!isCommunityExpansionEligibleTier(paidPlan.tier)) return { ok: false, error: "Community Expansion is only available on Gold and Platinum." };
+
+  const existing = await getCommunityExpansionState(admin, user.id);
+  if (existing && !existing.cancelAtPeriodEnd) return { ok: false, error: "Community Expansion is already active." };
+
+  const { data: pendingAddon } = await admin
+    .from("platform_deposits")
+    .select("id")
+    .eq("owner_id", user.id)
+    .eq("purpose", "watch_addon_purchase")
+    .eq("status", "pending")
+    .limit(1)
+    .maybeSingle();
+  if (pendingAddon) return { ok: false, error: "You already have a pending Community Expansion payment. Complete or wait for it to clear before starting another." };
+
+  const price = COMMUNITY_EXPANSION_MONTHLY_PRICE[paidPlan.tier];
+
+  const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
+  if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
+
+  const adapter = getAdapter(gateway);
+  if (!adapter) return { ok: false, error: "That gateway isn't implemented." };
+  const ctx = await getPlatformGatewayContext(gateway);
+  if (!ctx || Object.keys(ctx.secrets).length === 0) {
+    return { ok: false, error: "This payment method isn't fully configured yet. Please contact support." };
+  }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || "";
+  if (!appUrl) return { ok: false, error: "Payments aren't configured (NEXT_PUBLIC_APP_URL)." };
+
+  const { data: deposit, error } = await admin
+    .from("platform_deposits")
+    .insert({
+      owner_id: user.id,
+      panel_id: null,
+      gateway,
+      purpose: "watch_addon_purchase",
+      product_id: product.id,
+      plan: paidPlan.tier,
+      paid_amount: price,
+      credit_amount: price,
+      currency: "USD",
+      status: "pending",
+    })
+    .select("id")
+    .single();
+  if (error || !deposit) return { ok: false, error: error?.message ?? "Could not start the payment." };
+
+  try {
+    const { url, ref } = await adapter.createCheckout({
+      amount: price,
+      currency: "USD",
+      orderId: deposit.id as string,
+      callbackUrl: `${appUrl}/api/webhooks/platform/${gateway}`,
+      returnUrl: `${appUrl}/billing`,
+      config: ctx.config,
+      secrets: ctx.secrets,
+      customerEmail: user.email ?? null,
+    });
+    await admin.from("platform_deposits").update({ gateway_ref: ref }).eq("id", deposit.id);
+    return { ok: true, data: { url } };
+  } catch (e) {
+    await admin.from("platform_deposits").delete().eq("id", deposit.id);
+    return { ok: false, error: e instanceof Error ? e.message : "Could not reach the payment gateway." };
+  }
+}
+
 export interface WatchPaymentRecord {
   id: string;
   createdAt: string;
@@ -181,21 +299,26 @@ export interface WatchPaymentRecord {
   currency: string;
   status: string;
   reference: string | null;
+  purpose: "watch_subscription" | "watch_addon_purchase";
 }
 
 /** Real crypto payment/invoice history for the authenticated account only --
- *  never trusts a client-supplied account id, scoped by owner_id + the
- *  direct-Watch purpose so a panel-owner's unrelated Forge top-ups never
- *  leak in here. This is a checkout-event history (one row per invoice
- *  attempted), not a fabricated recurring-billing ledger. */
+ *  never trusts a client-supplied account id, scoped by owner_id + the two
+ *  direct-Watch purposes (base subscription + standalone Community
+ *  Expansion crypto purchases) so a panel-owner's unrelated Forge top-ups
+ *  never leak in here. This is a checkout-event history (one row per
+ *  invoice attempted), not a fabricated recurring-billing ledger. A
+ *  renewal that folded in an active add-on's price is still ONE real
+ *  `watch_subscription` row for the combined amount -- never duplicated
+ *  into a second misleading row. */
 export async function listWatchPaymentHistory(): Promise<WatchPaymentRecord[]> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return [];
   const { data } = await admin
     .from("platform_deposits")
-    .select("id, created_at, plan, gateway, paid_amount, currency, status, gateway_ref")
+    .select("id, created_at, plan, gateway, paid_amount, currency, status, gateway_ref, purpose")
     .eq("owner_id", user.id)
-    .eq("purpose", "watch_subscription")
+    .in("purpose", ["watch_subscription", "watch_addon_purchase"])
     .order("created_at", { ascending: false });
   return (data ?? []).map((r: Record<string, unknown>) => ({
     id: r.id as string,
@@ -206,6 +329,7 @@ export async function listWatchPaymentHistory(): Promise<WatchPaymentRecord[]> {
     currency: (r.currency as string | null) ?? "USD",
     status: r.status as string,
     reference: (r.gateway_ref as string | null) ?? null,
+    purpose: r.purpose as "watch_subscription" | "watch_addon_purchase",
   }));
 }
 

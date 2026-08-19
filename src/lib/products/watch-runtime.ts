@@ -2,7 +2,9 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ModeratorPlanTier } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier } from "@/src/lib/money";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
+import { hasActiveCommunityExpansion } from "./watch-community-expansion";
 import { normalizeModeratorPersona, type ModeratorPersona } from "@/src/lib/moderator/domain";
 import { getModerationDefaults } from "./watch-moderation-defaults";
 import { projectBelongsToAccount, listAccountProjects } from "./ownership";
@@ -197,7 +199,14 @@ export async function resolveStandaloneModeratorSettings(admin: SupabaseClient, 
 async function requireAccountWatchContext(admin: SupabaseClient, accountId: string): Promise<AccountWatchContextResult> {
   const tier = await resolveAccountWatchTier(admin, accountId);
   if (tier) {
-    return { ok: true, accountId, tier, maxCommunities: CAPACITY[tier].maxCommunities, maxActiveSlots: CAPACITY[tier].maxActiveSlots, maxSavedModerators: CAPACITY[tier].maxActiveSlots };
+    // Community Expansion (Gold/Platinum only, migration 0083) raises
+    // effective Community capacity from the included count to the SAME
+    // canonical maxWithAddons ceiling already shown on Plans -- never a
+    // second/duplicated number, and never checked for an ineligible tier
+    // (isCommunityExpansionEligibleTier short-circuits before the DB read).
+    const expanded = isCommunityExpansionEligibleTier(tier) && (await hasActiveCommunityExpansion(admin, accountId));
+    const maxCommunities = expanded ? MODERATOR_COMMUNITY_CAPACITY[tier].maxWithAddons : CAPACITY[tier].maxCommunities;
+    return { ok: true, accountId, tier, maxCommunities, maxActiveSlots: CAPACITY[tier].maxActiveSlots, maxSavedModerators: CAPACITY[tier].maxActiveSlots };
   }
   if (await hasActiveWatchTrial(admin, accountId)) {
     return { ok: true, accountId, tier: "trial", maxCommunities: TRIAL_CAPACITY.maxCommunities, maxActiveSlots: TRIAL_CAPACITY.maxActiveSlots, maxSavedModerators: TRIAL_MAX_SAVED_MODERATORS };
@@ -601,6 +610,13 @@ export interface AccountCapacity {
   slotsTotal: number;
   communitiesUsed: number;
   communitiesTotal: number;
+  /** True only for a Gold/Platinum tier with an active Community Expansion
+   *  add-on -- i.e. `communitiesTotal` already reflects the expanded max. */
+  communityExpansionActive: boolean;
+  /** Whether the CURRENT tier could even purchase Community Expansion at
+   *  all (Gold/Platinum only) -- lets UI show/hide the purchase CTA
+   *  without re-deriving eligibility itself. */
+  communityExpansionEligible: boolean;
 }
 
 /** Real capacity/usage against the account's actual entitlement -- paid tier
@@ -618,6 +634,13 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     ctx.tier === "trial" ? getWatchTrialState(admin, accountId) : Promise.resolve(null),
     ctx.tier !== "trial" ? getAccountPaidPlan(admin, accountId) : Promise.resolve(null),
   ]);
+  const eligible = ctx.tier !== "trial" && isCommunityExpansionEligibleTier(ctx.tier);
+  // Derived without a second DB read: requireAccountWatchContext already
+  // resolved maxCommunities against the expanded ceiling when the add-on is
+  // active -- if it differs from the tier's plain included count, expansion
+  // is on. (Never true for trial/ineligible tiers, whose included count IS
+  // their ceiling.)
+  const communityExpansionActive = eligible && ctx.tier !== "trial" && ctx.maxCommunities > CAPACITY[ctx.tier].maxCommunities;
   return {
     tier: ctx.tier,
     trialEndsAt: trial?.endsAt ?? null,
@@ -628,6 +651,8 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     slotsTotal: ctx.maxActiveSlots,
     communitiesUsed: communities.length,
     communitiesTotal: ctx.maxCommunities,
+    communityExpansionActive,
+    communityExpansionEligible: eligible,
   };
 }
 

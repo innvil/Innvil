@@ -4,6 +4,8 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { getAdapter } from "./adapters";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 import { creditInnvilCreditTopUp } from "@/src/lib/products/innvil-credit";
+import { getAccountPaidPlan } from "@/src/lib/products/watch-runtime";
+import { getCommunityExpansionState, finalizeAddonsOnRenewal, finalizeAddonsOnTierChange } from "@/src/lib/products/watch-community-expansion";
 
 /* =========================================================
    PLATFORM PAYMENTS runtime (server-only).
@@ -94,12 +96,44 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
   if (!claimed) return NextResponse.json({ ok: true }, { status: 200 });
 
   if (claimed.purpose === "watch_subscription") {
+    // Resolve the tier BEFORE activation overwrites it -- needed to detect a
+    // genuine plan CHANGE (see watch-community-expansion.ts's
+    // finalizeAddonsOnTierChange doc comment: a plan change never carries
+    // Community Expansion across tiers). createDirectWatchCheckout already
+    // blocked creating this checkout if it would leave the account over the
+    // new tier's included capacity -- this just completes the finalization.
+    const priorPlan = await getAccountPaidPlan(admin, claimed.owner_id as string);
+    const isTierChange = priorPlan != null && priorPlan.tier !== claimed.plan;
+    const hadExpansion = isTierChange ? await getCommunityExpansionState(admin, claimed.owner_id as string) : null;
+
     await activateWatchEntitlement(admin, claimed.owner_id as string, claimed.plan as string, claimed.id as string);
+    // Finalizes (marks 'removed') a Community Expansion scheduled for
+    // removal -- a real no-op unless one is actually pending, safe to call
+    // after every base-subscription settlement (initial purchase or renewal).
+    await finalizeAddonsOnRenewal(admin, claimed.owner_id as string);
+    if (isTierChange && hadExpansion) await finalizeAddonsOnTierChange(admin, claimed.owner_id as string);
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
   if (claimed.purpose === "innvil_credit_topup") {
     await creditInnvilCreditTopUp(admin, claimed.owner_id as string, Math.round(Number(claimed.credit_amount) * 100), claimed.id as string);
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
+
+  if (claimed.purpose === "watch_addon_purchase") {
+    // Standalone direct-crypto Community Expansion purchase -- activates
+    // the add-on itself (never touches the base subscription's own
+    // period). A duplicate/retried webhook can never double-activate:
+    // this branch only ever runs once per deposit (the SAME pending->
+    // completed claim above already guarantees that), and the add-on
+    // table's own partial unique index (account_id, addon_type) where
+    // status='active' rejects a genuinely concurrent duplicate insert.
+    const { error: insertError } = await admin
+      .from("watch_subscription_addons")
+      .insert({ account_id: claimed.owner_id as string, addon_type: "community_expansion", status: "active" });
+    if (insertError && insertError.code !== "23505") {
+      console.error("[platform-webhook] Community Expansion activation failed", { accountId: claimed.owner_id, depositId: claimed.id, error: insertError.message });
+    }
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 

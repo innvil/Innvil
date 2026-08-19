@@ -127,6 +127,228 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Sign in with email OR username, everywhere (v1.47.2)
+- **Extended the existing storefront-only username login (v1.1.28's `customerSignIn`) to the main Innvil/Watch
+  account login** — the same account a customer uses for Watch/Forge/every Innvil product. New
+  `emailForAccountUsername(username)` in `actions/auth.ts` resolves a `profiles.display_name` GLOBALLY (not
+  panel-scoped, since one Innvil account spans every product) to its login email, server-side only — an
+  ambiguous match (2+ accounts sharing the same display_name, which has no uniqueness constraint) is treated
+  as "not found" rather than guessing. `signInAction(identifier, password)` (was `email`) now accepts either.
+- **`LoginPageClient.tsx`** (the real product/Watch-branded login page) switched from calling the browser
+  Supabase client's `signInWithPassword` directly to calling the `signInAction` server action instead — required
+  so a typed username never has to be resolved to a real email address on the client (which would leak the
+  account's email to anyone probing usernames). Field relabeled "Email or username", `type="text"`.
+- **The legacy dev preview-switcher `AuthScreen`** (`src/components/panels/index.tsx`, `app/?preview=1`) also
+  updated — the email/username field only widens to `type="text"`/"Email or username" in **login** mode; signup
+  still requires a real `type="email"` input (username has nothing to resolve yet on signup).
+- No migration (`profiles.display_name` already exists). No dedicated test file — consistent with this
+  codebase's convention of not adding session/Supabase-Auth-mocked tests for `"use server"` action files
+  (verified via `tsc --noEmit` + full test suite + production build).
+
+### 2026-08-19 — Critical fix: standalone Innvil Watch was unreachable for a brand-new, zero-Panel, zero-entitlement account (v1.47.1)
+- **Live bug report: a brand-new Innvil account, registered directly through Watch with zero Panels, could not
+  enter or use the Watch dashboard at all** — every page (Overview, Plans, Billing, Usage, Profile, Settings,
+  Projects, Communities, Watchers, Activity, Support) bounced back to the marketing landing. Root cause found by
+  tracing the actual request path (not guessed): TWO separate places conflated **authentication** with
+  **entitlement**.
+  1. **`src/lib/watch-page.ts`'s `requireWatchPage()`** — the shared guard behind all 13 real Watch feature
+     routes (`/projects`, `/communities`, `/watchers`, `/activity`, `/usage`, `/billing`, `/plans`, `/profile`,
+     `/settings`, `/support`, plus the two `[id]` detail routes) — called `hasProductAccess()` and
+     `redirect("/")` whenever it returned `false`. A fresh account with no Panel, no trial, and no paid
+     subscription is, correctly, NOT entitled — but that meant **every one of these pages, including `/plans`
+     and `/billing` themselves**, was unreachable for exactly the account that most needs to reach them (to
+     start the Free Trial or subscribe in the first place). Fixed: this guard now checks ONLY Watch-host +
+     signed-in — it no longer touches entitlement at all. Every downstream page was ALREADY built to render a
+     real empty/upsell state for `capacity: null` (`getAccountCapacity` already returns `null` for no
+     entitlement, and Usage/Billing/`WatchShell` already branch on it correctly) — confirmed by reading each of
+     the 13 route files before touching anything, not assumed; this was a one-function fix, not a rewrite.
+  2. **`getWatchAccessState()`** (`src/lib/actions/watch-dashboard.ts`), which powers the ROOT `/` route (Watch's
+     "Overview") — early-returned a mostly-empty `EMPTY_ACCESS` object for a non-entitled authenticated user,
+     and `app/page.tsx` then rendered `<WatchLanding authenticated={true}>` (the marketing page) instead of the
+     real dashboard shell. Fixed: `getWatchAccessState()` now always fetches the full real read set (Projects,
+     Watchers, Communities, capacity, activity — all genuinely empty for a fresh account, never fabricated) for
+     any authenticated user; `app/page.tsx` now renders `<WatchDashboard>` for any `access.authenticated`,
+     dropping the `&& access.entitled` condition. `WatchDashboard`'s own pre-existing `hasAnyResource` check
+     (zero Projects/Watchers/Communities) already renders its `OnboardingEmptyState` for exactly this account
+     shape — no new empty-state UI needed to exist, it just couldn't be reached before.
+  3. **`OnboardingEmptyState` improved** (small, targeted addition, not part of the root cause): it previously
+     always pointed "Start setup" at the Create-Project modal — which fails for a non-entitled fresh account
+     (`createStandaloneProject` correctly requires entitlement) with a confusing inline rejection, since Watch's
+     real order of operations is Plan/Trial → Project → Community → Watcher → Deploy. Now takes an `entitled`
+     prop (`capacity != null`) and shows a 5-step list ending in "View plans / Start Free Trial" → `/plans`
+     when not yet entitled, vs. the original 4-step "Start setup" → Create-Project-modal flow once entitled.
+     The topbar's "Create Watcher" primary action is likewise only offered once entitled (same dead-end reason).
+- **No hidden/default/synthetic Panel was ever created or considered** — confirmed via grep that no Watch
+  signup/login/dashboard code path calls `createPanel`; `signUpAction`/`ensureProfile` only ever create an
+  `auth.users` row + a `profiles` row (a role LABEL, not a Panel). Ownership resolution for a standalone account
+  was already fully Panel-free (`Project → account_id`, `Community → Project → account_id`, `Deployment →
+  Community → Project → account_id`, all pre-existing from Phase 4.T/4.T.1) — this pass didn't need to touch it,
+  only the two gates blocking a not-yet-entitled account from REACHING that already-correct architecture.
+  **Legacy Panel-distributed Watch access is completely unaffected** — `hasProductAccess()` itself (the
+  entitlement RESOLVER, as opposed to the page GUARD that used to wrongly gate on it) is unchanged; an existing
+  Panel-backed subscriber still resolves as entitled exactly as before, and still sees the full dashboard with
+  real data once `capacity` resolves non-null.
+- New tests: `ownership.test.ts` (+2 — `hasProductAccess` resolves `false`, never throws, for a genuinely fresh
+  zero-Panel account; `listAccountProjects` returns `[]` for one), `watch-runtime.test.ts` (+1 — a single
+  consolidated fixture test proving the FULL Watch dashboard read set — `listAccountWatchers`,
+  `listAccountCommunities`, `getAccountCapacity`, `listAccountActivity`, `countRecentModerationActions`,
+  `listAccountAttentionItems`, `getCommunityOperationalStats`, `getAccountSlotBreakdown` — is zero-safe for
+  "Account A" from the bug report: zero Panels, zero Projects, zero Communities, zero Watchers, zero
+  deployments, zero trial, zero paid subscription; asserts zero Panel rows were ever touched to answer any of
+  it). 1273 tests pass, `tsc --noEmit` clean, production build clean (all 13 Watch routes still present).
+  **No dedicated test exists for `requireWatchPage()`/`getWatchAccessState()` themselves** (both depend on
+  `next/headers`/cookie-based sessions, consistent with this codebase's established convention of not
+  session-mocking server actions/route guards) — verified instead via full code review of every downstream
+  page's existing null-capacity handling (already correct, confirmed by reading all 13 files) plus the full
+  test suite + production build.
+- **Deliberately not built this pass** (matches the report's own explicit scope): no changes to `hasProductAccess`
+  itself, no changes to RLS (none of this touches Postgres row-level security — all Watch reads already go
+  through the service-role client with code-level tenancy checks, the established pattern for this whole
+  product), no changes to any OPERATION-level entitlement gate (`createStandaloneProject`, `createAccountWatcher`,
+  `createAccountCommunity`, `deployAccountWatcher` all correctly still require real entitlement at the point of
+  the actual write — only PAGE ACCESS was ever the bug). The Projects page's own "+ New Project" button (as
+  opposed to Overview's "Start setup") still points straight at Create-Project without an entitlement pre-check
+  — a real, minor, documented rough edge (fails with a clear inline error, never a crash) left for a future pass
+  rather than touching every CTA in the app in an already-large session.
+- **Confirms:** a brand-new standalone Innvil Watch account with zero Panels can now enter and use the Watch
+  dashboard — Overview shows a real welcome/onboarding empty state, and Profile/Plans/Billing/Usage/Settings/
+  Support/Projects/Communities/Watchers/Activity all open normally with real (empty) data.
+
+### 2026-08-19 — Community Expansion: a real, paid Gold/Platinum-only Watch capacity add-on (v1.47.0)
+- **Investigated first, per explicit instruction, before writing anything.** Confirmed `MODERATOR_COMMUNITY_
+  CAPACITY[tier].maxWithAddons` (money.ts) already existed and was already DISPLAYED on Plans (Gold "3 included
+  / Up to 5", Platinum "5 included / Up to 10") — but was purely decorative: `requireAccountWatchContext`
+  (watch-runtime.ts, the SINGLE canonical resolver every Watcher/Community/Deployment creation path and
+  `getAccountCapacity` already go through) only ever read `CAPACITY[tier].maxCommunities` (the INCLUDED count),
+  never `maxWithAddons` — there was no purchase mechanism anywhere that could actually raise a Community's
+  effective ceiling. This pass builds that missing mechanism, reusing the existing included/max numbers as the
+  canonical source (never redeclared) — Bronze/Silver get nothing (their own `maxWithAddons === included`,
+  hard-capped, unchanged); Gold expands 3→5 for $12.99/mo; Platinum expands 5→10 for $19.99/mo.
+- **New migration `0083_watch_community_expansion.sql`** — `watch_subscription_addons` (`account_id`,
+  `addon_type` check-limited to `'community_expansion'`, `status` active/removed, `cancel_at_period_end`,
+  timestamps; RLS on with no policies, service-role only, same convention as every other Watch runtime table).
+  **At most one active row per account, enforced at the DB level** via a partial unique index
+  `(account_id, addon_type) where status='active'` — a concurrent duplicate purchase attempt can never create a
+  second active row or push capacity beyond the canonical max, proven by a dedicated race-safety test.
+  Deliberately NO period columns on the add-on itself — "renewing" it just means its price is folded into the
+  BASE subscription's own next renewal charge; it belongs to the exact same billing period as
+  `product_entitlements`, never an independent renewal date. `platform_deposits.purpose` gained a fourth value,
+  `watch_addon_purchase`, with its own required-field shape in the existing check constraint. **Run migration
+  `0083`.**
+- **New `src/lib/products/watch-community-expansion.ts`** — deliberately the ONLY module that reads
+  `watch_subscription_addons` directly (both `watch-runtime.ts` and `innvil-credit.ts` import from here, never
+  from each other, since `innvil-credit.ts` already depends on `watch-runtime.ts` for `getAccountPaidPlan` —
+  importing the other direction would create a cycle). `getCommunityExpansionState`/`hasActiveCommunityExpansion`
+  (plain reads), `finalizeAddonsOnRenewal` (marks a `cancel_at_period_end` row `removed` — real no-op otherwise,
+  safe to call unconditionally after every base-subscription settlement), and `finalizeAddonsOnTierChange`
+  (unconditionally removes ANY active row — used only for a genuine plan CHANGE, see below).
+- **Capacity resolution — one line changed in the ONE canonical resolver, nothing duplicated.**
+  `requireAccountWatchContext`'s paid-tier branch now computes `maxCommunities` as
+  `isCommunityExpansionEligibleTier(tier) && hasActiveCommunityExpansion(...) ? MODERATOR_COMMUNITY_CAPACITY[tier]
+  .maxWithAddons : CAPACITY[tier].maxCommunities` — every existing enforcement point (`createAccountCommunity`'s
+  cap check, `getAccountCapacity`) picks this up automatically, with zero changes needed at those call sites.
+  `AccountCapacity` gained `communityExpansionActive`/`communityExpansionEligible` (derived by comparison against
+  the plain included cap — no second DB read needed, since `requireAccountWatchContext` already resolved the
+  effective ceiling internally). **Watcher slots are completely untouched** — `maxActiveSlots` is computed
+  identically regardless of the add-on, confirmed by a dedicated test.
+- **Purchase (Innvil Credit — `purchaseCommunityExpansionWithCredit`, `innvil-credit.ts`)**: eligibility
+  (Gold/Platinum only, active paid subscription required — rejected server-side, not just hidden in UI),
+  already-active is a safe idempotent no-op (never double-charges; un-cancels a removal-pending add-on for
+  free, since it was already paid for), priced via the SAME canonical `creditPriceUsd`/`annualCreditPriceUsd`
+  functions the base plan already uses (Gold $12.34/mo credit price via the existing 5% rule, Platinum $18.99/mo;
+  annual $140.29/$215.89/year via the existing 10% rule applied to the REGULAR $12.99/$19.99 — never stacked on
+  top of the monthly discount, pinned by a dedicated test), debit-then-activate with a compensating reversal
+  ledger entry on any activation failure (same documented pattern as the base subscription purchase — a real
+  disclosed compensating-transaction choice, not full single-statement DB atomicity). Race safety: two
+  concurrent purchase attempts with ample balance for both still activate exactly once (the loser's debit is
+  reversed via the same DB-level partial-unique-index guard, reporting `active:true` rather than a hard failure).
+- **Purchase (direct crypto — `createCommunityExpansionCheckout`, `watch-checkout.ts`)**: monthly-only,
+  structurally (no `billingInterval` parameter exists on this function at all) — annual stays Innvil-Credit-only
+  by product rule. Reuses the exact same `platform_deposits`/adapter/webhook pipeline as the base subscription,
+  with `purpose:'watch_addon_purchase'`; activation happens ONLY in `platform.ts`'s webhook handler (never from
+  a browser redirect), inserting the add-on row with the same 23505-tolerant idempotency as every other webhook
+  branch in this file.
+- **Renewal — folded into the SAME base-subscription charge, never a second/independent one.** Both
+  `purchaseWatchWithCredit` (credit) and `createDirectWatchCheckout` (crypto) now check: is this a renewal of
+  the SAME tier the add-on is active under, and is it not scheduled for removal? If so, the add-on's own credit/
+  regular price is added into the ONE combined debit/checkout amount (worked example: Gold base $208.99 credit
+  + $12.34 add-on = $221.33, ONE transaction, pinned by test) — `finalizeAddonsOnRenewal` runs after every
+  successful settlement either way, so a removal-pending add-on is charged nothing further and correctly
+  finalized to `removed` on that same renewal.
+- **Removal (`scheduleCommunityExpansionRemoval`)** — never an immediate capacity cut, never a refund for unused
+  time. Blocked SERVER-SIDE (not just hidden in UI) if current Community usage already exceeds the plan's plain
+  INCLUDED cap (would otherwise leave the account instantly over its own new effective capacity) — the add-on
+  stays fully active (expanded capacity still available, since it's already paid for) until finalized on the
+  next renewal.
+- **Plan-change transitions (Gold+expansion↔Platinum) — explicitly investigated and handled, per direct
+  instruction.** A plan CHANGE to a DIFFERENT tier never silently carries the add-on across tiers — it was
+  priced/sized for the OLD tier, and letting it ride along would mean either a Gold-priced add-on suddenly
+  granting Platinum's 10-Community ceiling for free, or the reverse commercial mismatch. Both `purchaseWatch
+  WithCredit` and `createDirectWatchCheckout` now detect a genuine tier change with an active add-on and: (1)
+  BLOCK the change server-side if current Community usage exceeds the NEW tier's plain included cap (the exact
+  "Platinum+expansion, 8 connected → Gold" worked example from the request — Gold's own max is 5, even
+  expanded, so 8 is rejected regardless; blocked with zero debit, the account stays on its current tier, and
+  the add-on is left completely untouched, not silently finalized for a change that itself never took effect),
+  else (2) let the change proceed with ONLY the new tier's own base price (no add-on price folded in) and call
+  `finalizeAddonsOnTierChange` after activation — the old tier's add-on is cleanly finalized (removed, no
+  refund), and the customer can re-purchase Community Expansion under the new tier's own price/capacity if they
+  still want it. The crypto webhook path (`platform.ts`) mirrors this: resolves the prior tier via
+  `getAccountPaidPlan` BEFORE `activateWatchEntitlement` overwrites it, then finalizes the add-on the same way.
+- **UI**: `BillingPlanPicker.tsx`'s Gold/Platinum cards now show a real "+$12.99/mo" / "+$19.99/mo" Community
+  Expansion line under the capacity block (annual view: "+$140.29/year · Innvil Credit only") — Bronze/Silver
+  show nothing about expansion at all, matching the existing `expandable` gate. `CommunityExpansionInfoPopover`
+  copy updated to reference the real priced package instead of vague "can be added" language. New
+  `CommunityExpansionCard.tsx` (Usage page, gated on `capacity.communityExpansionEligible`) — not-active state
+  shows the regular + Innvil Credit prices and an "Add with Innvil Credit" button (immediate, atomic) plus
+  "Pay with [gateway]" buttons for monthly-only direct crypto (real `listAvailableDirectWatchGateways()`
+  results, never a fabricated option); active state shows included/expanded capacity + real current usage and a
+  "Remove" action, or an amber "scheduled to end at your next renewal" note once removal is scheduled. Billing
+  page's "Current subscription" card now folds the add-on into its displayed price ("$232.98/mo (incl. Community
+  Expansion)") with a "+ Community Expansion" pill, and the payment-history table labels standalone add-on rows
+  distinctly ("Gold · Community Expansion") using the real `purpose` field `listWatchPaymentHistory` already
+  returns.
+- **Enterprise is completely untouched** (not in this diff at all) — Managed/BYO remain custom capacity/
+  commercial models; `COMMUNITY_EXPANSION_ELIGIBLE_TIERS` is structurally `["premium","pro"]` only, and
+  Enterprise was never a `ModeratorPlanTier` to begin with (can't compile into this logic even by accident).
+  **Free Trial is unaffected** — `isCommunityExpansionEligibleTier("trial")` is a compile-time type error (the
+  function only accepts `ModeratorPlanTier`), and `getAccountCapacity`'s trial branch never calls it at all;
+  pinned by a dedicated test (a stray active add-on row never expands a trial account's capacity).
+- **Code-review sweep performed** (all 12 requested items): no expansion pricing/logic reachable for Bronze/
+  Silver anywhere in the diff; no per-Community quantity/multiplier concept exists anywhere (confirmed —
+  explicitly a fixed package, no selector); zero duplicated `12.99`/`19.99` literals outside `money.ts` (every
+  other reference reads the canonical constant); zero duplicated annual-discount arithmetic (every annual price
+  goes through the existing `annualCreditPriceUsd`/`annualCreditPriceCents`); all money math is integer-cent
+  based via the existing canonical helpers, no new floating-point risk; zero `panel_id`/panel dependency
+  anywhere in the new add-on code (the two `panel_id: null` occurrences in `watch-checkout.ts` are the existing,
+  correct "this deposit belongs to no Panel" pattern, unchanged from the base subscription); effective capacity
+  is read EXCLUSIVELY through `requireAccountWatchContext`/`getAccountCapacity`, never re-derived from
+  `watch_subscription_addons` rows directly anywhere outside `watch-community-expansion.ts` itself; Watcher
+  slots verified untouched by both code review and a dedicated test; duplicate-payment/duplicate-activation
+  safety verified via the partial unique index + 23505 handling in both the credit path and the webhook, plus a
+  dedicated concurrency test; Enterprise confirmed untouched (not present in the diff); migration/RLS reviewed
+  (service-role only, matches convention); full diff reviewed file-by-file for scope creep (clean — every
+  changed file maps directly to this feature).
+- New tests: `watch-community-expansion.test.ts` (+15, new file), `money.test.ts` (+4), `innvil-credit-
+  pricing.test.ts` (+9, incl. the exact $140.29/$215.89 worked examples and the never-stack-the-monthly-discount
+  proof), `innvil-credit.test.ts` (+22 — eligibility incl. Bronze/Silver/no-entitlement rejection, exact
+  discounted pricing incl. annual, insufficient-credit debits/activates nothing, idempotent re-purchase, race
+  safety, same-tier renewal folding incl. the exact combined-amount worked example, different-tier renewal NOT
+  folding, removal-pending-not-charged-and-finalized, removal blocked/allowed by usage, un-cancel-never-
+  recharges, and both explicit plan-change worked examples — Gold+expansion→Platinum finalizes for free (no
+  double price), Platinum+expansion→Gold blocked at 8 Communities then succeeds once reduced to within Gold's
+  cap), `watch-runtime.test.ts` (+9 — capacity 1-7 from the request's own test list, Bronze/Silver/trial never
+  expand-eligible even with a stray active row). 1273 tests pass, `tsc --noEmit` clean, production build clean
+  (all 29 routes present, `/usage` and `/billing` confirmed carrying the new UI).
+- **Validation**: ran the full suite + `tsc --noEmit` + `npm run build` after every logical step, not just at
+  the end. Live/local walkthrough of the 8 requested cases (A–H) was NOT performed in this sandbox (no working
+  Supabase network access here, consistent with every other Watch pass this session) — verified instead via the
+  above test coverage + code review, matching this codebase's established convention for comparably complex
+  Watch billing work.
+- **Deliberately not built this pass**: a UI re-price/confirm step shown to the customer BEFORE a blocked plan
+  change (the server-side block itself is the safety requirement — it fails with a clear inline error message,
+  same UX pattern as every other blocked action in this codebase); a "+ New Project"-style entitlement
+  pre-check UI polish (unrelated to this feature).
+
 ### 2026-08-19 — Plan-card Community allowance made visually prominent + capacity-consistency pinning tests (v1.46.1)
 - **Investigated first, per explicit instruction, before assuming anything was actually missing.** Read
   `BillingPlanPicker.tsx`, `FreeTrialCard.tsx`, and `EnterpriseModeCards.tsx`/`ManagedEnterpriseCalculator.tsx`

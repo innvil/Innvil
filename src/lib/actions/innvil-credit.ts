@@ -8,8 +8,14 @@
  */
 
 import { getAuthedAdmin } from "@/src/lib/auth";
-import { getInnvilCreditBalance, listInnvilCreditActivity, purchaseWatchWithCredit } from "@/src/lib/products/innvil-credit";
-import type { InnvilCreditBalance, CreditActivityItem, PurchaseWithCreditResult } from "@/src/lib/products/innvil-credit";
+import {
+  getInnvilCreditBalance, listInnvilCreditActivity, purchaseWatchWithCredit,
+  purchaseCommunityExpansionWithCredit, scheduleCommunityExpansionRemoval,
+} from "@/src/lib/products/innvil-credit";
+import type {
+  InnvilCreditBalance, CreditActivityItem, PurchaseWithCreditResult,
+  CommunityExpansionPurchaseResult, ScheduleRemovalResult,
+} from "@/src/lib/products/innvil-credit";
 import type { WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 
@@ -32,4 +38,16 @@ export async function purchaseWatchWithCreditAction(
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return purchaseWatchWithCredit(admin, user.id, planName, billingInterval);
+}
+
+export async function purchaseCommunityExpansionWithCreditAction(): Promise<CommunityExpansionPurchaseResult> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return purchaseCommunityExpansionWithCredit(admin, user.id);
+}
+
+export async function scheduleCommunityExpansionRemovalAction(): Promise<ScheduleRemovalResult> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return scheduleCommunityExpansionRemoval(admin, user.id);
 }
