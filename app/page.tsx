@@ -48,7 +48,12 @@ export default async function Home({
   // (host is presentation-only; Watch access is always resolved server-side).
   if (await isWatchHost()) {
     const access = await getWatchAccessState();
-    if (access.authenticated && access.entitled) {
+    // AUTHENTICATION != ENTITLEMENT -- any signed-in visitor gets the real
+    // dashboard shell (empty/onboarding states for a fresh, not-yet-entitled
+    // account, per getWatchAccessState's own doc comment), never the
+    // marketing landing just because they haven't started a trial/subscribed
+    // yet. Only a genuinely unauthenticated visitor sees WatchLanding.
+    if (access.authenticated) {
       return (
         <WatchDashboard
           projects={access.projects}

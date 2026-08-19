@@ -24,7 +24,7 @@ function fakeAdmin(seed: {
   products?: Row[]; product_entitlements?: Row[]; projects?: Row[];
   virtual_moderators?: Row[]; communities?: Row[]; moderator_deployments?: Row[];
   moderator_activity_log?: Row[]; watch_moderation_defaults?: Row[];
-  watch_trial_claims?: Row[];
+  watch_trial_claims?: Row[]; watch_subscription_addons?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     products: seed.products ?? [],
@@ -36,6 +36,7 @@ function fakeAdmin(seed: {
     moderator_activity_log: seed.moderator_activity_log ?? [],
     watch_moderation_defaults: seed.watch_moderation_defaults ?? [],
     watch_trial_claims: seed.watch_trial_claims ?? [],
+    watch_subscription_addons: seed.watch_subscription_addons ?? [],
     watch_telegram_links: [],
   };
   let idCounter = 0;
@@ -1217,4 +1218,144 @@ test("getAccountActivityTrend returns all-zero buckets (never throws) for an acc
   const trend = await getAccountActivityTrend(admin, "acct-1", { days: 7 });
   assert.equal(trend.length, 7);
   assert.ok(trend.every((p) => p.count === 0));
+});
+
+/* ------------------------------------------------ community expansion ---- */
+// getAccountCapacity/createAccountCommunity both resolve effective Community
+// capacity through the SAME requireAccountWatchContext -- these tests prove
+// the add-on actually changes what that resolver returns, never a second
+// capacity model.
+
+const GOLD_ENTITLEMENT = { id: "e-gold", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1" };
+const PLATINUM_ENTITLEMENT = { id: "e-plat", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-1" };
+const ACTIVE_EXPANSION = { id: "addon-1", account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false };
+
+test("REQUIRED (capacity 1): Gold without expansion uses the included cap (3)", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 3);
+  assert.equal(capacity?.communityExpansionActive, false);
+  assert.equal(capacity?.communityExpansionEligible, true);
+});
+
+test("REQUIRED (capacity 2): Gold WITH an active Community Expansion add-on uses the expanded max (5)", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], watch_subscription_addons: [ACTIVE_EXPANSION] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 5);
+  assert.equal(capacity?.communityExpansionActive, true);
+});
+
+test("REQUIRED (capacity 3): Platinum without expansion uses the included cap (5)", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [PLATINUM_ENTITLEMENT] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 5);
+  assert.equal(capacity?.communityExpansionActive, false);
+  assert.equal(capacity?.communityExpansionEligible, true);
+});
+
+test("REQUIRED (capacity 4): Platinum WITH an active Community Expansion add-on uses the expanded max (10)", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [PLATINUM_ENTITLEMENT], watch_subscription_addons: [ACTIVE_EXPANSION] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 10);
+  assert.equal(capacity?.communityExpansionActive, true);
+});
+
+test("REQUIRED (capacity 5): Community Expansion never changes Watcher slot capacity", async () => {
+  const withoutAddon = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT] }), "acct-1");
+  const withAddon = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], watch_subscription_addons: [ACTIVE_EXPANSION] }), "acct-1");
+  assert.equal(withoutAddon?.slotsTotal, 10, "Gold's real slot count, from moderator/plan.ts's CAPACITY table");
+  assert.equal(withAddon?.slotsTotal, 10, "must be byte-identical to the non-expanded case -- the add-on only ever touches Community capacity");
+});
+
+test("REQUIRED (capacity 6): duplicate/stray active-expansion rows cannot push capacity beyond the canonical max", async () => {
+  // The real DB has a partial unique index preventing two active rows for the
+  // same account -- this proves that even if that invariant were somehow
+  // violated, the resolver still reads a plain boolean (hasActiveCommunityExpansion),
+  // never "count of active rows", so capacity is structurally incapable of
+  // exceeding the single canonical maxWithAddons ceiling.
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [GOLD_ENTITLEMENT],
+    watch_subscription_addons: [ACTIVE_EXPANSION, { ...ACTIVE_EXPANSION, id: "addon-2" }],
+  });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 5, "still exactly Gold's expanded max -- never 7 or any multiple");
+});
+
+test("REQUIRED (capacity 7): Community creation respects the effective EXPANDED capacity, not just the included one", async () => {
+  const existing = Array.from({ length: 3 }, (_, i) => ({ id: `c${i}`, panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: `-${i}` }));
+  // Gold included=3 -- without expansion, a 4th Community must be rejected.
+  const withoutAddon = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], projects: [STANDALONE_PROJECT], communities: existing });
+  const rejected = await createAccountCommunity(withoutAddon, "acct-1", "proj-1", { platform: "telegram", chatId: "-999" });
+  assert.equal(rejected.ok, false);
+
+  // With expansion active (max=5), the SAME 4th Community must succeed.
+  const withAddon = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], projects: [STANDALONE_PROJECT], communities: existing, watch_subscription_addons: [ACTIVE_EXPANSION] });
+  const accepted = await createAccountCommunity(withAddon, "acct-1", "proj-1", { platform: "telegram", chatId: "-999" });
+  assert.equal(accepted.ok, true);
+
+  // A 6th Community (beyond the expanded max of 5) must still be rejected.
+  const atExpandedMax = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], projects: [STANDALONE_PROJECT],
+    communities: [...existing, { id: "c3", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-3" }, { id: "c4", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-4" }],
+    watch_subscription_addons: [ACTIVE_EXPANSION],
+  });
+  const rejectedAtMax = await createAccountCommunity(atExpandedMax, "acct-1", "proj-1", { platform: "telegram", chatId: "-1000" });
+  assert.equal(rejectedAtMax.ok, false, "the expanded max (5) is still a real ceiling, not unlimited");
+});
+
+test("Bronze/Silver never report Community-Expansion eligibility, and an active add-on row (if one somehow existed) never expands their capacity", async () => {
+  const bronze = { id: "e-bronze", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "basic:dep-1" };
+  const silver = { id: "e-silver", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1" };
+  for (const entitlement of [bronze, silver]) {
+    const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [entitlement], watch_subscription_addons: [ACTIVE_EXPANSION] });
+    const capacity = await getAccountCapacity(admin, "acct-1");
+    assert.equal(capacity?.communityExpansionEligible, false, `${entitlement.subscription_ref} must never be expansion-eligible`);
+    assert.equal(capacity?.communityExpansionActive, false, "a stray add-on row must never expand a Bronze/Silver account's capacity");
+  }
+});
+
+test("trial never reports Community-Expansion eligibility, even with a stray active add-on row", async () => {
+  const admin = fakeAdmin({ watch_trial_claims: [{ account_id: "acct-1", started_at: new Date().toISOString(), ends_at: new Date(Date.now() + 86_400_000).toISOString() }], watch_subscription_addons: [ACTIVE_EXPANSION] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.tier, "trial");
+  assert.equal(capacity?.communityExpansionEligible, false);
+  assert.equal(capacity?.communityExpansionActive, false);
+});
+
+/* ---------------------------------- fresh zero-Panel account -- shell fixture ---- */
+// REQUIRED (standalone-Watch-access fix): "Account A" from the report --
+// authenticated, zero Panels, zero Projects, zero Communities, zero
+// Watchers, zero deployments, zero trial, zero paid subscription. Every
+// read function getWatchAccessState()/the individual Watch page routes
+// call must return a safe, real empty/null result for this exact fixture --
+// never throw, never require a Panel to exist first.
+
+test("REQUIRED: the full Watch dashboard read set is zero-safe for a genuinely brand-new account -- no Panel, no entitlement, nothing", async () => {
+  const admin = fakeAdmin({});
+  const accountId = "fresh-acct";
+
+  const [watchers, communities, capacity, activity, actions7d, attention, stats, breakdown] = await Promise.all([
+    listAccountWatchers(admin, accountId),
+    listAccountCommunities(admin, accountId),
+    getAccountCapacity(admin, accountId),
+    listAccountActivity(admin, accountId),
+    countRecentModerationActions(admin, accountId),
+    listAccountAttentionItems(admin, accountId),
+    getCommunityOperationalStats(admin, accountId),
+    getAccountSlotBreakdown(admin, accountId),
+  ]);
+
+  assert.deepEqual(watchers, [], "no Watchers yet -- real empty list, not an error");
+  assert.deepEqual(communities, [], "no Communities yet");
+  assert.equal(capacity, null, "no entitlement -- real null, not a fabricated plan");
+  assert.deepEqual(activity, [], "no Activity yet");
+  assert.equal(actions7d, 0);
+  assert.deepEqual(attention, [], "nothing to flag for an account with zero resources");
+  assert.equal(stats.size, 0);
+  assert.deepEqual(breakdown.byWatcher, []);
+  assert.deepEqual(breakdown.byCommunity, []);
+
+  // No Panel record was ever required or touched to answer any of the above.
+  assert.equal((admin.__store.panels ?? []).length, 0);
 });

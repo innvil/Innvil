@@ -100,9 +100,18 @@ export function WatchDashboard({
   };
 
   return (
-    <WatchShell active="overview" capacity={capacity} attentionCount={attentionItems.length} primaryAction={{ label: "Create Watcher", onClick: () => openModal("watcher") }}>
+    <WatchShell
+      active="overview"
+      capacity={capacity}
+      attentionCount={attentionItems.length}
+      // Only offered once entitled -- creating a Watcher without an active
+      // trial/plan just produces an inline entitlement rejection, a
+      // pointless dead end for a fresh account (see OnboardingEmptyState,
+      // which routes those accounts to Plans instead).
+      primaryAction={capacity != null ? { label: "Create Watcher", onClick: () => openModal("watcher") } : undefined}
+    >
       {!hasAnyResource ? (
-        <OnboardingEmptyState onCreateProject={() => openModal("project")} />
+        <OnboardingEmptyState entitled={capacity != null} onCreateProject={() => openModal("project")} />
       ) : (
         <div className="space-y-8">
           <div>
@@ -328,15 +337,26 @@ export function WatchDashboard({
   );
 }
 
-function OnboardingEmptyState({ onCreateProject }: { onCreateProject: () => void }) {
-  const steps = ["Create a Project", "Connect a Community", "Create a Watcher", "Deploy it"];
+/** `entitled` = `capacity != null` (an active trial or paid tier). A brand-
+ *  new account has neither yet -- Project creation itself is gated on Watch
+ *  entitlement (`createStandaloneProject`), so pointing "Start setup" at
+ *  that modal for a not-yet-entitled account would just produce a confusing
+ *  inline rejection. Route to Plans first instead (Free Trial or a paid
+ *  plan), matching the real order of operations: Telegram/Plan -> Project ->
+ *  Community -> Watcher -> Deploy. */
+function OnboardingEmptyState({ entitled, onCreateProject }: { entitled: boolean; onCreateProject: () => void }) {
+  const steps = entitled
+    ? ["Create a Project", "Connect a Community", "Create a Watcher", "Deploy it"]
+    : ["Start the Free Trial or choose a plan", "Create a Project", "Connect a Community", "Create a Watcher", "Deploy it"];
   return (
     <div className="max-w-lg mx-auto text-center py-16">
       <div className="w-14 h-14 rounded-full w-teal-soft-bg border w-teal-border flex items-center justify-center mx-auto mb-5">
         <Bot size={24} className="w-teal" />
       </div>
-      <h1 className="w-display text-xl mb-2">Set up Innvil Watch</h1>
-      <p className="text-sm w-text-dim mb-6">Follow these steps to get your first Watcher live in a community.</p>
+      <h1 className="w-display text-xl mb-2">Welcome to Innvil Watch</h1>
+      <p className="text-sm w-text-dim mb-6">
+        {entitled ? "Follow these steps to get your first Watcher live in a community." : "You're signed in. Get Watch access, then follow these steps to get your first Watcher live in a community."}
+      </p>
       <ol className="text-left space-y-2.5 mb-7 max-w-xs mx-auto">
         {steps.map((s, i) => (
           <li key={s} className="flex items-center gap-3 text-sm w-text">
@@ -345,9 +365,15 @@ function OnboardingEmptyState({ onCreateProject }: { onCreateProject: () => void
           </li>
         ))}
       </ol>
-      <button onClick={onCreateProject} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
-        Start setup <ArrowRight size={14} />
-      </button>
+      {entitled ? (
+        <button onClick={onCreateProject} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Start setup <ArrowRight size={14} />
+        </button>
+      ) : (
+        <Link href="/plans" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          View plans / Start Free Trial <ArrowRight size={14} />
+        </Link>
+      )}
     </div>
   );
 }

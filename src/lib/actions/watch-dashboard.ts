@@ -41,16 +41,23 @@ const EMPTY_ACCESS: WatchAccessState = {
 };
 
 /** Resolves what the current visitor should see on the Watch domain:
- *  unauthenticated (show landing/pricing), authenticated-but-not-entitled
- *  (show activation/purchase), or authenticated-and-entitled (show the
- *  Watch dashboard with their real Projects, Watchers, Communities,
- *  capacity, and recent activity — all real data, nothing fabricated). */
+ *  unauthenticated (show the marketing landing) vs. authenticated (show the
+ *  real Watch dashboard shell, regardless of entitlement).
+ *
+ *  AUTHENTICATION != ENTITLEMENT. `entitled` is still resolved and returned
+ *  (WatchDashboard/WatchShell use it to decide what to show, e.g. which
+ *  onboarding step comes first), but it is no longer a gate on whether the
+ *  dashboard itself renders — a brand-new account with zero Panels, zero
+ *  Projects, and no trial/subscription yet must still land inside the real
+ *  dashboard shell (real, empty Projects/Watchers/Communities/activity, and
+ *  `capacity: null`, which every consumer of this already renders as a
+ *  genuine empty/upsell state) rather than being bounced back to the
+ *  marketing landing on every visit. */
 export async function getWatchAccessState(): Promise<WatchAccessState> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return EMPTY_ACCESS;
 
   const entitled = await hasProductAccess(admin, user.id, WATCH_PRODUCT_SLUG);
-  if (!entitled) return { ...EMPTY_ACCESS, authenticated: true };
 
   const [projects, watchers, communities, capacity, activity, moderationActionsLast7Days, attentionItems, statsMap] = await Promise.all([
     listAccountProjects(admin, user.id),

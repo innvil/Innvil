@@ -272,3 +272,24 @@ test("listAccountProjects returns only this account's projects, standalone and P
   assert.equal(rows.find((r) => r.id === "proj-1")?.panelId, null);
   assert.equal(rows.find((r) => r.id === "proj-2")?.panelId, "panel-1");
 });
+
+/* ------------------------------------------- zero-Panel fresh account fixture ---- */
+// REQUIRED (standalone-Watch-access fix): a genuinely brand-new Innvil
+// account -- authenticated, zero Panels, zero Projects, zero trial, zero
+// paid subscription -- must resolve as "not entitled" (real, not a crash)
+// rather than being treated as unauthorized to even ask the question.
+// hasProductAccess/listAccountProjects are the two functions
+// getWatchAccessState() (src/lib/actions/watch-dashboard.ts) and every real
+// Watch page (via requireWatchPage()) call for this exact account shape.
+
+test("REQUIRED: a fresh zero-Panel, zero-entitlement account resolves hasProductAccess=false safely (never throws, never fabricates access)", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW] });
+  const entitled = await hasProductAccess(admin, "fresh-acct", WATCH_PRODUCT_SLUG);
+  assert.equal(entitled, false);
+});
+
+test("REQUIRED: listAccountProjects returns an empty array (not an error) for a fresh account with zero Projects", async () => {
+  const admin = fakeAdmin({});
+  const rows = await listAccountProjects(admin, "fresh-acct");
+  assert.deepEqual(rows, []);
+});
