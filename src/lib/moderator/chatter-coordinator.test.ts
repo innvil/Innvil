@@ -116,6 +116,48 @@ test("opener already handled by another moderator -> SILENCE (already_handled)",
   assert.deepEqual(result.reasons, ["already_handled"]);
 });
 
+test("REQUIRED (live bug repro): a directed @mention that ALSO reads as a greeting is answered even though the room was just handled", () => {
+  // Exact live repro: User A "hi Mr Pres" gets answered, then User B sends
+  // "hey @mrpreswan_bot" -- classifies as COMMUNITY_OPENER (contains "hey"),
+  // but is explicitly directed at this deployment via @mention. Must never
+  // be swallowed by the ambient already_handled suppression.
+  const result = single({ text: "hey @mrpreswan_bot", isDirectedAtBot: true, recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.equal(result.deploymentId, DEPLOYMENT_A);
+  assert.deepEqual(result.reasons, ["directed_opener"]);
+});
+
+test("a directed greeting-shaped message is answered even when a human (not a moderator) was the last recent responder", () => {
+  const result = single({ text: "hi again mrpres", isDirectedAtBot: true, recentlyRespondedByHuman: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.deepEqual(result.reasons, ["directed_opener"]);
+});
+
+test("an AMBIENT (non-directed) opener is still correctly suppressed by already_handled -- the fix is scoped to directed messages only", () => {
+  const result = single({ text: "gm everyone", isDirectedAtBot: false, recentlyAnsweredByModerator: true });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["already_handled"]);
+});
+
+test("a directed opener is still answered with no prior activity at all (not merely a bypass of already_handled)", () => {
+  const result = single({ text: "hey @mrpreswan_bot", isDirectedAtBot: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.deepEqual(result.reasons, ["directed_opener"]);
+});
+
+test("two DIFFERENT directed openers from two different moderators are both independently answered -- one candidate's directed status never blocks another's", () => {
+  const a = candidate(DEPLOYMENT_A, { isDirectedAtBot: true });
+  const b = candidate(DEPLOYMENT_B, { isDirectedAtBot: false });
+  const result = selectChatterAction({
+    text: "hey @mrpreswan_bot",
+    candidates: [a, b],
+    now: new Date(),
+    recentlyAnsweredByModerator: true,
+  });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.equal(result.deploymentId, DEPLOYMENT_A);
+});
+
 /* --------------------------------------------------------- trivial handling ---- */
 
 test('REQUIRED: unmentioned "lol" -> SILENCE (trivial_low_value), no text action', () => {

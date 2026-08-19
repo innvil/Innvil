@@ -805,6 +805,26 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   }
 
   if (kind === "COMMUNITY_OPENER") {
+    // A message that's ALSO explicitly directed at a specific candidate (an
+    // @mention, a reply, the bot's own configured name) must always be
+    // answerable, exactly like every other branch in this function (QUESTION,
+    // SUBSTANTIVE) already treats isDirectedAtBot as an override of ambient
+    // "already handled" state. Root-caused live bug: "hey @mrpreswan_bot"
+    // sent right after that same bot had just answered a DIFFERENT person's
+    // message classified as COMMUNITY_OPENER purely because it contains a
+    // greeting word ("hey") -- the already_handled suppression below exists
+    // for an AMBIENT, undirected greeting ("gm everyone" right after the room
+    // was just answered), never for a message a human explicitly aimed at one
+    // moderator by name/mention/reply. Checked BEFORE the ambient suppression
+    // so a directed re-address is never silently swallowed by "the room was
+    // already handled" -- this is a routing/selection fix, not an idempotency
+    // change: the underlying per-message claim (recordCommunityMessage) and
+    // per-update dedup (isDuplicateUpdate) are untouched and still guarantee
+    // each distinct Telegram message is only ever considered once.
+    const directed = eligible.find((c) => c.isDirectedAtBot);
+    if (directed) {
+      return { type: "CASUAL_CHAT", deploymentId: directed.deploymentId, reasons: ["directed_opener"] };
+    }
     if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman) {
       return { type: "SILENCE", reasons: ["already_handled"] };
     }

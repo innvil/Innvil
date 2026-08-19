@@ -127,6 +127,66 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Fixed: a directed @mention right after another user's greeting-shaped message went unanswered — a routing bug, not an idempotency bug (v1.47.17)
+- **Live reproducible bug**: in the same Community, User A sent "hi Mr Pres" (answered correctly); User B, a
+  different Telegram account, then sent "hey @mrpreswan_bot" — Mr Pres never responded.
+- **Full investigation performed first, per explicit instruction, before touching any code** — traced the
+  complete webhook -> routing -> Coordinator pipeline and inspected EVERY dedup/claim/handled mechanism in
+  `community-runtime.ts`: `isDuplicateUpdate` (keyed on `(integration_id, update_id)` — Telegram's own per-bot
+  update id, a DIFFERENT id for User A's and User B's messages, so this can't be the cause) and
+  `recordCommunityMessage` (the cross-bot claim-race, unique on `(community_id, platform_message_id)` — Telegram's
+  own per-chat message id, again distinct for the two messages, and correctly NOT keyed by sender/content/Watcher
+  at all). **Both of these are correctly scoped exact-event-duplication guards and were confirmed innocent** —
+  neither one is, or was, the bug.
+- **Actual root cause: a routing/classification bug in `selectChatterAction`'s `COMMUNITY_OPENER` branch**
+  (`chatter-coordinator.ts`). `classifyMessageKind` classifies any message containing a bare greeting word
+  (`gm`/`hi`/`hey`/`hello`/…, via `GREETING_RE`/`isConversationalOpener`) as `COMMUNITY_OPENER` whenever it isn't
+  ALSO a question/problem/acknowledgement — "hey @mrpreswan_bot" has no `?`, no problem word, no closing-ack
+  signal, so it classified as `COMMUNITY_OPENER` purely because of "hey". The `COMMUNITY_OPENER` branch then
+  checked ONLY `input.recentlyAnsweredByModerator`/`recentlyRespondedByHuman` — an AMBIENT "has the room already
+  been handled" signal, correct for a truly untargeted "gm everyone" right after the room was just answered —
+  and returned `SILENCE("already_handled")` **without ever checking `isDirectedAtBot`**, unlike every other
+  branch in this function (QUESTION, SUBSTANTIVE), which already treat an explicit @mention/reply/configured-name
+  match as an override of ambient continuity/suppression state. This is a genuine, narrow inconsistency in one
+  branch, not a systemic idempotency problem — confirms the user's own hypothesis that "isHandled" reasoning was
+  scoped too broadly, but the actual over-broad state lives in the Coordinator's ambient-opener suppression, not
+  in any DB-level dedup/claim table.
+- **Fix — narrowly scoped to the `COMMUNITY_OPENER` branch, nothing else touched.** A directed candidate
+  (`isDirectedAtBot`) is now checked FIRST inside that branch; when present, the message resolves to
+  `CASUAL_CHAT` with reason `directed_opener`, completely bypassing the ambient `already_handled` suppression —
+  matching the same directed-overrides-continuity precedent every other branch already follows. An undirected,
+  purely ambient opener ("gm everyone" with nobody @mentioned) is STILL correctly suppressed by
+  `already_handled` exactly as before — this fix changes nothing about ambient-opener behavior, only about a
+  message that is ALSO explicitly directed at a specific Watcher.
+- **Idempotency and single-enforcer protections are completely untouched and still fully intact** —
+  `isDuplicateUpdate`/`recordCommunityMessage` were not modified at all; a genuine retry of the exact same
+  Telegram update/message is still suppressed exactly as before. **No TTL, cache, or new state was added** — the
+  fix is a pure reordering of two already-existing checks inside one branch of a pure, synchronous function.
+  `resolveAmbientOpenerFallback` (the DeepSeek-assisted "waddup guys"-style fallback classifier) needed no
+  equivalent fix — it's only ever reached from the `low_social_priority` SILENCE case in the `SUBSTANTIVE`
+  branch, which already requires the message to be non-directed before it can reach that state at all, so a
+  directed message structurally never enters that fallback path.
+- **Final distinction, now explicit in code comments**: **event idempotency** (`isDuplicateUpdate`/
+  `recordCommunityMessage`) answers "has this exact Telegram update/message already been processed?" — scoped by
+  `(integration_id, update_id)` and `(community_id, platform_message_id)` respectively, never by sender/content/
+  Watcher, and untouched by this fix. **Coordinator claim/continuity** (`recentlyAnsweredByModerator`/
+  `recentlyRespondedByHuman`/`wasLastSpeaker`, gated by the existing 5-minute `RECENT_EXCHANGE_WINDOW_MS`) is a
+  SEPARATE, social-relevance concept — "does this ambient message still need a reply given what the room just
+  did?" — and is what this fix corrected the precedence of, never idempotency itself. There is no conversational
+  "cooldown"/rate-limit concept conflated into either of these; the pre-existing `ChatterPacingState`/
+  `deployment_state` pacing (`loadChatterPacing`/`recordBotSpoke`) is the genuine, already-separate rate-limit
+  mechanism, and a directed message already bypasses it (`bypassesPacing`) — confirmed unaffected by this change.
+- New tests (`chatter-coordinator.test.ts`, +5): the exact live-bug repro (a directed greeting-shaped @mention
+  answered even though `recentlyAnsweredByModerator: true`), the same for a human-responded-last variant, an
+  ambient (non-directed) opener still correctly suppressed by `already_handled` (proving the fix is scoped, not
+  a blanket removal of the suppression), a directed opener answered with zero prior activity at all, and two
+  different candidates' directed status never blocking each other. 1364 tests pass (up from 1359), `tsc --noEmit`
+  clean, production build clean.
+- **Not deployed automatically, per explicit instruction.** Live verification (User A -> reply, User B directed
+  @mention -> a SECOND independent reply, another distinct User A message -> still independently eligible) was
+  not performed this pass — no Preview deploy was requested/authorized as part of this fix; the regression tests
+  above directly reproduce and prove the exact reported failure mode and its fix at the pure-function level.
+
 ### 2026-08-19 — Real monthly AI-response usage tracking + enforcement (the ONE canonical Watch usage limit) (v1.47.16)
 - **Full investigation done first, per explicit instruction — reported before building anything.** Requested
   "usage limits" work (messages, provider requests, tokens, BYO controls) turned out to have almost no canonical
