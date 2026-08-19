@@ -8,7 +8,7 @@ import { getModerationDefaults } from "./watch-moderation-defaults";
 import { projectBelongsToAccount, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial, getWatchTrialState, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./watch-trial";
-import { periodHasExpired } from "./watch-billing-period";
+import { periodHasExpired, type WatchBillingInterval } from "./watch-billing-period";
 
 /**
  * Neutral ownership/creation layer for Communities, Watchers
@@ -87,6 +87,7 @@ export interface AccountPaidPlan {
   tier: ModeratorPlanTier;
   currentPeriodEnd: string | null;
   expired: boolean;
+  billingInterval: WatchBillingInterval;
 }
 
 /** The account's most-recently-held paid tier, REGARDLESS of whether its
@@ -101,7 +102,7 @@ export async function getAccountPaidPlan(admin: SupabaseClient, accountId: strin
   if (!product) return null;
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("subscription_ref, current_period_end")
+    .select("subscription_ref, current_period_end, billing_interval")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -109,7 +110,8 @@ export async function getAccountPaidPlan(admin: SupabaseClient, accountId: strin
   const tier = parseEntitlementTier((entitlement.subscription_ref as string | null) ?? null);
   if (!tier) return null;
   const currentPeriodEnd = (entitlement.current_period_end as string | null) ?? null;
-  return { tier, currentPeriodEnd, expired: periodHasExpired(currentPeriodEnd) };
+  const billingInterval: WatchBillingInterval = entitlement.billing_interval === "annual" ? "annual" : "monthly";
+  return { tier, currentPeriodEnd, expired: periodHasExpired(currentPeriodEnd), billingInterval };
 }
 
 /** Synthesizes a `panels.settings`-shaped value carrying JUST the Virtual
@@ -592,6 +594,8 @@ export interface AccountCapacity {
    *  paid row (see resolveAccountWatchTier's own doc comment) -- a genuine
    *  never-expiring state, not a missing value to paper over. */
   paidThrough: string | null;
+  /** Only meaningful for a paid tier -- "monthly" for trial/no-entitlement. */
+  billingInterval: WatchBillingInterval;
   watcherProfileCount: number;
   activeDeploymentCount: number;
   slotsTotal: number;
@@ -618,6 +622,7 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     tier: ctx.tier,
     trialEndsAt: trial?.endsAt ?? null,
     paidThrough: paidPlan?.currentPeriodEnd ?? null,
+    billingInterval: paidPlan?.billingInterval ?? "monthly",
     watcherProfileCount: watchers.length,
     activeDeploymentCount: communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length,
     slotsTotal: ctx.maxActiveSlots,

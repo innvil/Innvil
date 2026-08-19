@@ -5,8 +5,10 @@ import { ExternalLink, Loader2, CheckCircle2, XCircle, Coins } from "lucide-reac
 import { listAvailableDirectWatchGateways, createDirectWatchCheckout } from "@/src/lib/products/watch-checkout";
 import { createWatchBinanceDeposit, claimWatchBinancePayment, type WatchBinanceDepositInfo } from "@/src/lib/products/watch-binance";
 import { watchPlanOptions, watchTierFromDisplayName, type WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
-import { creditPriceUsd, creditSavingsUsd } from "@/src/lib/products/innvil-credit-pricing";
+import { creditPriceUsd, creditSavingsUsd, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
 import { getInnvilCreditBalanceAction, purchaseWatchWithCreditAction } from "@/src/lib/actions/innvil-credit";
+import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
+import { AddCreditCard } from "./AddCreditCard";
 
 const GATEWAY_LABELS: Record<string, string> = {
   cryptomus: "Cryptomus",
@@ -24,7 +26,8 @@ type Plan = Exclude<WatchPlanDisplayName, "Enterprise">;
  * confirms server-side; Binance Pay activates only once
  * `claimWatchBinancePayment` gets a real match back).
  */
-export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => void }) {
+export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { plan: Plan; onClose: () => void; billingInterval?: WatchBillingInterval }) {
+  const isAnnual = billingInterval === "annual";
   const [gateways, setGateways] = useState<string[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -39,29 +42,36 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
   // `method === "crypto"` branch) vs. Innvil Credit (a real, atomic,
   // account-owned prepaid balance -- never a mixed/partial payment; see
   // innvil-credit.ts). Regular price never changes; the credit price is a
-  // payment-METHOD benefit computed on top of it.
-  const [method, setMethod] = useState<"choose" | "crypto" | "credit">("choose");
+  // payment-METHOD benefit computed on top of it. Annual is Innvil-Credit-
+  // ONLY (server-enforced too, see innvil-credit.ts/watch-checkout.ts's own
+  // doc comments) -- it skips the "choose" screen entirely and never shows
+  // a crypto option, rather than merely hiding a button that could still
+  // be reached.
+  const [method, setMethod] = useState<"choose" | "crypto" | "credit">(isAnnual ? "credit" : "choose");
   const [creditBalanceCents, setCreditBalanceCents] = useState<number | null>(null);
   const [creditBusy, setCreditBusy] = useState(false);
   const [creditError, setCreditError] = useState<string | null>(null);
   const [creditConfirmed, setCreditConfirmed] = useState<{ paidThrough: string | null } | null>(null);
+  const [addCreditOpen, setAddCreditOpen] = useState(false);
 
   const tier = watchTierFromDisplayName(plan);
   const option = watchPlanOptions().find((o) => o.tier === tier);
   const regularPrice = option?.price ?? 0;
-  const creditPrice = creditPriceUsd(regularPrice, tier);
-  const savings = creditSavingsUsd(regularPrice, tier);
+  const creditPrice = isAnnual ? annualCreditPriceUsd(regularPrice) : creditPriceUsd(regularPrice, tier);
+  const savings = isAnnual ? annualSavingsUsd(regularPrice) : creditSavingsUsd(regularPrice, tier);
+  const equivalentMonthly = isAnnual ? annualEquivalentMonthlyUsd(regularPrice) : null;
   const hasEnoughCredit = creditBalanceCents != null && creditBalanceCents >= Math.round(creditPrice * 100);
 
   useEffect(() => {
-    listAvailableDirectWatchGateways().then(setGateways).catch(() => setGateways([]));
+    if (!isAnnual) listAvailableDirectWatchGateways().then(setGateways).catch(() => setGateways([]));
     getInnvilCreditBalanceAction().then((b) => setCreditBalanceCents(b.balanceCents)).catch(() => setCreditBalanceCents(0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const payWithCredit = async () => {
     setCreditBusy(true);
     setCreditError(null);
-    const res = await purchaseWatchWithCreditAction(plan);
+    const res = await purchaseWatchWithCreditAction(plan, billingInterval);
     setCreditBusy(false);
     if (!res.ok) { setCreditError(res.error); return; }
     setCreditBalanceCents(res.balanceCents);
@@ -100,11 +110,11 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
       <div className="w-surface border w-line rounded-2xl p-6 max-w-md w-full">
         <div className="flex items-center justify-between mb-4">
-          <p className="w-display text-lg">Subscribe to {plan}</p>
+          <p className="w-display text-lg">{isAnnual ? `${plan} — Annual` : `Subscribe to ${plan}`}</p>
           <button onClick={onClose} className="text-sm w-text-dim hover:w-text">Close</button>
         </div>
 
-        {method === "choose" && (
+        {method === "choose" && !isAnnual && (
           <div className="space-y-2">
             <p className="text-xs w-text-faint mb-2">Payment method</p>
             <button
@@ -132,26 +142,36 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
 
         {method === "credit" && !creditConfirmed && (
           <div className="space-y-3">
+            {isAnnual && (
+              <p className="text-xs w-text-faint">
+                Pay one year upfront with Innvil Credit and save 10%. Annual billing is Innvil Credit only — no direct crypto option.
+              </p>
+            )}
             <div className="w-surface-raised border w-line-soft rounded-lg p-3 text-sm">
-              <p className="w-text">Credit price: <strong>${creditPrice.toFixed(2)}</strong></p>
+              <p className="w-text">{isAnnual ? "Annual price" : "Credit price"}: <strong>${creditPrice.toFixed(2)}</strong>{isAnnual && <span className="text-xs w-text-faint font-normal"> /year</span>}</p>
+              {isAnnual && equivalentMonthly != null && <p className="text-xs w-text-faint mt-1">Equivalent to ${equivalentMonthly.toFixed(2)}/month, paid upfront — you're charged the full annual amount now, not in installments.</p>}
+              {savings > 0 && <p className="text-xs w-teal mt-1">Save ${savings.toFixed(2)}{isAnnual ? "/year vs. paying monthly" : ""}</p>}
               <p className="text-xs w-text-faint mt-1">Available Innvil Credit: {creditBalanceCents == null ? "…" : `$${(creditBalanceCents / 100).toFixed(2)}`}</p>
             </div>
             {creditBalanceCents != null && !hasEnoughCredit && (
-              <p className="text-xs w-amber">
-                Not enough Innvil Credit. Need ${(Math.round(creditPrice * 100) / 100 - creditBalanceCents / 100).toFixed(2)} more, or pay directly with crypto instead.
-              </p>
+              <div className="flex items-center justify-between gap-2 text-xs w-amber">
+                <span>Not enough Innvil Credit. Need ${(Math.round(creditPrice * 100) / 100 - creditBalanceCents / 100).toFixed(2)} more.</span>
+                <button type="button" onClick={() => setAddCreditOpen(true)} className="w-teal hover:underline shrink-0">Add credit</button>
+              </div>
             )}
             {creditError && <p className="text-xs text-red-400">{creditError}</p>}
             <div className="flex gap-2">
-              <button onClick={() => setMethod("choose")} disabled={creditBusy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
-                Back
-              </button>
+              {!isAnnual && (
+                <button onClick={() => setMethod("choose")} disabled={creditBusy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
+                  Back
+                </button>
+              )}
               <button
                 onClick={payWithCredit}
                 disabled={creditBusy || !hasEnoughCredit}
                 className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60"
               >
-                {creditBusy ? "Paying…" : "Pay with Innvil Credit"}
+                {creditBusy ? "Paying…" : isAnnual ? "Pay annual with Innvil Credit" : "Pay with Innvil Credit"}
               </button>
             </div>
           </div>
@@ -263,6 +283,7 @@ export function WatchCheckout({ plan, onClose }: { plan: Plan; onClose: () => vo
           </div>
         )}
       </div>
+      {addCreditOpen && <AddCreditCard onClose={() => setAddCreditOpen(false)} />}
     </div>
   );
 }

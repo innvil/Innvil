@@ -5,7 +5,8 @@ import { activateWatchEntitlement } from "./ownership";
 import { getAccountPaidPlan } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { watchPlanOptions, watchTierFromDisplayName, type WatchPlanDisplayName } from "./watch-plans";
-import { creditPriceCents } from "./innvil-credit-pricing";
+import { creditPriceCents, annualCreditPriceCents, ANNUAL_ELIGIBLE_TIERS } from "./innvil-credit-pricing";
+import type { WatchBillingInterval } from "./watch-billing-period";
 
 /**
  * Innvil Credit — a reusable, account-owned (never Panel-owned), USD-
@@ -110,33 +111,44 @@ export type PurchaseWithCreditResult =
  * the SAME single function either way (mirrors createDirectWatchCheckout's
  * own "one shape, purpose derived at settlement time" design), since
  * activateWatchEntitlement already decides purchase-vs-renewal timing from
- * the account's current entitlement state. Debit-then-activate, with a
+ * the account's current entitlement state. Also the SAME function for
+ * monthly and annual billing intervals -- annual is not a second purchase
+ * path, just a different canonical price + a different period-extension
+ * length, both already parameterized. Debit-then-activate, with a
  * compensating reversal ledger entry if activation itself fails after a
  * successful debit -- true single-statement DB atomicity across the credit
  * ledger and product_entitlements isn't attempted here (they're two
  * separate tables mutated by two separate calls); this is a deliberate,
  * documented compensating-transaction choice, not full ACID atomicity.
  */
-export async function purchaseWatchWithCredit(admin: SupabaseClient, accountId: string, planName: Exclude<WatchPlanDisplayName, "Enterprise">): Promise<PurchaseWithCreditResult> {
+export async function purchaseWatchWithCredit(
+  admin: SupabaseClient,
+  accountId: string,
+  planName: Exclude<WatchPlanDisplayName, "Enterprise">,
+  billingInterval: WatchBillingInterval = "monthly"
+): Promise<PurchaseWithCreditResult> {
   const tier = watchTierFromDisplayName(planName);
   const option = watchPlanOptions().find((o) => o.tier === tier);
   if (!option) return { ok: false, error: "Unknown plan." };
+  if (billingInterval === "annual" && !ANNUAL_ELIGIBLE_TIERS.includes(tier)) {
+    return { ok: false, error: "Annual billing isn't available for this plan." };
+  }
 
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
   if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
 
   const existingPlan = await getAccountPaidPlan(admin, accountId);
   const type = existingPlan ? "subscription_renewal" : "subscription_purchase";
-  const priceCents = creditPriceCents(option.price, tier);
+  const priceCents = billingInterval === "annual" ? annualCreditPriceCents(option.price) : creditPriceCents(option.price, tier);
 
   const debit = await applyCreditChange(admin, accountId, -priceCents, type, {
     productId: product.id as string,
-    description: `${option.displayName} — ${type === "subscription_renewal" ? "renewal" : "subscription"}`,
+    description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}`.replace(/\s+/g, " ").trim(),
   });
   if (!debit.ok) return { ok: false, error: debit.error };
 
   try {
-    await activateWatchEntitlement(admin, accountId, tier, `credit:${debit.data.id}`);
+    await activateWatchEntitlement(admin, accountId, tier, `credit:${debit.data.id}`, billingInterval);
   } catch (e) {
     // Compensating reversal -- the debit already committed; refund it in
     // full rather than leave the customer charged with no active

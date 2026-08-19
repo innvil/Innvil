@@ -222,6 +222,33 @@ test("a renewal after the existing period already expired starts a fresh period 
   assert.ok(new Date(row?.current_period_start as string).getTime() >= before, "the new period must start from settlement time, never retroactively from the old expiry");
 });
 
+test("REQUIRED: activateWatchEntitlement persists billing_interval='annual' and forces renewal_mode='innvil_credit' when called with 'annual'", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-1", "annual");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.billing_interval, "annual");
+  assert.equal(row?.renewal_mode, "innvil_credit");
+});
+
+test("activateWatchEntitlement defaults to billing_interval='monthly' when the parameter is omitted -- every existing (crypto webhook) caller is unaffected", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.billing_interval, "monthly");
+});
+
+test("REQUIRED: an annual activation extends a still-active period by a full year, matching computeRenewedPeriod's canonical rule", async () => {
+  const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1", current_period_end: futureEnd, billing_interval: "monthly" }],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-1", "annual");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  const daysUntilNewEnd = (new Date(row?.current_period_end as string).getTime() - Date.now()) / (24 * 60 * 60 * 1000);
+  assert.ok(daysUntilNewEnd > 300, "an annual extension from a still-active period must add roughly a year, not a month");
+});
+
 test("a subsequent activation for the SAME account+product now grants hasProductAccess", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), false);

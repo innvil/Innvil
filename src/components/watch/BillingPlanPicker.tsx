@@ -3,9 +3,10 @@
 import React, { useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
+import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
-import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT } from "@/src/lib/products/innvil-credit-pricing";
+import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
 
 type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -23,24 +24,74 @@ type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
  *  allowance. Gold/Platinum show BOTH the included Community allowance and
  *  the plan's expansion ceiling -- Bronze/Silver are hard-capped
  *  (included === max), so the "Up to N" line is only shown where expansion
- *  is actually possible, never fabricated for a tier that can't expand. */
-export function BillingPlanPicker({ options, currentDisplayName }: { options: WatchPlanOption[]; currentDisplayName: string | null }) {
+ *  is actually possible, never fabricated for a tier that can't expand.
+ *
+ *  Monthly/Annual is a BILLING INTERVAL on the same plan identity, never a
+ *  second product ("Silver Annual") -- selecting Annual changes only the
+ *  price shown + what WatchCheckout charges for, never the plan grid
+ *  itself. Annual is Innvil-Credit-only (WatchCheckout enforces this by
+ *  never rendering a crypto option when billingInterval="annual"). */
+export function BillingPlanPicker({
+  options, currentDisplayName, currentBillingInterval = "monthly",
+}: {
+  options: WatchPlanOption[];
+  currentDisplayName: string | null;
+  currentBillingInterval?: WatchBillingInterval;
+}) {
+  const [billingInterval, setBillingInterval] = useState<WatchBillingInterval>("monthly");
   const [checkoutPlan, setCheckoutPlan] = useState<SelfServePlan | null>(null);
 
   return (
     <>
+      <div className="flex items-center gap-1 mb-4 w-surface-raised border w-line-soft rounded-lg p-1 w-fit">
+        <button
+          type="button"
+          onClick={() => setBillingInterval("monthly")}
+          aria-pressed={billingInterval === "monthly"}
+          className={`text-xs font-medium px-3 py-1.5 rounded-md ${billingInterval === "monthly" ? "w-teal-soft-bg w-teal" : "w-text-faint hover:w-text-dim"}`}
+        >
+          Monthly
+        </button>
+        <button
+          type="button"
+          onClick={() => setBillingInterval("annual")}
+          aria-pressed={billingInterval === "annual"}
+          className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 ${billingInterval === "annual" ? "w-teal-soft-bg w-teal" : "w-text-faint hover:w-text-dim"}`}
+        >
+          Annual <span className="w-pill w-green-soft-bg w-green text-[10px]">Save 10%</span>
+        </button>
+      </div>
+      {billingInterval === "annual" && (
+        <p className="text-xs w-text-faint mb-4">
+          Pay one year upfront with Innvil Credit and save 10% vs. paying monthly. Annual billing is Innvil Credit only.
+        </p>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {options.map((o) => {
-          const isCurrent = o.displayName === currentDisplayName;
+          const isCurrentPlan = o.displayName === currentDisplayName;
+          const isCurrent = isCurrentPlan && billingInterval === currentBillingInterval;
           const expandable = o.communitiesMax > o.communitiesIncluded;
           return (
             <div key={o.tier} className={`w-card p-4 flex flex-col ${isCurrent ? "border w-teal-border" : ""}`}>
               <p className="w-display text-sm mb-1">{o.displayName}</p>
-              <p className="w-display text-xl w-teal mb-0.5">${o.price.toFixed(2)}<span className="text-xs w-text-faint font-normal">/mo</span></p>
-              {INNVIL_CREDIT_DISCOUNT[o.tier] > 0 && (
-                <p className="text-[11px] w-text-faint mb-3">${creditPriceUsd(o.price, o.tier).toFixed(2)} with Innvil Credit</p>
+              {billingInterval === "monthly" ? (
+                <>
+                  <p className="w-display text-xl w-teal mb-0.5">${o.price.toFixed(2)}<span className="text-xs w-text-faint font-normal">/mo</span></p>
+                  {INNVIL_CREDIT_DISCOUNT[o.tier] > 0 ? (
+                    <p className="text-[11px] w-text-faint mb-3">${creditPriceUsd(o.price, o.tier).toFixed(2)} with Innvil Credit</p>
+                  ) : (
+                    <p className="mb-3" />
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="w-display text-xl w-teal mb-0.5">${annualCreditPriceUsd(o.price).toFixed(2)}<span className="text-xs w-text-faint font-normal">/year</span></p>
+                  <p className="text-[11px] w-text-faint">Equivalent to ${annualEquivalentMonthlyUsd(o.price).toFixed(2)}/month</p>
+                  <p className="text-[11px] w-teal mb-1">Save ${annualSavingsUsd(o.price).toFixed(2)}/year</p>
+                  <p className="text-[10px] w-text-faint mb-3">Innvil Credit only</p>
+                </>
               )}
-              {INNVIL_CREDIT_DISCOUNT[o.tier] === 0 && <p className="mb-3" />}
               <div className="space-y-1.5 mb-4 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="w-text-dim flex items-center gap-1">Watcher slots <SlotInfoPopover /></span>
@@ -61,7 +112,7 @@ export function BillingPlanPicker({ options, currentDisplayName }: { options: Wa
                 <span className="mt-auto text-xs w-teal flex items-center gap-1"><CheckCircle2 size={13} /> Current plan</span>
               ) : (
                 <button onClick={() => setCheckoutPlan(o.displayName as SelfServePlan)} className="mt-auto w-btn-primary text-xs font-semibold py-2 rounded-lg">
-                  {currentDisplayName ? "Switch to this plan" : "Subscribe"}
+                  {billingInterval === "annual" ? "Choose annual" : currentDisplayName ? "Switch to this plan" : "Subscribe"}
                 </button>
               )}
             </div>
@@ -69,7 +120,7 @@ export function BillingPlanPicker({ options, currentDisplayName }: { options: Wa
         })}
       </div>
 
-      {checkoutPlan && <WatchCheckout plan={checkoutPlan} onClose={() => setCheckoutPlan(null)} />}
+      {checkoutPlan && <WatchCheckout plan={checkoutPlan} billingInterval={billingInterval} onClose={() => setCheckoutPlan(null)} />}
     </>
   );
 }

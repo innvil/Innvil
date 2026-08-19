@@ -127,6 +127,98 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Annual billing (Innvil Credit only) — a billing interval on the existing plan, not a new plan (v1.46.0)
+- **Extends the existing Plans/Billing/Innvil Credit architecture — no new plan/product ids.** Investigated
+  first: confirmed no billing-interval concept existed anywhere (`product_entitlements` had no such column) and
+  reused every piece of the v1.44.0 subscription-period architecture rather than building parallel annual code.
+  `plan_id`/tier stays exactly `basic`/`standard`/`premium`/`pro` — annual is stored as a `billing_interval`
+  column on the SAME entitlement row, never `silver_annual`.
+- **Migration `0082_watch_billing_interval.sql`** — `product_entitlements.billing_interval` (`'monthly'|'annual'`,
+  default `'monthly'`). Every existing paid row was created exclusively through the monthly-only crypto/credit
+  paths, so `'monthly'` is the deterministically correct default for 100% of existing customers — no guessing.
+- **One canonical period rule, extended not duplicated.** `watch-billing-period.ts` gained `addOneYearClamped`
+  (mirrors `addOneMonthClamped`'s Postgres-matching day-clamping, e.g. Feb 29 → Feb 28 the next non-leap year)
+  and `computeRenewedPeriod(existingEnd, now, interval)` now takes the interval as its extension-length
+  parameter — the anchor-selection logic (extend from existing end if still valid, else fresh from now) is
+  completely unchanged and applies identically to monthly, annual, AND an interval switch mid-cycle. This is
+  what makes monthly↔annual switching safe with **zero invented proration**: paying annual while a monthly
+  period is still active extends from that period's own end by a year; paying monthly while an annual period
+  is still active extends from the annual end by a month — no paid time is ever lost, and no special-case code
+  was needed for either direction (confirmed via 2 dedicated regression tests). `billing_interval` is stored as
+  whatever the LATEST successful payment specified, taking effect immediately (it only affects renewal
+  price/behavior, never capacity, so there's nothing to "schedule for later").
+- **Annual pricing — one centralized helper, verified against every spec worked example exactly.** New
+  `ANNUAL_CREDIT_DISCOUNT_BPS = 1000` (10%, basis points) + `ANNUAL_ELIGIBLE_TIERS` (all 4 self-serve tiers,
+  including Bronze — its monthly credit discount is 0% but annual still applies, an intentional, independent
+  commercial rule) in `innvil-credit-pricing.ts`. `annualCreditPriceCents/Usd` computes 10% off **12× the
+  REGULAR monthly price** (never the already-discounted monthly-credit price — a dedicated test proves these
+  would diverge if ever confused), deterministically rounded: Bronze $539.89, Silver $1,403.89, Gold $2,375.89,
+  Platinum $4,103.89 — every one matches the request's own worked examples byte-for-byte.
+  `annualEquivalentMonthlyUsd`/`annualSavingsUsd` are display-only, computed from the same canonical price
+  (savings vs. 12 ordinary monthly DIRECT payments, per explicit instruction, not vs. the discounted monthly
+  credit price).
+- **Purchase/renewal — the SAME function, not a second annual-only path.** `purchaseWatchWithCredit` gained a
+  `billingInterval` parameter (default `"monthly"`, every existing call site unaffected); for `"annual"` it
+  computes `annualCreditPriceCents` instead, debits atomically via the same `apply_innvil_credit_change` RPC,
+  and calls the same `activateWatchEntitlement(..., "annual")` — which forces `renewal_mode: "innvil_credit"`
+  on the row (annual is Innvil-Credit-only by product rule, enforced here so Billing never has to re-derive it).
+  Race-safety re-verified at the LARGER annual dollar amounts specifically (a dedicated test: two concurrent
+  $1,403.89 annual attempts against a $1,500 balance — exactly one succeeds, balance never negative); a
+  duplicate/second successful annual payment extends by exactly one more year, never two (verified by asserting
+  the actual delta between consecutive `paidThrough` dates).
+- **Annual direct crypto is structurally impossible, not merely hidden.** `createDirectWatchCheckout` has no
+  interval parameter at all and never had one — there is no code path through which "annual" could reach it,
+  so this isn't a runtime branch that could be forgotten; confirmed via a targeted grep (zero interval
+  references in `watch-checkout.ts`).
+- **UI**: `/plans`' `BillingPlanPicker` gained a Monthly/Annual toggle (a local view-state, not per-card) — 
+  Annual shows the real annual price, "Equivalent to $X/month" (display-only, upfront charge stated
+  explicitly), real savings, and "Innvil Credit only"; the "Current plan" badge now also checks the account's
+  actual `currentBillingInterval` (so switching intervals for the SAME plan still shows a real action button,
+  not a false "current plan" state). `WatchCheckout` gained a `billingInterval` prop — when `"annual"` it skips
+  the payment-method-choice screen entirely and never renders a crypto option (never merely hides a button
+  reachable another way), shows the annual-specific copy/pricing, and an "Add credit" shortcut appears directly
+  in the insufficient-credit message (works for both monthly-credit and annual). `RenewWatchButton` now takes
+  the account's own current `billingInterval` (never a client guess) so a renewal never silently switches a
+  customer's interval. Billing's "Current subscription" card shows a Monthly/Annual pill, the correct
+  price/period label ("Paid through" for annual vs. "Current period ends" for monthly), and honest renewal
+  copy ("Renewal: Innvil Credit only... does not currently auto-charge").
+- **Enterprise fully untouched** — `ANNUAL_ELIGIBLE_TIERS` is typed as `ModeratorPlanTier[]`, and Enterprise
+  isn't a `ModeratorPlanTier` value at all (confirmed unchanged from prior passes), so it structurally cannot
+  reach the annual pricing helper; `EnterpriseModeCards`/the Managed/BYO calculator were not touched in this diff.
+- **Trial unchanged** — Free Trial has no annual concept (still $0, still one-time, still Telegram-anchored);
+  `purchaseWatchWithCredit(..., "annual")` never reads or writes trial state, and a trial customer upgrading
+  straight to annual goes through the exact same durable-consumption path as any other upgrade (unaffected by
+  this pass).
+- **Auto-renew-from-credit remains deferred for annual too** — no scheduler exists (same finding as v1.44.0);
+  manual "Renew with Innvil Credit" is fully real for both monthly and annual today.
+- New/extended tests: `innvil-credit-pricing.test.ts` (+13 — every one of the 4 tier worked examples exactly,
+  the discount-never-stacks proof, deterministic rounding, equivalent-monthly, savings-vs-12x-regular-price,
+  Bronze's independent annual discount despite its 0% monthly discount), `watch-billing-period.test.ts` (+7 —
+  `addOneYearClamped`'s worked example + leap-year clamp, initial/early/late annual renewal timing, AND both
+  interval-switch-mid-cycle regression tests), `innvil-credit.test.ts` (+8 — annual purchase debits the exact
+  price and persists `billing_interval`/`renewal_mode`, real one-year period creation, insufficient-credit
+  no-op, zero-Panel confirmation, the large-amount concurrency race test, exactly-one-year renewal extension,
+  trial-independence), `ownership.test.ts` (+3 — `activateWatchEntitlement`'s interval persistence, the
+  monthly-default backward-compatibility guarantee, annual extension from a still-active period),
+  `watch-runtime.test.ts` (+2 — `getAccountPaidPlan`/`getAccountCapacity` both surface `billingInterval`, legacy
+  rows with no interval column default to monthly). 1213 tests pass (up from 1183), `tsc --noEmit` clean,
+  production build clean (`/plans` and `/billing` both present, unchanged route count elsewhere).
+- **Code-review sweep**: zero hardcoded annual dollar amounts outside test files; zero duplicated 10%/0.9
+  discount math outside the one canonical helper; zero interval-awareness in `createDirectWatchCheckout`
+  (structural rejection, not a runtime check); zero `panel_id`/`panelId` in the new annual files; `git status`
+  shows every changed file directly in scope.
+- **Not verified live via click-through this pass** — same limitation as the two immediately prior passes (no
+  authenticated session in the available preview tab); covered by typecheck + full test suite + production
+  build + code review.
+- **Deliberately not built this pass** (documented, not silently skipped): annual direct crypto (rejected by
+  design, per explicit instruction); mixed credit+crypto payment for annual (no mixed payment exists anywhere in
+  this system); proration on any interval switch (the existing extend-from-period-end rule already prevents lost
+  paid time without needing one); an Enterprise annual commercial term (explicitly out of scope); automatic
+  scheduled renewal from credit for annual subscriptions (same missing-scheduler gap as monthly, unchanged).
+- **Next safe step**: build the actual billing scheduler needed to safely turn on automatic renewal from Innvil
+  Credit for BOTH monthly and annual subscriptions — this is now the single highest-leverage remaining gap
+  blocking a fully "set and forget" subscription experience.
+
 ### 2026-08-19 — Watch link-preview branding fix + account-wide Innvil Credit header indicator (v1.45.0)
 - **Two combined pieces this pass.**
 - **(1) Root cause of the "watch.innvil.cloud previews as generic SMM Panel" bug — found and fixed at the

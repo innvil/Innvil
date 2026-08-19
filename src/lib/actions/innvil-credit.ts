@@ -11,6 +11,7 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { getInnvilCreditBalance, listInnvilCreditActivity, purchaseWatchWithCredit } from "@/src/lib/products/innvil-credit";
 import type { InnvilCreditBalance, CreditActivityItem, PurchaseWithCreditResult } from "@/src/lib/products/innvil-credit";
 import type { WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
+import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 
 export async function getInnvilCreditBalanceAction(): Promise<InnvilCreditBalance> {
   const { user, admin } = await getAuthedAdmin();
@@ -24,8 +25,11 @@ export async function listInnvilCreditActivityAction(): Promise<CreditActivityIt
   return listInnvilCreditActivity(admin, user.id);
 }
 
-export async function purchaseWatchWithCreditAction(planName: Exclude<WatchPlanDisplayName, "Enterprise">): Promise<PurchaseWithCreditResult> {
+export async function purchaseWatchWithCreditAction(
+  planName: Exclude<WatchPlanDisplayName, "Enterprise">,
+  billingInterval: WatchBillingInterval = "monthly"
+): Promise<PurchaseWithCreditResult> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
-  return purchaseWatchWithCredit(admin, user.id, planName);
+  return purchaseWatchWithCredit(admin, user.id, planName, billingInterval);
 }

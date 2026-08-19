@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasVirtualModerator } from "@/src/lib/moderator/plan";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial } from "./watch-trial";
-import { computeRenewedPeriod } from "./watch-billing-period";
+import { computeRenewedPeriod, type WatchBillingInterval } from "./watch-billing-period";
 
 /**
  * Neutral account-to-product ownership/entitlement resolution — the
@@ -78,8 +78,22 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
  *
  * Upserts on `(account_id, product_id)` — a renewal/plan-change simply
  * updates the existing row rather than creating a duplicate entitlement.
+ *
+ * `billingInterval` (default "monthly", preserving every existing caller's
+ * behavior unchanged) determines only the EXTENSION LENGTH added by
+ * `computeRenewedPeriod` -- switching interval mid-cycle needs no special
+ * casing: paying annual while a monthly period is still active simply
+ * extends from that period's own end by one year, and vice versa, so no
+ * paid time is ever lost or double-charged (see watch-billing-period.ts's
+ * own doc comment). `billing_interval` is stored as whatever the LATEST
+ * successful payment specified -- it takes effect immediately (accurately
+ * describing what governs the NEXT renewal), never scheduled for later,
+ * since it doesn't change plan capacity, only renewal price/behavior. An
+ * annual purchase always forces `renewal_mode: "innvil_credit"` (annual is
+ * Innvil-Credit-only by product rule, enforced by callers, but stored here
+ * too so Billing never has to re-derive it).
  */
-export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string): Promise<void> {
+export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string, billingInterval: WatchBillingInterval = "monthly"): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
 
@@ -90,7 +104,7 @@ export async function activateWatchEntitlement(admin: SupabaseClient, accountId:
     .eq("product_id", productId)
     .maybeSingle();
 
-  const period = computeRenewedPeriod((existing?.current_period_end as string | null) ?? null, new Date());
+  const period = computeRenewedPeriod((existing?.current_period_end as string | null) ?? null, new Date(), billingInterval);
 
   await admin.from("product_entitlements").upsert(
     {
@@ -101,6 +115,13 @@ export async function activateWatchEntitlement(admin: SupabaseClient, accountId:
       activated_at: new Date().toISOString(),
       current_period_start: period.start,
       current_period_end: period.end,
+      billing_interval: billingInterval,
+      // Annual is Innvil-Credit-only by product rule -- force it here so
+      // Billing never has to re-derive it. Monthly is deliberately left
+      // OUT of this object (not overwritten) since it can legitimately be
+      // paid by either crypto or credit and this field isn't yet surfaced
+      // anywhere that would need that distinction.
+      ...(billingInterval === "annual" ? { renewal_mode: "innvil_credit" } : {}),
     },
     { onConflict: "account_id,product_id" }
   );

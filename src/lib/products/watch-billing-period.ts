@@ -19,28 +19,56 @@ export function addOneMonthClamped(date: Date): Date {
   return new Date(Date.UTC(y, m + 1, clampedDay, date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds(), date.getUTCMilliseconds()));
 }
 
+/** Adds one calendar YEAR, clamped the same way as addOneMonthClamped (the
+ *  only real-world case this matters for is a Feb 29 anchor in a leap
+ *  year -> Feb 28 the following year, since it isn't one). Handles the
+ *  "Aug 19, 2026 -> Aug 19, 2027" annual worked example exactly, and every
+ *  ordinary calendar/leap-year boundary safely. */
+export function addOneYearClamped(date: Date): Date {
+  const y = date.getUTCFullYear();
+  const m = date.getUTCMonth();
+  const d = date.getUTCDate();
+  const isFeb29 = m === 1 && d === 29;
+  const targetIsLeap = (yr: number) => (yr % 4 === 0 && yr % 100 !== 0) || yr % 400 === 0;
+  const clampedDay = isFeb29 && !targetIsLeap(y + 1) ? 28 : d;
+  return new Date(Date.UTC(y + 1, m, clampedDay, date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds(), date.getUTCMilliseconds()));
+}
+
 export interface BillingPeriod {
   start: string;
   end: string;
 }
 
+export type WatchBillingInterval = "monthly" | "annual";
+
 /**
  * The ONE canonical period-extension rule, used identically by every
  * successful-payment path (initial purchase, on-time renewal, late
- * renewal, and plan change -- see the dated changelog entry for why plan
- * changes deliberately reuse this same rule rather than a second timing
- * model).
+ * renewal, plan change, AND a billing-interval switch mid-cycle -- see the
+ * dated changelog entry for why all of these deliberately reuse this same
+ * rule rather than a second timing model per case).
  *
  * - No existing period (first-ever payment): a fresh period starts NOW.
- * - Existing period still valid (paying early/on-time): extend from the
- *   existing END, never from the payment time -- an early renewal never
- *   shortens what the customer already paid for.
+ * - Existing period still valid (paying early/on-time, OR switching
+ *   interval while still-entitled): extend from the existing END, never
+ *   from the payment time -- an early renewal (or an interval switch)
+ *   never shortens what the customer already paid for. This is also what
+ *   makes monthly<->annual switching safe with zero proration: paying
+ *   monthly while an annual period is still active simply adds one month
+ *   AFTER the already-paid annual end; paying annual while a monthly
+ *   period is still active adds one year after the already-paid monthly
+ *   end -- no paid time is ever lost or double-charged.
  * - Existing period already expired (a late renewal): a fresh period
  *   starts NOW -- no retroactive backdating, no free grace days.
+ *
+ * `interval` determines only the EXTENSION LENGTH added on top of the
+ * resolved anchor -- the anchor-selection logic above is identical
+ * regardless of interval.
  */
-export function computeRenewedPeriod(existingPeriodEnd: string | null, now: Date): BillingPeriod {
+export function computeRenewedPeriod(existingPeriodEnd: string | null, now: Date, interval: WatchBillingInterval = "monthly"): BillingPeriod {
   const anchor = existingPeriodEnd && new Date(existingPeriodEnd).getTime() > now.getTime() ? new Date(existingPeriodEnd) : now;
-  return { start: now.toISOString(), end: addOneMonthClamped(anchor).toISOString() };
+  const end = interval === "annual" ? addOneYearClamped(anchor) : addOneMonthClamped(anchor);
+  return { start: now.toISOString(), end: end.toISOString() };
 }
 
 /** True when a period end exists AND has passed. A NULL period end is

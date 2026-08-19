@@ -205,3 +205,78 @@ test("REQUIRED: paid capacity remains canonical -- a Silver credit purchase reso
   const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
   assert.match(String(entitlement?.subscription_ref), /^standard:/);
 });
+
+/* ------------------------------------------------------- annual billing ---- */
+
+test("REQUIRED (test 1): sufficient credit buys an annual Silver subscription, debits the exact annual price once, and persists billing_interval='annual'", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 200000 }] });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.balanceCents, 200000 - 140389); // $1,403.89
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(entitlement?.billing_interval, "annual");
+  assert.equal(entitlement?.renewal_mode, "innvil_credit", "annual must force Innvil-Credit-only renewal");
+  assert.match(String(entitlement?.subscription_ref), /^standard:credit:/);
+});
+
+test("REQUIRED (test 3): the annual purchase creates a real one-year service period", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 200000 }] });
+  const before = new Date(Date.now() + 300 * 24 * 60 * 60 * 1000); // ~10 months out, definitely NOT one month
+  await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.ok(new Date(entitlement?.current_period_end as string).getTime() > before.getTime(), "the period must span a full year, not one month");
+});
+
+test("REQUIRED (tests 6-7): insufficient credit for an annual purchase debits nothing and activates nothing", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 50000 }] });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  assert.equal(result.ok, false);
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.equal(balance.balanceCents, 50000);
+  assert.equal(admin.__store.product_entitlements.length, 0);
+});
+
+test("REQUIRED (test 8): a zero-Panel account can buy annual -- no Panel table touched or required", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 200000 }] });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  assert.equal(result.ok, true);
+  assert.ok(!("panels" in admin.__store) || (admin.__store.panels ?? []).length === 0);
+});
+
+test("REQUIRED: race safety -- two concurrent annual purchase attempts against a balance that can fund only one succeed exactly once", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 150000 }] }); // enough for one $1,403.89 purchase, not two
+  const [a, b] = await Promise.all([
+    purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual"),
+    purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual"),
+  ]);
+  const succeeded = [a, b].filter((r) => r.ok);
+  assert.equal(succeeded.length, 1, "only one of the two concurrent annual purchases may succeed");
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.ok(balance.balanceCents >= 0, "balance must never go negative");
+});
+
+test("REQUIRED: an annual renewal extends the period by exactly one additional year, not two", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 500000 }] });
+  const first = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  const second = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  const firstEnd = new Date(first.paidThrough as string);
+  const secondEnd = new Date(second.paidThrough as string);
+  const yearsApart = Math.round((secondEnd.getTime() - firstEnd.getTime()) / (365 * 24 * 60 * 60 * 1000));
+  assert.equal(yearsApart, 1, "the second successful annual payment must extend by one more year, never two");
+});
+
+test("REQUIRED (trial -> annual): a trial customer can upgrade directly to an annual paid subscription", async () => {
+  const admin = fakeAdmin({
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 200000 }],
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
+  assert.equal(result.ok, true);
+  // This test's fake admin has no watch_trial_claims table -- trial-consumption
+  // durability itself is covered by watch-trial.test.ts; this proves the
+  // annual purchase path itself doesn't require or touch trial state.
+});

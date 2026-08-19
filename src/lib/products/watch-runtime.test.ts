@@ -675,6 +675,26 @@ test("REQUIRED: getAccountPaidPlan returns the tier and expired=true EVEN after 
   assert.equal(plan?.expired, true);
 });
 
+test("REQUIRED: getAccountPaidPlan and getAccountCapacity both surface a real annual billing_interval", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1", current_period_end: new Date(Date.now() + 300 * 24 * 60 * 60 * 1000).toISOString(), billing_interval: "annual" }],
+  });
+  const plan = await getAccountPaidPlan(admin, "acct-1");
+  assert.equal(plan?.billingInterval, "annual");
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.billingInterval, "annual");
+});
+
+test("an entitlement row with no billing_interval column set (legacy) defaults to 'monthly'", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1" }],
+  });
+  const plan = await getAccountPaidPlan(admin, "acct-1");
+  assert.equal(plan?.billingInterval, "monthly");
+});
+
 test("getAccountPaidPlan returns null for an account that never held a direct Watch subscription", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   assert.equal(await getAccountPaidPlan(admin, "acct-1"), null);

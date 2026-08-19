@@ -7,6 +7,7 @@ import { getWatchTrialState } from "@/src/lib/products/watch-trial";
 import { watchPlanOptions, watchAccessLabel, watchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import { listWatchPaymentHistory, listAvailableDirectWatchGateways, getPendingWatchPayment } from "@/src/lib/products/watch-checkout";
 import { getInnvilCreditBalance, listInnvilCreditActivity } from "@/src/lib/products/innvil-credit";
+import { annualCreditPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { RenewWatchButton } from "@/src/components/watch/RenewWatchButton";
@@ -64,35 +65,58 @@ export default async function BillingPage() {
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div>
                   <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier)}</p>
-                  {price != null && <p className="text-xs w-text-faint mt-0.5">${price.toFixed(2)}/mo</p>}
+                  <p className="text-xs w-text-faint mt-0.5">
+                    {capacity.billingInterval === "annual" ? (
+                      <>${annualCreditPriceUsd(options.find((o) => o.tier === capacity.tier)?.price ?? 0).toFixed(2)}/year</>
+                    ) : (
+                      price != null && <>${price.toFixed(2)}/mo</>
+                    )}
+                  </p>
                 </div>
-                <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
+                  <span className="w-pill w-surface-raised w-text-faint text-[11px] capitalize">{capacity.billingInterval}</span>
+                </div>
               </div>
               {capacity.paidThrough ? (
-                <p className="text-xs w-text-dim">Current period ends <span className="w-text font-medium">{formatDate(capacity.paidThrough)}</span></p>
+                <p className="text-xs w-text-dim">
+                  {capacity.billingInterval === "annual" ? "Paid through" : "Current period ends"}{" "}
+                  <span className="w-text font-medium">{formatDate(capacity.paidThrough)}</span>
+                </p>
               ) : (
                 <p className="text-xs w-text-faint">No tracked billing period on this subscription yet — it stays active until your next renewal or plan change.</p>
               )}
-              <p className="text-xs w-text-faint">Renewal: manual crypto payment, or Innvil Credit. Innvil Watch does not currently auto-charge a recurring payment.</p>
-              {pending ? (
+              <p className="text-xs w-text-faint">
+                {capacity.billingInterval === "annual"
+                  ? "Renewal: Innvil Credit only. Annual billing does not currently auto-charge — you'll renew manually when your period ends."
+                  : "Renewal: manual crypto payment, or Innvil Credit. Innvil Watch does not currently auto-charge a recurring payment."}
+              </p>
+              {pending && capacity.billingInterval !== "annual" ? (
                 <PendingPaymentNote pending={pending} />
               ) : (
-                <RenewWatchButton tier={capacity.tier} label="Pay renewal" />
+                <RenewWatchButton tier={capacity.tier} label="Pay renewal" billingInterval={capacity.billingInterval} />
               )}
             </div>
           ) : paidPlan && paidPlan.expired ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <p className="w-display text-lg w-text">{watchPlanDisplayName(paidPlan.tier)}</p>
-                <span className="w-pill w-surface-raised w-text-faint text-[11px]">Expired</span>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="w-pill w-surface-raised w-text-faint text-[11px]">Expired</span>
+                  <span className="w-pill w-surface-raised w-text-faint text-[11px] capitalize">{paidPlan.billingInterval}</span>
+                </div>
               </div>
               {paidPlan.currentPeriodEnd && <p className="text-xs w-text-dim">Paid through {formatDate(paidPlan.currentPeriodEnd)}</p>}
               <p className="text-sm w-text-dim">Your Watch setup is still saved.</p>
-              {pending ? (
+              {pending && paidPlan.billingInterval !== "annual" ? (
                 <PendingPaymentNote pending={pending} />
               ) : (
                 <div className="flex items-center gap-2">
-                  <RenewWatchButton tier={paidPlan.tier} label="Renew with crypto" />
+                  <RenewWatchButton
+                    tier={paidPlan.tier}
+                    label={paidPlan.billingInterval === "annual" ? "Renew with Innvil Credit" : "Renew with crypto"}
+                    billingInterval={paidPlan.billingInterval}
+                  />
                   <Link href="/plans" className="text-xs w-teal hover:underline">View plans</Link>
                 </div>
               )}

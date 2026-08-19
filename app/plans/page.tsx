@@ -73,7 +73,11 @@ export default async function PlansPage() {
 
         <div id="paid-plans" className="w-card p-5 scroll-mt-20">
           <SectionHeader icon={CreditCard} title="Bronze, Silver, Gold, Platinum" />
-          <BillingPlanPicker options={options} currentDisplayName={capacity?.tier !== "trial" ? currentDisplayName : null} />
+          <BillingPlanPicker
+            options={options}
+            currentDisplayName={capacity?.tier !== "trial" ? currentDisplayName : null}
+            currentBillingInterval={capacity && capacity.tier !== "trial" ? capacity.billingInterval : "monthly"}
+          />
         </div>
 
         <div className="w-card p-5">

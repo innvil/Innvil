@@ -49,6 +49,51 @@ export function creditSavingsUsd(regularPriceUsd: number, tier: ModeratorPlanTie
   return Math.round((toCents(regularPriceUsd) - creditPriceCents(regularPriceUsd, tier))) / 100;
 }
 
+/**
+ * Annual billing -- a BILLING INTERVAL on the existing plan identity, never
+ * a second product/plan id ("Silver Annual" etc.). Innvil-Credit-only:
+ * paid one year upfront, 10% off the normal 12-month canonical DIRECT
+ * price (never stacked with the separate monthly 5% credit discount --
+ * annual has its own dedicated pricing path entirely).
+ */
+export const ANNUAL_CREDIT_DISCOUNT_BPS = 1000; // 10%, basis points (avoids a bare float percentage)
+
+/** Every self-serve tier, including Bronze -- Bronze's monthly credit
+ *  discount is 0%, but annual still applies the 10% annual discount
+ *  (explicit, intentional per product decision: the two discounts are
+ *  independent commercial rules, not "annual = monthly discount + more"). */
+export const ANNUAL_ELIGIBLE_TIERS: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro"];
+
+function annualBaseCents(monthlyRegularPriceUsd: number): number {
+  return toCents(monthlyRegularPriceUsd) * 12;
+}
+
+/** The Innvil Credit price for a full year, in integer cents -- 10% off
+ *  12 × the canonical MONTHLY DIRECT price (never the already-discounted
+ *  monthly credit price, which would obscure the intended 10% figure).
+ *  Deterministically rounded the same way as creditPriceCents. */
+export function annualCreditPriceCents(monthlyRegularPriceUsd: number): number {
+  const base = annualBaseCents(monthlyRegularPriceUsd);
+  return Math.round((base * (10000 - ANNUAL_CREDIT_DISCOUNT_BPS)) / 10000);
+}
+
+export function annualCreditPriceUsd(monthlyRegularPriceUsd: number): number {
+  return annualCreditPriceCents(monthlyRegularPriceUsd) / 100;
+}
+
+/** Savings vs. 12 ordinary monthly DIRECT payments (never vs. the already-
+ *  discounted monthly credit price -- that would understate the real
+ *  annual benefit and obscure the 10% commercial model). */
+export function annualSavingsUsd(monthlyRegularPriceUsd: number): number {
+  return (annualBaseCents(monthlyRegularPriceUsd) - annualCreditPriceCents(monthlyRegularPriceUsd)) / 100;
+}
+
+/** Display-only "equivalent to $X/month" figure -- the customer is still
+ *  charged the full annual amount upfront; this never implies installments. */
+export function annualEquivalentMonthlyUsd(monthlyRegularPriceUsd: number): number {
+  return Math.round(annualCreditPriceCents(monthlyRegularPriceUsd) / 12) / 100;
+}
+
 /** Innvil Credit top-up bounds -- kept in this plain (non-`"use server"`)
  *  module so both the server-side checkout validator and the client-side
  *  amount input can import the SAME constants directly. A `"use server"`
