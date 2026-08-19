@@ -5,6 +5,7 @@ import { CheckCircle2 } from "lucide-react";
 import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
+import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT } from "@/src/lib/products/innvil-credit-pricing";
 
 type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -35,7 +36,11 @@ export function BillingPlanPicker({ options, currentDisplayName }: { options: Wa
           return (
             <div key={o.tier} className={`w-card p-4 flex flex-col ${isCurrent ? "border w-teal-border" : ""}`}>
               <p className="w-display text-sm mb-1">{o.displayName}</p>
-              <p className="w-display text-xl w-teal mb-3">${o.price.toFixed(2)}<span className="text-xs w-text-faint font-normal">/mo</span></p>
+              <p className="w-display text-xl w-teal mb-0.5">${o.price.toFixed(2)}<span className="text-xs w-text-faint font-normal">/mo</span></p>
+              {INNVIL_CREDIT_DISCOUNT[o.tier] > 0 && (
+                <p className="text-[11px] w-text-faint mb-3">${creditPriceUsd(o.price, o.tier).toFixed(2)} with Innvil Credit</p>
+              )}
+              {INNVIL_CREDIT_DISCOUNT[o.tier] === 0 && <p className="mb-3" />}
               <div className="space-y-1.5 mb-4 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="w-text-dim flex items-center gap-1">Watcher slots <SlotInfoPopover /></span>

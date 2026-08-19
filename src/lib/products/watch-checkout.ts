@@ -44,6 +44,66 @@ type Result<T> = { ok: true; data: T } | { ok: false; error: string };
  *  module imports it), so it's simply kept internal. */
 const WATCH_DIRECT_PAYMENT_GATEWAYS = ["cryptomus", "nowpayments"] as const;
 
+/** How long an unconfirmed pending checkout still blocks creating a new
+ *  one (matches typical crypto-invoice-provider expiry windows). This
+ *  codebase has no provider-side "invoice expired" webhook/callback for
+ *  any gateway today, so a genuinely-abandoned invoice would otherwise
+ *  block a customer from ever retrying -- past this window a NEW pending
+ *  checkout is allowed again even though the stale row is never deleted
+ *  (a duplicate CONFIRMED payment is still impossible either way, since
+ *  each deposit's own atomic pending->completed claim in
+ *  handlePlatformWebhook is what actually gates entitlement activation). */
+const PENDING_CHECKOUT_STALE_MINUTES = 60;
+
+/** Real pending crypto payment for this account's direct Watch subscription
+ *  (initial purchase or renewal -- both share the same `watch_subscription`
+ *  purpose, see the module doc's "one checkout shape either way" note),
+ *  or null. Billing surfaces this instead of letting the customer create a
+ *  second, duplicate pending invoice on every button click. */
+export interface PendingWatchPayment {
+  id: string;
+  gateway: string;
+  plan: string | null;
+  amount: number;
+  currency: string;
+  createdAt: string;
+}
+export async function getPendingWatchPayment(): Promise<PendingWatchPayment | null> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return null;
+  const staleBefore = new Date(Date.now() - PENDING_CHECKOUT_STALE_MINUTES * 60_000).toISOString();
+  const { data } = await admin
+    .from("platform_deposits")
+    .select("id, gateway, plan, paid_amount, currency, created_at")
+    .eq("owner_id", user.id)
+    .eq("purpose", "watch_subscription")
+    .eq("status", "pending")
+    .gte("created_at", staleBefore)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    id: data.id as string,
+    gateway: data.gateway as string,
+    plan: (data.plan as string | null) ?? null,
+    amount: Number(data.paid_amount ?? 0),
+    currency: (data.currency as string | null) ?? "USD",
+    createdAt: data.created_at as string,
+  };
+}
+
+/**
+ * Creates a checkout for the direct Watch product -- used for BOTH an
+ * initial purchase AND a renewal/plan-change. Deliberately the SAME
+ * function/shape either way: what a checkout charges for is identical from
+ * the payment-provider's point of view ("pay $X for plan Y via gateway
+ * Z"); what differs is only computed AFTER settlement, inside
+ * `activateWatchEntitlement` (which reads the account's CURRENT
+ * entitlement state at that moment to decide whether to extend an existing
+ * period or start a fresh one) -- so there's no separate "renewal purpose"
+ * to invent or keep in sync.
+ */
 export async function createDirectWatchCheckout(
   planName: Exclude<WatchPlanDisplayName, "Enterprise">,
   gateway: string
@@ -54,6 +114,9 @@ export async function createDirectWatchCheckout(
   if (!(WATCH_DIRECT_PAYMENT_GATEWAYS as readonly string[]).includes(gateway)) {
     return { ok: false, error: "That payment method isn't available for a direct Watch subscription." };
   }
+
+  const pending = await getPendingWatchPayment();
+  if (pending) return { ok: false, error: "You already have a pending payment for this subscription. Complete or wait for it to clear before starting another." };
 
   const tier = watchTierFromDisplayName(planName);
   const price = watchPlanOptions().find((o) => o.tier === tier)?.price;

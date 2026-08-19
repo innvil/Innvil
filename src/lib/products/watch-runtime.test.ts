@@ -6,6 +6,7 @@ import {
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   getAccountProjectDetail, getAccountCommunityDetail, getAccountWatcherDetail, listAccountAttentionItems,
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
+  getAccountPaidPlan,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 
@@ -636,6 +637,83 @@ test("a paused (disabled) deployment consumes zero slots -- matches the backend'
 test("getAccountCapacity returns null for an account with no active entitlement -- never a fabricated plan", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   assert.equal(await getAccountCapacity(admin, "acct-1"), null);
+});
+
+/* ------------------------------------------------ subscription period ---- */
+
+test("REQUIRED: a legacy paid row with NO current_period_end (pre-migration-0080) is treated as never-expiring -- the grandfather compatibility state", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1" }],
+  });
+  assert.equal(await resolveAccountWatchTier(admin, "acct-1"), "standard", "an existing paid customer must never be silently expired by this migration");
+});
+
+test("REQUIRED: a real, PAST current_period_end makes the tier resolve to null (expired)", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1", current_period_end: new Date(Date.now() - 60_000).toISOString() }],
+  });
+  assert.equal(await resolveAccountWatchTier(admin, "acct-1"), null);
+});
+
+test("a real, FUTURE current_period_end still resolves the tier normally", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1", current_period_end: new Date(Date.now() + 60_000).toISOString() }],
+  });
+  assert.equal(await resolveAccountWatchTier(admin, "acct-1"), "standard");
+});
+
+test("REQUIRED: getAccountPaidPlan returns the tier and expired=true EVEN after the period has ended (for the Renew button)", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() - 60_000).toISOString() }],
+  });
+  const plan = await getAccountPaidPlan(admin, "acct-1");
+  assert.equal(plan?.tier, "premium");
+  assert.equal(plan?.expired, true);
+});
+
+test("getAccountPaidPlan returns null for an account that never held a direct Watch subscription", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  assert.equal(await getAccountPaidPlan(admin, "acct-1"), null);
+});
+
+test("REQUIRED: expired paid subscriptions cannot create new paid-capacity resources (Watcher/Community/Deployment)", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() - 60_000).toISOString() }],
+    projects: [DASH_PROJECT],
+  });
+  const watcher = await createAccountWatcher(admin, "acct-1", "Should Fail");
+  assert.equal(watcher.ok, false, "an expired paid subscription must not be able to create new resources");
+});
+
+test("REQUIRED: expiry does not delete Projects/Communities/Watchers/deployments -- data is preserved", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() - 60_000).toISOString() }],
+    projects: [DASH_PROJECT],
+    virtual_moderators: [{ id: "m1", account_id: "acct-1", name: "Aegis" }],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "Chat" }],
+    moderator_deployments: [{ id: "d1", panel_id: null, moderator_id: "m1", community_id: "c1", enabled: true }],
+  });
+  const watchers = await listAccountWatchers(admin, "acct-1");
+  const communities = await listAccountCommunities(admin, "acct-1");
+  assert.equal(watchers.length, 1, "the Watcher record must still be visible after expiry");
+  assert.equal(communities.length, 1, "the Community record must still be visible after expiry");
+  assert.equal(communities[0].watchers.length, 1, "the deployment record must still be visible after expiry");
+});
+
+test("REQUIRED: renewal (a real future current_period_end) restores canonical paid capacity/access", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() }],
+    projects: [DASH_PROJECT],
+  });
+  const watcher = await createAccountWatcher(admin, "acct-1", "Renewed");
+  assert.equal(watcher.ok, true, "a renewed (future period end) subscription must be able to create resources again");
 });
 
 /* ---------------------------------------------------- trial integration ---- */

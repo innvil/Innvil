@@ -191,6 +191,37 @@ test("activateWatchEntitlement never writes anything if the Watch product row is
   assert.equal(admin.__store.product_entitlements.length, 0);
 });
 
+test("REQUIRED: an initial activation establishes a real current_period_start/current_period_end", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-1");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.ok(row?.current_period_start);
+  assert.ok(row?.current_period_end);
+});
+
+test("REQUIRED: a renewal before the existing period ends extends from the EXISTING end, not from now", async () => {
+  const futureEnd = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1", current_period_end: futureEnd }],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-2");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.notEqual(row?.current_period_end, futureEnd, "must be extended by one month from the existing end, not left unchanged");
+});
+
+test("a renewal after the existing period already expired starts a fresh period from now", async () => {
+  const pastEnd = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "standard:dep-1", current_period_end: pastEnd }],
+  });
+  const before = Date.now();
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-2");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.ok(new Date(row?.current_period_start as string).getTime() >= before, "the new period must start from settlement time, never retroactively from the old expiry");
+});
+
 test("a subsequent activation for the SAME account+product now grants hasProductAccess", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), false);

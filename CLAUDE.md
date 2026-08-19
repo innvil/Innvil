@@ -127,6 +127,127 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Real paid subscription periods + manual crypto renewals + Innvil Credit (v1.44.0)
+- **Two combined pieces, per explicit request: (A) real billing-period lifecycle for paid Watch subscriptions, and
+  (B) a new account-owned "Innvil Credit" prepaid ledger as a discounted second payment method.** Investigated
+  first: confirmed `product_entitlements` had zero period tracking at all (`status: 'active'` was permanent, no
+  expiry, no renewal concept) and confirmed there was NO existing account-level (non-Panel) balance/credit/ledger
+  system anywhere — `panels.settings.innvil_balance` is Panel-owned, `customer_accounts`/`balance_transactions`
+  is the PANEL CUSTOMER wallet (a different tenant boundary entirely) — so Innvil Credit is a genuine net-new
+  addition, not a variant of either.
+- **(A) Subscription periods — additive columns on `product_entitlements`, not a second table** (migration
+  `0080_watch_subscription_periods.sql`): `current_period_start`, `current_period_end`, `renewal_mode` (stored
+  for a future scheduler, not yet surfaced in the UI — see below). Kept as ONE row = one source of truth per
+  (account, product), so "subscription says expired but entitlement says active forever" can't happen by
+  construction. **Existing paid customers are never silently expired**: a `NULL current_period_end` (every row
+  created before this migration) is treated as never-expiring — the deliberate, documented grandfather
+  compatibility state; real period tracking begins on that account's NEXT successful payment.
+- **One canonical period-extension rule, reused everywhere.** New `src/lib/products/watch-billing-period.ts`
+  (pure) — `computeRenewedPeriod(existingPeriodEnd, now)`: no existing period → fresh period from now; existing
+  period still valid → extend from the existing END (an early renewal never shortens what was already paid for,
+  matches the spec's exact "Sep19→Oct19, not Sep15→Oct15" worked example); existing period expired → fresh
+  period from now (no retroactive backdating). Calendar-month billing (`addOneMonthClamped`, clamped to the
+  target month's last valid day like Postgres's own `date + interval '1 month'` — Jan 31 → Feb 28, never a JS
+  month-overflow into March). `ownership.ts`'s `activateWatchEntitlement` now calls this rule on EVERY successful
+  payment — initial purchase, on-time renewal, late renewal, AND plan change (a documented, deliberate "smallest
+  safe" choice: plan changes reuse the same period-extension timing rather than inventing a second one; no
+  proration exists anywhere in this codebase, so none was added here either).
+- **Expiry is a live timestamp comparison, no cron required** (mirrors the v1.43.0 trial's own pattern) —
+  `watch-runtime.ts`'s `resolveAccountWatchTier` now also checks `periodHasExpired(current_period_end)` before
+  resolving a tier; an expired paid subscription resolves to `null` exactly like no subscription at all, so
+  every existing entitlement-gated operation (create Watcher/Community, deploy, the live Telegram runtime via
+  `requireAccountWatchContext`) already stops correctly with ZERO new gates added anywhere — reused, not
+  duplicated. New `getAccountPaidPlan()` is the separate resolver Billing/renewal needs: the account's
+  most-recently-held tier REGARDLESS of expiry (so a "Renew" button still knows what plan to charge for after
+  the period has lapsed) — `resolveAccountWatchTier` deliberately stays entitlement-only. **Expiry never deletes
+  Projects/Communities/Watchers/deployments** — confirmed via a dedicated regression test; `listAccountWatchers`/
+  `listAccountCommunities` are unaffected by entitlement state, only creation/deployment functions are gated.
+- **Renewal checkout — same shape as initial purchase, not a second flow.** `watch-checkout.ts`'s
+  `createDirectWatchCheckout` is now used for BOTH initial purchase and renewal — a checkout is just "pay $X for
+  plan Y via gateway Z"; what it means (purchase vs. renewal vs. plan change) is derived entirely at settlement
+  time by `activateWatchEntitlement` reading the account's CURRENT state, so there's no separate renewal-purpose
+  taxonomy to invent or keep in sync. New `getPendingWatchPayment()` blocks a SECOND pending checkout while one
+  is still open (a 60-minute staleness window lets a customer retry if a provider invoice silently expired
+  without ever calling back — no expiry webhook exists for any gateway today, a pre-existing limitation, not
+  introduced here) — Billing surfaces the real pending payment instead of letting every button click create a
+  duplicate.
+- **(B) Innvil Credit — account-owned (never Panel-owned), USD-denominated prepaid service credit** (migration
+  `0081_innvil_credit.sql`): `innvil_credit_accounts` (cached balance, never negative) + `innvil_credit_
+  transactions` (immutable ledger, signed cents, `balance_after_cents` for audit) + `apply_innvil_credit_change`
+  (Postgres function, security definer, row-locks the account, rejects an overdraft, writes exactly one ledger
+  row per call — mirrors the existing `apply_balance_change`/`credit_panel_innvil_balance` pattern this codebase
+  already uses for its OTHER two balance systems, just scoped by `account_id` instead of `customer_id`/`panel_id`).
+  A duplicate `payment_ref` (a `platform_deposits.id`) hits a unique index and rolls back the WHOLE function call
+  atomically, so a duplicate top-up webhook is a clean no-op, never a double-credit. Funded through the SAME
+  `platform_deposits`/gateway system as direct Watch checkout, via a new THIRD `purpose` value
+  (`innvil_credit_topup`, its own shape-CHECK) — `handlePlatformWebhook` gained one more purpose branch,
+  otherwise completely unchanged. **Not a crypto custody wallet** — no coin/token quantity, no withdrawal, no
+  transfer, no exchange; the customer-facing term is always "Innvil Credit," never "wallet."
+- **Discount pricing — one canonical, deterministic, integer-cents calculation.** New
+  `innvil-credit-pricing.ts` — `INNVIL_CREDIT_DISCOUNT` keyed by the STABLE internal tier id (never a display-
+  name string comparison): Bronze 0%, Silver/Gold/Platinum 5%. `creditPriceCents`/`creditPriceUsd` round-half-up
+  on the discounted CENT value (never floating-point drift) — verified against every one of the spec's own
+  worked examples exactly: Silver $129.99→$123.49, Gold $219.99→$208.99, Platinum $379.99→$360.99. Enterprise is
+  structurally excluded (it isn't a `ModeratorPlanTier` value, so it can't compile into a call to this function)
+  — no special-case guard needed. The canonical plan price itself is never changed; the credit price is a
+  payment-method benefit computed on top of it.
+- **Purchase/renew with credit — one function for both, debit-then-activate with a compensating reversal.** New
+  `purchaseWatchWithCredit()` (`innvil-credit.ts`) atomically debits the discounted price via the RPC, then calls
+  the SAME `activateWatchEntitlement` the crypto path uses (so the period-extension rule is never duplicated
+  between the two payment methods); if activation itself fails after a successful debit, an equal-and-opposite
+  `adjustment` reversal is issued immediately. **Stated honestly, not oversold**: this is a documented
+  compensating-transaction choice, not single-statement Postgres ACID atomicity across the credit ledger and
+  `product_entitlements` (two separate tables mutated by two separate calls) — in practice unreconciled state is
+  prevented, but not by database-level atomicity alone.
+- **No mixed payment.** `WatchCheckout.tsx` now presents "Pay directly with crypto" vs. "Pay with Innvil Credit"
+  as two full-price, mutually exclusive options (never split/partial) — insufficient credit shows the exact
+  shortfall and points at "Add credit" or "Pay directly" instead, per explicit instruction to keep accounting
+  simple and auditable.
+- **Automatic renewal from Innvil Credit is explicitly deferred, not faked.** `renewal_mode` exists as a schema
+  column and every manual purchase/renewal path already works with credit, but NO scheduler/cron exists for
+  Watch subscription billing anywhere in this codebase (confirmed via a full migration-directory audit) — per
+  explicit instruction, the UI does not expose an "automatic renewal" toggle this pass, since claiming it without
+  a real execution mechanism would be dishonest. Manual "Renew with Innvil Credit" (via the same `WatchCheckout`
+  modal) is fully real and live today.
+- **Billing UX**: current subscription (plan, price, real "Current period ends…" / "Paid through…" date, honest
+  "does not currently auto-charge" language, Pay renewal button or pending-payment note); expired state (plan
+  name, "Paid through", "Your Watch setup is still saved", Renew + View plans); trial state (unchanged from
+  v1.43.0); Innvil Credit section (balance, Add credit, credit activity table, non-refundable/non-transferable
+  disclaimer); unchanged payment-history table. `/plans`' `BillingPlanPicker` gained a compact "$X.XX with Innvil
+  Credit" line per eligible tier (omitted for Bronze).
+- New tests: `watch-billing-period.test.ts` (+11 — the exact Aug19→Sep19 worked example, early-renewal extends
+  from period end not payment date, late-renewal starts fresh from settlement time never retroactively, calendar
+  clamping incl. leap year, the NULL-never-expires grandfather rule), `innvil-credit-pricing.test.ts` (+10 — every
+  discount tier incl. all three spec worked examples exactly, Bronze zero-discount, deterministic rounding),
+  `innvil-credit.test.ts` (+13 — zero-balance default, duplicate-webhook no-double-credit, negative-balance
+  rejection with no partial application, concurrent-debit double-spend prevention, cross-account isolation,
+  sufficient/insufficient-credit purchase incl. exact debited amount and zero side effects on failure, credit
+  renewal reusing the canonical period rule), plus extensions to `ownership.test.ts` (+3 — initial period
+  creation, early-renewal extension, late-renewal fresh-start) and `watch-runtime.test.ts` (+8 — legacy
+  grandfather NULL handling, past/future period-end resolution, `getAccountPaidPlan` surviving expiry, expired
+  subscriptions blocked from new resource creation, data preservation on expiry, renewal restoring access). 1170
+  tests pass (up from 1125), `tsc --noEmit` clean, production build clean (`/billing` and `/plans` both present,
+  confirmed unchanged route count elsewhere).
+- **Code-review sweep**: zero "auto-renew"/"automatically renews"/"recurring charge" claims anywhere; zero
+  "credit card" mentions; the one `panel_id: null` in the new credit-checkout file is the correct explicit
+  Panel-independence marker, not a coupling; every "wallet"/"withdraw"/"transfer" occurrence in the new files is
+  disclaimer copy stating those DON'T exist, never a mislabeled control; `git status` shows every changed file
+  directly in scope.
+- **Not verified live this pass via click-through** — the dev-server preview tab opened in a fresh, unauthenticated
+  browser context (no session cookie carried over from the prior pass's session); verification is typecheck +
+  full test suite + production build + code review, consistent with how this codebase treats the same tooling
+  gap when it recurs.
+- **Deliberately not built this pass** (documented, not silently skipped): an automatic credit-renewal
+  scheduler/cron (no execution mechanism exists yet — see above); Binance Pay for Innvil Credit top-ups (only
+  Cryptomus/NOWPayments this pass — Binance's claim-by-transaction-id flow is structurally separate per gateway
+  and wiring a third purpose through it was out of scope); mixed credit+crypto payment; proration on plan change;
+  a grace period beyond the exact period end; renewal-reminder emails (no timing was ever defined, and this pass
+  didn't invent one); refund/reversal self-service for a customer (only the internal compensating-reversal path
+  for a failed activation exists); admin manual credit adjustments beyond the ledger primitive itself.
+- **Remaining gaps before production monthly crypto billing is fully operational**: no provider-side invoice-
+  expiry webhook exists for any gateway (the 60-minute staleness window is a practical workaround, not a real
+  fix); no automated renewal reminder/notification; no scheduler for credit-based auto-renewal.
+
 ### 2026-08-19 — Plans/Billing split + a real, durable, one-time Free Trial (v1.43.0)
 - **Architecture correction, not a cosmetic split.** Plans (`/plans`, "what access can I have") and Billing
   (`/billing`, "how am I paying, and what's happened") were one page — `BillingPlanPicker` + Enterprise +

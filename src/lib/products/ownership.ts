@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasVirtualModerator } from "@/src/lib/moderator/plan";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial } from "./watch-trial";
+import { computeRenewedPeriod } from "./watch-billing-period";
 
 /**
  * Neutral account-to-product ownership/entitlement resolution — the
@@ -56,21 +57,51 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
 }
 
 /**
- * Activates (or extends) a direct Watch subscription for an account —
- * called ONLY from the authoritative, server-verified payment webhook path
- * (`src/lib/payments/platform.ts`), never from a client-side "payment
- * succeeded" redirect. Idempotent by construction: the caller
- * (`handlePlatformWebhook`) already claims the deposit via a single
+ * Activates (or extends/renews) a direct Watch subscription for an account
+ * — called ONLY from the authoritative, server-verified payment webhook
+ * path (`src/lib/payments/platform.ts`) or from a verified Innvil-Credit
+ * purchase (`innvil-credit.ts`'s `purchaseWatchWithCredit`), never from a
+ * client-side "payment succeeded" redirect. Idempotent by construction for
+ * the crypto path: the caller already claims the deposit via a single
  * `status='pending' -> 'completed'` conditional UPDATE before this runs, so
  * a duplicate/retried webhook can never call this twice for the same
- * payment. Upserts on `(account_id, product_id)` — a renewal simply
+ * payment.
+ *
+ * Establishes/extends the real billing period (migration 0080) via the ONE
+ * canonical rule in `watch-billing-period.ts` — used identically whether
+ * this is an initial purchase, an early or late renewal, or a plan change:
+ * a still-valid existing period extends from its own END (never from
+ * payment time); no existing period, or an already-expired one, starts a
+ * fresh period from NOW. Plan changes deliberately reuse this SAME rule
+ * (documented product decision, no proration/second timing model — see the
+ * dated changelog entry) rather than inventing separate plan-change timing.
+ *
+ * Upserts on `(account_id, product_id)` — a renewal/plan-change simply
  * updates the existing row rather than creating a duplicate entitlement.
  */
 export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
+
+  const { data: existing } = await admin
+    .from("product_entitlements")
+    .select("current_period_end")
+    .eq("account_id", accountId)
+    .eq("product_id", productId)
+    .maybeSingle();
+
+  const period = computeRenewedPeriod((existing?.current_period_end as string | null) ?? null, new Date());
+
   await admin.from("product_entitlements").upsert(
-    { account_id: accountId, product_id: productId, status: "active", subscription_ref: `${tier}:${subscriptionRef}`, activated_at: new Date().toISOString() },
+    {
+      account_id: accountId,
+      product_id: productId,
+      status: "active",
+      subscription_ref: `${tier}:${subscriptionRef}`,
+      activated_at: new Date().toISOString(),
+      current_period_start: period.start,
+      current_period_end: period.end,
+    },
     { onConflict: "account_id,product_id" }
   );
 }

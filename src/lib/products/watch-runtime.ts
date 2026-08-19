@@ -8,6 +8,7 @@ import { getModerationDefaults } from "./watch-moderation-defaults";
 import { projectBelongsToAccount, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial, getWatchTrialState, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./watch-trial";
+import { periodHasExpired } from "./watch-billing-period";
 
 /**
  * Neutral ownership/creation layer for Communities, Watchers
@@ -52,24 +53,63 @@ export interface AccountWatchContext {
 }
 export type AccountWatchContextResult = AccountWatchContext | { ok: false; error: string };
 
+function parseEntitlementTier(subscriptionRef: string | null): ModeratorPlanTier | null {
+  const tier = (subscriptionRef ?? "").split(":")[0];
+  if (tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro") return tier;
+  return null;
+}
+
 /** The account's current paid Watch tier, parsed from `product_entitlements
  *  .subscription_ref` (format `"<tier>:<depositId>"`, set by
  *  `activateWatchEntitlement`). Returns null if the account has no active
- *  direct Watch subscription — never guesses/defaults a tier. */
+ *  direct Watch subscription OR its real billing period (migration 0080)
+ *  has ended with no confirmed renewal — never guesses/defaults a tier. A
+ *  NULL `current_period_end` (every paid row created before migration
+ *  0080) is treated as never-expiring — the deliberate grandfather
+ *  compatibility state so no existing paid customer is silently cut off by
+ *  this migration; real period enforcement begins on that account's next
+ *  successful payment. */
 export async function resolveAccountWatchTier(admin: SupabaseClient, accountId: string): Promise<ModeratorPlanTier | null> {
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
   if (!product) return null;
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("status, subscription_ref")
+    .select("status, subscription_ref, current_period_end")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
   if (!entitlement || entitlement.status !== "active") return null;
-  const ref = (entitlement.subscription_ref as string | null) ?? "";
-  const tier = ref.split(":")[0];
-  if (tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro") return tier;
-  return null;
+  if (periodHasExpired((entitlement.current_period_end as string | null) ?? null)) return null;
+  return parseEntitlementTier((entitlement.subscription_ref as string | null) ?? null);
+}
+
+export interface AccountPaidPlan {
+  tier: ModeratorPlanTier;
+  currentPeriodEnd: string | null;
+  expired: boolean;
+}
+
+/** The account's most-recently-held paid tier, REGARDLESS of whether its
+ *  billing period has expired — the counterpart resolver renewal/Billing
+ *  surfaces need (resolveAccountWatchTier above intentionally returns null
+ *  once expired, which is correct for entitlement/capacity but useless for
+ *  "what plan should the Renew button charge for?"). Returns null only
+ *  when the account has genuinely never held a direct Watch subscription
+ *  at all (no product_entitlements row, or a non-paid subscription_ref). */
+export async function getAccountPaidPlan(admin: SupabaseClient, accountId: string): Promise<AccountPaidPlan | null> {
+  const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
+  if (!product) return null;
+  const { data: entitlement } = await admin
+    .from("product_entitlements")
+    .select("subscription_ref, current_period_end")
+    .eq("account_id", accountId)
+    .eq("product_id", product.id)
+    .maybeSingle();
+  if (!entitlement) return null;
+  const tier = parseEntitlementTier((entitlement.subscription_ref as string | null) ?? null);
+  if (!tier) return null;
+  const currentPeriodEnd = (entitlement.current_period_end as string | null) ?? null;
+  return { tier, currentPeriodEnd, expired: periodHasExpired(currentPeriodEnd) };
 }
 
 /** Synthesizes a `panels.settings`-shaped value carrying JUST the Virtual
@@ -547,6 +587,11 @@ export interface AccountCapacity {
    *  expiry every trial UI surface (Plans/Overview/Usage/sidebar) reads for
    *  "time remaining", never a client-computed/decrementing value. */
   trialEndsAt: string | null;
+  /** Only set for a paid tier -- the real, server-authoritative
+   *  current_period_end (migration 0080). Null for a legacy grandfathered
+   *  paid row (see resolveAccountWatchTier's own doc comment) -- a genuine
+   *  never-expiring state, not a missing value to paper over. */
+  paidThrough: string | null;
   watcherProfileCount: number;
   activeDeploymentCount: number;
   slotsTotal: number;
@@ -563,14 +608,16 @@ export interface AccountCapacity {
 export async function getAccountCapacity(admin: SupabaseClient, accountId: string): Promise<AccountCapacity | null> {
   const ctx = await requireAccountWatchContext(admin, accountId);
   if (!ctx.ok) return null;
-  const [watchers, communities, trial] = await Promise.all([
+  const [watchers, communities, trial, paidPlan] = await Promise.all([
     listAccountWatchers(admin, accountId),
     listAccountCommunities(admin, accountId),
     ctx.tier === "trial" ? getWatchTrialState(admin, accountId) : Promise.resolve(null),
+    ctx.tier !== "trial" ? getAccountPaidPlan(admin, accountId) : Promise.resolve(null),
   ]);
   return {
     tier: ctx.tier,
     trialEndsAt: trial?.endsAt ?? null,
+    paidThrough: paidPlan?.currentPeriodEnd ?? null,
     watcherProfileCount: watchers.length,
     activeDeploymentCount: communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length,
     slotsTotal: ctx.maxActiveSlots,

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { getAdapter } from "./adapters";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
+import { creditInnvilCreditTopUp } from "@/src/lib/products/innvil-credit";
 
 /* =========================================================
    PLATFORM PAYMENTS runtime (server-only).
@@ -94,6 +95,11 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
 
   if (claimed.purpose === "watch_subscription") {
     await activateWatchEntitlement(admin, claimed.owner_id as string, claimed.plan as string, claimed.id as string);
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
+
+  if (claimed.purpose === "innvil_credit_topup") {
+    await creditInnvilCreditTopUp(admin, claimed.owner_id as string, Math.round(Number(claimed.credit_amount) * 100), claimed.id as string);
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 

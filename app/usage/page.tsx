@@ -58,7 +58,11 @@ export default async function UsagePage() {
             <SectionHeader icon={ShieldCheck} title="Plan capacity" />
             {capacity ? (
               <>
-                <p className="w-display text-lg w-teal mb-3">{watchAccessLabel(capacity.tier)}</p>
+                <p className="w-display text-lg w-teal mb-1">{watchAccessLabel(capacity.tier)}</p>
+                {capacity.tier !== "trial" && capacity.paidThrough && (
+                  <p className="text-xs w-text-faint mb-3">Paid through {new Date(capacity.paidThrough).toLocaleDateString()}</p>
+                )}
+                {!(capacity.tier !== "trial" && capacity.paidThrough) && <div className="mb-3" />}
                 <div className="space-y-3">
                   <CapacityRow label="Watcher slots" used={capacity.activeDeploymentCount} total={capacity.slotsTotal} />
                   <CapacityRow label="Communities" used={capacity.communitiesUsed} total={capacity.communitiesTotal} />
