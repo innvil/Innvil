@@ -1,40 +1,43 @@
 "use client";
 
 import React, { useState } from "react";
-import { ChevronDown, Loader2, CheckCircle2 } from "lucide-react";
-import { MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS } from "@/src/lib/moderator/presets";
+import { Loader2, CheckCircle2 } from "lucide-react";
+import { currentPersonaPresetSummary, personaFieldsAfterApply, type ModeratorPersonaPreset } from "@/src/lib/moderator/presets";
 import type { ModeratorPersona } from "@/src/lib/moderator/domain";
 import {
-  applyAccountWatcherPersonaPreset, setAccountWatcherPersonaDescription, setAccountWatcherCustomInstructions,
+  setAccountWatcherPersonaDescription, setAccountWatcherCustomInstructions,
 } from "@/src/lib/actions/watch-watcher-persona";
+import { PersonaPresetPicker } from "./PersonaPresetPicker";
 
 /** Real persona/behavior editor for a standalone Watcher — the account-scoped
  *  counterpart of the owner-side PersonaPresetPicker, reusing the SAME
  *  preset catalog and the SAME materialize-onto-persona-fields mechanism
  *  (moderator/presets.ts). Customer-facing language only — never exposes
- *  raw `virtual_moderator` terminology or the numeric style dials directly. */
+ *  raw `virtual_moderator` terminology or the numeric style dials directly.
+ *
+ *  Persona belongs to the Watcher profile (scoped by moderatorId end to end,
+ *  via watch-watcher-persona.ts's per-Watcher ownership check) — never a
+ *  Community or deployment. If this Watcher is deployed to multiple
+ *  Communities, every deployment reads this SAME persona; no deployment-
+ *  level override exists.
+ *
+ *  Page reads top-to-bottom as description -> current preset (a compact
+ *  summary, not the full library) -> behavior instructions, so "configure
+ *  this Watcher" reads as the primary task and "browse presets" reads as an
+ *  occasional, deliberate action opened via "Change preset". The preset
+ *  itself is only ever a one-time starting TEMPLATE (see applyPersonaPreset
+ *  in presets.ts) — description/instructions stay fully editable afterward,
+ *  and nothing here implies a manual edit is somehow invalid once a preset
+ *  is applied. */
 export function WatcherPersonaTab({ moderatorId, persona }: { moderatorId: string; persona: ModeratorPersona }) {
-  const [showMore, setShowMore] = useState(false);
-  const [applying, setApplying] = useState<string | null>(null);
+  const [applying, setApplying] = useState<"__description__" | "__instructions__" | null>(null);
   const [description, setDescription] = useState(persona.description ?? "");
   const [customInstructions, setCustomInstructions] = useState(persona.customInstructions ?? "");
   const [currentPresetId, setCurrentPresetId] = useState(persona.presetId ?? null);
   const [savedField, setSavedField] = useState<"description" | "instructions" | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
-  const surfaced = MODERATOR_PERSONA_PRESETS.filter((p) => DEFAULT_SURFACED_PRESET_IDS.includes(p.id));
-  const visible = showMore ? MODERATOR_PERSONA_PRESETS : surfaced;
-  const activePreset = currentPresetId ? MODERATOR_PERSONA_PRESETS.find((p) => p.id === currentPresetId) : null;
-
-  const apply = async (presetId: string) => {
-    setApplying(presetId);
-    const res = await applyAccountWatcherPersonaPreset(moderatorId, presetId);
-    setApplying(null);
-    if (res.ok) {
-      setCurrentPresetId(presetId);
-      const preset = MODERATOR_PERSONA_PRESETS.find((p) => p.id === presetId);
-      if (preset?.overrides.description) setDescription(preset.overrides.description);
-    }
-  };
+  const activePreset = currentPersonaPresetSummary(currentPresetId);
 
   const saveDescription = async () => {
     setApplying("__description__");
@@ -48,6 +51,21 @@ export function WatcherPersonaTab({ moderatorId, persona }: { moderatorId: strin
     const res = await setAccountWatcherCustomInstructions(moderatorId, customInstructions);
     setApplying(null);
     if (res.ok) setSavedField("instructions");
+  };
+
+  // Mirrors exactly what the old inline grid's apply() did to local state --
+  // the server-side materialization (applyPersonaPreset) writes BOTH
+  // description and customInstructions from the preset's overrides, so both
+  // are re-synced here too (the prior version only re-synced description,
+  // leaving the Behavior instructions textarea showing stale text until a
+  // reload -- a real staleness bug, fixed here since this pass already
+  // touches this exact code path).
+  const handleApplied = (preset: ModeratorPersonaPreset) => {
+    setCurrentPresetId(preset.id);
+    const fields = personaFieldsAfterApply(preset);
+    if (fields.description !== undefined) setDescription(fields.description);
+    if (fields.customInstructions !== undefined) setCustomInstructions(fields.customInstructions);
+    setPickerOpen(false);
   };
 
   return (
@@ -71,41 +89,29 @@ export function WatcherPersonaTab({ moderatorId, persona }: { moderatorId: strin
       </div>
 
       <div className="w-card p-5">
-        <button onClick={() => setShowMore((v) => !v)} className="w-full flex items-center justify-between gap-2 text-left mb-1">
-          <span className="w-display text-sm">
-            Persona preset — {activePreset ? <span className="w-teal">{activePreset.label}</span> : "a quick starting point"}
-          </span>
-          <ChevronDown size={15} className={`w-text-faint transition-transform shrink-0 ${showMore ? "rotate-180" : ""}`} />
-        </button>
-        <p className="text-xs w-text-faint mb-3">Applying a preset updates the description and behavior above — you can still edit either afterward.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {visible.map((preset) => {
-            const active = currentPresetId === preset.id;
-            return (
-              <button
-                key={preset.id}
-                onClick={() => apply(preset.id)}
-                disabled={applying !== null}
-                className={`text-left w-surface-raised border rounded-lg p-3 disabled:opacity-60 ${active ? "w-teal-border" : "w-line-soft hover:w-teal-border"}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm w-text font-medium">{preset.label}</span>
-                  {applying === preset.id && <Loader2 size={12} className="animate-spin w-teal shrink-0" />}
-                  {active && applying !== preset.id && <CheckCircle2 size={13} className="w-teal shrink-0" />}
-                </div>
-                <p className="text-[11px] w-text-faint mt-1">{preset.shortDescription}</p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {preset.tags.map((tag) => (
-                    <span key={tag} className="text-[10px] w-pill w-surface w-text-faint">{tag}</span>
-                  ))}
-                </div>
-              </button>
-            );
-          })}
+        <h3 className="w-display text-sm mb-1">Persona preset</h3>
+        <p className="text-xs w-text-faint mb-3">A starting template for this Watcher's description and behavior — always editable afterward.</p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm w-text font-medium">{activePreset ? activePreset.label : "Custom persona"}</p>
+            <p className="text-xs w-text-faint mt-1">
+              {activePreset ? activePreset.shortDescription : "No preset applied — description and behavior instructions are set manually."}
+            </p>
+            {activePreset && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {activePreset.tags.map((tag) => (
+                  <span key={tag} className="text-[10px] w-pill w-surface w-text-faint">{tag}</span>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setPickerOpen(true)}
+            className="text-xs w-teal font-medium hover:underline shrink-0 px-3 py-1.5 rounded-lg border w-teal-border whitespace-nowrap"
+          >
+            Change preset
+          </button>
         </div>
-        {!showMore && (
-          <button onClick={() => setShowMore(true)} className="text-xs w-teal hover:underline mt-3">More presets</button>
-        )}
       </div>
 
       <div className="w-card p-5">
@@ -125,6 +131,15 @@ export function WatcherPersonaTab({ moderatorId, persona }: { moderatorId: strin
           {savedField === "instructions" && <span className="text-xs w-teal flex items-center gap-1"><CheckCircle2 size={12} /> Saved</span>}
         </div>
       </div>
+
+      {pickerOpen && (
+        <PersonaPresetPicker
+          moderatorId={moderatorId}
+          currentPresetId={currentPresetId}
+          onApplied={handleApplied}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

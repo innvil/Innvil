@@ -1,6 +1,6 @@
 import React from "react";
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2, PauseCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, PauseCircle, X } from "lucide-react";
 import type { CommunityOperationalStatus } from "@/src/lib/products/watch-status";
 import type { AttentionSeverity } from "@/src/lib/products/watch-runtime";
 
@@ -75,6 +75,34 @@ export function CapacityRow({ label, used, total }: { label: string; used: numbe
       </div>
       <div className="h-1.5 rounded-full w-surface-raised overflow-hidden">
         <div className="h-full w-teal-bg rounded-full" style={{ width: `${Math.min(100, (used / Math.max(1, total)) * 100)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** Small shared centered modal -- extracted from WatchDashboard's
+ *  (previously locally-defined) Create Project/Watcher dialog so a second
+ *  feature (the Persona preset picker) doesn't need its own duplicate
+ *  overlay implementation. `maxWidth` defaults to the original `max-w-sm`
+ *  so every existing call site is unaffected; wider consumers pass their
+ *  own Tailwind max-width class. */
+export function Modal({
+  title, onClose, children, maxWidth = "max-w-sm",
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  maxWidth?: string;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} aria-hidden="true" />
+      <div className={`relative w-full ${maxWidth} w-card p-5`}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="w-display text-base">{title}</h3>
+          <button onClick={onClose} aria-label="Close" className="w-text-dim hover:w-text"><X size={16} /></button>
+        </div>
+        {children}
       </div>
     </div>
   );

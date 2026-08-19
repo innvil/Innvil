@@ -292,6 +292,30 @@ export function resolvePersonaPreset(id: string): ModeratorPersonaPreset | null 
   return MODERATOR_PERSONA_PRESETS.find((p) => p.id === id) ?? null;
 }
 
+/** What a persona's "current preset" state resolves to for the compact
+ *  Persona-tab summary card and the picker's selected-state highlighting --
+ *  the real preset when the stored `presetId` still resolves to a known
+ *  preset, else `null` ("Custom persona"). A stale/removed preset id (or no
+ *  preset at all) both safely resolve to `null`, never a crash or a
+ *  fabricated label. Pure, directly testable without rendering anything. */
+export function currentPersonaPresetSummary(presetId: string | null): ModeratorPersonaPreset | null {
+  return presetId ? resolvePersonaPreset(presetId) : null;
+}
+
+/** The local description/customInstructions a persona-editing UI should
+ *  adopt immediately after applying a preset -- mirrors exactly what the
+ *  server-side materialization (applyPersonaPreset) writes, so a picker's
+ *  caller can re-sync its own state without waiting for a reload. Only ever
+ *  returns the fields the preset actually overrides (never a third field,
+ *  never anything that would imply the textareas become locked/read-only --
+ *  a preset is a one-time starting value, not a standing constraint). */
+export function personaFieldsAfterApply(preset: ModeratorPersonaPreset): { description?: string; customInstructions?: string } {
+  const next: { description?: string; customInstructions?: string } = {};
+  if (preset.overrides.description) next.description = preset.overrides.description;
+  if (preset.overrides.customInstructions) next.customInstructions = preset.overrides.customInstructions;
+  return next;
+}
+
 /** Materializes a preset onto a base persona -- a ONE-TIME write, not a live
  *  binding. Fields the preset doesn't touch (language, topicsToAvoid, and
  *  anything not in ModeratorPersonaPreset.overrides) are preserved from

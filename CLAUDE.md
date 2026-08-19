@@ -127,6 +127,68 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Watcher Persona tab: compact "current preset" card + a focused preset picker modal (v1.47.12)
+- **Root cause / UX issue.** The per-Watcher Persona tab (`WatcherPersonaTab.tsx`) showed a large,
+  always-expanded preset grid sitting directly in the main content flow between the description and behavior-
+  instructions textareas — visually dominating the page and making "pick a preset" read as the primary task
+  when the real task is "configure this Watcher's persona."
+- **Final page hierarchy** (unchanged section order, only the middle section's SIZE changed): **Persona
+  description → Current preset (compact) → Behavior instructions.** The preset section is now a small summary
+  card — current preset name + short description + tags (or "Custom persona" / "No preset applied…" when
+  unassigned) — plus a single **"Change preset"** button. No permanently-expanded grid remains in the main flow.
+- **Modal, not a drawer — no existing drawer/sheet pattern to reuse.** Investigated first: the only "drawer"
+  in this codebase is `WatchShell`'s mobile NAVIGATION drawer (unrelated), and no right-side content-drawer
+  component exists anywhere. A centered modal already existed for Create Project/Watcher
+  (`WatchDashboard.tsx`'s local `Modal`) — extracted that into a shared, reusable **`Modal`** in `WatchUI.tsx`
+  (new optional `maxWidth` prop, defaults to the original `max-w-sm` so the existing Create-Project/Watcher
+  usage is byte-identical) instead of building a second, redundant modal implementation.
+- **New `src/components/watch/PersonaPresetPicker.tsx`** — opened by "Change preset," renders the full 18-preset
+  catalog in a responsive grid inside the shared `Modal` (`max-w-3xl`, scrollable), reusing the EXACT SAME
+  preset-card markup/content the old inline grid used (never redesigned per preset). Applies via the SAME
+  existing action the old grid called (`applyAccountWatcherPersonaPreset`, `watch-watcher-persona.ts`) —
+  selecting a preset behaves identically to before, just from a relocated, focused surface. Dropped the old
+  "10 surfaced + More presets" two-tier disclosure inside the picker (redundant now that browsing presets is
+  already a deliberate, explicit action, not competing for main-page space) — shows all 18 directly.
+- **Real staleness bug fixed in the same pass, not scope creep — same code path this pass already touches.**
+  The old inline `apply()` only re-synced the LOCAL `description` state after applying a preset, never
+  `customInstructions` — even though the server-side `applyPersonaPreset` materializes BOTH fields from
+  `preset.overrides`. The Behavior Instructions textarea would show stale text until a reload. Fixed via two
+  new pure helpers in `presets.ts`: **`currentPersonaPresetSummary(presetId)`** (resolves the summary
+  card/picker's selected state, `null` for unassigned or a stale/removed preset id — never a fabricated label)
+  and **`personaFieldsAfterApply(preset)`** (returns exactly `{description?, customInstructions?}` — the same
+  two fields the server writes, never a third field, never anything that would imply the textareas become
+  locked once a preset is applied).
+- **Preset stays a one-time starting template, not authoritative** — confirmed by construction: applying a
+  preset only ever writes an initial value into `description`/`customInstructions` state; both textareas remain
+  ordinary controlled inputs with their own independent Save buttons, exactly as before. Nothing in the new UI
+  implies a manual edit is invalid after a preset is chosen.
+- **Persona stays Watcher-owned, not Community/deployment-owned — confirmed unchanged, not re-verified via new
+  code.** `watch-watcher-persona.ts` (the mutation layer) was NOT touched by this pass — every action still
+  scopes strictly by `moderatorId` + `virtual_moderators.account_id === user.id`; the new picker component
+  simply calls the exact same existing action with the exact same `moderatorId` prop it's given, so per-Watcher
+  scoping is inherited unmodified. No deployment-level persona override was introduced — a Watcher deployed to
+  multiple Communities still reads one shared persona, per explicit product decision to keep this out of scope.
+- **Deliberately NOT touched**: `ModerationDefaultsCard.tsx` (the SEPARATE Settings → account-level Moderation
+  Defaults page) — a different feature/page, out of scope for this Watcher-tab-specific pass; it already had
+  its own more modest collapsible "More presets" disclosure, not the always-expanded grid this pass fixed. The
+  legacy owner-side (Panel-owner) `PersonaPresetPicker` function inside `AdminTabs.tsx` is unrelated (different
+  directory, different flow, same name is not a collision since neither is imported across files) and untouched.
+- New tests (`presets.test.ts`, +6): `currentPersonaPresetSummary`'s known/null/stale-id resolution, and a
+  dedicated proof that it can never disagree with `resolvePersonaPreset`; `personaFieldsAfterApply`'s exact
+  field mirroring against real preset overrides across all 18 presets, and a dedicated proof it never returns
+  a field beyond `description`/`customInstructions`. **No new React component-interaction tests** ("opening the
+  picker," "choosing a preset" as literal UI actions) — consistent with this codebase's established convention
+  of no RTL/jsdom infrastructure (verified again this pass, no test file exists for ANY Watch component);
+  Watcher-level scoping is unchanged/verified via code review of the untouched action file rather than a new
+  DB-mocked action test, matching every other action file's established precedent in this codebase. 1322 tests
+  pass (up from 1316), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 6 files changed
+  (`WatchDashboard.tsx` — Modal consolidation only, byte-identical behavior; `WatchUI.tsx` — new shared Modal;
+  `WatcherPersonaTab.tsx` — the actual UX rewrite; `presets.ts`/`presets.test.ts` — the two new pure helpers +
+  tests; `PersonaPresetPicker.tsx` — new file), no accidental Community/deployment persona coupling, no
+  duplicated preset UI (the full grid now exists in exactly one place), no dead controls introduced.
+- **Not deployed this pass, per explicit instruction** — verified via typecheck + full test suite + production
+  build + code review only.
+
 ### 2026-08-19 — Moderation persona is assigned per-Watcher, never a silent account-wide default + new onboarding step + auto-advancing guide (v1.47.11)
 - **Live product-direction fix: a new Watcher's persona was silently pre-filled from Settings' account-level
   "Moderation Defaults" preset** (v1.40.0) — every new Watcher on an account with a configured default started

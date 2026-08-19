@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   MODERATOR_PERSONA_PRESETS, DEFAULT_SURFACED_PRESET_IDS,
   resolvePersonaPreset, applyPersonaPreset, personaFromPreset,
+  currentPersonaPresetSummary, personaFieldsAfterApply,
 } from "./presets";
 import { DEFAULT_MODERATOR_PERSONA } from "./domain";
 
@@ -51,6 +52,45 @@ test("REQUIRED: resolvePersonaPreset returns the expected structured config for 
 
 test("resolvePersonaPreset returns null for an unknown id", () => {
   assert.equal(resolvePersonaPreset("does_not_exist"), null);
+});
+
+/* ------------------------------------------- Watcher-tab preset summary UX ---- */
+/* currentPersonaPresetSummary / personaFieldsAfterApply back the compact
+   Persona-tab "current preset" card + the preset picker's selected-state
+   highlighting (WatcherPersonaTab.tsx / PersonaPresetPicker.tsx). */
+
+test("REQUIRED: currentPersonaPresetSummary resolves a known presetId to the real preset (drives the 'current preset' summary card and the picker's selected-state highlighting)", () => {
+  const summary = currentPersonaPresetSummary("friendly_community_mod");
+  assert.ok(summary);
+  assert.equal(summary!.label, "Friendly Community Mod");
+});
+
+test("REQUIRED: currentPersonaPresetSummary returns null for a Watcher with no preset applied yet -- renders as 'Custom persona', never a fabricated label", () => {
+  assert.equal(currentPersonaPresetSummary(null), null);
+});
+
+test("currentPersonaPresetSummary returns null for a stale/removed preset id, never throws", () => {
+  assert.equal(currentPersonaPresetSummary("this_preset_id_no_longer_exists"), null);
+});
+
+test("REQUIRED: personaFieldsAfterApply mirrors exactly what the server-side materialization writes -- both description and customInstructions, so the UI never shows stale text after picking a preset", () => {
+  const preset = resolvePersonaPreset("calm_professional")!;
+  const fields = personaFieldsAfterApply(preset);
+  assert.equal(fields.description, preset.overrides.description);
+  assert.equal(fields.customInstructions, preset.overrides.customInstructions);
+});
+
+test("REQUIRED: personaFieldsAfterApply never returns anything beyond description/customInstructions -- a preset is a one-time starting value, not a lock on the textareas", () => {
+  for (const preset of MODERATOR_PERSONA_PRESETS) {
+    const fields = personaFieldsAfterApply(preset);
+    assert.deepEqual(Object.keys(fields).sort(), ["customInstructions", "description"]);
+  }
+});
+
+test("every real preset resolves through currentPersonaPresetSummary identically to resolvePersonaPreset -- the summary card can never disagree with the picker's own resolution", () => {
+  for (const preset of MODERATOR_PERSONA_PRESETS) {
+    assert.equal(currentPersonaPresetSummary(preset.id), resolvePersonaPreset(preset.id));
+  }
 });
 
 /* -------------------------------------------------------------- distinctness ---- */

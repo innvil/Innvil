@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import {
-  Plus, FolderKanban, Bot, Users, ShieldCheck, Radio, Activity, ArrowRight, X, ChevronRight, AlertTriangle, CheckCircle2,
+  Plus, FolderKanban, Bot, Users, ShieldCheck, Radio, Activity, ArrowRight, ChevronRight, AlertTriangle, CheckCircle2,
 } from "lucide-react";
 import { createWatchProject, createWatcher } from "@/src/lib/actions/watch-dashboard";
 import type { AccountProjectRow } from "@/src/lib/products/ownership";
@@ -18,24 +18,7 @@ import { onboardingChecklist, type OnboardingStage } from "@/src/lib/products/wa
 import { moderatorPersonaIsAssigned } from "@/src/lib/moderator/domain";
 import { WatchShell } from "./WatchShell";
 import { WatcherConnectModal } from "./WatcherConnectModal";
-import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalStatusBadge, SeverityTag, WatcherNamesCell } from "./WatchUI";
-
-/* ---------------------------------------------------------------- modal ---- */
-
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} aria-hidden="true" />
-      <div className="relative w-full max-w-sm w-card p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="w-display text-base">{title}</h3>
-          <button onClick={onClose} aria-label="Close" className="w-text-dim hover:w-text"><X size={16} /></button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
+import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalStatusBadge, SeverityTag, WatcherNamesCell, Modal } from "./WatchUI";
 
 /* ------------------------------------------------------------- overview ---- */
 
