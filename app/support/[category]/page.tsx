@@ -5,7 +5,7 @@ import { ChevronRight } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { HelpDocsNav, HelpDocsNavMobile } from "@/src/components/watch/HelpDocsNav";
-import { HelpHomeRail, ContactSupportRail } from "@/src/components/watch/HelpRightRail";
+import { ContactSupportCta } from "@/src/components/watch/HelpRightRail";
 import { HELP_CATEGORIES, articlesByCategory, type HelpCategoryId } from "@/src/lib/watch-help/content";
 
 function findCategory(id: string) {
@@ -18,6 +18,11 @@ export async function generateMetadata({ params }: { params: Promise<{ category:
   return { title: cat ? `${cat.label} — Innvil Watch Help` : "Help Center — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 }
 
+/** Category pages keep the fuller docs-navigation layout (left category
+ *  nav) -- this is exactly where it earns its keep, letting a visitor move
+ *  between documentation sections after they've already found one. No
+ *  right rail here (the article list itself IS the page's main content;
+ *  a "Get Started" rail next to it would just be another duplicate list). */
 export default async function HelpCategoryPage({ params }: { params: Promise<{ category: string }> }) {
   const { category } = await params;
   const cat = findCategory(category);
@@ -41,7 +46,7 @@ export default async function HelpCategoryPage({ params }: { params: Promise<{ c
           </nav>
           <h1 className="w-display text-xl mb-1">{cat.label}</h1>
           <p className="text-sm w-text-dim mb-6">{cat.description}</p>
-          <div className="space-y-2">
+          <div className="space-y-2 mb-8">
             {articles.map((a) => (
               <Link key={a.slug} href={`/support/${cat.id}/${a.slug}`} className="w-card p-4 hover:w-teal-border transition-colors flex items-center justify-between gap-3 block">
                 <div className="min-w-0">
@@ -53,12 +58,8 @@ export default async function HelpCategoryPage({ params }: { params: Promise<{ c
             ))}
           </div>
 
-          <div className="xl:hidden mt-8 max-w-lg">
-            <ContactSupportRail />
-          </div>
+          <ContactSupportCta compact />
         </div>
-
-        <HelpHomeRail />
       </div>
     </WatchShell>
   );

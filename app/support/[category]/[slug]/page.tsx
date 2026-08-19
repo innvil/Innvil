@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronRight, LifeBuoy } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { HelpDocsNav, HelpDocsNavMobile } from "@/src/components/watch/HelpDocsNav";
-import { HelpArticleRail, ContactSupportRail } from "@/src/components/watch/HelpRightRail";
+import { HelpArticleRail, ContactSupportCta } from "@/src/components/watch/HelpRightRail";
 import { HELP_CATEGORIES, getArticle, relatedArticles } from "@/src/lib/watch-help/content";
 
 export async function generateMetadata({ params }: { params: Promise<{ category: string; slug: string }> }): Promise<Metadata> {
@@ -76,14 +76,12 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ ca
               </div>
             )}
 
-            <div className="mt-8 w-card p-4 flex items-center justify-between gap-3">
-              <p className="text-xs w-text-dim flex items-center gap-1.5"><LifeBuoy size={13} /> Didn&apos;t find what you needed?</p>
-              <Link href="/support" className="text-xs w-teal hover:underline shrink-0">Back to Help Center</Link>
+            <div className="xl:hidden mt-8">
+              <ContactSupportCta compact />
             </div>
-
-            <div className="xl:hidden mt-6">
-              <ContactSupportRail />
-            </div>
+            <p className="mt-3 text-xs">
+              <Link href="/support" className="w-teal hover:underline">← Back to Help Center</Link>
+            </p>
           </div>
         </div>
 

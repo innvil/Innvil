@@ -127,6 +127,46 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Help Center simplified: home is discovery-only, docs nav stays on category/article pages (v1.47.7)
+- **The v1.47.6 3-column layout over-corrected** — the Help Center HOME ended up repeating the same
+  information across five surfaces at once (left docs nav, Popular, category cards, a right-side "Get Started"
+  article list, and TWO separate Contact Support forms — one in the rail, one at the bottom). This pass applies
+  the report's core rule directly: **home = discovery, article/category pages = documentation navigation** —
+  different layouts for different jobs, not one architecture forced onto both.
+- **Home (`/support`) simplified to exactly four sections, nothing else**: Search → Popular (8 articles,
+  unchanged `POPULAR_ARTICLE_SLUGS`, `sm:grid-cols-2 lg:grid-cols-3`) → Browse by category (same 3-col grid) →
+  one compact "Still need help?" CTA card. **The left docs nav and the right "Get Started" rail were both
+  removed from this page entirely** (`HelpDocsNav`/`HelpDocsNavMobile`/the old `HelpHomeRail` are no longer
+  imported here) — the main `WatchShell` sidebar already provides global navigation, and a second sidebar of
+  the same 7 category names next to category CARDS showing the identical 7 names was pure duplication. Content
+  now sits in a single centered `max-w-4xl` column (search/contact narrower at `max-w-lg` within it) instead of
+  the old cramped `max-w-3xl` OR the prior pass's 3-column split — reasonably wide, not empty, not crowded.
+- **Contact Support collapsed to exactly ONE real form, at a new dedicated route.** New `/support/contact`
+  hosts the actual `SupportContactForm` (same existing account-scoped channel, untouched) — every other Help
+  Center surface (home, category, article) now shows only a small link/CTA into that page
+  (`ContactSupportCta`, replacing the old `ContactSupportRail` which used to embed the live form directly, in
+  up to two places on the same page at once). `HelpRightRail.tsx`'s exports narrowed accordingly — `HelpHomeRail`
+  deleted outright (nothing imports it anymore, confirmed via grep), `HelpArticleRail` kept (Related + the new
+  compact CTA) since article pages are exactly where the fuller layout is still justified.
+- **Category and article pages keep the docs-navigation layout, per explicit instruction that the
+  simplification is scoped to the home page.** `/support/[category]` keeps `HelpDocsNav`/`HelpDocsNavMobile` on
+  the left plus the category's own article list — its old right rail (which duplicated `HelpHomeRail`'s
+  Get-Started list next to a page that's already nothing BUT a list) was dropped in favor of one compact
+  contact CTA at the bottom, since the article list itself is the page's real content. `/support/[category]/[slug]`
+  keeps its 3-column shape (docs nav / article / `HelpArticleRail`) from v1.47.6 — also dropped a second,
+  now-redundant "Didn't find what you needed?" card that had been stacked directly above the old rail's embedded
+  form (two different "need help" affordances on the same screen); it's now a single compact CTA below `xl`
+  (matching the rail's version above it, never both) plus a plain "← Back to Help Center" link.
+- No docs content, `content.ts`, or `HelpSearch.tsx` were touched — search behavior and every article are
+  byte-identical to v1.47.5/6. 1302 tests pass (unchanged — this pass, like v1.47.6, is layout/composition only;
+  the report's own test list is almost entirely "X is/isn't visually present," which this codebase has no RTL/
+  jsdom infrastructure to assert on), `tsc --noEmit` clean, production build clean (`/support/contact` confirmed
+  as its own real static route, correctly NOT shadowed by the sibling `/support/[category]` dynamic route).
+- **Not live-verified this pass** — same auth-gated-route limitation as v1.47.5/6 (no genuine Supabase session
+  practically simulatable in this sandbox); verified via careful review that exactly one Contact Support surface
+  and no duplicate navigation/article list renders at any single breakpoint on any of the four routes, plus
+  `tsc --noEmit` + full test suite + production build.
+
 ### 2026-08-19 — Help Center layout refined into a real 3-column docs workspace (v1.47.6)
 - **Root cause, found before editing.** `WatchShell`'s `<main>` is `max-w-[1400px]` — every other Watch page
   (Usage/Billing/Watchers/etc.) already uses that width via its own grid layout, but all three `/support`
