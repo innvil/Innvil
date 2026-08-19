@@ -33,6 +33,7 @@ export type OnboardingStage =
   | "try_watch"
   | "create_project"
   | "create_watcher"
+  | "assign_moderation"
   | "connect_watcher"
   | "operational";
 
@@ -41,6 +42,13 @@ export interface OnboardingStateInput {
   hasEntitlement: boolean;
   projectCount: number;
   watcherCount: number;
+  /** True once at least one of this account's Watchers has an explicitly
+   *  assigned persona (moderatorPersonaIsAssigned in domain.ts) -- a new
+   *  Watcher is NEVER silently pre-assigned one from the account's
+   *  Moderation Defaults (watch-runtime.ts's createAccountWatcher starts it
+   *  genuinely blank), so this only ever becomes true from a real explicit
+   *  action on the Persona tab. */
+  watcherPersonaAssigned: boolean;
   activeDeploymentCount: number;
 }
 
@@ -54,6 +62,7 @@ export function resolveOnboardingStage(input: OnboardingStateInput): OnboardingS
   if (!input.hasEntitlement) return "try_watch";
   if (input.projectCount === 0) return "create_project";
   if (input.watcherCount === 0) return "create_watcher";
+  if (!input.watcherPersonaAssigned) return "assign_moderation";
   if (input.activeDeploymentCount === 0) return "connect_watcher";
   return "operational";
 }
@@ -73,6 +82,7 @@ export function onboardingChecklist(input: OnboardingStateInput): OnboardingChec
     { key: "try_watch", label: "Try Innvil Watch", done: input.hasEntitlement },
     { key: "create_project", label: "Create a Project", done: input.projectCount > 0 },
     { key: "create_watcher", label: "Create a Watcher", done: input.watcherCount > 0 },
+    { key: "assign_moderation", label: "Assign a moderation persona", done: input.watcherPersonaAssigned },
     { key: "connect_watcher", label: "Connect and deploy your Watcher", done: input.activeDeploymentCount > 0 },
   ];
 }

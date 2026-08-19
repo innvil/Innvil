@@ -22,6 +22,7 @@ import {
 import { getAccountTelegramIdentity } from "@/src/lib/products/watch-abuse";
 import { getWatchTrialState, type WatchTrialStatus } from "@/src/lib/products/watch-trial";
 import { resolveOnboardingStage, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
+import { moderatorPersonaIsAssigned } from "@/src/lib/moderator/domain";
 
 export interface WatchAccessState {
   authenticated: boolean;
@@ -94,6 +95,7 @@ export async function getWatchAccessState(): Promise<WatchAccessState> {
     hasEntitlement: capacity != null,
     projectCount: projects.length,
     watcherCount: watchers.length,
+    watcherPersonaAssigned: watchers.some((w) => moderatorPersonaIsAssigned(w.persona)),
     activeDeploymentCount,
   });
   return {

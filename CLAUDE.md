@@ -127,6 +127,45 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Moderation persona is assigned per-Watcher, never a silent account-wide default + new onboarding step + auto-advancing guide (v1.47.11)
+- **Live product-direction fix: a new Watcher's persona was silently pre-filled from Settings' account-level
+  "Moderation Defaults" preset** (v1.40.0) — every new Watcher on an account with a configured default started
+  identical, with no explicit per-Watcher decision ever made. Per explicit instruction, persona is now ALWAYS an
+  explicit, individual assignment — `createAccountWatcher` (`watch-runtime.ts`) no longer reads
+  `watch_moderation_defaults` at all; a new Watcher starts on the plain, genuinely-unconfigured platform
+  `DEFAULT_MODERATOR_PERSONA`. Settings' Moderation Defaults card still exists (re-worded — "Suggested starting
+  point" / "Suggested starting persona," never "applied when you create a new Watcher") as a convenience preset
+  to reach for during that explicit assignment, never something silently applied.
+- **New `moderatorPersonaIsAssigned(persona)`** (`moderator/domain.ts`) — true once a preset was applied or a
+  real description/custom-instructions was typed (mirrors the exact "isDefault" check
+  `ModerationDefaultsCard`/`WatcherPersonaTab` already used inline); false for the untouched platform default.
+  Numeric style dials alone never count — only an explicit preset/description/instructions is a real assignment
+  signal.
+- **New onboarding stage, second-to-last as requested**: `create_watcher → assign_moderation → connect_watcher
+  (deploy) → operational` (was `create_watcher → connect_watcher`). `watch-onboarding-state.ts`'s
+  `OnboardingStateInput` gained `watcherPersonaAssigned`; `resolveOnboardingStage`/`onboardingChecklist` gate on
+  it between create_watcher and connect_watcher. Computed in `getWatchAccessState`
+  (`actions/watch-dashboard.ts`) as `watchers.some(w => moderatorPersonaIsAssigned(w.persona))`. The guide's new
+  "Assign moderation persona" CTA links to `/watchers/[id]?tab=persona` — `app/watchers/[id]/page.tsx` gained
+  `searchParams` support for `?tab=` (mirrors the existing `communities/[id]` pattern) so it actually opens the
+  Persona tab, which is the SAME `WatcherPersonaTab` editor already used elsewhere (no new UI built).
+- **Guide now auto-advances after each step, instead of needing a manual reload.** Root cause: creating a
+  Project already did a full `window.location.reload()` (so the next real server-resolved stage rendered
+  immediately), but creating a Watcher only updated local client state — the `onboardingStage` prop (server-
+  resolved, passed once) never changed, so the guide visibly stalled on "Create a Watcher" even after one was
+  created. `WatchDashboard.tsx`'s watcher-creation branch now also reloads while still inside onboarding
+  (`showOnboarding` true), landing correctly on the new `assign_moderation` stage — matching the same mechanism
+  Project creation and Watcher deployment (`WatcherConnectModal`'s `onConnected`) already used, not a new
+  client-side stage-prediction mechanism.
+- New tests: `domain.test.ts` (+6, new file — every `moderatorPersonaIsAssigned` case incl. whitespace-only
+  and dial-only non-signals), `watch-onboarding-state.test.ts` (rewritten — the new 6-item checklist order,
+  every stage transition incl. the new assign_moderation gate, both REQUIRED renumbered cases),
+  `watch-runtime.test.ts` (the old "inherits the account's configured default" test now asserts the OPPOSITE —
+  a configured default is present but never applied). 1316 tests pass (up from 1308), `tsc --noEmit` clean,
+  production build clean, diff reviewed (every changed file maps directly to this scope).
+- **Not verified live this pass** — same sandbox limitation as most Watch dashboard work (no authenticated
+  session available); verified via the full test suite + typecheck + production build + code review.
+
 ### 2026-08-19 — One-click Telegram connect (Profile + Free Trial cards) (v1.47.10)
 - **Live UX report: connecting Telegram took two clicks** — "Connect Telegram" started verification, then a
   second, separately-rendered "Open Telegram" link had to be clicked to actually open the deep link.

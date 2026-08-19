@@ -150,7 +150,7 @@ test("REQUIRED: a new Watcher starts from the platform default persona when the 
   if (result.ok) assert.equal(result.data.persona.presetId, null);
 });
 
-test("REQUIRED: a new Watcher inherits the account's configured Moderation Default persona (migration 0077)", async () => {
+test("REQUIRED: a new Watcher NEVER silently inherits the account's configured Moderation Default -- persona is assigned per-Watcher, explicitly, not defaulted", async () => {
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW],
     product_entitlements: [ENTITLED_STANDARD],
@@ -159,8 +159,11 @@ test("REQUIRED: a new Watcher inherits the account's configured Moderation Defau
   const result = await createAccountWatcher(admin, "acct-1", "Kwan");
   assert.equal(result.ok, true);
   if (result.ok) {
-    assert.equal(result.data.persona.description, "Friendly and concise.");
-    assert.equal(result.data.persona.presetId, "witty_mod");
+    // A configured account-level default exists, but createAccountWatcher must
+    // never read watch_moderation_defaults at all -- the new Watcher's persona
+    // stays the plain, genuinely-unassigned platform default.
+    assert.equal(result.data.persona.description, "");
+    assert.equal(result.data.persona.presetId, null);
   }
 });
 

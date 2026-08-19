@@ -15,6 +15,7 @@ import { communityOperationalStatus } from "@/src/lib/products/watch-status";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
 import type { WatchTrialStatus } from "@/src/lib/products/watch-trial";
 import { onboardingChecklist, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
+import { moderatorPersonaIsAssigned } from "@/src/lib/moderator/domain";
 import { WatchShell } from "./WatchShell";
 import { WatcherConnectModal } from "./WatcherConnectModal";
 import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalStatusBadge, SeverityTag, WatcherNamesCell } from "./WatchUI";
@@ -108,6 +109,7 @@ export function WatchDashboard({
       const res = await createWatcher(name.trim());
       setBusy(false);
       if (!res.ok) { setError(res.error); return; }
+      if (showOnboarding) { window.location.reload(); return; } // same reason as Project above -- lands on the real next onboarding stage (assign_moderation) instead of a stale one
       setWatchers((prev) => [...prev, res.data]);
       setModal(null);
     }
@@ -132,6 +134,7 @@ export function WatchDashboard({
           hasEntitlement={capacity != null}
           projectCount={projects.length}
           watcherCount={watchers.length}
+          watcherPersonaAssigned={watchers.some((w) => moderatorPersonaIsAssigned(w.persona))}
           activeDeploymentCount={activeDeploymentCount}
           firstWatcher={watchers[0] ?? null}
           onCreateProject={() => openModal("project")}
@@ -376,7 +379,7 @@ export function WatchDashboard({
  * operational Overview.
  */
 function OnboardingGuide({
-  stage, trialStatus, telegramVerified, hasEntitlement, projectCount, watcherCount, activeDeploymentCount,
+  stage, trialStatus, telegramVerified, hasEntitlement, projectCount, watcherCount, watcherPersonaAssigned, activeDeploymentCount,
   firstWatcher, onCreateProject, onCreateWatcher, onConnectWatcher,
 }: {
   stage: OnboardingStage;
@@ -385,13 +388,14 @@ function OnboardingGuide({
   hasEntitlement: boolean;
   projectCount: number;
   watcherCount: number;
+  watcherPersonaAssigned: boolean;
   activeDeploymentCount: number;
   firstWatcher: AccountWatcherRow | null;
   onCreateProject: () => void;
   onCreateWatcher: () => void;
   onConnectWatcher: (w: AccountWatcherRow) => void;
 }) {
-  const checklist = onboardingChecklist({ telegramVerified, hasEntitlement, projectCount, watcherCount, activeDeploymentCount });
+  const checklist = onboardingChecklist({ telegramVerified, hasEntitlement, projectCount, watcherCount, watcherPersonaAssigned, activeDeploymentCount });
 
   const STAGE_COPY: Record<OnboardingStage, { title: string; body: string }> = {
     connect_telegram: {
@@ -406,6 +410,7 @@ function OnboardingGuide({
     },
     create_project: { title: "Create a Project", body: "A Project holds your identity and the knowledge your Watcher will answer from." },
     create_watcher: { title: "Create a Watcher", body: "A Watcher is your AI-powered Virtual Moderator." },
+    assign_moderation: { title: "Assign a moderation persona", body: "Choose a starting persona for this Watcher — how it talks, moderates, and describes itself. Every Watcher's persona is assigned individually, never shared as a silent default." },
     connect_watcher: { title: "Connect and deploy your Watcher", body: "Assign your Watcher to a Telegram Community — this connects its bot, verifies the Community, and deploys it in one step." },
     operational: { title: "", body: "" },
   };
@@ -458,6 +463,11 @@ function OnboardingGuide({
         <button onClick={onCreateWatcher} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
           Create Watcher <ArrowRight size={14} />
         </button>
+      )}
+      {stage === "assign_moderation" && firstWatcher && (
+        <Link href={`/watchers/${firstWatcher.id}?tab=persona`} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Assign moderation persona <ArrowRight size={14} />
+        </Link>
       )}
       {stage === "connect_watcher" && firstWatcher && (
         <button onClick={() => onConnectWatcher(firstWatcher)} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">

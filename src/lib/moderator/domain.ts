@@ -95,6 +95,17 @@ export function normalizeModeratorPersona(value: unknown): ModeratorPersona {
   };
 }
 
+/** True once a persona has actually been explicitly assigned -- a preset was
+ *  applied, or a real description/custom-instructions was typed. False for a
+ *  brand-new Watcher still sitting on the untouched platform default (see
+ *  DEFAULT_MODERATOR_PERSONA above). Mirrors the exact "isDefault" check
+ *  ModerationDefaultsCard already used inline for the account-level default
+ *  editor, now shared so the per-Watcher onboarding gate can never disagree
+ *  with it. */
+export function moderatorPersonaIsAssigned(persona: ModeratorPersona): boolean {
+  return persona.presetId !== null || persona.description.trim() !== "" || persona.customInstructions.trim() !== "";
+}
+
 /* --------------------------------------------------------- provisioning ---- */
 
 export interface ModeratorProvisioningDraft {

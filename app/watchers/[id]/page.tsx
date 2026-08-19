@@ -28,8 +28,14 @@ const STATUS_LABEL: Record<string, string> = {
   expired: "Connection attempt expired",
 };
 
-export default async function WatcherDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function WatcherDetailPage({
+  params, searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const { id } = await params;
+  const { tab } = await searchParams;
   const { accountId, admin } = await requireWatchPage();
   const [detail, projects, shell] = await Promise.all([
     getAccountWatcherDetail(admin, accountId, id),
@@ -184,7 +190,7 @@ export default async function WatcherDetailPage({ params }: { params: Promise<{ 
             <WatcherConnectCta watcher={detail} projects={projects} />
           </div>
         </div>
-        <WatchTabs tabs={tabs} />
+        <WatchTabs tabs={tabs} defaultTab={tab === "persona" || tab === "deployments" || tab === "activity" || tab === "settings" ? tab : "overview"} />
       </div>
     </WatchShell>
   );

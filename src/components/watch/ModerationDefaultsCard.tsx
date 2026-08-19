@@ -12,12 +12,13 @@ import {
 /** Real account-level Moderation Defaults editor — the SAME preset catalog
  *  and materialize-onto-persona-fields mechanism as the per-Watcher
  *  WatcherPersonaTab (moderator/presets.ts), persisted against the account
- *  instead of one specific Watcher. What's saved here is what a NEW Watcher
- *  actually starts from (createAccountWatcher, watch-runtime.ts) — this
- *  isn't a decorative preference, changing it changes real behavior for
- *  every Watcher created afterward (never retroactively — existing
- *  Watchers keep their own already-saved persona). One flat section surface
- *  with internal dividers, not stacked cards. */
+ *  instead of one specific Watcher. Per explicit product decision this is
+ *  NEVER silently applied to a new Watcher — every Watcher's persona is
+ *  assigned individually (see the onboarding guide's "Assign a moderation
+ *  persona" step, and the per-Watcher Persona tab). What's configured here
+ *  is only a suggested starting point for that explicit assignment step —
+ *  changing it never retroactively edits any already-configured Watcher.
+ *  One flat section surface with internal dividers, not stacked cards. */
 export function ModerationDefaultsCard({ initial }: { initial: ModeratorPersona }) {
   const [showMore, setShowMore] = useState(false);
   const [applying, setApplying] = useState<string | null>(null);
@@ -73,14 +74,15 @@ export function ModerationDefaultsCard({ initial }: { initial: ModeratorPersona 
     <div className="max-w-2xl">
       <div className="w-surface-raised border w-teal-border rounded-lg p-3.5 mb-5">
         <p className="text-xs w-text">
-          <span className="font-medium">Default moderation profile.</span> Applied when you create a new Watcher.
-          Existing Watchers keep their own already-configured persona — changing this never retroactively edits them.
+          <span className="font-medium">Suggested starting persona.</span> Offered as a starting point when you assign a
+          persona to a new Watcher — never applied automatically. Each Watcher's persona is assigned individually, and
+          changing this never retroactively edits an already-configured Watcher.
         </p>
       </div>
 
       <div className="flex items-center justify-between gap-3 mb-5 pb-5 border-b w-line-soft">
         <div>
-          <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">Default for new Watchers</p>
+          <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">Suggested starting point</p>
           <p className="text-sm w-text">
             {activePreset ? <>Preset: <span className="w-teal">{activePreset.label}</span></> : isDefault ? "Platform default (no customization)" : "Custom"}
           </p>
