@@ -30,6 +30,7 @@ import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, PROMOTION_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  filterOutOwnBotMentions,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
@@ -1058,7 +1059,7 @@ export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: stri
   return result;
 }
 
-interface ChatterDeployment {
+export interface ChatterDeployment {
   deploymentId: string;
   moderatorName: string;
   persona: ModeratorPersona;
@@ -1564,7 +1565,7 @@ async function isSenderAdminOrTrusted(token: string, chatId: string, platformUse
  *  the community's configured collab contact if ordinary chatter decides to
  *  reply to it at all — moderation itself never sends that reply, chatter's
  *  own existing selection/quota governs whether anything is said. */
-async function runLinkModeration(
+export async function runLinkModeration(
   admin: SupabaseClient,
   panelId: string | null,
   community: { id: string },
@@ -1576,11 +1577,24 @@ async function runLinkModeration(
   const links = extractLinks(event.text);
   if (!links.length || !deployments.length) return { handled: false, collabRoutable: false };
 
+  // A bare mention of one of THIS community's own deployed Watcher bot
+  // usernames is addressing, not a link/promotion candidate -- excluded
+  // BEFORE anything else runs, using the SAME trusted runtime bot identity
+  // (ChatterDeployment.botUsername, sourced from telegram_bot_integrations)
+  // every other addressing/routing decision already reads. Never a
+  // hardcoded username, never a manual whitelist -- and scoped to only THIS
+  // community's own deployments, so it never trusts a username globally.
+  // Any OTHER link/handle in the same message (a real phishing URL, an
+  // unrelated external @handle) is left untouched and still evaluated below
+  // -- this narrowly exempts the self-mention, never the whole message.
+  const moderationCandidates = filterOutOwnBotMentions(links, deployments.map((d) => d.botUsername));
+  if (!moderationCandidates.length) return { handled: false, collabRoutable: false };
+
   const enforcer = deployments[0];
   const senderPlatformId = event.sender.platformUserId;
 
   const priorState = await loadLinkWarningState(admin, community.id, senderPlatformId);
-  const observedState = recordLinkObservation(priorState, linkHash(links[0]), now);
+  const observedState = recordLinkObservation(priorState, linkHash(moderationCandidates[0]), now);
   const floodRepeat = isFloodRepeat(observedState);
 
   const recentContextSummary = (await loadRecentContext(admin, community.id, 6)).map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");

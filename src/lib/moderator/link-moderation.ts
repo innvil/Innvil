@@ -89,6 +89,42 @@ export function extractLinks(text: string): string[] {
   return found;
 }
 
+/* --------------------------------------------------- self-mention exemption ---- */
+
+/** Canonical Telegram username normalization -- case-insensitive, optional
+ *  leading `@`, trimmed. Telegram usernames are already restricted to
+ *  `[a-zA-Z0-9_]`, so no further sanitization is needed. */
+export function normalizeTelegramUsername(username: string): string {
+  return username.trim().replace(/^@/, "").toLowerCase();
+}
+
+/** True when `candidate` (an extractLinks() output, e.g. "@mrpreswan_bot")
+ *  is a bare mention of one of `botUsernames` -- the REAL, currently-
+ *  deployed Watcher bot usernames for the community this message was posted
+ *  in (never a hardcoded name, never a manually-maintained whitelist; the
+ *  caller sources these from `telegram_bot_integrations.username` via each
+ *  community's own ChatterDeployment list). A self-mention is addressing,
+ *  not a link/promotion candidate -- this is the ONLY exemption: it makes
+ *  the bare mention itself non-suspicious, it does not exempt the rest of
+ *  the message from moderation (see filterOutOwnBotMentions below, which
+ *  only ever removes the matching handle, never any other link/URL present
+ *  in the same message). */
+export function isOwnBotMention(candidate: string, botUsernames: Array<string | null>): boolean {
+  if (!candidate.startsWith("@")) return false;
+  const normalizedCandidate = normalizeTelegramUsername(candidate);
+  return botUsernames.some((u) => u && normalizeTelegramUsername(u) === normalizedCandidate);
+}
+
+/** Removes bare mentions of the community's own deployed Watcher bots from
+ *  a link-candidate list, leaving every OTHER link/handle untouched -- a
+ *  real phishing URL or an unrelated external @handle in the SAME message
+ *  is still passed through for classification/enforcement. Order-
+ *  preserving. */
+export function filterOutOwnBotMentions(links: string[], botUsernames: Array<string | null>): string[] {
+  if (!botUsernames.some(Boolean)) return links;
+  return links.filter((l) => !isOwnBotMention(l, botUsernames));
+}
+
 /** Enough normalization for sensible spam/history comparison (spec §44) --
  *  lowercases the hostname, strips a trailing slash and common tracking
  *  params, WITHOUT changing destination identity (path/query beyond

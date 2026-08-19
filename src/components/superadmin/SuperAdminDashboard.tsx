@@ -5,7 +5,9 @@ import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
   PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag, Megaphone, Boxes,
+  Wrench,
 } from "lucide-react";
+import { WatchDevOpsAdmin } from "./WatchDevOpsAdmin";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
@@ -1534,6 +1536,7 @@ const TABS = [
   { k: "pricing", label: "Design pricing", icon: Tag },
   { k: "landing", label: "Landing video", icon: PlayCircle },
   { k: "support", label: "Support", icon: LifeBuoy },
+  { k: "watch-devops", label: "Watch devops", icon: Wrench },
 ];
 
 export function SuperAdminDashboard() {
@@ -1588,6 +1591,7 @@ export function SuperAdminDashboard() {
         {tab === "pricing" && <DesignPricingAdmin />}
         {tab === "landing" && <LandingTab />}
         {tab === "support" && <SupportTab />}
+        {tab === "watch-devops" && <WatchDevOpsAdmin />}
       </div>
     </div>
   );

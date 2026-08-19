@@ -5,8 +5,10 @@ import {
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
-  finalizeCommunityConnection,
+  finalizeCommunityConnection, runLinkModeration, type ChatterDeployment,
 } from "./community-runtime";
+import type { CommunityEvent } from "./event-types";
+import { DEFAULT_MODERATOR_PERSONA } from "./domain";
 import {
   buildStandaloneModeratorSettings, resolveStandaloneModeratorSettings, resolveWatcherAccountId,
 } from "@/src/lib/products/watch-runtime";
@@ -1124,4 +1126,102 @@ test("REQUIRED: loadRelevantKnowledge with panelId: null skips the ORGANIZATION-
   const results = await loadRelevantKnowledge(admin, null, "community-1", "anything");
   const surfacedTitles = (results ?? []).map((r) => r.title);
   assert.ok(!surfacedTitles.includes("Org fact"), "ORGANIZATION-scope knowledge must never leak into a standalone (panel-less) community");
+});
+
+/* ------------------------------------------------- runLinkModeration (self-mention) ---- */
+/* Live bug: a legitimate mention of a Watcher's OWN Telegram username was
+   being deleted and warned as scam/promotion merely because it contained an
+   @username. Fixed in link-moderation.ts (filterOutOwnBotMentions) --
+   these are the integration-level proofs that runLinkModeration itself
+   never reaches classification/enforcement for a bare self-mention. */
+
+function buildLinkModerationEvent(text: string): CommunityEvent {
+  return {
+    panelId: null,
+    communityId: "community-1",
+    integrationId: "integration-1",
+    messageId: "msg-1",
+    sender: { platformUserId: "user-1", isBot: false, senderType: "HUMAN", displayName: "Sam", username: "sam_h" },
+    timestamp: new Date().toISOString(),
+    text,
+    replyToMessageId: null,
+    origin: "HUMAN",
+    interactionDepth: 0,
+    causationMessageId: null,
+  };
+}
+
+const MR_PRES_DEPLOYMENT: ChatterDeployment = {
+  deploymentId: "dep-1", moderatorName: "Mr Pres", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "mrpreswan_bot",
+};
+
+test("REQUIRED (live bug, NO HIDDEN FALLBACK): a message containing ONLY the Watcher's own @username + greeting never touches the DB or Telegram -- structurally proves no deletion/warning can happen", async () => {
+  const admin = throwingAdmin();
+  const result = await runLinkModeration(
+    admin, null, { id: "community-1" }, "-1001",
+    buildLinkModerationEvent("@mrpreswan_bot hello"),
+    [MR_PRES_DEPLOYMENT],
+    new Date()
+  );
+  assert.deepEqual(result, { handled: false, collabRoutable: false });
+});
+
+test("REQUIRED (live bug): the Watcher's own mention in a normal sentence is also never treated as a moderation candidate", async () => {
+  const admin = throwingAdmin();
+  const result = await runLinkModeration(
+    admin, null, { id: "community-1" }, "-1001",
+    buildLinkModerationEvent("hey @mrpreswan_bot what do you think about this proposal?"),
+    [MR_PRES_DEPLOYMENT],
+    new Date()
+  );
+  assert.deepEqual(result, { handled: false, collabRoutable: false });
+});
+
+test("REQUIRED: the same self-mention with different casing is still recognized and exempted", async () => {
+  const admin = throwingAdmin();
+  const result = await runLinkModeration(
+    admin, null, { id: "community-1" }, "-1001",
+    buildLinkModerationEvent("@MrPresWan_Bot good morning"),
+    [MR_PRES_DEPLOYMENT],
+    new Date()
+  );
+  assert.deepEqual(result, { handled: false, collabRoutable: false });
+});
+
+test("REQUIRED (multi-Watcher, requirement 8): mentioning a DIFFERENT deployed Watcher's username is also exempt -- Test never treats Kwan's mention as its own scam signal", async () => {
+  const kwan: ChatterDeployment = { deploymentId: "dep-kwan", moderatorName: "Kwan", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "kwan_mod_bot" };
+  const test1: ChatterDeployment = { deploymentId: "dep-test", moderatorName: "Test", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "test1_mod_bot" };
+  const admin = throwingAdmin();
+  const result = await runLinkModeration(
+    admin, null, { id: "community-1" }, "-1001",
+    buildLinkModerationEvent("@kwan_mod_bot can you help me?"),
+    [test1, kwan], // Test is deployments[0] (the enforcer) -- proves the exemption isn't limited to "only the mentioned bot"
+    new Date()
+  );
+  assert.deepEqual(result, { handled: false, collabRoutable: false });
+});
+
+test("an arbitrary external @username with no other link and no other suspicious content is NOT exempt by this mechanism -- it still reaches real moderation logic (proven by requiring a DB touch, unlike the self-mention cases above which never touch the DB at all)", async () => {
+  let touchedDb = false;
+  const admin = {
+    from() {
+      touchedDb = true;
+      return { select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) };
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+  try {
+    await runLinkModeration(
+      admin, null, { id: "community-1" }, "-1001",
+      buildLinkModerationEvent("@totally_unrelated_person said hi"),
+      [MR_PRES_DEPLOYMENT],
+      new Date()
+    );
+  } catch {
+    // The minimal fake admin above doesn't implement every table this code
+    // path reaches beyond the first real DB touch -- a thrown error past
+    // that point is expected and irrelevant; only whether the DB was
+    // touched at all matters for this test.
+  }
+  assert.equal(touchedDb, true, "an arbitrary external handle (not the Watcher's own) must still reach real moderation logic, never silently exempted");
 });

@@ -43,6 +43,19 @@ export function isWatchHostname(host: string, vercelEnv: string | undefined = pr
 }
 
 /**
+ * True only when running under Vercel's Preview environment. Used to
+ * hard-gate superadmin actions that must never be exercisable in Production
+ * (e.g. manually granting a "devops" Watch subscription for testing) --
+ * checked server-side, in the action itself, never only hidden in the UI. A
+ * plain local/CI build (VERCEL_ENV unset) is deliberately NOT treated as
+ * Preview here -- callers that also want to allow local testing should check
+ * for that separately and explicitly, never fold it into this function.
+ */
+export function isPreviewEnvironment(vercelEnv: string | undefined = process.env.VERCEL_ENV): boolean {
+  return vercelEnv === "preview";
+}
+
+/**
  * CLIENT-side link prefix for a panel's own storefront pages, based on the host the
  * browser is actually on:
  *   - app host (innvil.cloud, localhost, *.vercel.app) → "/p/<subdomain>"

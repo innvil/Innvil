@@ -127,6 +127,90 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Fixed: a legitimate Watcher self-mention was deleted/warned as spam + superadmin Watch devops subscription grant (Preview-only) (v1.47.15)
+- **Root cause, found by tracing the actual pipeline (message received -> entity extraction -> spam/scam
+  classification -> enforcement -> Watcher response), not guessed.** `extractLinks()` (`link-moderation.ts`)
+  already treats a bare `@handle` as a "link" candidate for moderation purposes (by design — "join @othergroup"
+  is functionally a t.me link). `runLinkModeration()` (`community-runtime.ts`) then gated purely on "were ANY
+  link-like things found" and handed the WHOLE message text to `classifyLinkIntent` (Sonnet 5) for
+  classification, with no concept of "this @handle is the bot's own username, not an external reference." A
+  message like `@mrpreswan_bot hello` was therefore classified exactly like an external promotional link, and
+  the AI classifier — seeing an isolated `@username` with no other context — plausibly mislabeled it
+  `UNSOLICITED_PROMOTION` (confirmed live via `moderator_activity_log`), triggering `DELETE_WARN`: the user's
+  message deleted, a warning issued, for legitimately addressing the Watcher by name.
+- **Fix, at the extraction/gating layer — not the AI prompt, not the deterministic policy.** New pure
+  `filterOutOwnBotMentions(links, botUsernames)` + `isOwnBotMention` + `normalizeTelegramUsername`
+  (`link-moderation.ts`) strip bare mentions of the community's own deployed Watcher bot usernames OUT of the
+  candidate list BEFORE classification ever runs — sourced from `ChatterDeployment.botUsername`
+  (`telegram_bot_integrations.username`, the SAME trusted runtime bot identity every other addressing/routing
+  decision already reads), never a hardcoded name, never a manual whitelist. If a message contains ONLY a
+  self-mention (no other link), `runLinkModeration` now returns `{handled:false}` immediately — zero DB calls,
+  zero AI calls, zero Telegram calls, structurally proving no deletion/warning can happen. Any OTHER link in
+  the same message (a real phishing URL, an unrelated external @handle) is left completely untouched and still
+  evaluated normally — `@Watcher click <phishing-link>` is still classified and still enforceable; the
+  exemption is narrowly "the self-mention itself isn't suspicious," never "this message is exempt." Also added
+  one clarifying line to the classification system prompt (`link-classify.ts`): a bare @username alone, with
+  no other suspicious content, is not sufficient for PHISHING_OR_SCAM/UNSOLICITED_PROMOTION — a narrow
+  reinforcement, not a weakening of any existing detection rule.
+- **Multi-Watcher correct by construction**: `filterOutOwnBotMentions` is given EVERY deployed bot's username
+  in the community (not just the one processing the update), so mentioning `@KwanBot` is exempt for every
+  Watcher's own moderation pass, not just Kwan's — satisfies "Test must not treat Kwan's mention as its own
+  scam signal." Direct-address ROUTING itself (`resolveDirectedModerator`/`selectChatterAction`,
+  `chatter-coordinator.ts`) is completely untouched — this fix only changes the moderation GATE, never the
+  message text, so a Watcher still correctly recognizes it's being addressed and can still respond.
+- **Telegram entity-aware parsing (mention/text_mention) was investigated and confirmed NOT supported anywhere
+  in this codebase's ingestion pipeline today** — `CommunityEvent` carries only raw `text`, no `entities` array
+  is captured from the Telegram update at all. Building that support is a real, separate, larger architecture
+  change (spans `event-types.ts` and the webhook ingestion), out of scope for this root-cause fix; the regex +
+  canonical-normalization approach fully resolves the reported bug. Documented as a known gap, not silently
+  skipped.
+- **Investigated "it doesn't send any messages" as a possible rate-limit issue — confirmed NOT a plan/quota
+  problem.** Checked `community_reactive_quota` for the affected community/day: zero rows (0/20 of the trial's
+  `TRIAL_REACTIVE_DAILY_LIMIT` used). `moderator_activity_log` showed the real explanation: several messages
+  were legitimately `SILENCE`d (`empty_message`, `trivial_low_value` — correct, unrelated to this bug), and
+  the false-positive warning itself put the room into `already_handled` continuity state for several minutes
+  afterward, correctly (by existing design) suppressing further chatter replies in that window — a real
+  cascade FROM the same bug, not a separate rate-limit issue. Fixing the self-mention bug directly resolves
+  this symptom too.
+- **New: superadmin can manually grant a Watch subscription tier to an account for live QA — Preview-only.**
+  New `src/lib/actions/superadmin-watch-devops.ts` — `findAccountByEmail` (reuses the existing
+  `auth_user_id_by_email` RPC, migration 0038, no second email->id lookup), `getAccountDevOpsSubscription`
+  (read-only, NOT Preview-gated — a superadmin must still be able to SEE an account's real entitlement from
+  Production), and the two MUTATING actions `setAccountDevOpsSubscription`/`clearAccountDevOpsSubscription`,
+  both hard-gated server-side on new `isPreviewEnvironment()` (`config.ts`, `VERCEL_ENV === "preview"`) — fail
+  explicitly outside Preview, never a silent no-op, and never only hidden in the UI. Reuses the EXACT canonical
+  `activateWatchEntitlement` (`ownership.ts`) every real paid purchase already calls — never a second/parallel
+  entitlement-writing path — tagging the grant distinctly (`subscription_ref: "<tier>:devops:<superadminId>:
+  <timestamp>"`, vs. a real purchase's `"<tier>:<depositId>"`) so it's always visually distinguishable and so
+  `clearAccountDevOpsSubscription` refuses to ever touch a row that isn't itself devops-tagged (never
+  accidentally cancels a real paid subscription). **"Brought live" clarified**: Preview and Production read/
+  write the SAME Supabase project (confirmed this session) — there is no separate promotion step; a devops
+  entitlement granted on Preview is immediately the account's real entitlement everywhere, including
+  Production. Only the ACT of granting/revoking it this way is Preview-restricted.
+- New UI: `src/components/superadmin/WatchDevOpsAdmin.tsx` (email search -> current entitlement state -> tier
+  picker + grant/clear), mounted in BOTH superadmin surfaces per this codebase's established dual-mount
+  convention — the `/superadmin` route (new "Watch devops" tab) and the owner-app super-admin sidebar (new
+  "Watch devops" section, `isSuper`-gated, matching Products/Design pricing).
+- New tests: `link-moderation.test.ts` (+13 — the exact live-bug repro, case-insensitive/optional-@ matching,
+  multi-Watcher exemption, real-phishing-link-still-enforceable, arbitrary external handle NOT exempted,
+  no-op-with-no-known-bots), `community-runtime.test.ts` (+5 integration-level — a bare self-mention structurally
+  never touches the DB/Telegram (NO HIDDEN FALLBACK-style proof), same-sentence and different-casing variants,
+  the multi-Watcher requirement 8 case, an arbitrary external handle confirmed to still reach real moderation
+  logic), `config.test.ts` (+3 — `isPreviewEnvironment`'s exact gate). 1345 tests pass (up from 1333),
+  `tsc --noEmit` clean, production build clean. Diff reviewed: 11 files, every one maps directly to this
+  scope — no broad spam/scam weakening, no hardcoded bot usernames, no global whitelist, no duplicated entity
+  parsing, no coordinator/single-enforcer regression (verified: `chatter-coordinator.ts` untouched).
+- **Live verification status, stated honestly**: deployed to Preview and confirmed via direct DB inspection
+  (temporary, removed diagnostic routes — never committed) that the exact live account/community/bot involved
+  in the original report now has this fix live, and that quota/activity logs match the analysis above. Did
+  **not** send a fresh live Telegram message end-to-end to visually confirm post-fix behavior in this pass —
+  marking that as **unverified live** rather than claiming it was proven; the fix is proven at the pure-logic
+  and integration-test level (13+5 new tests), and the diagnostic-route DB inspection confirmed the pre-fix
+  failure mode exactly matches the described bug with no other contributing cause found.
+- **Not deployed automatically** — commit is local; will deploy to Preview on request (this pass's live
+  diagnostic inspection above was done via a separate already-authorized Preview deployment mid-session, not
+  this final committed state).
+
 ### 2026-08-19 — Removed Settings' Moderation Defaults + fixed live "Connect community" DB error (v1.47.14)
 - **Removed Settings → Moderation, per explicit product decision.** Now that persona is always an explicit
   per-Watcher assignment (v1.47.11 — `createAccountWatcher` no longer inherits an account-wide default), the

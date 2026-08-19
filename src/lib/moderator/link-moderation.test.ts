@@ -4,6 +4,7 @@ import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, PROMOTION_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -54,6 +55,75 @@ test("normalizeLink treats different paths on the same host as different destina
 test("linkHash is stable for the same normalized link and differs for different ones", () => {
   assert.equal(linkHash("https://example.com/a?utm_source=x"), linkHash("https://example.com/a?utm_medium=y"));
   assert.notEqual(linkHash("https://example.com/a"), linkHash("https://example.com/b"));
+});
+
+/* --------------------------------------------------------- self-mention exemption ---- */
+/* Live bug: a legitimate mention of a Watcher's OWN Telegram username was
+   being extracted as a "link" candidate and deleted/warned as scam/promotion
+   merely because it contained an @username. normalizeTelegramUsername /
+   isOwnBotMention / filterOutOwnBotMentions are the fix -- a bare mention of
+   one of the community's own deployed bot usernames is addressing, never a
+   moderation candidate, while every OTHER link in the same message is left
+   untouched. */
+
+test("normalizeTelegramUsername strips a leading @, lowercases, and trims", () => {
+  assert.equal(normalizeTelegramUsername("@MrPresWan_Bot"), "mrpreswan_bot");
+  assert.equal(normalizeTelegramUsername("  mrpreswan_bot  "), "mrpreswan_bot");
+  assert.equal(normalizeTelegramUsername("mrpreswan_bot"), "mrpreswan_bot");
+});
+
+test("REQUIRED (live bug): isOwnBotMention recognizes the Watcher's own username, case-insensitively, with or without a leading @", () => {
+  assert.equal(isOwnBotMention("@mrpreswan_bot", ["MrPresWan_Bot"]), true);
+  assert.equal(isOwnBotMention("@MRPRESWAN_BOT", ["mrpreswan_bot"]), true);
+});
+
+test("isOwnBotMention returns false for a candidate that isn't a bare @handle at all (a URL)", () => {
+  assert.equal(isOwnBotMention("https://example.com", ["mrpreswan_bot"]), false);
+});
+
+test("isOwnBotMention returns false for an unrelated external handle", () => {
+  assert.equal(isOwnBotMention("@some_random_scammer", ["mrpreswan_bot"]), false);
+});
+
+test("isOwnBotMention safely handles null/empty bot usernames (never crashes, never a false match)", () => {
+  assert.equal(isOwnBotMention("@anything", [null, null]), false);
+  assert.equal(isOwnBotMention("@anything", []), false);
+});
+
+test("REQUIRED (live bug repro): filterOutOwnBotMentions removes ONLY the self-mention, leaving the message with zero moderation candidates", () => {
+  const links = extractLinks("@mrpreswan_bot hello");
+  assert.deepEqual(links, ["@mrpreswan_bot"]);
+  assert.deepEqual(filterOutOwnBotMentions(links, ["mrpreswan_bot"]), []);
+});
+
+test("REQUIRED: a self-mention in a normal sentence is still exempt", () => {
+  const links = extractLinks("hey @mrpreswan_bot what do you think about this?");
+  assert.deepEqual(filterOutOwnBotMentions(links, ["mrpreswan_bot"]), []);
+});
+
+test("REQUIRED (requirement 4 -- real threats still enforceable): a self-mention alongside a REAL phishing link only removes the self-mention, the phishing link remains a candidate", () => {
+  const links = extractLinks("@mrpreswan_bot click https://totally-legit-wallet-drainer.xyz now!");
+  const filtered = filterOutOwnBotMentions(links, ["mrpreswan_bot"]);
+  assert.deepEqual(filtered, ["https://totally-legit-wallet-drainer.xyz"]);
+});
+
+test("REQUIRED (requirement 8 -- multi-Watcher): mentioning a DIFFERENT deployed Watcher's username is also exempt for every deployed bot, not just the one mentioned", () => {
+  const links = extractLinks("@kwan_mod_bot what do you think?");
+  // Simulates Test's own moderation pass in a community where both Kwan and
+  // Test are deployed -- Test must never treat a mention of Kwan's username
+  // as a spam signal just because it isn't Test's own username.
+  assert.deepEqual(filterOutOwnBotMentions(links, ["kwan_mod_bot", "test1_mod_bot"]), []);
+});
+
+test("an arbitrary external @username with no other suspicious content is NOT removed by this exemption (it's still a real candidate -- classification, not extraction, is what must judge it fairly)", () => {
+  const links = extractLinks("@totally_unrelated_person said hi");
+  assert.deepEqual(filterOutOwnBotMentions(links, ["mrpreswan_bot"]), ["@totally_unrelated_person"]);
+});
+
+test("filterOutOwnBotMentions is a no-op when no bot usernames are known (never accidentally exempts everything)", () => {
+  const links = extractLinks("@somebody hello https://example.com");
+  assert.deepEqual(filterOutOwnBotMentions(links, [null, null]), links);
+  assert.deepEqual(filterOutOwnBotMentions(links, []), links);
 });
 
 /* -------------------------------------------------------------------- flood window ---- */

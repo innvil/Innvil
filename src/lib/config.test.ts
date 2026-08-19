@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isTrustedWatchHost, isWatchHostname, WATCH_ROOT_DOMAIN } from "./config";
+import { isTrustedWatchHost, isWatchHostname, WATCH_ROOT_DOMAIN, isPreviewEnvironment } from "./config";
 
 const PREVIEW_ALIAS = "innvil-git-rebrand-innvil-v020-ako-me.vercel.app";
 
@@ -74,4 +74,24 @@ test("REQUIRED: the same Preview alias hostname is NOT treated as Watch outside 
 test("comparison is case-insensitive for both the production and preview rules", () => {
   assert.equal(isWatchHostname(WATCH_ROOT_DOMAIN.toUpperCase(), "production"), true);
   assert.equal(isWatchHostname(PREVIEW_ALIAS.toUpperCase(), "preview"), true);
+});
+
+/**
+ * isPreviewEnvironment -- the hard server-side gate behind the superadmin
+ * "Watch devops subscription" grant/clear actions (superadmin-watch-devops.ts).
+ */
+
+test("REQUIRED: isPreviewEnvironment is true only for VERCEL_ENV=preview", () => {
+  assert.equal(isPreviewEnvironment("preview"), true);
+});
+
+test("REQUIRED: isPreviewEnvironment is false for production, development, and unset", () => {
+  assert.equal(isPreviewEnvironment("production"), false);
+  assert.equal(isPreviewEnvironment("development"), false);
+  assert.equal(isPreviewEnvironment(undefined), false);
+});
+
+test("isPreviewEnvironment does not fuzzy-match -- an unrelated string is never treated as preview", () => {
+  assert.equal(isPreviewEnvironment("Preview"), false);
+  assert.equal(isPreviewEnvironment("preview "), false);
 });
