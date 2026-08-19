@@ -127,6 +127,57 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Help Center layout refined into a real 3-column docs workspace (v1.47.6)
+- **Root cause, found before editing.** `WatchShell`'s `<main>` is `max-w-[1400px]` — every other Watch page
+  (Usage/Billing/Watchers/etc.) already uses that width via its own grid layout, but all three `/support`
+  routes self-constrained to a much narrower inner div (`max-w-3xl`/`max-w-2xl`) with nothing else beside it,
+  leaving a large empty gutter on any screen wider than ~1000px. This is a layout-only pass — zero docs content
+  was rewritten, no other Watch page/route/business logic was touched.
+- **New shared docs chrome**, reused by all three routes (home/category/article) rather than duplicated per
+  page: `HelpDocsNav.tsx` — a quiet, narrow (`w-44`) internal category nav, deliberately NOT styled like the
+  main `WatchShell` app sidebar (no icons, smaller text, subtle active state), sticky on desktop
+  (`hidden lg:block`, so it appears at the laptop breakpoint and up); `HelpDocsNavMobile` — the same category
+  list as a horizontal scrollable pill row below `lg` (no drawer/overlay — avoids a nested scroll trap, per
+  explicit instruction). `HelpRightRail.tsx` — `HelpHomeRail` (a real "Get started" quick-link block + the
+  Contact Support fallback, `hidden xl:block`) and `HelpArticleRail` (Related articles + the same Contact
+  fallback). Every nav/rail category or article list is still filtered through the SAME "zero real articles ->
+  never shown" rule the home page already used — no dead links introduced by the new chrome.
+- **Three-column desktop layout** on all three routes (`flex gap-8`: docs nav | main `flex-1 min-w-0` | rail):
+  Help Center home (search + Popular + Categories, both grids widened `sm:grid-cols-2` → `lg:grid-cols-3` so
+  they actually use the reclaimed width instead of two columns of mostly-empty cards); the category listing
+  page; the article page (article prose itself stays wrapped in an inner `max-w-2xl` for a comfortable reading
+  measure — the extra column width goes to nav/rail/related content, never to stretched paragraph lines, per
+  explicit instruction).
+- **No "On this page" TOC was added** — this content model is flat paragraphs with no internal sub-headings, so
+  a per-article TOC would have no real anchors to link to; deliberately omitted rather than faked with
+  fragment ids that go nowhere, per the explicit "hide/omit rather than show a meaningless empty TOC" instruction.
+- **Contact Support never disappears at any width** — `HelpHomeRail`/`HelpArticleRail` are `xl:only` (need real
+  room for a 3rd column), so every page also renders the identical `ContactSupportRail` inline (`xl:hidden`)
+  below the main content for laptop/tablet/mobile — confirmed via review that exactly one instance of the
+  contact block (and, on article pages, of the Related block) is ever visible at any single breakpoint, never
+  both the inline and rail copies stacked together on wide desktop.
+- **Responsive summary**: wide desktop (`xl`, 1280px+) = nav + main + rail; laptop (`lg`, 1024–1279px) = nav +
+  main, rail content moves inline below; tablet/mobile (below `lg`) = single column, category nav becomes the
+  horizontal pill row, rail content inline. No new horizontal-scroll surface anywhere except the deliberate
+  pill row itself.
+- No changes to `HelpSearch.tsx`/`content.ts` — search behavior, article content, and the canonical-data wiring
+  from v1.47.5 are completely untouched. 1302 tests pass (unchanged — this pass is layout/component-composition
+  only; the report's own test list is almost entirely responsive-CSS behavior, which this codebase has no RTL/
+  jsdom infrastructure to assert on, consistent with every prior Watch UI layout pass), `tsc --noEmit` clean,
+  production build clean (`/support`, `/support/[category]`, `/support/[category]/[slug]` all still present,
+  unchanged route count).
+- **Not live-verified at the requested viewport widths this pass** — `/support` is auth-gated
+  (`requireWatchPage()`), and (consistent with every other authenticated-flow verification in this session) a
+  real Supabase session isn't practically simulatable in this sandbox; verified instead via careful review of
+  the actual Tailwind breakpoints used (`lg`=1024px/`xl`=1280px, standard/unmodified in this project) against
+  the exact desktop/laptop/tablet/mobile behavior requested, plus `tsc --noEmit` + full test suite + production
+  build.
+- **Deliberately not built this pass**: a distinct right-rail module for the category listing page (reuses
+  `HelpHomeRail`'s Get-started + Contact rather than inventing a third rail variant — judged sufficient content
+  for that page); sticky behavior for the mobile pill nav (only the desktop rails/nav are sticky, per "only if
+  it works cleanly with the current shell" — the mobile pill row scrolls with the page, avoiding any risk of a
+  second sticky layer stacking under the shell's own sticky topbar).
+
 ### 2026-08-19 — `/support` becomes a real Innvil Watch Help Center (search + categories + articles), Contact Support kept as the fallback (v1.47.5)
 - **Investigated first.** `/support` was a single contact form (`SupportContactForm`, an existing account-scoped
   support-message channel) with no self-service content anywhere — every FAQ/explanatory copy in this codebase
