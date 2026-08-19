@@ -24,3 +24,38 @@ export function communityOperationalStatus(community: { watchers: CommunityWatch
   if (community.watchers.some((w) => w.enabled)) return "healthy";
   return "paused";
 }
+
+export type WatcherOperationalStatus = "active" | "paused" | "unassigned";
+
+export interface WatcherDeploymentLike { watcherId: string; enabled: boolean }
+
+/** Deterministic per-Watcher operational status from the same real
+ *  deployment data every other Watcher surface already reads -- "active"
+ *  (at least one enabled deployment), "paused" (deployed, but every
+ *  deployment disabled), or "unassigned" (not deployed to a Community at
+ *  all). Reused by the Watcher navigator (compact row status) and the
+ *  Watchers list's own filter chips, so the two can never disagree about
+ *  what "active"/"paused" means for a Watcher. */
+export function watcherOperationalStatus(watcherId: string, deployments: WatcherDeploymentLike[]): WatcherOperationalStatus {
+  const own = deployments.filter((d) => d.watcherId === watcherId);
+  if (own.length === 0) return "unassigned";
+  return own.some((d) => d.enabled) ? "active" : "paused";
+}
+
+export interface CommunityWithWatcherDeployments {
+  id: string;
+  title?: string | null;
+  chatId?: string;
+  watchers: Array<{ watcherId: string; enabled: boolean }>;
+}
+
+/** Flattens the per-Community watcher-deployment lists (as returned by
+ *  `listAccountCommunities`) into one flat per-deployment list keyed by
+ *  Watcher id -- the exact shape the Watcher navigator and the Watchers
+ *  list page both need, computed once from the same source data rather
+ *  than re-derived independently in each route. */
+export function deploymentSummaries(communities: CommunityWithWatcherDeployments[]): Array<{ watcherId: string; communityTitle: string; enabled: boolean }> {
+  return communities.flatMap((c) =>
+    c.watchers.map((w) => ({ watcherId: w.watcherId, communityTitle: c.title ?? c.chatId ?? "", enabled: w.enabled }))
+  );
+}

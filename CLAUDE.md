@@ -127,6 +127,71 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Watchers restructured into a scalable CRM master/detail layout (v1.47.13)
+- **Root UX problem.** `/watchers` was a flat table; opening a Watcher fully REPLACED the workspace with a
+  large standalone detail page — no persistent way to jump between Watchers without going back to the list
+  first. With more than a couple of Watchers, navigating between them would get cumbersome and there was no
+  scalable pattern for a growing roster.
+- **Final structure: `App sidebar | Watcher navigator | Watcher detail`**, a genuine CRM-style master/detail —
+  the navigator lives INSIDE the Watchers workspace only (never added to `WatchShell`'s global sidebar, which
+  is completely untouched this pass — confirmed via `git diff`, zero changes). New
+  `src/components/watch/WatcherNavigator.tsx` — compact scrollable list (name, a status dot + deployment-count
+  line, a "Connect" action for unassigned Watchers), a search box + status filter chips (shown once there are
+  4+ Watchers, so 1-2 Watchers stay uncluttered), and a small icon-only "+" create button. Exactly one Watcher's
+  detail is ever rendered at a time — the navigator has no capability to show more than one detail pane.
+- **Selection is route-driven, not client-only state.** Every navigator row is a plain `<Link href="/watchers/
+  [id]">` — the SAME two pre-existing routes (`app/watchers/page.tsx`, `app/watchers/[id]/page.tsx`) still exist,
+  unchanged in shape/path, so deep links, `notFound()` on an invalid/unowned id, and browser back/forward all
+  keep working exactly as before. New `src/components/watch/WatchersWorkspaceClient.tsx` is the shared shell
+  both routes render into — `selectedId={null}` on `/watchers` (nothing chosen yet), `selectedId={id}` on
+  `/watchers/[id]` (with the server-rendered tabs content passed in as a `detail` prop, the same established
+  "server JSX passed into a client component" pattern `WatchTabs` already used).
+- **Responsive**: desktop always shows navigator + detail together. Mobile shows exactly one column — the
+  navigator alone (acting as the Watchers list "screen") when nothing's selected, or the detail pane alone
+  (with a small "← Watchers" back link, `lg:hidden`) once a specific Watcher's route is loaded. No third
+  column, no horizontal Watcher strip, no simultaneous multi-detail rendering anywhere.
+- **Create/connect actions preserved, not duplicated.** `WatchersWorkspaceClient` owns the Create-Watcher modal
+  (reuses the shared `Modal` from `WatchUI.tsx`, same as v1.47.12's Persona picker) and the navigator's per-row
+  "Connect" action (opens the existing `WatcherConnectModal`, unchanged) — the detail pane's own big "Connect to
+  Telegram"/"Connect a Community" button (`WatcherConnectCta`, `WatcherDetailClient.tsx`) is untouched and
+  self-contained, so there are two independent entry points into the SAME connect flow, never two competing
+  implementations.
+- **No duplicated Watcher data loading**: new pure helpers in `watch-status.ts` — `watcherOperationalStatus`
+  (active/paused/unassigned, the same real deployment-derived definition the old flat list's inline `statusOf`
+  used) and `deploymentSummaries` (flattens `listAccountCommunities`'s per-Community watcher lists into one
+  per-deployment row list) — are now the SINGLE source both `app/watchers/page.tsx` and `app/watchers/[id]/
+  page.tsx` call, instead of each page re-deriving the same `.flatMap(...)` independently. The detail route does
+  fetch two more queries than before (`listAccountWatchers`/`listAccountCommunities`, for the navigator) — a
+  legitimate, necessary cost of adding a persistent navigator alongside the detail pane, not duplicate loading
+  of the same data for the same purpose.
+- **Old flat list UI deleted outright** — `src/components/watch/WatchersClient.tsx` (`WatchersListClient`) is
+  fully superseded by `WatcherNavigator`/`WatchersWorkspaceClient`; confirmed via grep it had zero remaining
+  importers before deletion. `Breadcrumbs` dropped from the detail pane (redundant now that the navigator
+  itself provides "you're in Watchers, here's the list" context on desktop, and the new mobile back link covers
+  the same need on mobile) — no duplicate Watcher headers remain.
+- **Persona tab unaffected, already correct from v1.47.12** — `WatcherPersonaTab.tsx`/`PersonaPresetPicker.tsx`/
+  `presets.ts` are byte-for-byte untouched this pass (confirmed via `git diff`). It still renders inside the
+  detail pane's existing "Persona" tab, still scoped by `moderatorId={detail.id}` (the currently selected
+  Watcher, unchanged), so "Persona description → Current preset (compact) → Behavior instructions" and the
+  focused preset-picker modal carry forward correctly into the new layout with no changes needed.
+- **Ownership semantics reconfirmed unchanged**: `watch-watcher-persona.ts` (per-Watcher persona mutations) and
+  the deployment-ownership logic in `watch-runtime.ts` were not touched — Community/deployment still never own
+  Persona; only the Watcher profile does.
+- New tests (`watch-status.test.ts`, +11, new file): `watcherOperationalStatus`'s full active/paused/unassigned
+  truth table incl. cross-Watcher isolation (one Watcher's deployments never bleed into another's status),
+  `deploymentSummaries`' flattening + title/chatId fallback + empty-Communities case, an end-to-end composition
+  test proving the two functions agree when chained exactly as the navigator uses them, plus 3 tests for the
+  previously-untested `communityOperationalStatus`. 1333 tests pass (up from 1322), `tsc --noEmit` clean,
+  production build clean (confirmed `/watchers` and `/watchers/[id]` are still the only two Watcher routes — no
+  route regression, no new/removed paths).
+- **No React component-interaction tests** ("navigator renders multiple Watchers," "selecting a Watcher,"
+  "mobile list-to-detail") — consistent with this codebase's established convention of zero RTL/jsdom
+  infrastructure anywhere (reconfirmed again this pass); the underlying pure logic every one of those behaviors
+  depends on (status/filter computation, deployment-summary construction, route-driven `selectedId` matching)
+  is fully unit-tested instead. Verified via typecheck + full test suite + production build + code review of
+  the responsive class logic, not live browser interaction (no authenticated session available this pass).
+- **Not deployed this pass, per explicit instruction.**
+
 ### 2026-08-19 — Watcher Persona tab: compact "current preset" card + a focused preset picker modal (v1.47.12)
 - **Root cause / UX issue.** The per-Watcher Persona tab (`WatcherPersonaTab.tsx`) showed a large,
   always-expanded preset grid sitting directly in the main content flow between the description and behavior-

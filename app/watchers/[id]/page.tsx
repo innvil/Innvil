@@ -3,14 +3,16 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Bot, Radio, Settings as SettingsIcon } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountWatcherDetail } from "@/src/lib/products/watch-runtime";
+import { getAccountWatcherDetail, listAccountWatchers, listAccountCommunities } from "@/src/lib/products/watch-runtime";
 import { listAccountProjects } from "@/src/lib/products/ownership";
+import { deploymentSummaries } from "@/src/lib/products/watch-status";
 import { WatchShell } from "@/src/components/watch/WatchShell";
-import { Breadcrumbs, StatusDot, EmptyRow, SectionHeader, relTime } from "@/src/components/watch/WatchUI";
+import { StatusDot, EmptyRow, SectionHeader, relTime } from "@/src/components/watch/WatchUI";
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { DeploymentToggle } from "@/src/components/watch/DeploymentToggle";
 import { WatcherConnectCta } from "@/src/components/watch/WatcherDetailClient";
 import { WatcherPersonaTab } from "@/src/components/watch/WatcherPersonaTab";
+import { WatchersWorkspaceClient } from "@/src/components/watch/WatchersWorkspaceClient";
 
 export const metadata: Metadata = { title: "Watcher — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -37,8 +39,10 @@ export default async function WatcherDetailPage({
   const { id } = await params;
   const { tab } = await searchParams;
   const { accountId, admin } = await requireWatchPage();
-  const [detail, projects, shell] = await Promise.all([
+  const [detail, allWatchers, communities, projects, shell] = await Promise.all([
     getAccountWatcherDetail(admin, accountId, id),
+    listAccountWatchers(admin, accountId),
+    listAccountCommunities(admin, accountId),
     listAccountProjects(admin, accountId),
     getWatchShellContext(admin, accountId),
   ]);
@@ -175,23 +179,32 @@ export default async function WatcherDetailPage({
     },
   ];
 
+  const detailContent = (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-xs w-text-faint uppercase tracking-wide font-semibold mb-1 flex items-center gap-1.5"><Bot size={12} /> Watcher</p>
+          <h1 className="w-display text-xl mb-1">{detail.name}</h1>
+          <p className="text-sm w-text-dim">{STATUS_LABEL[detail.provisioningStatus] ?? detail.provisioningStatus}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <StatusDot on={hasActive} onLabel="Active" offLabel={detail.deployments.length === 0 ? "Not deployed" : "Paused"} />
+          <WatcherConnectCta watcher={detail} projects={projects} />
+        </div>
+      </div>
+      <WatchTabs tabs={tabs} defaultTab={tab === "persona" || tab === "deployments" || tab === "activity" || tab === "settings" ? tab : "overview"} />
+    </div>
+  );
+
   return (
     <WatchShell active="watchers" capacity={shell.capacity} attentionCount={shell.attentionCount}>
-      <div className="space-y-6">
-        <Breadcrumbs items={[{ href: "/watchers", label: "Watchers" }, { label: detail.name }]} />
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <p className="text-xs w-text-faint uppercase tracking-wide font-semibold mb-1 flex items-center gap-1.5"><Bot size={12} /> Watcher</p>
-            <h1 className="w-display text-xl mb-1">{detail.name}</h1>
-            <p className="text-sm w-text-dim">{STATUS_LABEL[detail.provisioningStatus] ?? detail.provisioningStatus}</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <StatusDot on={hasActive} onLabel="Active" offLabel={detail.deployments.length === 0 ? "Not deployed" : "Paused"} />
-            <WatcherConnectCta watcher={detail} projects={projects} />
-          </div>
-        </div>
-        <WatchTabs tabs={tabs} defaultTab={tab === "persona" || tab === "deployments" || tab === "activity" || tab === "settings" ? tab : "overview"} />
-      </div>
+      <WatchersWorkspaceClient
+        watchers={allWatchers}
+        deployments={deploymentSummaries(communities)}
+        projects={projects}
+        selectedId={id}
+        detail={detailContent}
+      />
     </WatchShell>
   );
 }

@@ -2,11 +2,18 @@ import type { Metadata } from "next";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { listAccountProjects } from "@/src/lib/products/ownership";
 import { listAccountWatchers, listAccountCommunities } from "@/src/lib/products/watch-runtime";
+import { deploymentSummaries } from "@/src/lib/products/watch-status";
 import { WatchShell } from "@/src/components/watch/WatchShell";
-import { WatchersListClient } from "@/src/components/watch/WatchersClient";
+import { WatchersWorkspaceClient } from "@/src/components/watch/WatchersWorkspaceClient";
 
 export const metadata: Metadata = { title: "Watchers — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
+/** The Watchers workspace with no Watcher selected -- the master/detail
+ *  shell's "nothing picked yet" state (WatchersWorkspaceClient). On mobile
+ *  this IS the Watcher list screen; on desktop the navigator renders
+ *  alongside an empty-state detail pane. See app/watchers/[id]/page.tsx for
+ *  the selected-Watcher counterpart -- both routes render the SAME
+ *  navigator via the SAME shared client shell, never a separate list page. */
 export default async function WatchersPage() {
   const { accountId, admin } = await requireWatchPage();
   const [watchers, communities, projects, shell] = await Promise.all([
@@ -16,13 +23,15 @@ export default async function WatchersPage() {
     getWatchShellContext(admin, accountId),
   ]);
 
-  const deployments = communities.flatMap((c) =>
-    c.watchers.map((w) => ({ watcherId: w.watcherId, communityTitle: c.title ?? c.chatId, enabled: w.enabled }))
-  );
-
   return (
     <WatchShell active="watchers" capacity={shell.capacity} attentionCount={shell.attentionCount}>
-      <WatchersListClient watchers={watchers} deployments={deployments} projects={projects} />
+      <WatchersWorkspaceClient
+        watchers={watchers}
+        deployments={deploymentSummaries(communities)}
+        projects={projects}
+        selectedId={null}
+        detail={null}
+      />
     </WatchShell>
   );
 }
