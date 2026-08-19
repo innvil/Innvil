@@ -127,6 +127,18 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — One-click Telegram connect (Profile + Free Trial cards) (v1.47.10)
+- **Live UX report: connecting Telegram took two clicks** — "Connect Telegram" started verification, then a
+  second, separately-rendered "Open Telegram" link had to be clicked to actually open the deep link.
+- **Fix, both cards** (`src/components/watch/ConnectTelegramCard.tsx` on `/profile`,
+  `src/components/watch/FreeTrialCard.tsx` on `/plans`): `window.open("", "_blank")` now runs SYNCHRONOUSLY
+  inside the click handler, before the `await startWatchTelegramVerification()` call — browsers generally only
+  allow a popup as a direct result of a user gesture, not after an awaited async call, so opening blank
+  immediately and navigating that handle to the real deep link once it resolves keeps this to one click. Falls
+  back to a direct `window.open(deepLink, ...)` if the popup handle came back null/closed (blocked anyway). The
+  existing fallback "Open Telegram" link/Cancel UI in the pending state is unchanged, still usable manually.
+- 1308 tests pass (unaffected — no logic changed, UI-only), `tsc --noEmit` clean, production build clean.
+
 ### 2026-08-19 — Stable Vercel Preview alias now classifies as Innvil Watch, for this branch's QA only (v1.47.9)
 - **Root cause**: `isWatchHost()` (`watch-host.ts`) did an exact-match comparison against `WATCH_ROOT_DOMAIN`
   (`watch.innvil.cloud`) only — the stable Preview branch alias confirmed working in the prior pass

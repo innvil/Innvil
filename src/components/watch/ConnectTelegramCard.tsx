@@ -46,12 +46,20 @@ export function ConnectTelegramCard({ initial, preferences }: { initial: State; 
   const connect = async () => {
     setConnecting(true);
     setError(null);
+    // Open a blank tab SYNCHRONOUSLY, inside the click handler -- popup
+    // blockers generally only allow window.open() as a direct result of a
+    // user gesture, not after an awaited server call. Opening blank now and
+    // navigating it once the real deep link comes back keeps this to a
+    // single click instead of "Connect" then a separate "Open Telegram".
+    const popup = window.open("", "_blank");
     const res = await startWatchTelegramVerification();
     setConnecting(false);
-    if (!res.ok) { setError(res.error); return; }
+    if (!res.ok) { setError(res.error); popup?.close(); return; }
     setDeepLink(res.deepLink);
     setState({ status: "pending", expiresAt: res.expiresAt });
     startPolling();
+    if (popup && !popup.closed) popup.location.href = res.deepLink;
+    else window.open(res.deepLink, "_blank", "noopener,noreferrer"); // fallback if the popup was blocked anyway
   };
 
   const cancel = async () => {

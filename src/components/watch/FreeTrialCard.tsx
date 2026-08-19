@@ -55,11 +55,19 @@ export function FreeTrialCard({
   const connectTelegram = async () => {
     setConnecting(true);
     setError(null);
+    // Same synchronous-popup pattern as Profile's ConnectTelegramCard --
+    // open a blank tab inside the click handler (before the await) so
+    // browsers don't block it, then navigate it once the real deep link
+    // comes back. Keeps this to one click instead of "Connect" then a
+    // separate "Open Telegram".
+    const popup = window.open("", "_blank");
     const res = await startWatchTelegramVerification();
     setConnecting(false);
-    if (!res.ok) { setError(res.error); return; }
+    if (!res.ok) { setError(res.error); popup?.close(); return; }
     setDeepLink(res.deepLink);
     startPolling();
+    if (popup && !popup.closed) popup.location.href = res.deepLink;
+    else window.open(res.deepLink, "_blank", "noopener,noreferrer"); // fallback if the popup was blocked anyway
   };
 
   const cancelConnect = async () => {
