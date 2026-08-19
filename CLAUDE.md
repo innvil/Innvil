@@ -127,6 +127,28 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Watch sidebar now links to Super Admin for super_admin-role accounts (v1.47.19)
+- **Live gap, found while testing**: a super admin signed in on the Watch host (`watch.innvil.cloud`/the Watch
+  Preview alias) had no way to REACH `/superadmin` from inside Watch's own UI — `WatchShell.tsx`'s sidebar had
+  zero reference to it. The route itself was never actually broken: `/superadmin` (`app/superadmin/page.tsx`)
+  is gated purely on `getUser()` + `amSuperAdmin()` (a role check), with no host-based restriction at all, and
+  `proxy.ts`'s `RESERVED` subdomain set (which includes `"superadmin"`/`"watch"`) only governs PANEL-subdomain
+  rewriting, never blocks the literal `/superadmin` path — so it was always reachable by typing the URL
+  directly, just not discoverable from Watch's nav.
+- **Fix**: `WatchShell.tsx` now resolves the signed-in account's super-admin status client-side via the SAME
+  `amSuperAdmin()` server action the main owner-app sidebar and `/superadmin` route itself already gate on
+  (`src/lib/actions/superadmin.ts`) — no new role-check logic, no new server plumbing, mirrors the exact
+  pattern already used for the header's Innvil Credit balance fetch in the same file. When true, a new
+  **"Innvil" → "Super admin"** section appears in the sidebar (desktop + mobile drawer), linking to
+  `/superadmin` — where the existing "Watch devops" tab (v1.47.15) already lives. Fails safe (stays hidden) on
+  any resolution error.
+- No migration, no new tests (pure UI wiring around an already-tested, already-secure server action — consistent
+  with this codebase's convention for comparably small nav-only changes). 1368 tests pass (unchanged), `tsc
+  --noEmit` clean, production build clean.
+- **Reminder from earlier this session, still standing**: separate host session cookies mean a super admin must
+  be signed in ON the Watch host itself (not just the main app host) for this to resolve `true` — expected,
+  documented behavior from v1.23.3, not a bug.
+
 ### 2026-08-20 — Usage page: the real Current Period Usage tracker was missing — added, incl. Free Trial (v1.47.18)
 - **Investigated first, per explicit instruction, before adding anything.** The Usage page already showed
   structural resource capacity (Watcher profiles/slots, Communities, Plan capacity, Slots by Watcher/Community,

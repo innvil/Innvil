@@ -4,13 +4,14 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutGrid, FolderKanban, Users, Bot, Activity,
-  CreditCard, Layers, Settings, LogOut, Menu, X, Plus, User, HelpCircle,
+  CreditCard, Layers, Settings, LogOut, Menu, X, Plus, User, HelpCircle, ShieldCheck,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
 import { withTimeout } from "@/src/lib/timeout";
 import type { AccountCapacity } from "@/src/lib/products/watch-runtime";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
 import { getInnvilCreditBalanceAction } from "@/src/lib/actions/innvil-credit";
+import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { HeaderCreditIndicator } from "./HeaderCreditIndicator";
 
 const LOGOUT_TIMEOUT_MS = 8000;
@@ -79,7 +80,7 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
-function SidebarContent({ active, capacity, onNavigate }: { active: string; capacity: AccountCapacity | null; onNavigate?: () => void }) {
+function SidebarContent({ active, capacity, isSuper, onNavigate }: { active: string; capacity: AccountCapacity | null; isSuper: boolean; onNavigate?: () => void }) {
   return (
     <div className="flex flex-col h-full" onClick={onNavigate}>
       <Link href="/" className="flex items-center gap-2.5 px-4 py-4 shrink-0">
@@ -113,6 +114,14 @@ function SidebarContent({ active, capacity, onNavigate }: { active: string; capa
             {ACCOUNT_NAV.map((item) => <NavLink key={item.id} item={item} active={active === item.id} />)}
           </div>
         </div>
+        {isSuper && (
+          <div>
+            <p className="px-3 text-[10px] uppercase tracking-wider w-text-faint font-semibold mb-1.5">Innvil</p>
+            <div className="space-y-0.5">
+              <NavLink item={{ id: "superadmin", label: "Super admin", icon: ShieldCheck, href: "/superadmin", implemented: true }} active={active === "superadmin"} />
+            </div>
+          </div>
+        )}
       </nav>
 
       {capacity && (
@@ -163,6 +172,22 @@ export function WatchShell({
   // capacity/attentionCount are resolved the same server-per-request way,
   // never live-pushed) is what refreshes it after a top-up/purchase/renewal.
   const [creditBalanceCents, setCreditBalanceCents] = useState<number | null>(null);
+  // Whether the signed-in account holds the super_admin role -- Watch has its
+  // own session per host (see CLAUDE.md's product-brand/auth notes), so this
+  // is resolved independently here rather than assumed from any main-app
+  // state. Reuses the EXACT SAME server action (amSuperAdmin) the main
+  // owner-app sidebar/`/superadmin` route already gate on -- never a second
+  // role check. Fails safe (stays false) on any error -- an unresolved check
+  // must never accidentally reveal the link.
+  const [isSuper, setIsSuper] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    amSuperAdmin()
+      .then((v) => { if (!cancelled) setIsSuper(v); })
+      .catch(() => { if (!cancelled) setIsSuper(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -199,7 +224,7 @@ export function WatchShell({
       {/* Desktop sidebar */}
       <aside className="hidden lg:block w-60 shrink-0 border-r w-line-soft">
         <div className="sticky top-0 h-screen">
-          <SidebarContent active={active} capacity={capacity} />
+          <SidebarContent active={active} capacity={capacity} isSuper={isSuper} />
         </div>
       </aside>
 
@@ -215,7 +240,7 @@ export function WatchShell({
             >
               <X size={18} />
             </button>
-            <SidebarContent active={active} capacity={capacity} onNavigate={() => setMobileNavOpen(false)} />
+            <SidebarContent active={active} capacity={capacity} isSuper={isSuper} onNavigate={() => setMobileNavOpen(false)} />
           </div>
         </div>
       )}
