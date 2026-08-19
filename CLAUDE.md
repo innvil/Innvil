@@ -8270,6 +8270,135 @@ Architecture direction for future implementation:
   pricing-economics rationale (Innvil still pays for hosting/queues/Telegram
   processing/storage/bandwidth/classification/monitoring/security even under BYO).
 
+### Phase 4.U: Watcher Presence Scheduling (NOTED, not built — sequenced after current testing)
+
+> **FUTURE PLAN — DO NOT IMPLEMENT YET.** Full verbatim spec (source of truth):
+> `docs/moderator/watcher-presence-scheduling-spec.md`. Sent in full during the
+> 2026-08-19 session alongside the Phase 4.V BYO refinement below — explicit
+> instruction: **implement only after current Telegram/moderation testing/debugging
+> is complete and confirmed stable**, and only the real usage-limit work (v1.47.16)
+> was authorized to proceed in that same session. Nothing in the schema, runtime, or
+> UI was changed to produce this note.
+- **Ownership**: a Presence Schedule belongs to the DEPLOYMENT (Watcher ↔ Community
+  assignment), never the Watcher Profile (which stays identity/persona-only, reusable
+  across future multi-Community deployments) and never a Community-owned/shared
+  persona. Mirrors the existing Watcher-Profile-vs-Deployment split already
+  established for persona ownership (v1.47.11/4.12).
+- **"Presence" is a distinct concept from moderation, reactive chat, and Auto-
+  Posting** — a Watcher outside its presence window must still perform normal
+  safety/scam/phishing moderation (`runLinkModeration`/media moderation are separate,
+  independent code paths already, per the same architecture the self-mention fix
+  v1.47.15 relied on) unless a real, separate moderation setting says otherwise.
+- **Default "Innvil Recommended" schedule**: auto-staggers deployed Watchers, default
+  rotation cadence 2 hours (a stagger interval, NOT a fixed 2-hour active duration —
+  active duration/return behavior model separately), generated deterministically from
+  the real deployment count (1–5+ Watchers), using the account/Community timezone via
+  the EXISTING canonical timezone system (`watch-datetime.ts`/`watch-account-
+  preferences.ts`, migration 0076) — no second timezone system.
+- **Owner control**: Innvil Recommended vs. Custom per-deployment schedule (start/
+  offset, active duration, return interval, ordering, coverage window, presence-
+  message toggle) — no cron syntax exposed.
+- **Presence transitions are semantic events** (`presence_started`/`presence_resumed`/
+  `presence_ending`-shaped, exact naming TBD at implementation time), never hardcoded
+  message text — wording comes from the SAME persona/AI generation system chatter
+  already uses (`chatter-generate.ts`), so Kwan and a dry-humor Watcher sound
+  different for the same transition. Owner can disable transition messages entirely.
+- **Idempotency/scheduler safety is the hard part**: must reuse whatever real
+  background-job mechanism this codebase already has (the existing pg_cron pattern —
+  `supabase/migrations/00{15,26,27,34,36,56,61}_supabase_*_cron.sql` — never a
+  client-side timer), with a persisted transition/occurrence identity so duplicate
+  scheduler runs/retries/concurrent invocations fire a real transition AT MOST ONCE
+  (mirrors `auto_post_occurrences`' unique-per-occurrence pattern, Phase 4.N/v1.17.0).
+  Missed/delayed transitions must reconcile to current-state correctness, never replay
+  a storm of historical "I'm back" messages.
+- **UI placement**: Community → Watchers → **Deployments / Presence Schedule** (a new
+  tab alongside the existing Deployments tab on a Community's detail page) — never on
+  the reusable Watcher Persona page (`WatcherPersonaTab.tsx`/`app/watchers/[id]`),
+  which stays Watcher-Profile-scoped only.
+- **Plan gating**: inspect the real canonical entitlement system before hard-coding —
+  intended Silver/Gold/Platinum (not Bronze), Enterprise included by default,
+  Free Trial eligibility to be decided from the real trial capability model
+  (`watch-trial.ts`), not assumed. Gate through one centralized capability helper
+  (matching the `moderatorPersonaIsAssigned`/`hasAiResponsePoolRemaining`-style pure-
+  helper convention already established this session), never scattered plan-name
+  checks in UI/runtime.
+- **Schema**: additive migration, account ownership derived through Deployment →
+  Community → Project → account_id (zero-Panel compatible, no synthetic Panel), every
+  EXISTING deployment defaults to presence scheduling OFF on migration — this feature
+  must never cause a live Watcher to start sending unsolicited social messages merely
+  because the migration ran.
+- **Interaction with Phase 4.V (BYO) below**: if a presence transition ever triggers
+  an AI/provider call under a BYO account, that call must go through BYO's own usage-
+  policy enforcement (once built) — this Phase 4.U note does not itself define that
+  enforcement, Phase 4.V does.
+
+### Phase 4.V: Innvil Watch BYO Enterprise refinement (NOTED, not built — sequenced after current testing)
+
+> **FUTURE PLAN — DO NOT IMPLEMENT YET.** Full verbatim spec (source of truth):
+> `docs/moderator/byo-enterprise-refinement-spec.md`. Sent in full during the
+> 2026-08-19 session, in TWO drafts — the doc file preserves the LATER, superseding
+> one (explicit "BYO IS A MAJOR WATCH OFFERING" positioning). Same sequencing
+> instruction as Phase 4.U above: implement only after current testing/debugging is
+> confirmed stable. This supersedes the narrower "Phase 4.S" BYO pricing note above
+> for POSITIONING/architecture — Phase 4.S's `$599`/`$799` BYO price points are still
+> the only real recorded numbers and remain valid; this phase is about the
+> provider-management/usage-policy/landing-prominence work layered on top of that
+> pricing, not new pricing.
+- **BYO stays inside Innvil Watch** — same domain/CRM/dashboard, never a separate
+  product. `watch-enterprise.ts` (already live, v1.34.0) is currently PRICING/COPY
+  ONLY — confirmed again this session: no stored BYO-vs-Managed flag exists on any
+  account, no credential storage, no way to even determine programmatically whether
+  an account is BYO. This is the actual architecture gap that must close first before
+  anything else in this phase can be gated correctly.
+- **Landing-page positioning upgrade**: BYO promoted from a footnote to a real
+  first-class section/CTA on the Watch landing (`WatchLanding.tsx`) — integrated into
+  the EXISTING landing structure, never a redundant second Enterprise section. Must
+  never claim guaranteed total-cost savings, never claim Innvil pays provider usage,
+  never imply automatic provider setup, always disclose provider usage is billed
+  separately — matching the honesty bar already set by `compareEnterpriseModesAtSlots`
+  (v1.34.0's real, equivalent-capacity-only Innvil-fee comparison).
+- **Provider configuration vs. BYO usage POLICY are two distinct concepts** — the
+  former is connection details (provider/model/credential), the latter is customer-
+  owned operational guardrails on top of it (requests/tokens/messages per period,
+  optionally hierarchical: account → Community → Watcher/deployment, tightest
+  ceiling wins). Neither ever mutates Innvil's own commercial plan config
+  (`money.ts`/`product_entitlements` stay untouched by a BYO override).
+- **Secret handling**: MUST reuse this codebase's established pgcrypto encryption
+  pattern (`set_provider_key`/`get_provider_key`-style RPCs, already used for SMM
+  provider keys and payment-gateway credentials — see `providerKeySecret()`,
+  `src/lib/supabase/admin.ts`) — never a new/weaker storage mechanism. Never return a
+  stored plaintext credential to the browser after initial submission; UI shows only
+  a masked placeholder + "Replace credential", never a reveal-existing-key control.
+  If this pattern turns out insufficient for a specific BYO need, STOP and report
+  before inventing new secret storage.
+- **Provider usage telemetry — only where Innvil genuinely has it.** If Innvil
+  proxies/makes the customer's provider call, real measurable data (account/Project/
+  Community/Watcher/deployment/provider/model/timestamp/request count/tokens where
+  the provider reports them/latency/status) can be recorded — extending the SAME
+  usage-accounting layer this session just built for `MODERATOR_AI_RESPONSE_POOL`
+  (`watch-ai-usage.ts`/`watch_ai_response_usage`, v1.47.16), never a second, separate
+  usage-tracking mechanism. Never fabricate a token count/cost/request count Innvil
+  can't actually observe — label unavailable instead.
+- **Usage page**: BYO accounts get the SAME real read-only plan-limit reporting every
+  paid tier now sees (v1.47.16) PLUS a clearly separated "BYO Usage Controls" section
+  for their own configurable operational ceilings — never rendered for non-BYO
+  accounts, never blurred with Innvil's own commercial entitlement numbers.
+- **Runtime separation preserved, explicitly**: a BYO conversational/proactive usage
+  cap must never disable unrelated scam/phishing/spam moderation (same invariant
+  already true and tested for the trial reactive quota and the new AI-response pool —
+  `runLinkModeration`/media moderation are structurally separate code paths that never
+  read either gate). If a moderation capability itself genuinely depends on the
+  customer's exhausted BYO provider, that must be surfaced honestly, never silently
+  claimed as still-available.
+- **Server-side enforcement only** — BYO eligibility, provider config, and effective
+  usage policy are all resolved and enforced server-side before every eligible
+  provider call, never trusted from the browser; race-safe/idempotent accounting
+  under concurrent/retried calls (same atomic-upsert discipline as
+  `increment_watch_ai_response_usage`).
+- **Zero-Panel/account-native ownership preserved** — Community → Project →
+  account_id / Deployment → Community → Project → account_id, no synthetic Panel,
+  consistent with every other Watch table added this session.
+
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
 - [ ] Webhook handling for payment confirmations
