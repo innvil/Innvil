@@ -127,6 +127,37 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Full release-readiness audit of standalone Innvil Watch (report-only, no code changes, v1.47.7 unchanged)
+- **Classification: NOT READY — BLOCKERS REMAIN.** Not because of a known broken feature (none was found this
+  pass), but because the entire standalone-Watch commercial pipeline (Free Trial, direct paid subscription,
+  Innvil Credit, Community Expansion, native Telegram identity linking) has **never been exercised end-to-end
+  against real data** — confirmed via **read-only queries against the live production Supabase project**
+  (this sandbox has genuine outbound network access to it, contrary to this file's own earlier notes from
+  prior sessions): `product_entitlements`, `watch_trial_claims`, `watch_subscription_addons`, and
+  `innvil_credit_transactions` all have **zero rows**; `watch_telegram_links` has exactly one (from this
+  session's own earlier manual verification); `platform_deposits` has exactly one row and it's a legacy
+  `panel_topup`, never a `watch_subscription`/`innvil_credit_topup`. Every existing `projects`/`communities`/
+  `virtual_moderators`/`moderator_deployments` row is the pre-existing legacy Panel-distributed test data
+  (Kwan/Test under "Innvil Test Community"), not a standalone (`panel_id: null`) resource. All three platform
+  payment gateways (Cryptomus/NOWPayments/Binance Pay) ARE connected and active, so checkout is at least
+  reachable — it has simply never been completed once.
+- **No code was changed this pass** — the audit found no dead buttons, no stale "coming soon"/"still rolling
+  out" copy, no fabricated auto-renew control, and confirmed `requireWatchPage()`/`CommunityExpansionCard`/etc.
+  are all still correctly wired from prior passes (spot-checked, not regressed).
+- **Full 36-section report delivered directly to the user in-conversation** (route/domain audit, zero-Panel
+  onboarding, Telegram identity, Free Trial lifecycle, Plans/Billing/Innvil Credit/annual/Community Expansion,
+  Project/Community/Watcher/Deployment CRUD, live Telegram runtime, moderation, Activity/Usage consistency,
+  Settings, Help Center, landing, account isolation, legacy Panel compatibility, migrations, dead/partial
+  features, error states, responsive/accessibility, and 6 end-to-end journeys) — not duplicated into this file
+  verbatim; see that conversation turn for the complete section-by-section findings. 1302 tests pass,
+  `tsc --noEmit` clean, production build clean (all routes present, unchanged from v1.47.7).
+- **The single highest-value next step, per this audit**: actually complete ONE real, live, standalone
+  journey end to end against this same production project — sign up a genuinely fresh account, verify Telegram,
+  start the Free Trial (or complete one real crypto/Innvil-Credit purchase), create a Project, connect a real
+  Telegram Community, deploy a Watcher, and confirm a real inbound Telegram message is handled correctly. Until
+  that happens at least once, every piece of this pipeline is proven only by code review and mocked unit tests,
+  never by outcome.
+
 ### 2026-08-19 — Help Center simplified: home is discovery-only, docs nav stays on category/article pages (v1.47.7)
 - **The v1.47.6 3-column layout over-corrected** — the Help Center HOME ended up repeating the same
   information across five surfaces at once (left docs nav, Popular, category cards, a right-side "Get Started"
