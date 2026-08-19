@@ -133,9 +133,9 @@ const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldC
 ];
 
 const STEPS = [
-  { n: "01", title: "Choose a plan", body: "Create your Innvil account and choose a Watch plan." },
-  { n: "02", title: "Connect Telegram", body: "Add your Watcher to your Telegram community." },
-  { n: "03", title: "Configure", body: "Set its persona and knowledge base." },
+  { n: "01", title: "Connect Telegram", body: "Verify your Telegram account, then try Watch with a Free Trial or a paid plan." },
+  { n: "02", title: "Create a Watcher", body: "Configure its persona and knowledge base." },
+  { n: "03", title: "Deploy it", body: "Connect your Watcher's bot to your Telegram Community." },
   { n: "04", title: "Let it operate", body: "Your Watcher moderates, answers, and posts on schedule." },
 ];
 

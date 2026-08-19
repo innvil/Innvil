@@ -64,6 +64,9 @@ export default async function Home({
           moderationActionsLast7Days={access.moderationActionsLast7Days}
           attentionItems={access.attentionItems}
           communityStats={access.communityStats}
+          telegramVerified={access.telegramVerified}
+          trialStatus={access.trialStatus}
+          onboardingStage={access.onboardingStage}
         />
       );
     }

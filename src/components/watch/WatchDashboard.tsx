@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import {
-  Plus, FolderKanban, Bot, Users, ShieldCheck, Radio, Activity, ArrowRight, X, ChevronRight, AlertTriangle,
+  Plus, FolderKanban, Bot, Users, ShieldCheck, Radio, Activity, ArrowRight, X, ChevronRight, AlertTriangle, CheckCircle2,
 } from "lucide-react";
 import { createWatchProject, createWatcher } from "@/src/lib/actions/watch-dashboard";
 import type { AccountProjectRow } from "@/src/lib/products/ownership";
@@ -13,6 +13,8 @@ import type {
 } from "@/src/lib/products/watch-runtime";
 import { communityOperationalStatus } from "@/src/lib/products/watch-status";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import type { WatchTrialStatus } from "@/src/lib/products/watch-trial";
+import { onboardingChecklist, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
 import { WatchShell } from "./WatchShell";
 import { WatcherConnectModal } from "./WatcherConnectModal";
 import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalStatusBadge, SeverityTag, WatcherNamesCell } from "./WatchUI";
@@ -38,7 +40,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 
 export function WatchDashboard({
   projects: initialProjects, watchers: initialWatchers, communities, capacity, activity, moderationActionsLast7Days,
-  attentionItems = [], communityStats = {},
+  attentionItems = [], communityStats = {}, telegramVerified = true, trialStatus = "active", onboardingStage = "operational",
 }: {
   projects: AccountProjectRow[];
   watchers: AccountWatcherRow[];
@@ -48,6 +50,13 @@ export function WatchDashboard({
   moderationActionsLast7Days: number;
   attentionItems?: AttentionItem[];
   communityStats?: Record<string, CommunityOperationalStats>;
+  /** Real, server-resolved Telegram PERSON identity + trial + onboarding
+   *  stage (watch-onboarding-state.ts) -- defaults here exist only so
+   *  existing call sites/tests that predate this prop don't break; the real
+   *  page (app/page.tsx) always passes the actual resolved values. */
+  telegramVerified?: boolean;
+  trialStatus?: WatchTrialStatus;
+  onboardingStage?: OnboardingStage;
 }) {
   const [projects, setProjects] = useState(initialProjects);
   const [watchers, setWatchers] = useState(initialWatchers);
@@ -57,7 +66,12 @@ export function WatchDashboard({
   const [error, setError] = useState<string | null>(null);
   const [connectingWatcher, setConnectingWatcher] = useState<AccountWatcherRow | null>(null);
 
-  const hasAnyResource = projects.length > 0 || watchers.length > 0 || communities.length > 0;
+  // The onboarding welcome panel governs Overview until a real deployment
+  // is active -- NOT merely until any resource exists, so the guide stays
+  // visible and progresses (checkmarks accumulating) through Project ->
+  // Watcher -> Connect, matching the real account-state onboarding stage
+  // rather than disappearing the moment the FIRST resource is created.
+  const showOnboarding = onboardingStage !== "operational";
   // Distinct Watchers with at least one enabled deployment — NOT a count of
   // enabled deployments (a Watcher deployed to 2 communities would otherwise
   // be double-counted here while the Watchers table below only ever lists it
@@ -104,14 +118,26 @@ export function WatchDashboard({
       active="overview"
       capacity={capacity}
       attentionCount={attentionItems.length}
-      // Only offered once entitled -- creating a Watcher without an active
-      // trial/plan just produces an inline entitlement rejection, a
-      // pointless dead end for a fresh account (see OnboardingEmptyState,
-      // which routes those accounts to Plans instead).
-      primaryAction={capacity != null ? { label: "Create Watcher", onClick: () => openModal("watcher") } : undefined}
+      // Only offered once past onboarding -- creating a Watcher without an
+      // active trial/plan (or before Project even exists) just produces an
+      // inline rejection, a pointless dead end mid-onboarding (see
+      // OnboardingGuide, which routes each stage to its own real next step).
+      primaryAction={!showOnboarding ? { label: "Create Watcher", onClick: () => openModal("watcher") } : undefined}
     >
-      {!hasAnyResource ? (
-        <OnboardingEmptyState entitled={capacity != null} onCreateProject={() => openModal("project")} />
+      {showOnboarding ? (
+        <OnboardingGuide
+          stage={onboardingStage}
+          trialStatus={trialStatus}
+          telegramVerified={telegramVerified}
+          hasEntitlement={capacity != null}
+          projectCount={projects.length}
+          watcherCount={watchers.length}
+          activeDeploymentCount={activeDeploymentCount}
+          firstWatcher={watchers[0] ?? null}
+          onCreateProject={() => openModal("project")}
+          onCreateWatcher={() => openModal("watcher")}
+          onConnectWatcher={(w) => setConnectingWatcher(w)}
+        />
       ) : (
         <div className="space-y-8">
           <div>
@@ -337,42 +363,103 @@ export function WatchDashboard({
   );
 }
 
-/** `entitled` = `capacity != null` (an active trial or paid tier). A brand-
- *  new account has neither yet -- Project creation itself is gated on Watch
- *  entitlement (`createStandaloneProject`), so pointing "Start setup" at
- *  that modal for a not-yet-entitled account would just produce a confusing
- *  inline rejection. Route to Plans first instead (Free Trial or a paid
- *  plan), matching the real order of operations: Telegram/Plan -> Project ->
- *  Community -> Watcher -> Deploy. */
-function OnboardingEmptyState({ entitled, onCreateProject }: { entitled: boolean; onCreateProject: () => void }) {
-  const steps = entitled
-    ? ["Create a Project", "Connect a Community", "Create a Watcher", "Deploy it"]
-    : ["Start the Free Trial or choose a plan", "Create a Project", "Connect a Community", "Create a Watcher", "Deploy it"];
+/**
+ * Progressive first-run onboarding panel — governed entirely by the real,
+ * server-resolved `stage` (watch-onboarding-state.ts), never a local/
+ * browser-only flag. Exactly ONE primary CTA is shown at a time, matching
+ * the stage's own real next action — never the old ambiguous
+ * "View plans / Start Free Trial" button. Checkmarks accumulate as real
+ * account state changes (Telegram verified, entitlement active, Project/
+ * Watcher/deployment created) — this panel keeps showing (with earlier
+ * steps checked off) until a real deployment goes active, at which point
+ * `WatchDashboard` stops rendering it at all in favor of the normal
+ * operational Overview.
+ */
+function OnboardingGuide({
+  stage, trialStatus, telegramVerified, hasEntitlement, projectCount, watcherCount, activeDeploymentCount,
+  firstWatcher, onCreateProject, onCreateWatcher, onConnectWatcher,
+}: {
+  stage: OnboardingStage;
+  trialStatus: WatchTrialStatus;
+  telegramVerified: boolean;
+  hasEntitlement: boolean;
+  projectCount: number;
+  watcherCount: number;
+  activeDeploymentCount: number;
+  firstWatcher: AccountWatcherRow | null;
+  onCreateProject: () => void;
+  onCreateWatcher: () => void;
+  onConnectWatcher: (w: AccountWatcherRow) => void;
+}) {
+  const checklist = onboardingChecklist({ telegramVerified, hasEntitlement, projectCount, watcherCount, activeDeploymentCount });
+
+  const STAGE_COPY: Record<OnboardingStage, { title: string; body: string }> = {
+    connect_telegram: {
+      title: "First, connect your Telegram account.",
+      body: "Innvil Watch verifies your Telegram identity before anything else — this is your personal Telegram account, not a Community.",
+    },
+    try_watch: {
+      title: "Try Innvil Watch",
+      body: trialStatus === "expired"
+        ? "Your Free Trial has already been used on this account. Choose a paid plan to continue."
+        : "Start your Free Trial and deploy your first Watcher, or choose a paid plan.",
+    },
+    create_project: { title: "Create a Project", body: "A Project holds your identity and the knowledge your Watcher will answer from." },
+    create_watcher: { title: "Create a Watcher", body: "A Watcher is your AI-powered Virtual Moderator." },
+    connect_watcher: { title: "Connect and deploy your Watcher", body: "Assign your Watcher to a Telegram Community — this connects its bot, verifies the Community, and deploys it in one step." },
+    operational: { title: "", body: "" },
+  };
+  const copy = STAGE_COPY[stage];
+
   return (
-    <div className="max-w-lg mx-auto text-center py-16">
+    <div className="max-w-lg mx-auto text-center py-14">
       <div className="w-14 h-14 rounded-full w-teal-soft-bg border w-teal-border flex items-center justify-center mx-auto mb-5">
         <Bot size={24} className="w-teal" />
       </div>
       <h1 className="w-display text-xl mb-2">Welcome to Innvil Watch</h1>
-      <p className="text-sm w-text-dim mb-6">
-        {entitled ? "Follow these steps to get your first Watcher live in a community." : "You're signed in. Get Watch access, then follow these steps to get your first Watcher live in a community."}
-      </p>
+      <p className="text-sm w-text-dim mb-1 w-display">{copy.title}</p>
+      <p className="text-xs w-text-faint mb-6 max-w-sm mx-auto">{copy.body}</p>
+
       <ol className="text-left space-y-2.5 mb-7 max-w-xs mx-auto">
-        {steps.map((s, i) => (
-          <li key={s} className="flex items-center gap-3 text-sm w-text">
-            <span className="w-6 h-6 rounded-full w-surface-raised border w-line-soft flex items-center justify-center text-xs w-text-dim shrink-0">{i + 1}</span>
-            {s}
+        {checklist.map((item, i) => (
+          <li key={item.key} className={`flex items-center gap-3 text-sm ${item.done ? "w-text-faint" : item.key === stage ? "w-text font-medium" : "w-text-dim"}`}>
+            {item.done ? (
+              <CheckCircle2 size={18} className="w-teal shrink-0" />
+            ) : (
+              <span className={`w-6 h-6 rounded-full border flex items-center justify-center text-xs shrink-0 ${item.key === stage ? "w-teal-border w-teal-soft-bg w-teal" : "w-surface-raised w-line-soft w-text-dim"}`}>{i + 1}</span>
+            )}
+            <span className={item.done ? "line-through" : ""}>{item.label}</span>
           </li>
         ))}
       </ol>
-      {entitled ? (
-        <button onClick={onCreateProject} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
-          Start setup <ArrowRight size={14} />
-        </button>
-      ) : (
-        <Link href="/plans" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
-          View plans / Start Free Trial <ArrowRight size={14} />
+
+      {stage === "connect_telegram" && (
+        <Link href="/profile#connected-identities" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Connect Telegram <ArrowRight size={14} />
         </Link>
+      )}
+      {stage === "try_watch" && (
+        <div className="flex flex-col items-center gap-2">
+          <Link href="/plans" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+            {trialStatus === "expired" ? "Choose a plan" : "Start Free Trial"} <ArrowRight size={14} />
+          </Link>
+          {trialStatus !== "expired" && <Link href="/plans" className="text-xs w-text-faint hover:w-text-dim">View paid plans instead</Link>}
+        </div>
+      )}
+      {stage === "create_project" && (
+        <button onClick={onCreateProject} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Create Project <ArrowRight size={14} />
+        </button>
+      )}
+      {stage === "create_watcher" && (
+        <button onClick={onCreateWatcher} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Create Watcher <ArrowRight size={14} />
+        </button>
+      )}
+      {stage === "connect_watcher" && firstWatcher && (
+        <button onClick={() => onConnectWatcher(firstWatcher)} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Deploy Watcher <ArrowRight size={14} />
+        </button>
       )}
     </div>
   );

@@ -19,6 +19,9 @@ import {
   type AccountCommunitySummary, type AccountCapacity, type AccountActivityItem, type AttentionItem,
   type CommunityOperationalStats,
 } from "@/src/lib/products/watch-runtime";
+import { getAccountTelegramIdentity } from "@/src/lib/products/watch-abuse";
+import { getWatchTrialState, type WatchTrialStatus } from "@/src/lib/products/watch-trial";
+import { resolveOnboardingStage, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
 
 export interface WatchAccessState {
   authenticated: boolean;
@@ -34,10 +37,23 @@ export interface WatchAccessState {
    *  object (not a Map) since this crosses the server->client component
    *  boundary and Maps aren't serializable as React props. */
   communityStats: Record<string, CommunityOperationalStats>;
+  /** Real, server-resolved Telegram PERSON identity status -- never the
+   *  Telegram Community connection. */
+  telegramVerified: boolean;
+  /** The real trial status (telegram_required/eligible/active/expired),
+   *  used only for CTA COPY ("Start Free Trial" vs "Choose a plan") once
+   *  `onboardingStage === "try_watch"` -- never a second entitlement gate. */
+  trialStatus: WatchTrialStatus;
+  /** The single first-run onboarding stage to show, resolved from all of
+   *  the above via the pure state machine in watch-onboarding-state.ts.
+   *  "operational" means the normal Overview should render instead of the
+   *  welcome panel. */
+  onboardingStage: OnboardingStage;
 }
 
 const EMPTY_ACCESS: WatchAccessState = {
   authenticated: false, entitled: false, projects: [], watchers: [], communities: [], capacity: null, activity: [], moderationActionsLast7Days: 0, attentionItems: [], communityStats: {},
+  telegramVerified: false, trialStatus: "telegram_required", onboardingStage: "connect_telegram",
 };
 
 /** Resolves what the current visitor should see on the Watch domain:
@@ -59,7 +75,7 @@ export async function getWatchAccessState(): Promise<WatchAccessState> {
 
   const entitled = await hasProductAccess(admin, user.id, WATCH_PRODUCT_SLUG);
 
-  const [projects, watchers, communities, capacity, activity, moderationActionsLast7Days, attentionItems, statsMap] = await Promise.all([
+  const [projects, watchers, communities, capacity, activity, moderationActionsLast7Days, attentionItems, statsMap, telegramIdentity, trial] = await Promise.all([
     listAccountProjects(admin, user.id),
     listAccountWatchers(admin, user.id),
     listAccountCommunities(admin, user.id),
@@ -68,9 +84,22 @@ export async function getWatchAccessState(): Promise<WatchAccessState> {
     countRecentModerationActions(admin, user.id),
     listAccountAttentionItems(admin, user.id),
     getCommunityOperationalStats(admin, user.id),
+    getAccountTelegramIdentity(admin, user.id),
+    getWatchTrialState(admin, user.id),
   ]);
   const communityStats = Object.fromEntries(statsMap);
-  return { authenticated: true, entitled, projects, watchers, communities, capacity, activity, moderationActionsLast7Days, attentionItems, communityStats };
+  const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
+  const onboardingStage = resolveOnboardingStage({
+    telegramVerified: telegramIdentity != null,
+    hasEntitlement: capacity != null,
+    projectCount: projects.length,
+    watcherCount: watchers.length,
+    activeDeploymentCount,
+  });
+  return {
+    authenticated: true, entitled, projects, watchers, communities, capacity, activity, moderationActionsLast7Days, attentionItems, communityStats,
+    telegramVerified: telegramIdentity != null, trialStatus: trial.status, onboardingStage,
+  };
 }
 
 export async function createWatchProject(name: string): Promise<{ ok: true } | { ok: false; error: string }> {

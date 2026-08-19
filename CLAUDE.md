@@ -127,6 +127,77 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Telegram-identity-first onboarding: a real account-state machine replaces the old plan-first welcome screen (v1.47.4)
+- **Investigated first.** The Overview welcome panel (`WatchDashboard.tsx`'s old `OnboardingEmptyState`) had
+  exactly two states — entitled vs. not — and its primary CTA for a not-yet-entitled account was the single
+  ambiguous button "View plans / Start Free Trial". It also disappeared the instant ANY resource existed
+  (`hasAnyResource`, a plain `projects.length > 0 || watchers.length > 0 || communities.length > 0` check) —
+  meaning a customer who'd only created a Project would drop straight into the full operational dashboard with
+  empty tables everywhere, never the guided checklist the report explicitly asked to keep showing (with earlier
+  steps checked off) until a Watcher is actually deployed.
+- **New pure state machine, `src/lib/products/watch-onboarding-state.ts`** (no I/O — the same "pure resolver +
+  caller gathers real state" pattern as `watch-status.ts`) — `resolveOnboardingStage()`: `connect_telegram` →
+  `try_watch` → `create_project` → `create_watcher` → `connect_watcher` → `operational`. Checked in strict
+  dependency order, first unmet condition wins. Telegram PERSON identity (`watch_telegram_links`, Profile's
+  existing `ConnectTelegramCard` flow) is checked FIRST, unconditionally — even ahead of an already-active paid
+  entitlement, per explicit product decision — and is structurally never confused with a Telegram COMMUNITY
+  connection (a real Telegram group/supergroup/channel) anywhere in this file or its consumers.
+  `onboardingChecklist()` derives the SAME 5-item checklist from the SAME input, so the checklist and the
+  resolved stage can never disagree (a dedicated test pins this).
+- **Honest adaptation to the real UI, not the report's literal step count.** The report's suggested order was
+  Telegram → Trial/Plan → Project → Community → Watcher → Deploy (6 steps after identity). This codebase's
+  ACTUAL UI has no standalone "connect a Community with no Watcher yet" control — Community connection only
+  ever happens through `WatcherConnectModal` (bot creation → Telegram membership verification → Community
+  connect → deploy, all one guided flow per Watcher, confirmed via code review before writing the state
+  machine). Per the report's own explicit "adapt later steps to current actual route/business logic" allowance,
+  Community-connect and deploy were collapsed into one `connect_watcher` stage rather than inventing a UI
+  control that doesn't exist — documented here, not silently done.
+- **`getWatchAccessState()` (`actions/watch-dashboard.ts`) extended** — now also resolves
+  `getAccountTelegramIdentity()` and `getWatchTrialState()` (both already-existing, already-tested functions,
+  reused verbatim — no second Telegram-identity or trial-status implementation) and computes the real
+  `onboardingStage` via the new resolver. `WatchAccessState` gained `telegramVerified`/`trialStatus`/
+  `onboardingStage`; `app/page.tsx` threads all three into `WatchDashboard`.
+- **`WatchDashboard.tsx` rewritten**: the onboarding gate is now `onboardingStage !== "operational"` (was
+  `!hasAnyResource`) — the welcome panel now correctly stays up through Project/Watcher creation, only handing
+  off to the normal operational Overview once a real deployment is active. New `OnboardingGuide` (replaces
+  `OnboardingEmptyState`) — one stage-specific headline + body, a 5-item checklist with real checkmarks
+  (`onboardingChecklist`, strikethrough + teal check on completed items, the current stage highlighted), and
+  exactly ONE primary CTA per stage: `connect_telegram` → "Connect Telegram" → `/profile#connected-identities`
+  (a new anchor id added to Profile's existing Connected identities card — no second Telegram-linking
+  implementation); `try_watch` → "Start Free Trial" (or "Choose a plan" when `trialStatus === "expired"`, per
+  the explicit "trial-consumed accounts must never see Start Free Trial again" requirement — the actual
+  gating still lives entirely in `/plans`'s existing `FreeTrialCard`, this is copy-only) → `/plans`;
+  `create_project`/`create_watcher` → the existing create-Project/create-Watcher modals, unchanged; 
+  `connect_watcher` → opens the existing `WatcherConnectModal` for the account's first Watcher. The Overview
+  CTA never calls `startWatchTrialAction` itself — Telegram verification only makes the account ELIGIBLE, the
+  customer must still explicitly click through to Plans and start the trial there, exactly as required.
+- **Navigation is never blocked during onboarding** — `WatchShell`'s sidebar (Profile/Usage/Plans/Billing/
+  Settings/Support, unchanged) renders unconditionally around the onboarding panel; only the Overview CONTENT
+  area swaps between the guide and the operational dashboard.
+- **Zero-Panel confirmed**: no code in `watch-onboarding-state.ts` or the `OnboardingGuide` rewrite touches
+  `panels`/`panel_id` at all — the resolver's five inputs (Telegram identity, entitlement, Project/Watcher/
+  deployment counts) are all already-Panel-free reads this codebase established in earlier passes.
+- **Short "How it works" summary on the public landing corrected to match** (`WatchLanding.tsx`'s 4-card `STEPS`
+  — was "01 Choose a plan / 02 Connect Telegram [meaning: add the bot to a community] / 03 Configure / 04 Let it
+  operate", now "01 Connect Telegram [meaning: verify your account, then try Watch] / 02 Create a Watcher /
+  03 Deploy it / 04 Let it operate") — deliberately did NOT restructure the separate, much longer authenticated-
+  visitor-facing 8-step Getting Started guide (`watch-onboarding.ts`) to match; that's marketing content for a
+  signed-out prospect evaluating the product, a distinct concern from this pass's actual account-state machine,
+  and restructuring its whole content order wasn't requested here — flagged as a documented follow-up, not
+  silently left inconsistent.
+- New tests: `watch-onboarding-state.test.ts` (+11, new file — the exact state-machine requirements 1/3/4/5/6/7/
+  8/9/11/12/13 from the report, plus the checklist-matches-resolver guarantee and full-completion case). 1284
+  tests pass (up from 1273), `tsc --noEmit` clean, production build clean (all 29 routes present, `/profile`
+  confirmed carrying the new `#connected-identities` anchor).
+- **Not live-verified with a real authenticated zero-Telegram account this pass** — doing so needs a genuine
+  Supabase auth session with a controllable fresh Telegram-identity state, which (consistent with every other
+  authenticated-flow verification in this session) isn't practically simulatable in this sandbox; verified
+  instead via the full state-machine test suite (which pins every requested transition, including the ones a
+  live click-through would exercise) plus `tsc --noEmit` + production build + code review of every consumer.
+- **Deliberately not built this pass**: restructuring the long-form Getting Started marketing guide's step order
+  to match (see above); a "Learn more" contextual help link from the onboarding panel to a Help Center (no such
+  system exists yet — see the next entry).
+
 ### 2026-08-19 — Public Watch landing: Watcher clarity + Free Trial made publicly visible (v1.47.3)
 - **Investigated first.** The landing had NO mention of the Free Trial anywhere — not in the hero, not in
   pricing (Bronze→Platinum + Enterprise only), not in FAQ — confirming the reported problem exactly; a visitor

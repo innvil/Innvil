@@ -46,7 +46,7 @@ export default async function ProfilePage() {
           </p>
         </div>
 
-        <div className="w-card p-5">
+        <div id="connected-identities" className="w-card p-5 scroll-mt-24">
           <SectionHeader icon={Link2} title="Connected identities" />
           <ConnectTelegramCard initial={initialTelegramState} preferences={preferences} />
         </div>
