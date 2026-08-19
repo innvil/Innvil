@@ -434,9 +434,12 @@ function OnboardingGuide({
       </ol>
 
       {stage === "connect_telegram" && (
-        <Link href="/profile#connected-identities" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
-          Connect Telegram <ArrowRight size={14} />
-        </Link>
+        <div className="flex flex-col items-center gap-2">
+          <Link href="/profile#connected-identities" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+            Connect Telegram <ArrowRight size={14} />
+          </Link>
+          <Link href="/support/account/connect-your-telegram-account" className="text-xs w-text-faint hover:w-text-dim">Why connect Telegram?</Link>
+        </div>
       )}
       {stage === "try_watch" && (
         <div className="flex flex-col items-center gap-2">

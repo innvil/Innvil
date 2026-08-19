@@ -127,6 +127,72 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — `/support` becomes a real Innvil Watch Help Center (search + categories + articles), Contact Support kept as the fallback (v1.47.5)
+- **Investigated first.** `/support` was a single contact form (`SupportContactForm`, an existing account-scoped
+  support-message channel) with no self-service content anywhere — every FAQ/explanatory copy in this codebase
+  lived scattered across the landing FAQ, `/plans`' FAQ, and the various `InfoPopover` tooltips, none of it
+  searchable or centrally organized. No MDX/markdown infra exists in this codebase — a plain typed content
+  module was the right fit for this article count, not a new dependency.
+- **New content model, `src/lib/watch-help/content.ts`** (pure, no I/O, client-safe — rendered from both server
+  article pages and the client search box) — `HELP_CATEGORIES` (7: Getting Started, Watchers, Projects &
+  Communities, Plans & Billing, Innvil Credit, Account & Telegram, Troubleshooting) and **18 real articles**
+  (exceeds the requested 15-minimum initial set): What is Innvil Watch? / What is a Watcher? / Watcher Profiles
+  vs Deployments vs Slots / How moderation works / Start the Free Trial / Connect your Telegram account /
+  Create a Project / Connect a Community / Create and Deploy a Watcher / Community capacity / Community
+  Expansion / Plans and Billing / Innvil Credit / Crypto payments / Watcher not responding / Community needs
+  attention / Payment pending / Telegram connection issue / Innvil Credit not updated. No placeholder/"coming
+  soon" articles — every category shown actually has real content (`articlesByCategory().length === 0` is
+  hidden, never a dead link).
+- **Single source of truth for commercial/config values** — every number an article states (trial duration/
+  slot/Community allowance, plan prices, Community Expansion pricing incl. the exact Gold/Platinum ceilings,
+  the per-Community deployment cap, the Innvil Credit monthly/annual discount percentages) is read from the
+  SAME canonical constants Plans/Billing/Usage already enforce (`moderator/plan.ts`, `money.ts`,
+  `innvil-credit-pricing.ts`, `watch-plans.ts`) — never a second hardcoded copy that could drift.
+- **Local search, no external service** — `searchArticles(query)` scores title (highest) > keywords >
+  description > body-text matches, pure/no-I/O, rendered client-side via new `HelpSearch.tsx`. An empty query
+  shows nothing; a query with zero real overlap shows an honest "No matching help articles" state — never falls
+  back to showing the whole catalog.
+- **Real routes**: `/support` (Help Center home — search, Popular articles, category grid, Contact Support at
+  the bottom as the explicit fallback), `/support/[category]` (category listing, 404s for an unpopulated
+  category), `/support/[category]/[slug]` (article page — breadcrumb, title/description, body, Related
+  articles, a "Back to Help Center" footer link; 404s if the slug doesn't belong to that category). All three
+  reuse `requireWatchPage()`/`WatchShell` like every other Watch route — the Help Center is reached from the
+  existing authenticated sidebar's "Need help?" link, kept behind the same auth gate as before rather than
+  built as a new public/unauthenticated surface (a public docs site was judged a separate, larger scope
+  decision — documented below, not silently done).
+- **Contextual help links added where genuinely non-obvious** (per the explicit "don't litter every screen"
+  instruction — exactly two, both already-existing tooltip components) — `SlotInfoPopover`/
+  `CommunityExpansionInfoPopover` (`SlotInfoPopover.tsx`, used on Plans' plan cards) gained a real "Learn more"
+  link to the matching article; the Overview onboarding panel's `connect_telegram` stage gained a small "Why
+  connect Telegram?" link alongside its primary CTA.
+- **No article-level table of contents** — the content model is flat paragraphs (no internal sub-headings), so
+  a per-article "On this page" TOC wouldn't have real anchors to link to; deliberately not built rather than
+  faked with fragment ids that go nowhere useful.
+- New tests: `content.test.ts` (+18, new file) — every article has real title/description/body and a real
+  category, unique slugs, zero Panel/Forge/SMM mentions, every `related` slug resolves to a real article (this
+  caught two genuine dangling references while writing the content — `how-moderation-works` and
+  `telegram-connection-issue`/`payment-pending`/`innvil-credit-not-updated` didn't exist yet; all four were then
+  written as real articles rather than removing the references), category/lookup/popular-articles correctness,
+  6 required search-behavior cases (watcher slot / free trial / credit / community expansion all match; an
+  unrelated troubleshooting article never matches a narrow billing query; empty/no-overlap queries return
+  nothing), and canonical-accuracy pins for the Free Trial, Innvil Credit (1:1 USD semantics, non-transferable/
+  non-withdrawable), Community Expansion (Gold/Platinum only, exact prices), and Community capacity articles.
+  1302 tests pass (up from 1284), `tsc --noEmit` clean, production build clean (`/support`, `/support/[category]`,
+  `/support/[category]/[slug]` all present).
+- **Not live-verified this pass** — `/support` is auth-gated (`requireWatchPage()`), and (consistent with every
+  other authenticated-flow verification this session) a real Supabase session isn't practically simulatable in
+  this sandbox; verified instead via the full content/search test suite (which directly exercises the same
+  search queries the report's own validation section asked to try live — "watcher"/"slot"/"free trial"/
+  "credit"/"community expansion"/"telegram") plus `tsc --noEmit` + production build + code review.
+- **Deliberately not built this pass** (documented, not silently skipped): a public/unauthenticated Help Center
+  (kept behind the existing auth gate, matching how every other Watch route works today); per-article table of
+  contents (no sub-headings exist in the content model yet); screenshots/diagrams in articles (no fabricated
+  visuals, per explicit instruction — real diagrams could be added later using the existing slot-diagram
+  components); a `/support/contact` dedicated route (Contact Support stays a card at the bottom of the Help
+  Center home rather than a separate page, since the existing form is already small and this avoids an extra
+  click for what's meant to be a fallback); further contextual "Learn more" links beyond the two added (the
+  report explicitly warned against over-adding these).
+
 ### 2026-08-19 — Telegram-identity-first onboarding: a real account-state machine replaces the old plan-first welcome screen (v1.47.4)
 - **Investigated first.** The Overview welcome panel (`WatchDashboard.tsx`'s old `OnboardingEmptyState`) had
   exactly two states — entitled vs. not — and its primary CTA for a not-yet-entitled account was the single

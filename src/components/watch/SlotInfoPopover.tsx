@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Info } from "lucide-react";
 
 /** Accessible click/tap/keyboard-toggleable info popover — the shared
@@ -50,7 +51,8 @@ export function SlotInfoPopover() {
   return (
     <InfoPopover label="Learn what a Watcher slot means">
       <p className="mb-1.5">A slot is one Watcher actively deployed to one Community.</p>
-      <p>One Watcher deployed to two Communities uses two slots.</p>
+      <p className="mb-1.5">One Watcher deployed to two Communities uses two slots.</p>
+      <Link href="/support/watchers/watcher-profiles-deployments-slots" className="w-teal hover:underline">Learn more</Link>
     </InfoPopover>
   );
 }
@@ -60,7 +62,8 @@ export function SlotInfoPopover() {
 export function CommunityExpansionInfoPopover({ included, max }: { included: number; max: number }) {
   return (
     <InfoPopover label="Learn how Community expansion works">
-      <p>Your plan includes {included} communit{included === 1 ? "y" : "ies"}. Add the Community Expansion package (see the price below) to raise your Community capacity to this plan's maximum of {max} — it never changes your Watcher slot allowance.</p>
+      <p className="mb-1.5">Your plan includes {included} communit{included === 1 ? "y" : "ies"}. Add the Community Expansion package (see the price below) to raise your Community capacity to this plan's maximum of {max} — it never changes your Watcher slot allowance.</p>
+      <Link href="/support/plans-billing/community-expansion" className="w-teal hover:underline">Learn more</Link>
     </InfoPopover>
   );
 }
