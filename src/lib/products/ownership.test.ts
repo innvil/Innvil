@@ -11,12 +11,14 @@ import { WATCH_PRODUCT_SLUG } from "./watch";
 
 type Row = Record<string, unknown>;
 
-function fakeAdmin(seed: { panels?: Row[]; products?: Row[]; product_entitlements?: Row[]; projects?: Row[] }) {
+function fakeAdmin(seed: { panels?: Row[]; products?: Row[]; product_entitlements?: Row[]; projects?: Row[]; watch_trial_claims?: Row[]; watch_telegram_links?: Row[] }) {
   const store: Record<string, Row[]> = {
     panels: seed.panels ?? [],
     products: seed.products ?? [],
     product_entitlements: seed.product_entitlements ?? [],
     projects: seed.projects ?? [],
+    watch_trial_claims: seed.watch_trial_claims ?? [],
+    watch_telegram_links: seed.watch_telegram_links ?? [],
   };
   return {
     __store: store,
@@ -27,6 +29,7 @@ function fakeAdmin(seed: { panels?: Row[]; products?: Row[]; product_entitlement
         select() { return builder; },
         eq(col: string, val: unknown) { filters.push([col, val]); return builder; },
         order() { return builder; },
+        limit() { return builder; },
         async maybeSingle() { return { data: rowsMatching()[0] ?? null, error: null }; },
         insert(row: Row) {
           return {
@@ -90,6 +93,22 @@ test("REQUIRED: Forge ownership alone (a Panel with NO active moderator addon) d
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW],
     panels: [{ id: "panel-1", owner_id: "acct-1", settings: {} }], // no addons.moderator at all
+  });
+  assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), false);
+});
+
+test("REQUIRED: an active direct-Watch trial claim grants access with NO Forge/Panel and NO product_entitlements row at all", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    watch_trial_claims: [{ account_id: "acct-1", telegram_user_id: 555, ends_at: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString() }],
+  });
+  assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), true);
+});
+
+test("an expired trial claim does NOT grant access", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    watch_trial_claims: [{ account_id: "acct-1", telegram_user_id: 555, ends_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() }],
   });
   assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), false);
 });

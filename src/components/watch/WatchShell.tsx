@@ -4,11 +4,12 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   LayoutGrid, FolderKanban, Users, Bot, Activity,
-  CreditCard, Settings, LogOut, Menu, X, Plus, User, HelpCircle,
+  CreditCard, Layers, Settings, LogOut, Menu, X, Plus, User, HelpCircle,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
 import { withTimeout } from "@/src/lib/timeout";
 import type { AccountCapacity } from "@/src/lib/products/watch-runtime";
+import { watchAccessLabel } from "@/src/lib/products/watch-plans";
 
 const LOGOUT_TIMEOUT_MS = 8000;
 
@@ -45,6 +46,7 @@ const OPERATIONS_NAV: NavItem[] = [
 const ACCOUNT_NAV: NavItem[] = [
   { id: "profile", label: "Profile", icon: User, href: "/profile", implemented: true },
   { id: "usage", label: "Usage", icon: LayoutGrid, href: "/usage", implemented: true },
+  { id: "plans", label: "Plans", icon: Layers, href: "/plans", implemented: true },
   { id: "billing", label: "Billing", icon: CreditCard, href: "/billing", implemented: true },
   { id: "settings", label: "Settings", icon: Settings, href: "/settings", implemented: true },
 ];
@@ -112,13 +114,13 @@ function SidebarContent({ active, capacity, onNavigate }: { active: string; capa
       </nav>
 
       {capacity && (
-        <div className="px-4 py-3 mx-2.5 mb-2 rounded-lg w-surface-raised border w-line-soft shrink-0">
-          <p className="text-[10px] uppercase tracking-wide w-text-faint mb-1">Plan</p>
-          <p className="w-display text-sm w-teal capitalize">{capacity.tier}</p>
+        <Link href="/plans" className="block px-4 py-3 mx-2.5 mb-2 rounded-lg w-surface-raised border w-line-soft shrink-0 hover:w-teal-border">
+          <p className="text-[10px] uppercase tracking-wide w-text-faint mb-1">{capacity.tier === "trial" ? "Access" : "Plan"}</p>
+          <p className="w-display text-sm w-teal">{watchAccessLabel(capacity.tier)}</p>
           <p className="text-[11px] w-text-faint mt-0.5">
             {capacity.activeDeploymentCount}/{capacity.slotsTotal} slots · {capacity.communitiesUsed}/{capacity.communitiesTotal} Communities
           </p>
-        </div>
+        </Link>
       )}
 
       <Link

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions } from "./watch-plans";
+import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions, watchAccessLabel } from "./watch-plans";
 import { moderatorPlanPrice, MODERATOR_COMMUNITY_CAPACITY } from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
 
@@ -79,4 +79,10 @@ test("communitiesMax always reads from the same canonical MODERATOR_COMMUNITY_CA
   for (const opt of options) {
     assert.equal(opt.communitiesMax, MODERATOR_COMMUNITY_CAPACITY[opt.tier].maxWithAddons);
   }
+});
+
+test("REQUIRED: watchAccessLabel shows 'Free Trial' for the trial pseudo-tier, real plan names otherwise", () => {
+  assert.equal(watchAccessLabel("trial"), "Free Trial");
+  assert.equal(watchAccessLabel("basic"), "Bronze");
+  assert.equal(watchAccessLabel("pro"), "Platinum");
 });

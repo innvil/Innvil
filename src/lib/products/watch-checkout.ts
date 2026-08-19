@@ -109,6 +109,43 @@ export async function createDirectWatchCheckout(
   }
 }
 
+export interface WatchPaymentRecord {
+  id: string;
+  createdAt: string;
+  plan: string | null;
+  gateway: string;
+  amount: number;
+  currency: string;
+  status: string;
+  reference: string | null;
+}
+
+/** Real crypto payment/invoice history for the authenticated account only --
+ *  never trusts a client-supplied account id, scoped by owner_id + the
+ *  direct-Watch purpose so a panel-owner's unrelated Forge top-ups never
+ *  leak in here. This is a checkout-event history (one row per invoice
+ *  attempted), not a fabricated recurring-billing ledger. */
+export async function listWatchPaymentHistory(): Promise<WatchPaymentRecord[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data } = await admin
+    .from("platform_deposits")
+    .select("id, created_at, plan, gateway, paid_amount, currency, status, gateway_ref")
+    .eq("owner_id", user.id)
+    .eq("purpose", "watch_subscription")
+    .order("created_at", { ascending: false });
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    createdAt: r.created_at as string,
+    plan: (r.plan as string | null) ?? null,
+    gateway: r.gateway as string,
+    amount: Number(r.paid_amount ?? 0),
+    currency: (r.currency as string | null) ?? "USD",
+    status: r.status as string,
+    reference: (r.gateway_ref as string | null) ?? null,
+  }));
+}
+
 /** Which providers can actually be offered right now — configured AND
  *  either on the direct-checkout-capable allowlist above OR Binance Pay
  *  (its own dedicated claim-by-transaction-id flow, watch-binance.ts).

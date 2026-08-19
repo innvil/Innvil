@@ -7,6 +7,7 @@ import { normalizeModeratorPersona, type ModeratorPersona } from "@/src/lib/mode
 import { getModerationDefaults } from "./watch-moderation-defaults";
 import { projectBelongsToAccount, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
+import { hasActiveWatchTrial, getWatchTrialState, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./watch-trial";
 
 /**
  * Neutral ownership/creation layer for Communities, Watchers
@@ -28,16 +29,26 @@ import { WATCH_PRODUCT_SLUG } from "./watch";
  * a standalone deployment — no second settings/config model was invented.
  *
  * Reuses the EXISTING pure capacity/cap-checking functions from
- * moderator/plan.ts (`CAPACITY`, `communityCountExceeded`,
+ * moderator/plan.ts (`CAPACITY`, `TRIAL_CAPACITY`, `communityCountExceeded`,
  * `checkDeploymentSlotCaps`) — never a second capacity model. Direct Watch
- * has no trial concept (checkout is paid-only, see watch-checkout.ts), so
- * capacity here always comes straight from the account's paid tier.
+ * checkout itself is still paid-only (see watch-checkout.ts) -- there is no
+ * $0 checkout flow -- but an account may ALSO hold a free trial entitlement
+ * (see watch-trial.ts), resolved through the SAME requireAccountWatchContext
+ * every capacity/creation function in this file goes through.
  */
 
 export interface AccountWatchContext {
   ok: true;
   accountId: string;
-  tier: ModeratorPlanTier;
+  /** "trial" is a real, distinct entitlement SOURCE (not a ModeratorPlanTier
+   *  value) -- mirrors moderator/plan.ts's ModeratorEntitlementSource. */
+  tier: ModeratorPlanTier | "trial";
+  maxCommunities: number;
+  maxActiveSlots: number;
+  /** Max SAVED Watcher identities -- distinct from maxActiveSlots (a
+   *  Watcher can be saved without being deployed). For trial this is the
+   *  canonical TRIAL_MAX_SAVED_MODERATORS (1), not the slot count. */
+  maxSavedModerators: number;
 }
 export type AccountWatchContextResult = AccountWatchContext | { ok: false; error: string };
 
@@ -66,8 +77,9 @@ export async function resolveAccountWatchTier(admin: SupabaseClient, accountId: 
  *  actually parses (`settings.addons.moderator.{tier,commercialMode,
  *  since,lastChargeAt,nextChargeAt,lapsed,trial}`) -- every `virtualMod*`
  *  capability check in that file is ultimately a function of this shape
- *  alone. Direct Watch has no trial concept (checkout is paid-only, see
- *  watch-checkout.ts) -- trial is always off here. */
+ *  alone. A PAID direct-Watch tier always synthesizes trial: off (a paid
+ *  entitlement, never a trial, per moderatorEntitlementSource's own "a paid
+ *  tier always supersedes an active trial" rule). */
 export function buildStandaloneModeratorSettings(tier: ModeratorPlanTier): unknown {
   return {
     addons: {
@@ -79,6 +91,31 @@ export function buildStandaloneModeratorSettings(tier: ModeratorPlanTier): unkno
         nextChargeAt: null,
         lapsed: false,
         trial: { active: false, startedAt: null, endsAt: null },
+      },
+    },
+  };
+}
+
+/** Synthesizes the SAME settings shape for an active direct-Watch trial --
+ *  `tier: null` so `moderatorEntitlementSource` resolves to "trial" (not a
+ *  paid tier), with the real, DB-sourced start/end timestamps from
+ *  watch-trial.ts's `watch_trial_claims`. This is what makes a trial
+ *  account's live-deployed Watcher actually process Telegram messages --
+ *  the ENTIRE existing trial capability-gating machinery in moderator/plan.ts
+ *  (TRIAL_CAPACITY, TRIAL_REACTIVE_DAILY_LIMIT, content-generation exclusion,
+ *  etc.) runs completely unmodified, exactly as it already does for the
+ *  Panel-distributed trial -- never a second trial-capability implementation. */
+function buildStandaloneTrialModeratorSettings(trial: { startedAt: string; endsAt: string }): unknown {
+  return {
+    addons: {
+      moderator: {
+        tier: null,
+        commercialMode: "commission",
+        since: null,
+        lastChargeAt: null,
+        nextChargeAt: null,
+        lapsed: false,
+        trial: { active: true, startedAt: trial.startedAt, endsAt: trial.endsAt },
       },
     },
   };
@@ -99,13 +136,31 @@ export async function resolveStandaloneModeratorSettings(admin: SupabaseClient, 
   const accountId = await resolveWatcherAccountId(admin, virtualModeratorId);
   if (!accountId) return null;
   const tier = await resolveAccountWatchTier(admin, accountId);
-  return tier ? buildStandaloneModeratorSettings(tier) : null;
+  if (tier) return buildStandaloneModeratorSettings(tier);
+  const trial = await getWatchTrialState(admin, accountId);
+  if (trial.status === "active" && trial.startedAt && trial.endsAt) {
+    return buildStandaloneTrialModeratorSettings({ startedAt: trial.startedAt, endsAt: trial.endsAt });
+  }
+  return null;
 }
 
+/** Paid entitlement always wins when both exist (a trial customer who
+ *  upgrades transitions cleanly to paid capacity -- see resolveAccountWatchTier's
+ *  own doc comment and activateWatchEntitlement, which is what makes a paid
+ *  tier actually resolve here in the first place). Falls back to an active
+ *  trial claim (watch-trial.ts) only when there's no paid tier -- the SAME
+ *  canonical resolver every Watcher/Community/Deployment creation path and
+ *  getAccountCapacity() below both go through, never a second capacity
+ *  model for trial vs. paid. */
 async function requireAccountWatchContext(admin: SupabaseClient, accountId: string): Promise<AccountWatchContextResult> {
   const tier = await resolveAccountWatchTier(admin, accountId);
-  if (!tier) return { ok: false, error: "This account doesn't have an active Innvil Watch subscription." };
-  return { ok: true, accountId, tier };
+  if (tier) {
+    return { ok: true, accountId, tier, maxCommunities: CAPACITY[tier].maxCommunities, maxActiveSlots: CAPACITY[tier].maxActiveSlots, maxSavedModerators: CAPACITY[tier].maxActiveSlots };
+  }
+  if (await hasActiveWatchTrial(admin, accountId)) {
+    return { ok: true, accountId, tier: "trial", maxCommunities: TRIAL_CAPACITY.maxCommunities, maxActiveSlots: TRIAL_CAPACITY.maxActiveSlots, maxSavedModerators: TRIAL_MAX_SAVED_MODERATORS };
+  }
+  return { ok: false, error: "This account doesn't have an active Innvil Watch subscription." };
 }
 
 async function loadOwnedProject(admin: SupabaseClient, accountId: string, projectId: string): Promise<{ id: string; accountId: string } | null> {
@@ -140,7 +195,7 @@ export async function createAccountWatcher(admin: SupabaseClient, accountId: str
   const trimmed = name.trim().slice(0, 80);
   if (!trimmed) return { ok: false, error: "Give this Watcher a name." };
 
-  const maxSaved = CAPACITY[ctx.tier].maxActiveSlots;
+  const maxSaved = ctx.maxSavedModerators;
   const { count: existingCount } = await admin
     .from("virtual_moderators")
     .select("id", { count: "exact", head: true })
@@ -255,7 +310,7 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
     return { ok: false, error: "This is a personal Telegram account, not a group or channel. Add the Watcher's bot to a Telegram group, supergroup, or channel instead." };
   }
 
-  const maxCommunities = CAPACITY[ctx.tier].maxCommunities;
+  const maxCommunities = ctx.maxCommunities;
   const { data: existingForChat } = await admin
     .from("communities")
     .select("id, project_id")
@@ -330,7 +385,7 @@ export async function deployAccountWatcher(admin: SupabaseClient, accountId: str
     .eq("community_id", communityId)
     .maybeSingle();
 
-  const maxActiveSlots = CAPACITY[ctx.tier].maxActiveSlots;
+  const maxActiveSlots = ctx.maxActiveSlots;
   const { data: accountModerators } = await admin.from("virtual_moderators").select("id").eq("account_id", accountId);
   const moderatorIds = (accountModerators ?? []).map((m: Record<string, unknown>) => m.id as string);
   const { count: activeSlotCount } = moderatorIds.length
@@ -487,7 +542,11 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
  *  consumed). `activeDeploymentCount` now matches the backend's own
  *  `activeSlotCount` computation exactly. */
 export interface AccountCapacity {
-  tier: ModeratorPlanTier;
+  tier: ModeratorPlanTier | "trial";
+  /** Only set when tier === "trial" -- the real, server-authoritative
+   *  expiry every trial UI surface (Plans/Overview/Usage/sidebar) reads for
+   *  "time remaining", never a client-computed/decrementing value. */
+  trialEndsAt: string | null;
   watcherProfileCount: number;
   activeDeploymentCount: number;
   slotsTotal: number;
@@ -495,24 +554,28 @@ export interface AccountCapacity {
   communitiesTotal: number;
 }
 
-/** Real capacity/usage against the account's actual entitlement tier —
- *  reads straight from the canonical `CAPACITY` table (moderator/plan.ts),
- *  never a duplicated number. Returns null when there's no active
- *  entitlement (nothing to show a capacity panel for). */
+/** Real capacity/usage against the account's actual entitlement -- paid tier
+ *  (canonical CAPACITY table) OR an active trial (canonical TRIAL_CAPACITY),
+ *  resolved through the SAME requireAccountWatchContext every Watcher/
+ *  Community/Deployment creation path already uses, never a second/duplicated
+ *  capacity model for trial vs. paid. Returns null when there's no active
+ *  entitlement at all (nothing to show a capacity panel for). */
 export async function getAccountCapacity(admin: SupabaseClient, accountId: string): Promise<AccountCapacity | null> {
-  const tier = await resolveAccountWatchTier(admin, accountId);
-  if (!tier) return null;
-  const [watchers, communities] = await Promise.all([
+  const ctx = await requireAccountWatchContext(admin, accountId);
+  if (!ctx.ok) return null;
+  const [watchers, communities, trial] = await Promise.all([
     listAccountWatchers(admin, accountId),
     listAccountCommunities(admin, accountId),
+    ctx.tier === "trial" ? getWatchTrialState(admin, accountId) : Promise.resolve(null),
   ]);
   return {
-    tier,
+    tier: ctx.tier,
+    trialEndsAt: trial?.endsAt ?? null,
     watcherProfileCount: watchers.length,
     activeDeploymentCount: communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length,
-    slotsTotal: CAPACITY[tier].maxActiveSlots,
+    slotsTotal: ctx.maxActiveSlots,
     communitiesUsed: communities.length,
-    communitiesTotal: CAPACITY[tier].maxCommunities,
+    communitiesTotal: ctx.maxCommunities,
   };
 }
 

@@ -23,6 +23,7 @@ function fakeAdmin(seed: {
   products?: Row[]; product_entitlements?: Row[]; projects?: Row[];
   virtual_moderators?: Row[]; communities?: Row[]; moderator_deployments?: Row[];
   moderator_activity_log?: Row[]; watch_moderation_defaults?: Row[];
+  watch_trial_claims?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     products: seed.products ?? [],
@@ -33,6 +34,8 @@ function fakeAdmin(seed: {
     moderator_deployments: seed.moderator_deployments ?? [],
     moderator_activity_log: seed.moderator_activity_log ?? [],
     watch_moderation_defaults: seed.watch_moderation_defaults ?? [],
+    watch_trial_claims: seed.watch_trial_claims ?? [],
+    watch_telegram_links: [],
   };
   let idCounter = 0;
 
@@ -633,6 +636,79 @@ test("a paused (disabled) deployment consumes zero slots -- matches the backend'
 test("getAccountCapacity returns null for an account with no active entitlement -- never a fabricated plan", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   assert.equal(await getAccountCapacity(admin, "acct-1"), null);
+});
+
+/* ---------------------------------------------------- trial integration ---- */
+// Free Trial capacity/enforcement reuses this SAME canonical resolver -- no
+// second Watcher/Community enforcement path exists for trial vs. paid.
+
+const ACTIVE_TRIAL = { account_id: "acct-1", telegram_user_id: 555, started_at: new Date().toISOString(), ends_at: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString() };
+
+test("REQUIRED: an active trial (no paid tier) resolves real capacity from the canonical TRIAL_CAPACITY constants", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }], watch_trial_claims: [ACTIVE_TRIAL] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.ok(capacity);
+  assert.equal(capacity?.tier, "trial");
+  assert.equal(capacity?.slotsTotal, 1);
+  assert.equal(capacity?.communitiesTotal, 1);
+  assert.ok(capacity?.trialEndsAt, "trial capacity must carry the real server-sourced expiry for UI countdowns");
+});
+
+test("REQUIRED (test 14): trial Watcher/Community/Deployment creation enforces slot-based capacity, not saved-profile count", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }], watch_trial_claims: [ACTIVE_TRIAL], projects: [DASH_PROJECT] });
+  const watcher = await createAccountWatcher(admin, "acct-1", "Trial Watcher");
+  assert.equal(watcher.ok, true);
+  const community = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-9001" });
+  assert.equal(community.ok, true);
+  if (!watcher.ok || !community.ok) return;
+  const deploy = await deployAccountWatcher(admin, "acct-1", watcher.data.id, community.data.id);
+  assert.equal(deploy.ok, true, "a verified, active-trial account with zero Panels must be able to deploy a real Watcher");
+});
+
+test("REQUIRED (test 15): trial Community cap (1) is enforced -- a second Community is rejected", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    watch_trial_claims: [ACTIVE_TRIAL],
+    projects: [DASH_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "First" }],
+  });
+  const result = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-9002" });
+  assert.equal(result.ok, false);
+});
+
+test("REQUIRED (test 15b): trial Watcher slot cap (1) is enforced -- a second active deployment is rejected", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    watch_trial_claims: [ACTIVE_TRIAL],
+    projects: [DASH_PROJECT],
+    virtual_moderators: [{ id: "m1", account_id: "acct-1", name: "A" }, { id: "m2", account_id: "acct-1", name: "B" }],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "First" }],
+    moderator_deployments: [{ id: "d1", panel_id: null, moderator_id: "m1", community_id: "c1", enabled: true }],
+  });
+  const result = await deployAccountWatcher(admin, "acct-1", "m2", "c1");
+  assert.equal(result.ok, false);
+});
+
+test("REQUIRED (test 18): a paid entitlement supersedes an active trial's capacity", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1" }],
+    watch_trial_claims: [ACTIVE_TRIAL],
+  });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.tier, "premium");
+  assert.equal(capacity?.slotsTotal, 10, "must use paid Premium capacity, never trial's 1-slot ceiling, once a paid tier exists");
+});
+
+test("REQUIRED (test 19): the durable trial claim record is untouched by a later paid upgrade -- consumption stays permanent", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1" }],
+    watch_trial_claims: [ACTIVE_TRIAL],
+  });
+  await getAccountCapacity(admin, "acct-1");
+  assert.equal(admin.__store.watch_trial_claims.length, 1, "activating a paid tier must never delete/rewrite the historical trial claim");
+  assert.deepEqual(admin.__store.watch_trial_claims[0], ACTIVE_TRIAL);
 });
 
 test("REQUIRED: listAccountActivity only surfaces genuinely meaningful moderation decisions, translated to customer-facing text", async () => {

@@ -127,6 +127,118 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Plans/Billing split + a real, durable, one-time Free Trial (v1.43.0)
+- **Architecture correction, not a cosmetic split.** Plans (`/plans`, "what access can I have") and Billing
+  (`/billing`, "how am I paying, and what's happened") were one page — `BillingPlanPicker` + Enterprise +
+  slot-explainer + FAQ all lived on `/billing` alongside current-plan status. Investigated the actual system
+  before touching anything (per explicit instruction): confirmed `product_entitlements.status` already had an
+  unused `'trial'` enum value, `hasProductAccess()` already accepted it, and `eligibleForOneTimeOffer`/
+  `watch_abuse_signals` already modeled one-time-offer eligibility keyed by account+Telegram identity — all
+  scaffolding, never wired to anything. Direct Watch checkout was explicitly documented "paid-only, no trial
+  concept" and `resolveAccountWatchTier`/`buildStandaloneModeratorSettings` had zero trial branch. Confirmed
+  via grep: every substantive "trial" implementation in the repo was the OLD Panel-distributed Virtual Moderator
+  trial (`moderator/plan.ts`) — a real precedent, never touched or reused directly, but its canonical constants
+  (`TRIAL_DURATION_DAYS=7`, `TRIAL_CAPACITY={maxCommunities:1,maxActiveSlots:1}`, `TRIAL_MAX_SAVED_MODERATORS=1`)
+  ARE reused verbatim for the new direct-Watch trial — same product, same trial concept, a second distribution
+  channel, never a second invented set of numbers.
+- **New `/plans`** (`app/plans/page.tsx`) — Free Trial card + Bronze/Silver/Gold/Platinum (`BillingPlanPicker`,
+  unchanged) + the slot-education diagrams + Enterprise (Managed/BYO, `EnterpriseModeCards`, pricing formula
+  untouched) + FAQ (moved verbatim from Billing, +2 trial-specific entries). **`/billing` rebuilt as a real
+  ledger**: current access (plan or trial + real expiry), payment method (crypto-only, explicit honest language
+  — "Innvil Watch does not currently auto-charge a recurring crypto payment" since no such mechanism exists;
+  never "auto-renews"), and a real payment history table sourced from `platform_deposits`
+  (`purpose='watch_subscription'`, account-scoped via `owner_id`) with an honest empty state for
+  trial/new customers ("No payments yet... View plans").
+- **Free Trial — a temporary, one-time entitlement, NOT a permanent free plan.** New migration
+  `0079_watch_trial.sql` — `watch_trial_claims` (`account_id` UNIQUE, `telegram_user_id` UNIQUE, `started_at`,
+  `ends_at`) is BOTH the atomic claim arbiter (a real DB unique-constraint violation, not an application
+  "if eligible then insert" race) AND the durable, never-deleted consumption record — surviving both expiry and
+  a later paid upgrade, so the trial can never be reclaimed by either path. New `src/lib/products/watch-trial.ts`
+  — `getWatchTrialState`/`hasActiveWatchTrial`/`startWatchTrial`, states `telegram_required → eligible → active
+  → expired` (derived live from `ends_at` vs. now — no cron needed, mirrors `readTrialState`'s existing
+  server-authoritative expiry pattern in `moderator/plan.ts`). Reuses `getAccountTelegramIdentity` from
+  `watch-abuse.ts` (the SAME verified numeric Telegram identity Profile's Connect Telegram card already
+  establishes) as the eligibility anchor — never username, never IP/cookie/localStorage as a primary signal.
+  **Run migration `0079`.**
+- **Capacity/entitlement resolution — one canonical resolver understands paid OR trial, never two.**
+  `watch-runtime.ts`'s `requireAccountWatchContext` (private, used by every Watcher/Community/Deployment
+  creation path) now resolves a paid tier first (unchanged), falling back to an active trial claim only when no
+  paid tier exists — a trial customer who upgrades transitions cleanly, and `AccountWatchContext`/
+  `AccountCapacity.tier` widened to `ModeratorPlanTier | "trial"` (a real, distinct entitlement SOURCE, mirroring
+  `ModeratorEntitlementSource` in the old system) rather than forcing trial into the paid tier vocabulary.
+  `createAccountWatcher`/`createAccountCommunity`/`deployAccountWatcher` now read capacity limits off the
+  resolved context (`ctx.maxSavedModerators`/`maxCommunities`/`maxActiveSlots`) instead of indexing `CAPACITY[tier]`
+  directly — the one small, explicitly-justified compatibility change needed so trial capacity enforcement goes
+  through the SAME functions paid capacity always has, never a second Watcher/Community enforcement path.
+  `ownership.ts`'s `hasProductAccess()` (the hard gate every Watch route's `requireWatchPage()` uses) now also
+  accepts an active trial claim — without this, a trial customer would be redirected off every page in the app.
+- **Trial Watchers actually run — the live Telegram runtime, not just the dashboard.** New
+  `buildStandaloneTrialModeratorSettings()` synthesizes the SAME `panels.settings`-shaped value the moderation
+  runtime already reads (`tier:null, trial:{active:true,startedAt,endsAt}`), so `moderatorEntitlementSource`
+  resolves to `"trial"` and the ENTIRE existing trial capability-gating machinery in `moderator/plan.ts`
+  (`TRIAL_CAPACITY`, `TRIAL_REACTIVE_DAILY_LIMIT`=20/day, content-generation exclusion) runs completely
+  unmodified for a standalone deployment — exactly as it already does for the Panel-distributed trial, never a
+  second trial-capability implementation. `resolveStandaloneModeratorSettings` now checks paid tier, then this,
+  before returning null.
+- **No payment method required for the trial, ever** — `startWatchTrial`/the Free Trial card never touch
+  `platform_deposits`/checkout/any gateway. New `FreeTrialCard.tsx` reuses the EXACT SAME
+  `startWatchTelegramVerification`/`getWatchTelegramState`/`cancelWatchTelegramVerification` actions Profile's
+  `ConnectTelegramCard` already uses (no second identity-linking flow) for the "Telegram required" state, then
+  `startWatchTrialAction()` (new thin auth wrapper, `src/lib/actions/watch-trial.ts`) for the "eligible" state.
+  States: telegram_required (Connect Telegram CTA) / eligible (Start free trial, no payment) / active (real
+  expiry + `trialTimeRemainingLabel` — a coarse human duration like "6 days remaining", never a client-side
+  decrementing countdown, per explicit anti-anxiety instruction — real usage bars, Upgrade link) / expired
+  (reassuring "Your Projects, Communities, and Watchers are still here" + View paid plans, no Start button).
+  New client-safe `watch-trial-format.ts` (mirrors the existing `watch-datetime.ts`/`watch-status.ts` extraction
+  pattern) keeps `server-only` Supabase code out of the client bundle.
+- **Nav**: `WatchShell.tsx`'s `ACCOUNT_NAV` gains "Plans" (Profile / Usage / Plans / Billing / Settings); the
+  sidebar footer capacity card now links to `/plans`, shows "Access" (not "Plan") + `watchAccessLabel(tier)`
+  when on trial, so it never renders the raw internal `"trial"` string. New `watchAccessLabel()` in
+  `watch-plans.ts` (Free Trial vs. real plan names) — every surface that renders `AccountCapacity.tier`
+  (`WatchShell`, `WatchDashboard`'s Plan & capacity card, `app/usage/page.tsx`) updated to use it instead of the
+  raw tier. Every "Manage"/"Choose a plan" link across Overview/Usage now points at `/plans`; Billing's own nav
+  link correctly still points at `/billing` — confirmed via a full repo grep, no stale link left pointing at the
+  old combined page.
+- **Public marketing landing left untouched this pass** — `WatchLanding.tsx`'s own `#pricing` section triggers
+  checkout directly and doesn't route through `/billing`, so nothing there was stale; per the explicit "don't
+  aggressively rewrite public marketing" instruction, a public Free Trial CTA is deferred (see below).
+- New tests: `watch-trial.test.ts` (+16, new file — every one of the 20 requested trial-abuse scenarios that
+  apply at this layer: no-Telegram rejection, real eligible→active transition, zero Panel/Project/Community/
+  Watcher rows written, server-generated timestamps proven via a before/after bound, concurrent double-start
+  yields exactly one claim via `Promise.all`, idempotent re-call, an expired trial can't restart, the same
+  Telegram numeric id blocked across a second account via the simulated `23505` unique-violation path, username
+  change doesn't reset eligibility, canonical capacity constants, exact expiry-boundary edge case, cross-account
+  isolation), `watch-runtime.test.ts` (+7 — trial-only capacity resolution incl. real `trialEndsAt`, trial
+  Watcher/Community/Deployment creation actually works end-to-end for a zero-Panel account, trial's 1-Community
+  and 1-slot caps both enforced via the real creation functions, paid supersedes trial capacity, and the durable
+  claim record is proven byte-for-byte untouched after a paid upgrade), `ownership.test.ts` (+2 — an active trial
+  claim alone grants `hasProductAccess` with zero Panel/product_entitlements row, an expired claim does not),
+  `watch-plans.test.ts` (+1 — `watchAccessLabel`). Also fixed a pre-existing local test-fixture gap
+  (`community-runtime.test.ts`'s `fakeAdminForStandaloneSettings` lacked `.order()`/`.limit()` and the two new
+  tables, needed once `resolveStandaloneModeratorSettings` gained its trial fallback branch) — the "NO HIDDEN
+  FALLBACK" test asserting the exact table-touch list for an ENTITLED account is unaffected (that path returns
+  before ever reaching the trial branch). 1125 tests pass (up from 1102), `tsc --noEmit` clean, production build
+  clean (confirmed both `/plans` and `/billing` in the build output).
+- **Code-review sweep, per the request's own explicit checklist**: zero `panel_id`/`panelId`/hidden-Panel
+  references anywhere in the new trial files; zero "credit card" anywhere in `src`/`app`; zero "auto-renew"/
+  "automatic renewal" claims anywhere (Billing explicitly states the opposite — no auto-charge exists); exactly
+  one `href="/billing"` left in the whole codebase (the Billing nav item itself); `watch-checkout.ts`'s
+  `returnUrl` is a plain post-checkout redirect destination only — entitlement activation still happens
+  exclusively via the server-verified `handlePlatformWebhook` path, never a browser redirect (unchanged,
+  re-verified); `git status` shows every changed file is directly in scope, no unrelated scope creep.
+- **Deliberately not built this pass** (documented, not silently skipped): a public/unauthenticated Free Trial
+  marketing CTA on the Watch landing (kept the landing conservative, per explicit instruction, even though trial
+  values are now canonical — a genuine follow-up, not a blocker); any change to the Rental/BYO commercial-mode
+  billing path (unrelated, untouched); a scheduled cron for trial expiry (unnecessary — expiry is a live
+  timestamp comparison, same pattern the old Panel trial already uses, and is proven server-authoritative by
+  the exact-boundary test).
+- **Remaining Billing gap, stated honestly**: there is no recurring/auto-renewal mechanism for direct Watch
+  paid subscriptions today — once `activateWatchEntitlement` sets `status:'active'`, nothing currently expires
+  or re-bills it (no `nextChargeAt`/billing-cron exists for direct Watch, unlike the old Panel-based moderator
+  addon). Billing states this honestly rather than fabricating a renewal date; building real recurring billing
+  (manual "pay renewal" invoice generation, or a real subscription-period expiry) is the natural next step once
+  Plans/Billing/Trial are live and stable.
+
 ### 2026-08-18 — Settings restructured into an admin-console control center: left-nav IA, Profile/Support moved out, `/support` route, and dense real-data polish (v1.42.0)
 - **Two combined passes, per explicit live product direction after seeing the v1.41.0 result.**
 - **(1) Information architecture correction.** Profile and Support tabs REMOVED from Settings — Profile already

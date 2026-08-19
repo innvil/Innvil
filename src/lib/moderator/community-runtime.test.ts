@@ -1024,6 +1024,12 @@ function fakeAdminForStandaloneSettings(opts: { moderators?: Array<{ id: string;
     virtual_moderators: opts.moderators ?? [],
     product_entitlements: opts.entitlements ?? [],
     products: opts.products ?? [{ id: "product-watch", slug: "watch" }],
+    // Neither table has any rows in these fixtures -- a non-entitled
+    // account here also has no trial claim / no verified Telegram identity,
+    // so resolveStandaloneModeratorSettings' trial branch correctly falls
+    // through to null, same as before trial support existed.
+    watch_trial_claims: [],
+    watch_telegram_links: [],
   };
   return {
     __tablesTouched: tablesTouched,
@@ -1033,6 +1039,8 @@ function fakeAdminForStandaloneSettings(opts: { moderators?: Array<{ id: string;
       const api = {
         select() { return api; },
         eq(col: string, val: unknown) { filters.push((r) => r[col] === val); return api; },
+        order() { return api; },
+        limit() { return api; },
         async maybeSingle() {
           const rows = (store[table] ?? []) as Record<string, unknown>[];
           return { data: rows.filter((r) => filters.every((f) => f(r)))[0] ?? null, error: null };

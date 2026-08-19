@@ -12,6 +12,7 @@ import type {
   CommunityOperationalStats,
 } from "@/src/lib/products/watch-runtime";
 import { communityOperationalStatus } from "@/src/lib/products/watch-status";
+import { watchAccessLabel } from "@/src/lib/products/watch-plans";
 import { WatchShell } from "./WatchShell";
 import { WatcherConnectModal } from "./WatcherConnectModal";
 import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalStatusBadge, SeverityTag, WatcherNamesCell } from "./WatchUI";
@@ -184,10 +185,10 @@ export function WatchDashboard({
             </div>
 
             <div className="w-card p-5">
-              <SectionHeader icon={ShieldCheck} title="Plan & capacity" action={<Link href="/billing" className="text-xs w-teal hover:underline">Manage</Link>} />
+              <SectionHeader icon={ShieldCheck} title="Plan & capacity" action={<Link href="/plans" className="text-xs w-teal hover:underline">Manage</Link>} />
               {capacity ? (
                 <div className="space-y-3">
-                  <p className="w-display text-lg w-teal capitalize">{capacity.tier}</p>
+                  <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier)}</p>
                   <CapacityRow label="Watcher slots" used={capacity.activeDeploymentCount} total={capacity.slotsTotal} />
                   <CapacityRow label="Communities" used={capacity.communitiesUsed} total={capacity.communitiesTotal} />
                   <Link href="/usage" className="text-xs w-teal hover:underline inline-block pt-1">View usage</Link>
@@ -196,7 +197,7 @@ export function WatchDashboard({
                 <div className="text-center py-4">
                   <p className="text-sm w-text mb-1">No active plan</p>
                   <p className="text-xs w-text-faint mb-4">Watch is not currently subscribed.</p>
-                  <Link href="/billing" className="w-btn-primary text-xs font-semibold px-4 py-2 rounded-lg inline-block">Choose a plan</Link>
+                  <Link href="/plans" className="w-btn-primary text-xs font-semibold px-4 py-2 rounded-lg inline-block">Choose a plan</Link>
                 </div>
               )}
             </div>

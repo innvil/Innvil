@@ -7,6 +7,7 @@ import {
 } from "@/src/lib/products/watch-runtime";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
+import { watchAccessLabel } from "@/src/lib/products/watch-plans";
 
 export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -48,7 +49,7 @@ export default async function UsagePage() {
         {!capacity && (
           <div className="w-card p-4 border w-amber-border text-sm w-text-dim">
             No active subscription — the numbers above are real, but nothing is currently entitled to run.{" "}
-            <Link href="/billing" className="w-teal hover:underline">Choose a plan</Link>.
+            <Link href="/plans" className="w-teal hover:underline">Choose a plan</Link>.
           </div>
         )}
 
@@ -57,7 +58,7 @@ export default async function UsagePage() {
             <SectionHeader icon={ShieldCheck} title="Plan capacity" />
             {capacity ? (
               <>
-                <p className="w-display text-lg w-teal capitalize mb-3">{capacity.tier}</p>
+                <p className="w-display text-lg w-teal mb-3">{watchAccessLabel(capacity.tier)}</p>
                 <div className="space-y-3">
                   <CapacityRow label="Watcher slots" used={capacity.activeDeploymentCount} total={capacity.slotsTotal} />
                   <CapacityRow label="Communities" used={capacity.communitiesUsed} total={capacity.communitiesTotal} />

@@ -3,6 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasVirtualModerator } from "@/src/lib/moderator/plan";
 import { WATCH_PRODUCT_SLUG } from "./watch";
+import { hasActiveWatchTrial } from "./watch-trial";
 
 /**
  * Neutral account-to-product ownership/entitlement resolution — the
@@ -16,7 +17,13 @@ import { WATCH_PRODUCT_SLUG } from "./watch";
  * `hasProductAccess()` combines two sources, in this order:
  *   1. `product_entitlements` — the new, account-level, product-generic
  *      source of truth (works identically for Forge/Watch/Herald/future).
- *   2. LEGACY COMPATIBILITY (Watch only, for now): does this account own
+ *   2. DIRECT WATCH FREE TRIAL (Watch only): does this account hold an
+ *      active, unexpired trial claim (watch-trial.ts's `watch_trial_claims`,
+ *      migration 0079)? A temporary, one-time entitlement, structurally
+ *      separate from `product_entitlements` so a later paid upgrade can
+ *      overwrite/supersede the paid row without ever touching (or being
+ *      able to accidentally resurrect) the durable trial-consumption record.
+ *   3. LEGACY COMPATIBILITY (Watch only, for now): does this account own
  *      any Panel with an active Virtual Moderator entitlement? This is
  *      exactly the "existing Panel-owner Watch distribution channel"
  *      the architecture doc requires stay functional — it does NOT mean
@@ -36,6 +43,7 @@ export async function hasProductAccess(admin: SupabaseClient, accountId: string,
   if (entitlement && (entitlement.status === "active" || entitlement.status === "trial")) return true;
 
   if (productSlug === WATCH_PRODUCT_SLUG) {
+    if (await hasActiveWatchTrial(admin, accountId)) return true;
     const { data: panels } = await admin.from("panels").select("settings").eq("owner_id", accountId);
     return (panels ?? []).some((p) => hasVirtualModerator(p.settings));
   }
