@@ -634,6 +634,10 @@ export interface AccountCapacity {
    *  expiry every trial UI surface (Plans/Overview/Usage/sidebar) reads for
    *  "time remaining", never a client-computed/decrementing value. */
   trialEndsAt: string | null;
+  /** Only set when tier === "trial" -- the real trial start timestamp
+   *  (watch_trial_claims.started_at), so a Usage surface can show the real
+   *  "Aug 20 – Aug 27" period instead of only a countdown. */
+  trialStartedAt: string | null;
   /** Only set for a paid tier -- the real, server-authoritative
    *  current_period_end (migration 0080). Null for a legacy grandfathered
    *  paid row (see resolveAccountWatchTier's own doc comment) -- a genuine
@@ -680,6 +684,7 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
   return {
     tier: ctx.tier,
     trialEndsAt: trial?.endsAt ?? null,
+    trialStartedAt: trial?.startedAt ?? null,
     paidThrough: paidPlan?.currentPeriodEnd ?? null,
     billingInterval: paidPlan?.billingInterval ?? "monthly",
     watcherProfileCount: watchers.length,

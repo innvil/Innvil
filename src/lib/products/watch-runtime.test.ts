@@ -796,6 +796,17 @@ test("REQUIRED: an active trial (no paid tier) resolves real capacity from the c
   assert.equal(capacity?.slotsTotal, 1);
   assert.equal(capacity?.communitiesTotal, 1);
   assert.ok(capacity?.trialEndsAt, "trial capacity must carry the real server-sourced expiry for UI countdowns");
+  assert.equal(capacity?.trialStartedAt, ACTIVE_TRIAL.started_at, "Usage must be able to show the real trial start date, not just the end");
+});
+
+test("a paid-tier account never carries a fabricated trialStartedAt", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1", current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() }],
+  });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.trialStartedAt, null);
+  assert.equal(capacity?.trialEndsAt, null);
 });
 
 test("REQUIRED (test 14): trial Watcher/Community/Deployment creation enforces slot-based capacity, not saved-profile count", async () => {

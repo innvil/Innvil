@@ -127,6 +127,66 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Usage page: the real Current Period Usage tracker was missing — added, incl. Free Trial (v1.47.18)
+- **Investigated first, per explicit instruction, before adding anything.** The Usage page already showed
+  structural resource capacity (Watcher profiles/slots, Communities, Plan capacity, Slots by Watcher/Community,
+  Moderation activity) and — for a PAID tier only — a real "AI responses" metered card
+  (`MODERATOR_AI_RESPONSE_POOL`, shipped in v1.47.16). The reported "tracker is missing" gap was specifically that
+  **nothing was ever shown for the Free Trial** — `paidTier` is explicitly `null` for `capacity.tier === "trial"`
+  (v1.47.16 deliberately excludes trial from the AI-response pool, since trial has its own separate mechanism),
+  so a trial account's Usage page had no current-period consumption section at all, only structural cards.
+- **Canonical usage-limit sources, both already existed, neither was invented for this pass**: paid tiers —
+  `MODERATOR_AI_RESPONSE_POOL` (`money.ts`, monthly, via `aiResponsePoolLimit(tier)`). Free Trial — the
+  ALREADY-ENFORCED (since Phase 4.M/v1.7.0) `TRIAL_REACTIVE_DAILY_LIMIT = 20` (`moderator/plan.ts`), a real,
+  server-side-checked-before-every-reply DAILY quota per Community, persisted in `community_reactive_quota`
+  (migration 0050) — this was already gating real Watcher behavior, it just had no read-only display function
+  before now.
+- **Period semantics — inspected, not assumed.** Paid tiers reset on the account's REAL subscription period
+  (`product_entitlements.current_period_start/current_period_end`, already resolved by
+  `resolveAccountBillingPeriod()`, unchanged from v1.47.16). The Free Trial has NO monthly/subscription-period
+  concept at all — its real reset cadence is a UTC calendar day (`community-runtime.ts`'s `reactiveQuotaDay`,
+  already established in v1.7.0's own doc comment: "no per-community timezone field exists yet"). Per explicit
+  instruction not to force "monthly" onto a product that doesn't use it, the trial's usage card is labeled
+  "AI responses (today)" / "Resets daily (UTC)" — its own real period, not a fabricated month.
+- **New `getCommunityReactiveQuotaUsage(admin, communityId, quotaDay)`** (`community-runtime.ts`) — the exact same
+  query shape `hasReactiveQuotaRemaining` already used (read-only, real persisted `reactive_count`), just
+  returning the actual number instead of only a boolean — no duplicated quota-tracking logic, no second counter.
+  Zero rows correctly reads as `0`, never a fabricated/estimated value; a real overshoot (race-condition edge
+  case) is reported honestly, never silently clamped to the limit.
+- **`AccountCapacity` gained `trialStartedAt`** (`watch-runtime.ts`, alongside the existing `trialEndsAt`) —
+  sourced from the SAME `getWatchTrialState()` call `getAccountCapacity` already makes (zero extra queries),
+  since a real "Aug 20 – Aug 27" period display needs both real endpoints, not just the expiry.
+- **Usage page restructured** (`app/usage/page.tsx`) into the requested two-concept hierarchy, resource capacity
+  never mixed with metered consumption: structural stat row (unchanged) → **new "Current Period Usage" section**
+  (prominent, right after the stat row/no-plan banner — paid tier shows the existing AI-responses-this-period
+  card; Free Trial shows its own real "AI responses (today)" card + a "Free Trial period" card with the real
+  start/end dates via `new Date(...).toLocaleDateString()` and `trialTimeRemainingLabel()`, the same coarse
+  non-anxiety-inducing formatter already used on Plans/Overview) → Plan capacity / Moderation activity (unchanged)
+  → Community Expansion (unchanged) → Slots by Watcher/Community (unchanged). The whole "Current Period Usage"
+  block renders nothing at all for an account with neither a paid tier nor an active trial — never a fake
+  zero-metric placeholder.
+- **Trial expiry handled by construction, not a new code path** — `getAccountCapacity` already returns `null` for
+  an expired trial (`requireAccountWatchContext` only resolves `tier: "trial"` while `hasActiveWatchTrial` is
+  true), so once a trial expires the Usage page automatically falls back to the existing "No active subscription"
+  banner while the structural stat cards (Watcher profiles, Communities, Moderation actions) keep showing real,
+  preserved historical data — no resources are ever deleted, and an expired trial is never shown as an active
+  allowance. No new logic was needed for this — it was already the correct behavior once `capacity` is null.
+- **Normal plans stay strictly read-only** — every value on this page is a plain read (`getWatchAiResponseUsage`/
+  `getCommunityReactiveQuotaUsage`/`getAccountCapacity`), no new mutation endpoint was added, and no BYO/editable
+  controls were introduced (Enterprise/BYO has no account-level implementation to preserve or touch, confirmed
+  unchanged from the v1.47.16 investigation).
+- New tests: `community-runtime.test.ts` (+3 — `getCommunityReactiveQuotaUsage` zero-row/real-count/honest-
+  overshoot), `watch-runtime.test.ts` (+2 — `trialStartedAt` carries the real claim's `started_at` for an active
+  trial, and is `null`/never fabricated for a paid-tier account). 1368 tests pass (up from 1364), `tsc --noEmit`
+  clean, production build clean. Diff reviewed: exactly 5 files, all mapping directly to this scope — no invented
+  limits, no duplicated quota/period calculation (both reuse the existing canonical functions), no Panel coupling,
+  no unrelated changes.
+- **Not deployed automatically, per explicit instruction.**
+- **Metrics intentionally NOT shown, because not measurable/canonical**: raw provider/API request counts, token
+  usage, generated-message counts distinct from the AI-response pool, and any BYO/Enterprise usage metering — none
+  of these exist anywhere in this codebase's schema or entitlement configuration (re-confirmed this pass); showing
+  them would mean inventing numbers, which was explicitly out of scope.
+
 ### 2026-08-20 — Fixed: a directed @mention right after another user's greeting-shaped message went unanswered — a routing bug, not an idempotency bug (v1.47.17)
 - **Live reproducible bug**: in the same Community, User A sent "hi Mr Pres" (answered correctly); User B, a
   different Telegram account, then sent "hey @mrpreswan_bot" — Mr Pres never responded.

@@ -8,6 +8,9 @@ import {
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 import { resolveAccountBillingPeriod, getWatchAiResponseUsage, aiResponsePoolLimit } from "@/src/lib/products/watch-ai-usage";
+import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
+import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
+import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
@@ -43,6 +46,23 @@ export default async function UsagePage() {
   const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" ? capacity.tier : null;
   const aiUsageCount = paidTier && aiPeriod ? await getWatchAiResponseUsage(admin, accountId, aiPeriod.start) : null;
 
+  // Trial's own real, measurable current-period consumption: the 20/day
+  // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
+  // scoped per Community and reset per UTC calendar day (community-runtime.ts
+  // reactiveQuotaDay -- no per-community timezone field exists yet, see that
+  // function's own doc comment). This is a DAILY limit, not monthly -- the
+  // trial has no monthly/subscription-period consumption concept at all
+  // (MODERATOR_AI_RESPONSE_POOL explicitly excludes trial), so it is shown
+  // under its own real "today" period rather than forced into a fabricated
+  // monthly bucket. Summed across every Community the account has (the trial
+  // is capped at 1, but this generalizes rather than assuming exactly one).
+  const isTrial = capacity?.tier === "trial";
+  const trialQuotaDay = isTrial ? reactiveQuotaDay(new Date()) : null;
+  const trialReactiveUsed =
+    isTrial && trialQuotaDay
+      ? (await Promise.all(communities.map((c) => getCommunityReactiveQuotaUsage(admin, c.id, trialQuotaDay)))).reduce((a, b) => a + b, 0)
+      : null;
+
   return (
     <WatchShell active="usage" capacity={shell.capacity} attentionCount={shell.attentionCount}>
       <div className="space-y-6">
@@ -67,6 +87,74 @@ export default async function UsagePage() {
           <div className="w-card p-4 border w-amber-border text-sm w-text-dim">
             No active subscription — the numbers above are real, but nothing is currently entitled to run.{" "}
             <Link href="/plans" className="w-teal hover:underline">Choose a plan</Link>.
+          </div>
+        )}
+
+        {/* ---- Current Period Usage: real metered consumption against a canonical
+             limit, distinct from the structural resource capacity below. Paid
+             tiers show the one canonical monthly pool (MODERATOR_AI_RESPONSE_POOL);
+             the Free Trial shows its own real, separately-scoped DAILY quota
+             (TRIAL_REACTIVE_DAILY_LIMIT) -- these are two different real metrics
+             with two different real periods, never forced into one fabricated
+             shape. Nothing renders here for an account with neither (no active
+             plan and no trial), since there is nothing real to meter. ---- */}
+        {((paidTier && aiUsageCount != null && aiPeriod) || (isTrial && trialReactiveUsed != null)) && (
+          <div>
+            <h2 className="w-display text-sm w-text-dim mb-2">Current Period Usage</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {paidTier && aiUsageCount != null && aiPeriod && (
+                <div className="w-card p-5">
+                  <SectionHeader icon={MessageSquare} title="AI responses" />
+                  <div className="flex items-end justify-between gap-3 mb-2">
+                    <p className="w-display text-2xl w-text">
+                      {aiUsageCount.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {aiResponsePoolLimit(paidTier).toLocaleString()} this period</span>
+                    </p>
+                  </div>
+                  <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
+                    <div
+                      className="h-full w-teal-bg rounded-full"
+                      style={{ width: `${Math.min(100, (aiUsageCount / Math.max(1, aiResponsePoolLimit(paidTier))) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs w-text-faint">
+                    Current period {new Date(aiPeriod.start).toLocaleDateString()} – {new Date(aiPeriod.end).toLocaleDateString()}. Counts
+                    conversational replies your Watchers generate (not silence, reactions, or moderation actions) — a pooled allowance
+                    shared across every Watcher on this account, read-only and set by your plan.
+                  </p>
+                </div>
+              )}
+
+              {isTrial && trialReactiveUsed != null && (
+                <div className="w-card p-5">
+                  <SectionHeader icon={MessageSquare} title="AI responses (today)" />
+                  <div className="flex items-end justify-between gap-3 mb-2">
+                    <p className="w-display text-2xl w-text">
+                      {trialReactiveUsed.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {TRIAL_REACTIVE_DAILY_LIMIT.toLocaleString()} today</span>
+                    </p>
+                  </div>
+                  <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
+                    <div
+                      className="h-full w-teal-bg rounded-full"
+                      style={{ width: `${Math.min(100, (trialReactiveUsed / Math.max(1, TRIAL_REACTIVE_DAILY_LIMIT)) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs w-text-faint">
+                    Resets daily (UTC). Counts conversational replies your Watcher generates during the Free Trial — a per-Community
+                    daily allowance, separate from the monthly pool paid plans use.
+                  </p>
+                </div>
+              )}
+
+              {isTrial && capacity?.trialEndsAt && (
+                <div className="w-card p-5">
+                  <SectionHeader icon={ShieldCheck} title="Free Trial period" />
+                  <p className="w-display text-lg w-teal mb-1">{trialTimeRemainingLabel(capacity.trialEndsAt)}</p>
+                  <p className="text-xs w-text-faint">
+                    {capacity.trialStartedAt ? new Date(capacity.trialStartedAt).toLocaleDateString() : "—"} – {new Date(capacity.trialEndsAt).toLocaleDateString()}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -98,28 +186,6 @@ export default async function UsagePage() {
             <p className="text-xs w-text-faint mt-4">Counts real warn/kick/ban decisions made by your Watchers — not routine chatter or silence.</p>
           </div>
         </div>
-
-        {paidTier && aiUsageCount != null && aiPeriod && (
-          <div className="w-card p-5">
-            <SectionHeader icon={MessageSquare} title="AI responses" />
-            <div className="flex items-end justify-between gap-3 mb-2">
-              <p className="w-display text-2xl w-text">
-                {aiUsageCount.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {aiResponsePoolLimit(paidTier).toLocaleString()} this period</span>
-              </p>
-            </div>
-            <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
-              <div
-                className="h-full w-teal-bg rounded-full"
-                style={{ width: `${Math.min(100, (aiUsageCount / Math.max(1, aiResponsePoolLimit(paidTier))) * 100)}%` }}
-              />
-            </div>
-            <p className="text-xs w-text-faint">
-              Current period {new Date(aiPeriod.start).toLocaleDateString()} – {new Date(aiPeriod.end).toLocaleDateString()}. Counts
-              conversational replies your Watchers generate (not silence, reactions, or moderation actions) — a pooled allowance
-              shared across every Watcher on this account, read-only and set by your plan.
-            </p>
-          </div>
-        )}
 
         {capacity && capacity.communityExpansionEligible && (
           <CommunityExpansionCard

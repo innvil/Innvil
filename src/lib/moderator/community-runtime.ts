@@ -1241,6 +1241,21 @@ export async function recordReactiveQuotaUse(admin: SupabaseClient, panelId: str
   await admin.rpc("increment_community_reactive_quota", { p_panel_id: panelId, p_community_id: communityId, p_quota_day: quotaDay });
 }
 
+/** The real, persisted count behind hasReactiveQuotaRemaining -- read-only,
+ *  same query shape, exposed separately so a Usage surface can display
+ *  actual consumption ("used / limit today") rather than only a boolean.
+ *  Never a fabricated/estimated number -- zero rows (no reactive replies
+ *  sent yet today) correctly reads as 0, not "unknown". */
+export async function getCommunityReactiveQuotaUsage(admin: SupabaseClient, communityId: string, quotaDay: string): Promise<number> {
+  const { data } = await admin
+    .from("community_reactive_quota")
+    .select("reactive_count")
+    .eq("community_id", communityId)
+    .eq("quota_day", quotaDay)
+    .maybeSingle();
+  return (data as { reactive_count: number } | null)?.reactive_count ?? 0;
+}
+
 /** Pure: turns a raw resolveMultiTargetAddress() result into the bounded set
  *  of ADDITIONAL responders that should independently reply alongside the
  *  primary. Excludes the primary (already answering — dedup-safety: the

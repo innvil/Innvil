@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
-  reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
+  reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse, getCommunityReactiveQuotaUsage,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
   finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
@@ -270,6 +270,23 @@ test("REQUIRED: recordReactiveQuotaUse calls the atomic increment RPC with the r
   assert.equal(rpcCalls.length, 1);
   assert.equal(rpcCalls[0].name, "increment_community_reactive_quota");
   assert.deepEqual(rpcCalls[0].params, { p_panel_id: "panel-1", p_community_id: "community-1", p_quota_day: "2026-08-10" });
+});
+
+/* ------------------------------------ real Usage-tracker consumption read ---- */
+
+test("REQUIRED: getCommunityReactiveQuotaUsage returns 0 (real, not fabricated) when no reactive reply has been sent yet today", async () => {
+  const { admin } = fakeQuotaAdmin(null);
+  assert.equal(await getCommunityReactiveQuotaUsage(admin, "community-1", "2026-08-10"), 0);
+});
+
+test("REQUIRED: getCommunityReactiveQuotaUsage returns the exact persisted count", async () => {
+  const { admin } = fakeQuotaAdmin(7);
+  assert.equal(await getCommunityReactiveQuotaUsage(admin, "community-1", "2026-08-10"), 7);
+});
+
+test("getCommunityReactiveQuotaUsage never caps at the limit -- a real overshoot is reported honestly, not clamped", async () => {
+  const { admin } = fakeQuotaAdmin(23);
+  assert.equal(await getCommunityReactiveQuotaUsage(admin, "community-1", "2026-08-10"), 23);
 });
 
 /* ================================== timeout/budget hardening (live incident) ==========
