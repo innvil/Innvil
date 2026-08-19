@@ -127,6 +127,35 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Plan-card Community allowance made visually prominent + capacity-consistency pinning tests (v1.46.1)
+- **Investigated first, per explicit instruction, before assuming anything was actually missing.** Read
+  `BillingPlanPicker.tsx`, `FreeTrialCard.tsx`, and `EnterpriseModeCards.tsx`/`ManagedEnterpriseCalculator.tsx`
+  in full: every plan card already rendered BOTH "Watcher slots" and "Communities" (included + "Up to N" for
+  expandable tiers) from the real canonical `watchPlanOptions()` data — the Free Trial card already listed its
+  real 1-slot/1-Community allowance, Managed Enterprise already showed a real calculated Communities-included
+  figure, and BYO Enterprise already correctly said "Community capacity: Custom" (no formula exists for it).
+  **The underlying data/config was already fully correct and already shared with Usage/Billing** — this pass is
+  a visual-prominence fix, not a data-correctness fix.
+- **Plan-card polish**: the Watcher-slots/Communities rows are now set off in their own bordered "Capacity"
+  block (small uppercase label, `border-t`, semibold values) instead of sitting as plain small text directly
+  under the price — so a visitor can see both capacity numbers immediately without needing to scroll to the
+  "Understanding Watcher slots" education section to discover them. No values changed, only presentation.
+- **Monthly/Annual confirmed unaffected**: `WatchPlanOption` (the type both the Plans page and Usage/Billing
+  read) has no billing-interval field at all — capacity is structurally interval-independent, pinned by a new
+  test rather than left as an implicit assumption.
+- New tests (`watch-plans.test.ts`, +3): `WatchPlanOption` never carries a billing-interval-specific value (so
+  Monthly/Annual views can never diverge on slots/Communities), every plan's `slots`/`communitiesIncluded`/
+  `communitiesMax` is byte-identical to the exact `CAPACITY`/`MODERATOR_COMMUNITY_CAPACITY` constants Usage/
+  Billing's own `AccountCapacity` resolver reads (closing the loop explicitly, not just by construction), and
+  the Free Trial's real `TRIAL_CAPACITY` constant (1 slot/1 Community) is confirmed canonical. 1216 tests pass
+  (up from 1213), `tsc --noEmit` clean, production build clean.
+- **Not verified live via click-through this pass** — `/plans` requires authentication and no session was
+  available in this pass's preview tab (same limitation as the three immediately prior passes); covered by
+  typecheck + full test suite + production build + code review instead.
+- **Remaining capacity UI note**: none found — Trial/Bronze/Silver/Gold/Platinum/Enterprise capacity
+  presentation is now consistent everywhere it appears (Plans cards, Plans education section, Usage, Billing,
+  Enterprise calculator).
+
 ### 2026-08-19 — Annual billing (Innvil Credit only) — a billing interval on the existing plan, not a new plan (v1.46.0)
 - **Extends the existing Plans/Billing/Innvil Credit architecture — no new plan/product ids.** Investigated
   first: confirmed no billing-interval concept existed anywhere (`product_entitlements` had no such column) and

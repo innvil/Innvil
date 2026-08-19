@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions, watchAccessLabel } from "./watch-plans";
 import { moderatorPlanPrice, MODERATOR_COMMUNITY_CAPACITY } from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
+import { TRIAL_CAPACITY } from "./watch-trial";
 
 /**
  * Customer-facing Watch plan rename: Basic->Bronze, Standard->Silver,
@@ -85,4 +86,30 @@ test("REQUIRED: watchAccessLabel shows 'Free Trial' for the trial pseudo-tier, r
   assert.equal(watchAccessLabel("trial"), "Free Trial");
   assert.equal(watchAccessLabel("basic"), "Bronze");
   assert.equal(watchAccessLabel("pro"), "Platinum");
+});
+
+/* ------------------------------- plan-card capacity consistency (Plans page) ---- */
+// The Plans page's plan cards must show BOTH Watcher slots and Community
+// allowance, using the exact same canonical config Usage/Billing read --
+// these tests pin that agreement so the three surfaces can never silently
+// drift apart from each other.
+
+test("REQUIRED: watchPlanOptions() carries no billing-interval field at all -- capacity is structurally interval-independent, so Monthly and Annual Plans views can never show different slot/Community numbers for the same plan", () => {
+  const options = watchPlanOptions();
+  for (const o of options) {
+    assert.ok(!("billingInterval" in o), `${o.displayName} option must not carry a billing-interval-specific capacity value`);
+  }
+});
+
+test("REQUIRED: every plan option's slots/communitiesIncluded/communitiesMax are IDENTICAL to what Usage/Billing's own AccountCapacity resolver reads (CAPACITY + MODERATOR_COMMUNITY_CAPACITY) -- same source, not a second copy", () => {
+  for (const o of watchPlanOptions()) {
+    assert.equal(o.slots, CAPACITY[o.tier].maxActiveSlots, `${o.displayName}: Plans and Usage/Billing must agree on Watcher slots`);
+    assert.equal(o.communitiesIncluded, CAPACITY[o.tier].maxCommunities, `${o.displayName}: Plans and Usage/Billing must agree on included Communities`);
+    assert.equal(o.communitiesMax, MODERATOR_COMMUNITY_CAPACITY[o.tier].maxWithAddons, `${o.displayName}: Plans and Usage/Billing must agree on max Communities`);
+  }
+});
+
+test("REQUIRED: the Free Trial's real capacity (1 Watcher slot, 1 Community) is a canonical constant, the same one the runtime entitlement resolver enforces -- never a value hand-typed into the Plans UI", () => {
+  assert.equal(TRIAL_CAPACITY.maxActiveSlots, 1);
+  assert.equal(TRIAL_CAPACITY.maxCommunities, 1);
 });

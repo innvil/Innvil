@@ -92,20 +92,23 @@ export function BillingPlanPicker({
                   <p className="text-[10px] w-text-faint mb-3">Innvil Credit only</p>
                 </>
               )}
-              <div className="space-y-1.5 mb-4 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="w-text-dim flex items-center gap-1">Watcher slots <SlotInfoPopover /></span>
-                  <span className="w-text font-medium">{o.slots}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="w-text-dim flex items-center gap-1">
-                    Communities
-                    {expandable && <CommunityExpansionInfoPopover included={o.communitiesIncluded} max={o.communitiesMax} />}
-                  </span>
-                  <span className="w-text font-medium text-right">
-                    {o.communitiesIncluded} included
-                    {expandable && <span className="block w-text-faint font-normal">Up to {o.communitiesMax}</span>}
-                  </span>
+              <div className="mb-4 border-t w-line-soft pt-3">
+                <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">Capacity</p>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="w-text-dim flex items-center gap-1">Watcher slots <SlotInfoPopover /></span>
+                    <span className="w-text font-semibold">{o.slots}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="w-text-dim flex items-center gap-1">
+                      Communities
+                      {expandable && <CommunityExpansionInfoPopover included={o.communitiesIncluded} max={o.communitiesMax} />}
+                    </span>
+                    <span className="w-text font-semibold text-right">
+                      {o.communitiesIncluded} included
+                      {expandable && <span className="block w-text-faint font-normal">Up to {o.communitiesMax}</span>}
+                    </span>
+                  </div>
                 </div>
               </div>
               {isCurrent ? (
