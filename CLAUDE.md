@@ -127,6 +127,69 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Real monthly AI-response usage tracking + enforcement (the ONE canonical Watch usage limit) (v1.47.16)
+- **Full investigation done first, per explicit instruction — reported before building anything.** Requested
+  "usage limits" work (messages, provider requests, tokens, BYO controls) turned out to have almost no canonical
+  source. Confirmed exactly ONE approved monthly limit exists anywhere in the Watch plan/entitlement
+  configuration: `MODERATOR_AI_RESPONSE_POOL` (`money.ts` — Bronze 1,200 / Silver 2,400 / Gold 4,200 / Platinum
+  7,200, pooled per account across every Watcher, defined since v1.13.0). Its own code comment said outright:
+  "Not yet enforced (no usage counter exists)." Also confirmed: "Presence Scheduling" doesn't exist anywhere in
+  this codebase (a separate, larger feature the user deferred to after current testing); BYO Enterprise has zero
+  account-level architecture (`watch-enterprise.ts` is explicitly "PRICING/COPY only" — no stored BYO/Managed
+  flag on any account, no credential storage, no way to even determine if an account is BYO) — also deferred.
+  Per explicit instruction, **only this one real, already-approved limit was built this pass.**
+- **Canonical usage-limit source**: `MODERATOR_AI_RESPONSE_POOL` (`src/lib/money.ts`), read via new
+  `aiResponsePoolLimit(tier)` (`src/lib/products/watch-ai-usage.ts`) — never re-declared/duplicated.
+- **Monthly/current-period semantics**: the account's REAL subscription period
+  (`product_entitlements.current_period_start/current_period_end`, migration 0080 — monthly or annual per
+  `billing_interval`), never an invented calendar month. New `resolveAccountBillingPeriod()` reads this
+  directly; returns `null` (never a fabricated period) for a legacy pre-migration-0080 row with no tracked
+  `current_period_end`, or an account with no entitlement at all. Trial is explicitly excluded (its own
+  separate daily reactive quota already exists, a different cadence/scope — not touched or duplicated here).
+- **New migration `0084_watch_ai_response_usage.sql`** — `watch_ai_response_usage` (account_id, period_start,
+  period_end, response_count; PK on `(account_id, period_start)` — one row per real subscription period, so a
+  renewal automatically starts a fresh row at 0, no reset logic needed anywhere) + atomic
+  `increment_watch_ai_response_usage` RPC (upsert-and-increment, race-safe under concurrent responders — e.g. a
+  multi-Watcher "@everyone" fan-out — mirrors `increment_community_reactive_quota`'s exact pattern). Service-role
+  only, no `panel_id` — this is a direct-Watch-only concept (the legacy Panel-distributed Virtual Moderator
+  system has its own separate commercial model, untouched). **Run migration 0084.**
+- **Enforcement, at the runtime layer, not the UI.** `respondAsDeployment` (`community-runtime.ts`) gates
+  CASUAL_CHAT/ANSWER generation on real remaining pool headroom for a paid direct-Watch account with a
+  resolvable period — checked BEFORE any AI call (same discipline as the existing trial reactive-quota gate),
+  resolving to `SILENCE` (`reason_code: "ai_response_pool_exhausted"`) when exhausted. Incremented ONLY after a
+  confirmed successful Telegram send (mirrors the trial quota's exact "record only on confirmed send"
+  discipline) — never for a failed send, declined/failed generation, or SILENCE/REACT (none of which reach that
+  line). **Deliberately scoped to CASUAL_CHAT/ANSWER only** — SHORT_ACK is deterministic/zero-AI-call and never
+  gated, matching `MODERATOR_AI_RESPONSE_POOL`'s own doc comment exactly. `accountId`/`paidTier` are resolved
+  ONCE in `handleCommunityUpdate` (`null` for a trial account or a Panel-distributed deployment — the gate is a
+  no-op, zero extra queries, for both) and threaded down through both the primary and every additional
+  (multi-target fan-out) `respondAsDeployment` call, so the pool is correctly shared across the whole account
+  regardless of how many Watchers respond to one message.
+- **Moderation completely unaffected, confirmed by construction**: `runLinkModeration`/media moderation both
+  run earlier in `handleHumanMessage`, as separate, independent code paths that never reach or depend on this
+  gate — an exhausted AI-response pool can never suppress scam/phishing/spam enforcement.
+- **Usage page** (`app/usage/page.tsx`): new read-only "AI responses" card — `used / limit this period` +
+  progress bar + real current-period date range, shown for every paid tier with a resolvable period. Read-only
+  by construction — no editable inputs, no mutation endpoint exists for a normal plan to call even if one were
+  added client-side. Nothing rendered for BYO (doesn't exist) or trial (different metric/cadence, not
+  displayed here this pass — a deliberate scope boundary, not a silent gap).
+- New tests: `watch-ai-usage.test.ts` (+11, new file — real-period resolution incl. the legacy-null-period and
+  no-entitlement cases, atomic increment + per-account isolation + fresh-period-starts-at-zero, the exact
+  canonical pool values per tier, the remaining-headroom boundary), `community-runtime.test.ts` (+3 — an
+  exhausted pool resolves to `SILENCE` structurally before any generation/send/increment (proven via a
+  restricted fake DB that throws for any other table), the gate's own tables are never queried when
+  `accountId` is `null` (trial/Panel-distributed), and a pinned boundary-condition proof — no live AI call
+  risked in any test). 1359 tests pass (up from 1345), `tsc --noEmit` clean, production build clean. Diff
+  reviewed: exactly 6 files, all mapping directly to this scope — no BYO/Presence Scheduling code, no
+  moderation-path changes, no scattered plan-name checks (all reads go through the one canonical constant).
+- **Not deployed automatically, per explicit instruction.**
+- **Deliberately deferred, per explicit user sequencing ("both of this is to be implemented after the
+  testings")**: Watcher Presence Scheduling and BYO Enterprise refinement — both received full, detailed specs
+  this session but neither has been started. Building either now would mean inventing an entire new
+  architecture (a BYO account-mode/credential system, a scheduler/idempotency system for presence transitions)
+  on top of live, actively-being-debugged moderation code — explicitly out of scope until current testing is
+  confirmed stable.
+
 ### 2026-08-19 — Fixed: a legitimate Watcher self-mention was deleted/warned as spam + superadmin Watch devops subscription grant (Preview-only) (v1.47.15)
 - **Root cause, found by tracing the actual pipeline (message received -> entity extraction -> spam/scam
   classification -> enforcement -> Watcher response), not guessed.** `extractLinks()` (`link-moderation.ts`)

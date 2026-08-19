@@ -5,7 +5,7 @@ import {
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
-  finalizeCommunityConnection, runLinkModeration, type ChatterDeployment,
+  finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
 } from "./community-runtime";
 import type { CommunityEvent } from "./event-types";
 import { DEFAULT_MODERATOR_PERSONA } from "./domain";
@@ -13,6 +13,7 @@ import {
   buildStandaloneModeratorSettings, resolveStandaloneModeratorSettings, resolveWatcherAccountId,
 } from "@/src/lib/products/watch-runtime";
 import { hasVirtualModerator, virtualModNaturalChatter, virtualModModeration, moderatorEntitlementSource, CAPACITY } from "./plan";
+import { hasAiResponsePoolRemaining } from "@/src/lib/products/watch-ai-usage";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
  *  isDuplicateUpdate uses, enforcing a real (integration_id, update_id)
@@ -1199,6 +1200,124 @@ test("REQUIRED (multi-Watcher, requirement 8): mentioning a DIFFERENT deployed W
     new Date()
   );
   assert.deepEqual(result, { handled: false, collabRoutable: false });
+});
+
+/* --------------------------------------------------- MODERATOR_AI_RESPONSE_POOL gate ---- */
+/* Live-approved monthly usage limit (money.ts), never enforced until now.
+   respondAsDeployment gates CASUAL_CHAT/ANSWER generation on real usage
+   for a paid direct-Watch account with a resolvable billing period --
+   proven here structurally: once the pool reads as exhausted, NOTHING
+   past that point (no generation, no Telegram send, no usage increment)
+   may happen. */
+
+type AiUsageRow = Record<string, unknown>;
+
+function fakeAdminForAiUsageGate(opts: { periodStart: string; periodEnd: string; usedCount: number }) {
+  const activityLog: AiUsageRow[] = [];
+  const allowedTables = new Set(["products", "product_entitlements", "watch_ai_response_usage", "moderator_activity_log"]);
+  return {
+    __activityLog: activityLog,
+    from(table: string) {
+      if (!allowedTables.has(table)) {
+        throw new Error(`respondAsDeployment must not touch "${table}" once the AI response pool reads as exhausted`);
+      }
+      if (table === "moderator_activity_log") {
+        return { insert: async (row: AiUsageRow) => { activityLog.push(row); return { data: null, error: null }; } };
+      }
+      const builder: Record<string, unknown> = {
+        select() { return builder; },
+        eq() { return builder; },
+        async maybeSingle() {
+          if (table === "products") return { data: { id: "product-watch" }, error: null };
+          if (table === "product_entitlements") return { data: { current_period_start: opts.periodStart, current_period_end: opts.periodEnd }, error: null };
+          if (table === "watch_ai_response_usage") return { data: { response_count: opts.usedCount }, error: null };
+          return { data: null, error: null };
+        },
+      };
+      return builder;
+    },
+    rpc() { throw new Error("respondAsDeployment must not call any RPC (e.g. the usage increment) once the pool reads as exhausted"); },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+function baseAiGateEvent(): CommunityEvent {
+  return {
+    panelId: null,
+    communityId: "community-1",
+    integrationId: "integration-1",
+    messageId: "msg-1",
+    sender: { platformUserId: "user-1", isBot: false, senderType: "HUMAN", displayName: "Sam", username: "sam_h" },
+    timestamp: new Date().toISOString(),
+    text: "how does this work?",
+    replyToMessageId: null,
+    origin: "HUMAN",
+    interactionDepth: 0,
+    causationMessageId: null,
+  };
+}
+
+const AI_GATE_DEPLOYMENT: ChatterDeployment = {
+  deploymentId: "dep-1", moderatorName: "Mr Pres", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "mrpreswan_bot",
+};
+
+test("REQUIRED: an exhausted AI response pool resolves to SILENCE for a paid account, structurally before any generation/send/increment", async () => {
+  const admin = fakeAdminForAiUsageGate({ periodStart: "2026-08-01T00:00:00Z", periodEnd: "2026-09-01T00:00:00Z", usedCount: 1200 }); // basic's pool is exactly 1200
+  const result = await respondAsDeployment({
+    admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+    deployment: AI_GATE_DEPLOYMENT, actionType: "ANSWER", reasons: ["directed"], isTrialEntitlement: false,
+    accountId: "acct-1", paidTier: "basic", now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+    otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+  });
+  assert.deepEqual(result, { replied: false });
+  assert.equal(admin.__activityLog.length, 1);
+  assert.equal(admin.__activityLog[0].decision, "SILENCE");
+  assert.equal(admin.__activityLog[0].reason_code, "ai_response_pool_exhausted");
+});
+
+test("REQUIRED: with accountId null (trial account / Panel-distributed deployment, as handleCommunityUpdate resolves), the pool gate's own billing-period/usage tables are never queried at all", async () => {
+  const queriedTables: string[] = [];
+  const admin = {
+    from(table: string) {
+      queriedTables.push(table);
+      const builder: Record<string, unknown> = {
+        select() { return builder; },
+        eq() { return builder; },
+        insert: async () => ({ data: null, error: null }),
+        upsert: async () => ({ data: null, error: null }),
+        async maybeSingle() { return { data: null, error: null }; },
+      };
+      return builder;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+  // SHORT_ACK never reaches the pool gate at all regardless of accountId --
+  // deterministic, zero Sonnet calls, matches MODERATOR_AI_RESPONSE_POOL's
+  // own doc comment -- this exercises accountId: null specifically (the
+  // real shape handleCommunityUpdate resolves for a trial account or a
+  // Panel-distributed deployment).
+  await respondAsDeployment({
+    admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+    deployment: AI_GATE_DEPLOYMENT, actionType: "SHORT_ACK", reasons: ["ack"], isTrialEntitlement: false,
+    accountId: null, paidTier: null, now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+    otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+  });
+  assert.equal(queriedTables.includes("products"), false);
+  assert.equal(queriedTables.includes("product_entitlements"), false);
+  assert.equal(queriedTables.includes("watch_ai_response_usage"), false);
+});
+
+test("REQUIRED: with real headroom remaining, the pool gate itself never fires -- proven via the pure hasAiResponsePoolRemaining check the gate is built on (no live AI call risked in this test)", () => {
+  // respondAsDeployment's positive path (headroom exists -> proceed to
+  // generation) is intentionally NOT exercised end-to-end here -- doing so
+  // would require actually calling generateChatterReply, which could hit a
+  // real AI provider if any key happens to be configured in the shell
+  // running these tests. The gate's decision boundary is already fully
+  // covered at the pure-function level (watch-ai-usage.test.ts); this pins
+  // the exact worked example used by the exhausted-pool test above, so the
+  // two tests can never silently drift apart on what "exhausted" means.
+  assert.equal(hasAiResponsePoolRemaining(1199, "basic"), true);
+  assert.equal(hasAiResponsePoolRemaining(1200, "basic"), false);
 });
 
 test("an arbitrary external @username with no other link and no other suspicious content is NOT exempt by this mechanism -- it still reaches real moderation logic (proven by requiring a DB touch, unlike the self-mention cases above which never touch the DB at all)", async () => {

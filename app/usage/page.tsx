@@ -1,23 +1,24 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { LayoutGrid, ShieldCheck, Bot, Users } from "lucide-react";
+import { LayoutGrid, ShieldCheck, Bot, Users, MessageSquare } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import {
   getAccountCapacity, countRecentModerationActions, listAccountCommunities, listAccountWatchers, getAccountSlotBreakdown,
 } from "@/src/lib/products/watch-runtime";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
+import { resolveAccountBillingPeriod, getWatchAiResponseUsage, aiResponsePoolLimit } from "@/src/lib/products/watch-ai-usage";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
-import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 
 export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
 export default async function UsagePage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, actions7d, actions30d, communities, watchers, breakdown, shell, expansion, gateways] = await Promise.all([
+  const [capacity, actions7d, actions30d, communities, watchers, breakdown, shell, expansion, gateways, aiPeriod] = await Promise.all([
     getAccountCapacity(admin, accountId),
     countRecentModerationActions(admin, accountId, 7),
     countRecentModerationActions(admin, accountId, 30),
@@ -27,10 +28,20 @@ export default async function UsagePage() {
     getWatchShellContext(admin, accountId),
     getCommunityExpansionState(admin, accountId),
     listAvailableDirectWatchGateways(),
+    resolveAccountBillingPeriod(admin, accountId),
   ]);
 
   const activeWatcherCount = new Set(communities.flatMap((c) => c.watchers.filter((w) => w.enabled).map((w) => w.watcherId))).size;
   const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
+
+  // MODERATOR_AI_RESPONSE_POOL (money.ts) -- the one canonical monthly usage
+  // limit approved in the Watch plan/entitlement configuration. Only shown
+  // for a real paid (non-trial) tier with a resolvable real subscription
+  // period -- never fabricated for the trial (which has its own, separate
+  // daily reactive quota) or for an account with no trackable period (a
+  // legacy never-expiring row predating migration 0080).
+  const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" ? capacity.tier : null;
+  const aiUsageCount = paidTier && aiPeriod ? await getWatchAiResponseUsage(admin, accountId, aiPeriod.start) : null;
 
   return (
     <WatchShell active="usage" capacity={shell.capacity} attentionCount={shell.attentionCount}>
@@ -87,6 +98,28 @@ export default async function UsagePage() {
             <p className="text-xs w-text-faint mt-4">Counts real warn/kick/ban decisions made by your Watchers — not routine chatter or silence.</p>
           </div>
         </div>
+
+        {paidTier && aiUsageCount != null && aiPeriod && (
+          <div className="w-card p-5">
+            <SectionHeader icon={MessageSquare} title="AI responses" />
+            <div className="flex items-end justify-between gap-3 mb-2">
+              <p className="w-display text-2xl w-text">
+                {aiUsageCount.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {aiResponsePoolLimit(paidTier).toLocaleString()} this period</span>
+              </p>
+            </div>
+            <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
+              <div
+                className="h-full w-teal-bg rounded-full"
+                style={{ width: `${Math.min(100, (aiUsageCount / Math.max(1, aiResponsePoolLimit(paidTier))) * 100)}%` }}
+              />
+            </div>
+            <p className="text-xs w-text-faint">
+              Current period {new Date(aiPeriod.start).toLocaleDateString()} – {new Date(aiPeriod.end).toLocaleDateString()}. Counts
+              conversational replies your Watchers generate (not silence, reactions, or moderation actions) — a pooled allowance
+              shared across every Watcher on this account, read-only and set by your plan.
+            </p>
+          </div>
+        )}
 
         {capacity && capacity.communityExpansionEligible && (
           <CommunityExpansionCard

@@ -41,7 +41,9 @@ import { classifyImageBytes } from "./media-safety-provider";
 import { extractVideoFrames } from "./media-frame-extractor";
 import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
-import { resolveStandaloneModeratorSettings } from "@/src/lib/products/watch-runtime";
+import { resolveStandaloneModeratorSettings, resolveWatcherAccountId } from "@/src/lib/products/watch-runtime";
+import { resolveAccountBillingPeriod, getWatchAiResponseUsage, incrementWatchAiResponseUsage, hasAiResponsePoolRemaining } from "@/src/lib/products/watch-ai-usage";
+import type { ModeratorPlanTier } from "@/src/lib/money";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -1936,7 +1938,9 @@ async function handleHumanMessage(
   event: CommunityEvent,
   isTrialEntitlement: boolean,
   timer: RequestTimer,
-  settings: unknown
+  settings: unknown,
+  accountId: string | null = null,
+  paidTier: ModeratorPlanTier | null = null
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
@@ -2084,7 +2088,7 @@ async function handleHumanMessage(
 
   const primaryResult = await respondAsDeployment({
     admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
-    deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, now,
+    deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, accountId, paidTier, now,
     recentContext,
     isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
     addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
@@ -2140,7 +2144,7 @@ async function handleHumanMessage(
         if (!additionalDeployment) continue;
         const result = await respondAsDeployment({
           admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
-          deployment: additionalDeployment, actionType: action.type, reasons: ["multi_target_address"], isTrialEntitlement, now,
+          deployment: additionalDeployment, actionType: action.type, reasons: ["multi_target_address"], isTrialEntitlement, accountId, paidTier, now,
           recentContext,
           // Each additional responder answers on its own merit, not because
           // it was @mentioned individually -- but a genuine multi-target
@@ -2202,7 +2206,7 @@ async function reactAsDeployment(
  *  responder and, independently, once per additional co-addressed responder
  *  (see the multi-target block above) -- same budget/timeout/quota/logging
  *  shape every time, just scoped to a different deployment + its own persona. */
-async function respondAsDeployment(params: {
+export async function respondAsDeployment(params: {
   admin: SupabaseClient;
   panelId: string | null;
   communityId: string;
@@ -2212,6 +2216,14 @@ async function respondAsDeployment(params: {
   actionType: "SHORT_ACK" | "CASUAL_CHAT" | "ANSWER";
   reasons: string[];
   isTrialEntitlement: boolean;
+  /** Direct-Watch account id, resolved only for a standalone (Panel-less)
+   *  integration -- null for a Panel-distributed deployment or a trial
+   *  account, in which case the MODERATOR_AI_RESPONSE_POOL gate below never
+   *  applies (see handleCommunityUpdate's resolution). */
+  accountId: string | null;
+  /** The account's real current paid tier -- null unless accountId is also
+   *  set and the account is genuinely on a paid (non-trial) subscription. */
+  paidTier: ModeratorPlanTier | null;
   now: Date;
   recentContext: ChatterContextMessage[];
   isDirectedAtBot: boolean;
@@ -2233,7 +2245,7 @@ async function respondAsDeployment(params: {
   timer: RequestTimer;
 }): Promise<{ replied: false } | { replied: true; text: string }> {
   const {
-    admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, now, recentContext,
+    admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, accountId, paidTier, now, recentContext,
     isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
   } = params;
 
@@ -2251,10 +2263,35 @@ async function respondAsDeployment(params: {
   }
 
   let replyText: string;
+  let aiUsagePeriod: { start: string; end: string } | null = null;
   if (actionType === "SHORT_ACK") {
     // Deterministic, zero Sonnet calls.
     replyText = shortAckText(deployment.persona);
   } else {
+    // MODERATOR_AI_RESPONSE_POOL (money.ts) -- direct-Watch paid accounts
+    // only (accountId/paidTier both set only in that case, see
+    // handleCommunityUpdate). Deliberately scoped to CASUAL_CHAT/ANSWER
+    // only (this whole branch) -- SHORT_ACK never reaches here, matching
+    // the pool's own doc comment ("SILENCE, REACT, deterministic SHORT_ACK
+    // ... never consume it"). Checked BEFORE any AI call, same discipline
+    // as the trial reactive-quota gate above -- an exhausted pool must
+    // never itself pay for a wasted Sonnet/DeepSeek call. Never applies to
+    // moderation (runLinkModeration/media moderation are separate,
+    // independent code paths that already ran earlier and are untouched by
+    // this gate).
+    if (accountId && paidTier) {
+      aiUsagePeriod = await resolveAccountBillingPeriod(admin, accountId);
+      if (aiUsagePeriod) {
+        const used = await getWatchAiResponseUsage(admin, accountId, aiUsagePeriod.start);
+        if (!hasAiResponsePoolRemaining(used, paidTier)) {
+          await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "SILENCE", "ai_response_pool_exhausted", {
+            reasons: ["ai_response_pool_exhausted"],
+            attemptedAction: actionType,
+          });
+          return { replied: false };
+        }
+      }
+    }
     // GENERATION_STARTED is written BEFORE the model call specifically so a
     // killed function still leaves a diagnostic trace in the DB alone -- the
     // live incident this closes had a recorded community_messages row but
@@ -2341,6 +2378,15 @@ async function respondAsDeployment(params: {
   // returned above), or a SILENCE/REACT (neither reaches this line at all).
   if (isTrialEntitlement && sent.sentMessageId) {
     await recordReactiveQuotaUse(admin, panelId, communityId, reactiveQuotaDay(now));
+  }
+  // Same "only on a confirmed successful send" discipline as the trial quota
+  // above, for the separate paid MODERATOR_AI_RESPONSE_POOL. `aiUsagePeriod`
+  // is only ever set when this was a real CASUAL_CHAT/ANSWER generation for
+  // a paid direct-Watch account with a resolvable period (see the gate
+  // above) -- SHORT_ACK, trial accounts, Panel-distributed deployments, and
+  // accounts with no trackable period never reach this increment.
+  if (accountId && aiUsagePeriod && sent.sentMessageId) {
+    await incrementWatchAiResponseUsage(admin, accountId, aiUsagePeriod);
   }
 
   if (sent.sentMessageId) {
@@ -2481,8 +2527,19 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // Phase 4.M (B): the 20/day reactive quota is trial-only (spec §2) --
     // paid tiers are unaffected and this patch does not change their
     // existing (unlimited) behavior.
-    const isTrialEntitlement = moderatorEntitlementSource(settings) === "trial";
-    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings);
+    const entitlementSource = moderatorEntitlementSource(settings);
+    const isTrialEntitlement = entitlementSource === "trial";
+    // MODERATOR_AI_RESPONSE_POOL (money.ts) usage gate -- direct-Watch
+    // accounts only (integration.panel_id null), never the legacy Panel-
+    // distributed Virtual Moderator system, which has its own separate
+    // commercial model. `resolveStandaloneModeratorSettings` already
+    // resolved `entitlementSource` to the account's REAL current paid tier
+    // for a standalone integration, so this is a plain type-narrow, not a
+    // second entitlement lookup.
+    const accountId = integration.panel_id ? null : await resolveWatcherAccountId(admin, integration.virtual_moderator_id);
+    const paidTier: ModeratorPlanTier | null =
+      !integration.panel_id && entitlementSource && entitlementSource !== "trial" ? entitlementSource : null;
+    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier);
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;
   }
