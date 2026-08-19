@@ -2,6 +2,7 @@
 
 import { headers } from "next/headers";
 import { createClient } from "@/src/lib/supabase/server";
+import { createAdminClient } from "@/src/lib/supabase/admin";
 import { ensureProfile } from "@/src/lib/auth";
 import { isTrustedWatchHost } from "@/src/lib/config";
 import type { UserRole } from "@/src/types/db";
@@ -10,11 +11,45 @@ type AuthResult =
   | { ok: true; needsConfirmation?: boolean }
   | { ok: false; error: string };
 
-/** Sign in a panel owner / staff / super admin with email + password. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Resolves a username to its login email, GLOBALLY across every Innvil
+ * account (`profiles.display_name`) -- not panel-scoped, since one Innvil
+ * account grants access to Watch and every other Innvil product alike
+ * (mirrors `customer-auth.ts`'s `emailForUsername`, which does the same
+ * lookup scoped to one panel's customers). `display_name` has no uniqueness
+ * constraint, so an ambiguous match (2+ accounts sharing the same username)
+ * is deliberately treated as "not found" rather than guessing which account
+ * to sign in as.
+ */
+async function emailForAccountUsername(username: string): Promise<string | null> {
+  const admin = createAdminClient();
+  const uname = username.trim().toLowerCase();
+  if (!uname) return null;
+  const { data } = await admin.from("profiles").select("id, display_name");
+  const matches = ((data as Array<{ id: string; display_name: string | null }> | null) ?? [])
+    .filter((p) => (p.display_name ?? "").trim().toLowerCase() === uname);
+  if (matches.length !== 1) return null;
+  try {
+    const { data: userData } = await admin.auth.admin.getUserById(matches[0].id);
+    return userData.user?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign in a panel owner / staff / super admin with an email OR username + password. */
 export async function signInAction(
-  email: string,
+  identifier: string,
   password: string
 ): Promise<AuthResult> {
+  let email = identifier.trim();
+  if (!EMAIL_RE.test(email)) {
+    const resolved = await emailForAccountUsername(email);
+    if (!resolved) return { ok: false, error: "No account found with that email or username." };
+    email = resolved;
+  }
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({
     email,

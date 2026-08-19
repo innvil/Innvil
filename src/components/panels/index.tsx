@@ -159,14 +159,14 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
             submit();
           }}
         >
-          <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
+          <label className="fp-text-dim text-xs fp-mono uppercase">{mode === "login" ? "Email or username" : "Email"}</label>
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            type="email"
+            type={mode === "login" ? "text" : "email"}
             name="email"
             autoComplete="section-innvil-owner username"
-            placeholder="you@example.com"
+            placeholder={mode === "login" ? "you@example.com or username" : "you@example.com"}
             className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
           />
           <label className="fp-text-dim text-xs fp-mono uppercase">Password</label>

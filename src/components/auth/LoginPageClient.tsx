@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LogIn, AlertTriangle, Loader2 } from "lucide-react";
 import { AuthShell } from "@/src/components/auth/AuthShell";
-import { createClient } from "@/src/lib/supabase/client";
+import { signInAction } from "@/src/lib/actions/auth";
 import type { AuthBrand } from "@/src/lib/auth/product-brand";
 
 const COPY: Record<AuthBrand["id"], { subtitle: string; newPrompt: string; note?: string }> = {
@@ -18,17 +18,18 @@ const COPY: Record<AuthBrand["id"], { subtitle: string; newPrompt: string; note?
 };
 
 /**
- * Same login logic as before (createClient().auth.signInWithPassword,
- * router.replace("/")) -- this file only adds product-aware presentation.
- * "/" is already host-aware, so replacing to it lands a Watch-origin visitor
- * back on Watch (dashboard if entitled, landing otherwise) automatically --
- * no separate returnTo plumbing needed.
+ * Signs in via the `signInAction` server action (accepts an email OR a
+ * username -- resolving a username to its account email happens server-side
+ * only, so an entered username never leaks the underlying email address to
+ * the client), then `router.replace("/")`. "/" is already host-aware, so
+ * replacing to it lands a Watch-origin visitor back on Watch (dashboard if
+ * entitled, landing otherwise) automatically -- no separate returnTo plumbing
+ * needed.
  */
 export function LoginPageClient({ brand }: { brand: AuthBrand }) {
   const router = useRouter();
-  const supabase = createClient();
   const copy = COPY[brand.id];
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<"idle" | "auth" | "redirect">("idle");
@@ -42,12 +43,12 @@ export function LoginPageClient({ brand }: { brand: AuthBrand }) {
     if (busy) return;
     setError(null);
     setPhase("idle");
-    if (!email || !password) { setError("Enter your email and password."); return; }
+    if (!identifier || !password) { setError("Enter your email/username and password."); return; }
     setBusy(true);
     setPhase("auth");
     try {
-      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-      if (authError) { setError(authError.message); setBusy(false); setPhase("idle"); return; }
+      const result = await signInAction(identifier, password);
+      if (!result.ok) { setError(result.error); setBusy(false); setPhase("idle"); return; }
       setPhase("redirect");
       router.replace("/");
     } catch {
@@ -73,8 +74,8 @@ export function LoginPageClient({ brand }: { brand: AuthBrand }) {
         }}
         aria-busy={busy}
       >
-        <label className={`${brand.textDimClass} text-xs ${brand.monoClass} uppercase`}>Email</label>
-        <input disabled={busy} value={email} onChange={(e) => setEmail(e.target.value)} type="email" name="email" autoComplete="section-innvil-owner username" placeholder="you@example.com" className={brand.inputClass} />
+        <label className={`${brand.textDimClass} text-xs ${brand.monoClass} uppercase`}>Email or username</label>
+        <input disabled={busy} value={identifier} onChange={(e) => setIdentifier(e.target.value)} type="text" name="identifier" autoComplete="section-innvil-owner username" placeholder="you@example.com or username" className={brand.inputClass} />
         <label className={`${brand.textDimClass} text-xs ${brand.monoClass} uppercase mt-4 block`}>Password</label>
         <input disabled={busy} value={password} onChange={(e) => setPassword(e.target.value)} type="password" name="password" autoComplete="section-innvil-owner current-password" placeholder="••••••••" className={brand.inputClass} />
         <div className="text-right mt-2">
