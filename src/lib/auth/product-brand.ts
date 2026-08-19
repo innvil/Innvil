@@ -1,5 +1,7 @@
 import "server-only";
+import type { Metadata } from "next";
 import { isWatchHost } from "@/src/lib/watch-host";
+import { watchPageMetadata } from "@/src/lib/watch-metadata";
 
 /**
  * Product-aware auth presentation. This is presentation ONLY — every brand
@@ -94,4 +96,20 @@ export function resolveAuthBrand(isWatch: boolean): AuthBrand {
 export async function getAuthProductContext(): Promise<{ isWatch: boolean; brand: AuthBrand }> {
   const isWatch = await isWatchHost();
   return { isWatch, brand: resolveAuthBrand(isWatch) };
+}
+
+/**
+ * Full `generateMetadata()` return value for a shared auth page (login/
+ * signup/forgot-password/reset-password), host-aware. Centralized here so
+ * every auth page changes ONE call site instead of hand-writing its own
+ * title/description/openGraph/twitter — the exact per-route duplication
+ * that previously let the Watch auth pages silently inherit the root
+ * layout's generic SMM-panel copy (they only ever set `icons`). On the
+ * main Innvil brand this returns exactly what it always did (icons only,
+ * since `logoSrc` is null there) — no change to non-Watch behavior.
+ */
+export function authPageMetadata(brand: AuthBrand, path: string): Metadata {
+  const icons = brand.logoSrc ? { icons: { icon: brand.logoSrc } } : {};
+  if (brand.id !== "watch") return icons;
+  return { ...icons, ...watchPageMetadata(path) };
 }

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveAuthBrand } from "./product-brand";
+import { resolveAuthBrand, authPageMetadata } from "./product-brand";
+import { WATCH_TITLE } from "@/src/lib/watch-metadata";
 
 /**
  * `getAuthProductContext()` itself wraps `isWatchHost()` (next/headers,
@@ -70,4 +71,34 @@ test("resolveAuthBrand is a pure function of its input -- same input, same outpu
   const a = resolveAuthBrand(true);
   const b = resolveAuthBrand(true);
   assert.deepEqual(a, b);
+});
+
+/* -------------------------------------------------------- auth metadata ---- */
+// REQUIRED regression coverage for the reported bug: every Watch auth page
+// previously only ever set `icons`, so title/description/openGraph/twitter
+// silently fell through to the root layout's generic SMM-panel copy.
+
+test("REQUIRED: authPageMetadata on the Watch brand sets full Watch title/openGraph/twitter, not just an icon", () => {
+  const meta = authPageMetadata(resolveAuthBrand(true), "/login");
+  assert.equal(meta.title, WATCH_TITLE);
+  assert.ok(meta.openGraph, "Watch auth pages must set their own openGraph, never inherit the root layout's");
+  assert.ok(meta.twitter, "Watch auth pages must set their own twitter card, never inherit the root layout's");
+  assert.equal((meta.icons as { icon: string }).icon, "/watch/app-tile.svg");
+});
+
+test("REQUIRED: authPageMetadata never contains the generic SMM Panel title on the Watch brand", () => {
+  const meta = authPageMetadata(resolveAuthBrand(true), "/signup");
+  const serialized = JSON.stringify(meta).toLowerCase();
+  assert.ok(!serialized.includes("smm panel"));
+});
+
+test("REQUIRED: authPageMetadata on the plain Innvil brand is unchanged -- icon only, no Watch metadata leaks in", () => {
+  const meta = authPageMetadata(resolveAuthBrand(false), "/login");
+  assert.deepEqual(meta, {});
+  assert.equal((meta as { title?: string }).title, undefined, "the Innvil brand must keep inheriting the root layout's own title, not a Watch one");
+});
+
+test("authPageMetadata's og:url reflects the specific auth route", () => {
+  const meta = authPageMetadata(resolveAuthBrand(true), "/forgot-password");
+  assert.equal((meta.openGraph as { url?: string })?.url, "/forgot-password");
 });

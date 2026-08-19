@@ -5,6 +5,7 @@ import { getPublicTopupTiers } from "@/src/lib/actions/platform-payments";
 import { LandingJsonLd } from "./JsonLd";
 import HomeClient from "./HomeClient";
 import { isWatchHost } from "@/src/lib/watch-host";
+import { watchPageMetadata } from "@/src/lib/watch-metadata";
 import { WatchLanding } from "@/src/components/watch/WatchLanding";
 import { WatchDashboard } from "@/src/components/watch/WatchDashboard";
 import { getWatchAccessState } from "@/src/lib/actions/watch-dashboard";
@@ -15,10 +16,8 @@ import { getWatchAccessState } from "@/src/lib/actions/watch-dashboard";
 export async function generateMetadata(): Promise<Metadata> {
   if (await isWatchHost()) {
     return {
-      title: "Innvil Watch — AI-powered Watchers for your community",
-      description: "Deploy AI-powered Virtual Moderators into your Telegram community. Natural conversation, spam & scam moderation, Auto-Posting — grounded in your own project knowledge.",
+      ...watchPageMetadata("/"),
       alternates: { canonical: "/" },
-      openGraph: { url: "/", title: "Innvil Watch", description: "AI-powered Watchers for modern communities.", siteName: "Innvil Watch" },
       robots: { index: true, follow: true },
       icons: { icon: "/watch/app-tile.svg" },
     };

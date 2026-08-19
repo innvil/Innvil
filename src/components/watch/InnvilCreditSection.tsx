@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Coins } from "lucide-react";
 import { AddCreditCard } from "./AddCreditCard";
 import type { InnvilCreditBalance, CreditActivityItem } from "@/src/lib/products/innvil-credit";
+import { formatUsd } from "@/src/lib/products/innvil-credit-format";
 import { SectionHeader, EmptyRow } from "./WatchUI";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -27,7 +28,7 @@ export function InnvilCreditSection({ initialBalance, initialActivity }: { initi
       <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
         <div>
           <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">Available</p>
-          <p className="w-display text-2xl w-teal">${balance.balanceUsd.toFixed(2)}</p>
+          <p className="w-display text-2xl w-teal">{formatUsd(balance.balanceCents)}</p>
         </div>
         <button onClick={() => setAddOpen(true)} className="w-btn-primary text-xs font-semibold px-4 py-2 rounded-lg">Add credit</button>
       </div>

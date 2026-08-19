@@ -10,6 +10,8 @@ import { signOutAction } from "@/src/lib/actions/auth";
 import { withTimeout } from "@/src/lib/timeout";
 import type { AccountCapacity } from "@/src/lib/products/watch-runtime";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { getInnvilCreditBalanceAction } from "@/src/lib/actions/innvil-credit";
+import { HeaderCreditIndicator } from "./HeaderCreditIndicator";
 
 const LOGOUT_TIMEOUT_MS = 8000;
 
@@ -154,6 +156,13 @@ export function WatchShell({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  // Account-wide Innvil Credit balance -- fetched once per page load via the
+  // SAME canonical getInnvilCreditBalance() Billing's own Innvil Credit
+  // section reads (never a second/duplicated balance calculation). A full
+  // page navigation/reload (this codebase's existing data-refresh model --
+  // capacity/attentionCount are resolved the same server-per-request way,
+  // never live-pushed) is what refreshes it after a top-up/purchase/renewal.
+  const [creditBalanceCents, setCreditBalanceCents] = useState<number | null>(null);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -161,6 +170,14 @@ export function WatchShell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileNavOpen]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getInnvilCreditBalanceAction()
+      .then((b) => { if (!cancelled) setCreditBalanceCents(b.balanceCents); })
+      .catch(() => { if (!cancelled) setCreditBalanceCents(0); });
+    return () => { cancelled = true; };
+  }, []);
 
   const logOut = async () => {
     if (loggingOut) return;
@@ -228,6 +245,7 @@ export function WatchShell({
                   <Plus size={14} /> <span className="hidden sm:inline">{primaryAction.label}</span>
                 </button>
               )}
+              {creditBalanceCents != null && <HeaderCreditIndicator balanceCents={creditBalanceCents} />}
               <div className="flex flex-col items-end">
                 <button
                   onClick={logOut}

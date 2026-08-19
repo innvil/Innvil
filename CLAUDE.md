@@ -127,6 +127,69 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Watch link-preview branding fix + account-wide Innvil Credit header indicator (v1.45.0)
+- **Two combined pieces this pass.**
+- **(1) Root cause of the "watch.innvil.cloud previews as generic SMM Panel" bug — found and fixed at the
+  source, not patched per-route.** Confirmed `/` already had host-aware `generateMetadata()`, but it never set a
+  `twitter` override (Twitter/X-style unfurlers that prefer `twitter:*` tags fell straight through to the root
+  layout's SMM-panel copy). Worse: the four shared auth pages (`/login`,`/signup`,`/forgot-password`,
+  `/reset-password`) — genuinely public, shareable, indexed pages — had `generateMetadata()` functions that
+  ONLY ever set `icons`, so `title`/`description`/`openGraph`/`twitter` silently inherited the root layout's
+  "Innvil — SMM Panel Making & Managing, Made Easy" copy on the Watch host every time. This was a structural gap
+  (missing fields, not wrong ones), which is why it kept surfacing across different unfurler tools.
+- **New single source of truth: `src/lib/watch-metadata.ts`** — `WATCH_TITLE` ("Innvil Watch — AI Virtual
+  Moderators for Communities"), `WATCH_DESCRIPTION` (Watchers/AI moderation/community operations/Telegram,
+  never SMM-Panel language), `WATCH_SITE_NAME`, `WATCH_OG_IMAGE` (`/watch/app-tile.svg` — the best existing
+  Watch asset; **no dedicated large 1200×630 social card exists yet**, flagged honestly rather than generating
+  placeholder art), and `watchPageMetadata(path)` returning a full title+description+openGraph+twitter block.
+  `/`'s Watch branch now spreads this directly. New `authPageMetadata(brand, path)` in `product-brand.ts` —
+  the ONE call every auth page's `generateMetadata()` now makes; on the Watch brand it merges the favicon with
+  `watchPageMetadata()`, on the plain Innvil brand it's byte-identical to the old behavior (icon only, since
+  `logoSrc` is null there) — confirmed zero behavior change for the main site.
+- **Route coverage**: `/` and all four auth pages now carry full Watch metadata on the Watch host. The
+  authenticated app pages (`/plans`,`/billing`,`/profile`,`/settings`,`/usage`,`/projects`,`/communities`,
+  `/watchers`,`/activity`,`/support`) already had `robots:{index:false}` + their own `title: "X — Innvil Watch"`
+  + the Watch favicon from earlier passes — left unchanged, since noindex/authenticated pages don't need a
+  public OG/Twitter card and already correctly avoid the generic SMM title. No manifest/JSON-LD exists anywhere
+  in this codebase for either brand today — none was added, per explicit "don't add speculative schema" instruction.
+- **(2) Account-wide Innvil Credit balance in the authenticated Watch header** (a mid-turn addition to the same
+  session). Innvil Credit is account-owned, not Watch-owned or Billing-page-only — new `HeaderCreditIndicator.tsx`
+  in `WatchShell.tsx`'s top bar (near Log out, not under Workspace/Operations nav) shows "Credit $X.XX" always,
+  including a genuine `$0.00` (never hidden, so the feature stays discoverable). Reuses the EXACT SAME
+  `getInnvilCreditBalance()`/`getInnvilCreditBalanceAction()` Billing's own Innvil Credit section already calls
+  — never a second query path, never a client-cached balance treated as authority. Clicking opens an accessible
+  click/Escape/outside-click-toggleable popover (mirrors the existing `InfoPopover` pattern from `SlotInfoPopover.tsx`)
+  showing "$X.XX available", "1 Innvil Credit = $1.00 USD, usable for eligible Innvil services" (display
+  semantics only — never "convert"/"withdraw"/"wallet" language), an **Add credit** button that opens the SAME
+  real `AddCreditCard` top-up modal Billing uses (no second top-up implementation), and a **View billing** link.
+  New plain `src/lib/products/innvil-credit-format.ts` (`formatUsd`) is the one canonical USD formatter both the
+  header and Billing's own Innvil Credit section now call, so the two surfaces can never disagree on formatting.
+  **Refresh model, stated honestly**: the balance is fetched once per page load/navigation — this codebase's
+  existing data-refresh model (capacity/attentionCount are resolved the same server-per-request way, never
+  live-pushed); a crypto top-up's `returnUrl` already lands back on `/billing` (a full reload), and the existing
+  post-credit-purchase "Continue to dashboard" reload button in `WatchCheckout` covers the pay-with-credit case
+  — no new live-push mechanism was built.
+- **Zero-Panel confirmed**: `HeaderCreditIndicator`/`innvil-credit-format.ts` have no `panel_id`/`panelId`
+  reference anywhere (grepped).
+- New tests: `watch-metadata.test.ts` (+6 — Watch title/description never contain "smm panel", `watchPageMetadata`
+  sets openGraph AND twitter, per-route og:url), `product-brand.test.ts` (+4 — `authPageMetadata` on Watch sets
+  full title/openGraph/twitter not just an icon, never leaks "smm panel", the Innvil brand's output is byte-
+  identical to before/unaffected, og:url reflects the specific route), `innvil-credit-format.test.ts` (+3 — the
+  exact $0.00/$125.00/$1,250.50/$123.49 formatting cases). 1183 tests pass (up from 1170), `tsc --noEmit` clean,
+  production build clean. **Live-verified via the real dev server on the Watch host**: `/login`'s rendered
+  `<head>` confirmed `title`, `meta[name=description]`, `og:title`, `og:description`, `og:site_name`, `og:url`,
+  `og:image`, `twitter:card/title/description`, and the favicon all resolve to the new Watch-specific values;
+  the plain `localhost` host confirmed still shows the unchanged "Innvil — SMM Panel Making & Managing, Made
+  Easy" title, proving the fix is genuinely host-scoped, not a global replacement.
+- **Not verified live for the header credit indicator specifically** — no authenticated session was available in
+  this pass's fresh preview tab (same limitation noted in the immediately prior pass); covered instead by
+  typecheck + full test suite + production build + code review, reusing the already-tested, already-secure
+  `getInnvilCreditBalance` read path.
+- **No remaining Watch branding leaks found** — grepped every Watch route/component for "SMM Panel"/"Forge"
+  after this pass; only appearances are in code comments explaining what Watch is NOT, never in rendered copy.
+- **Next safe step**: commission a proper 1200×630 Watch-branded social-card image (the current `og:image` is a
+  small app-tile icon, functional but not an ideal large preview image).
+
 ### 2026-08-19 — Real paid subscription periods + manual crypto renewals + Innvil Credit (v1.44.0)
 - **Two combined pieces, per explicit request: (A) real billing-period lifecycle for paid Watch subscriptions, and
   (B) a new account-owned "Innvil Credit" prepaid ledger as a discounted second payment method.** Investigated
