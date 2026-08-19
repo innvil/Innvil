@@ -127,6 +127,72 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Public Watch landing: Watcher clarity + Free Trial made publicly visible (v1.47.3)
+- **Investigated first.** The landing had NO mention of the Free Trial anywhere — not in the hero, not in
+  pricing (Bronze→Platinum + Enterprise only), not in FAQ — confirming the reported problem exactly; a visitor
+  could only discover the trial by first signing up and reaching `/plans`. The hero headline ("Your community
+  doesn't sleep. Neither does your Watch.") was a slogan with no plain-language explanation of what a Watcher
+  is, matching the report's "vague slogan" complaint.
+- **New explicit "What is a Watcher?" section**, right after the hero — a definition card ("An AI-powered
+  Virtual Moderator you deploy to your Community... Every active Watcher-to-Community deployment uses one
+  Watcher slot") paired with a real worked Aegis→Community-A(/B) slot example, reusing the same
+  profile/deployment/slot vocabulary the authenticated app already uses, never left to be inferred from
+  branding.
+- **Hero rewritten**: "AI Virtual Moderators for your Communities." + a plain capability sentence (moderate/
+  protect/monitor/operate) + a visible trial line ("Try it free for 7 days — no payment required.") + primary
+  CTA "Start Free Trial" (→ `/signup`, never activates anything client-side) + secondary "See how Watchers
+  work" (→ the new definition section).
+- **Free Trial made visible in three places**, using the REAL canonical constants
+  (`TRIAL_DURATION_DAYS`/`TRIAL_CAPACITY` from `moderator/plan.ts` — imported directly, never a second
+  hardcoded copy): (1) the hero line above; (2) a new highlighted Free Trial card in `WatchPricingSection.tsx`,
+  shown FIRST, before Bronze ("$0 for 7 days · 1 Watcher slot · 1 Community · No payment required" + "Start Free
+  Trial" → `/signup`); (3) a new mid-page conversion CTA after the capabilities section ("Ready to put a Watcher
+  in your Community? Start with a 7-day Free Trial."). **Never** "Free Plan"/"Free forever" anywhere — always
+  "Free Trial", and never "no credit card required" (Watch is crypto-only; used "No payment required" instead,
+  per explicit instruction). The landing CTA never activates the trial directly — it's a plain link into
+  `/signup`, which lands the visitor in the real authenticated dashboard/Plans flow where the actual
+  server-side eligibility check and Telegram-verification requirement still gate `startWatchTrialAction`,
+  completely untouched by this pass.
+- **New "Who is Watch for?" section** (Telegram Community owners, crypto/project communities, support
+  communities, creator communities, membership groups, teams running multiple Communities) — plain truthful
+  audience list, not generic SMM marketing.
+- **FAQ gained 4 trial entries** (What is the Free Trial? / Do I need to pay? / Do I need Telegram? / What
+  happens when it ends?) using the same canonical constants and the exact "One-time Free Trial. Telegram
+  verification required." phrasing the report asked for — deliberately does NOT expose the internal "one trial
+  per Telegram numeric ID" anti-abuse detail.
+- **Nav simplified/corrected**: added a "Free Trial" anchor and a "What's a Watcher?" anchor; dropped "Getting
+  started" from the nav itself (the section still exists on the page, just reached via scroll/"How it works",
+  per the explicit "don't overcomplicate the nav" instruction using the report's own suggested anchor set).
+- **Real accuracy fix found and corrected while auditing the Getting Started guide, not merely a copy pass**:
+  `watch-onboarding.ts`'s step 4 (Telegram connection) still said *"Self-serve Telegram connection is still
+  rolling out. Contact support to get connected today"* with a "Contact support" CTA — but `WatcherConnectModal.tsx`
+  (bot username → Telegram deep link → membership verification → connect community, `watch-moderator.ts`) has
+  actually been live and wired into `/watchers`, `/watchers/[id]`, and Overview since Phase 4.O — this doc
+  comment/callout was simply never updated after that shipped. Fixed: the callout now correctly describes the
+  real self-serve flow ("Connect directly from your Watchers page...") and the CTA now reads "Create your
+  account" → `/signup` instead of a misleading "Contact support" link. Updated the file's own top doc comment
+  to match. This is exactly the "confirm steps match real onboarding, do not use an outdated step sequence"
+  requirement from the report — found by tracing actual component usage, not assumed.
+- **Forge/SMM-leakage audit**: grepped every touched file for "panel"/"forge"/"smm" — the only match was the
+  pre-existing, unrelated "operations panel" UI term (`WatchOpsPanel`), never SMM-Panel/Forge language.
+- New tests: `watch-onboarding.test.ts` — the stale "still rolling out" assertion was itself a test that had
+  encoded the NOW-INCORRECT product state; replaced with a test proving the Telegram-connect step correctly
+  points to the real self-serve entry point and never claims to still be in progress. No other dedicated tests
+  added for the landing page itself — this codebase has no React Testing Library/jsdom infra (confirmed,
+  consistent with every prior Watch UI pass) — verified instead via `tsc --noEmit` + full test suite + production
+  build + a genuine logged-out live walkthrough (see below), matching established convention.
+- **Live-verified as a logged-out visitor** (`Host: watch.localhost:3000`, real dev server): hero/definition/
+  capabilities/Free Trial pricing card/FAQ all render with the exact intended copy; confirmed the $0/7-day/1-slot/
+  1-community Free Trial card appears FIRST in pricing, before Bronze; confirmed all four trial FAQ entries
+  render; confirmed zero Forge/SMM copy visible anywhere on the page. 1273 tests pass, `tsc --noEmit` clean,
+  production build clean.
+- **Deliberately not built this pass** (documented, not silently skipped): the short 4-step "How it works" summary
+  (`STEPS` const, "01 Choose a plan / 02 Connect Telegram / 03 Configure / 04 Let it operate") was left as-is —
+  a separate, immediately-following Telegram-identity-first onboarding rework (see the next entry) changes the
+  canonical first-run step order account-wide, and updating this short summary once, consistently, after that
+  work landed was judged better than updating it twice; a Help Center/docs system to link "Learn more" from
+  concepts like Watcher slots (also requested separately) is a distinct, larger project — not started this pass.
+
 ### 2026-08-19 — Sign in with email OR username, everywhere (v1.47.2)
 - **Extended the existing storefront-only username login (v1.1.28's `customerSignIn`) to the main Innvil/Watch
   account login** — the same account a customer uses for Watch/Forge/every Innvil product. New

@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Clock } from "lucide-react";
 import { WatchCheckout } from "./WatchCheckout";
 import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
+import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
 
 type Plan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -36,8 +38,23 @@ export function WatchPricingSection({ options, authenticated }: { options: Watch
   return (
     <section id="pricing" className="max-w-6xl mx-auto px-6 py-20">
       <p className="text-xs w-mono uppercase w-teal tracking-wider text-center mb-2">Pricing</p>
-      <h2 className="w-display text-3xl text-center mb-3">Choose your Watch plan</h2>
-      <p className="w-text-dim text-center max-w-lg mx-auto mb-12">Simple monthly pricing. Cancel anytime.</p>
+      <h2 className="w-display text-3xl text-center mb-3">Try free, then choose your Watch plan</h2>
+      <p className="w-text-dim text-center max-w-lg mx-auto mb-12">Start with a {TRIAL_DURATION_DAYS}-day Free Trial — no payment required. Simple monthly pricing after that. Cancel anytime.</p>
+
+      <div id="free-trial" className="max-w-md mx-auto mb-6 scroll-mt-24">
+        <div className="w-card-raised border w-teal-border p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1">
+            <span className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full mb-2 w-teal-soft-bg w-teal">
+              <Clock size={10} /> Free Trial
+            </span>
+            <p className="text-2xl w-display mb-1">$0 <span className="text-sm w-text-faint font-normal">for {TRIAL_DURATION_DAYS} days</span></p>
+            <p className="text-[11px] w-text-dim">{TRIAL_CAPACITY.maxActiveSlots} Watcher slot · {TRIAL_CAPACITY.maxCommunities} Community · No payment required</p>
+          </div>
+          <Link href="/signup" className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg text-center shrink-0">
+            Start Free Trial
+          </Link>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {options.map((opt) => {

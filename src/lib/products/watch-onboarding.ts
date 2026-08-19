@@ -8,15 +8,15 @@
  * real enforcement.
  *
  * HONEST STATE, checked against the actual codebase before writing this
- * (not assumed): Account creation, choosing a Watch plan, creating a
- * Project, and creating a Watcher are all genuinely self-serve today, fully
- * owned by the account directly (`ownership.ts`/`watch-runtime.ts`, gated on
- * Watch entitlement only). Connecting a Watcher to a live Telegram community
- * is the one step not yet reachable from this dashboard — the ownership
- * layer for it exists (`createAccountCommunity`/`deployAccountWatcher`), but
- * the customer-facing Telegram bot-creation/verification flow isn't wired
- * to it yet. Step 4 says so plainly rather than promising a flow that
- * doesn't exist yet, without dwelling on why.
+ * (not assumed): Account creation, choosing a Watch plan/Free Trial,
+ * creating a Project, creating a Watcher, and connecting it to a real
+ * Telegram community are ALL genuinely self-serve today, fully owned by the
+ * account directly (`ownership.ts`/`watch-runtime.ts`, gated on Watch
+ * entitlement only). Telegram connection (step 4) is reachable from
+ * `/watchers` via `WatcherConnectModal.tsx` (bot username -> Telegram deep
+ * link -> membership verification -> connect community, `watch-moderator.ts`)
+ * — this was the last piece to ship (Phase 4.O) and is no longer "rolling
+ * out"; this file previously said otherwise and has been corrected.
  */
 
 import { watchPlanOptions } from "./watch-plans";
@@ -103,9 +103,9 @@ export function watchOnboardingSteps(): OnboardingStep[] {
       callouts: [
         { kind: "community-limit", text: "Each community can hold at most 5 active Watchers, regardless of your plan's total slot count." },
         { kind: "required", text: "The bot must actually be present in the Telegram community — verified by Innvil before it goes live." },
-        { kind: "in-progress", text: "Self-serve Telegram connection is still rolling out. Contact support to get connected today." },
+        { kind: "good-to-know", text: "Connect directly from your Watchers page: pick a bot username, open the deep link Telegram gives you, then confirm your community — no support ticket needed." },
       ],
-      cta: { label: "Contact support", href: "/signup" },
+      cta: { label: "Create your account", href: "/signup" },
     },
     {
       n: "05",
