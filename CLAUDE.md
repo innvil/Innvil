@@ -127,6 +127,44 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Removed Settings' Moderation Defaults + fixed live "Connect community" DB error (v1.47.14)
+- **Removed Settings → Moderation, per explicit product decision.** Now that persona is always an explicit
+  per-Watcher assignment (v1.47.11 — `createAccountWatcher` no longer inherits an account-wide default), the
+  "Default for new Watchers" concept this section existed to configure no longer applies to anything. Deleted
+  outright, confirmed zero remaining importers first: `ModerationDefaultsCard.tsx`,
+  `actions/watch-moderation-defaults.ts`, `products/watch-moderation-defaults.ts`, and its test file.
+  `app/settings/page.tsx` drops the Moderation tab/fetch; `SettingsSummary.tsx` drops the "Moderation defaults"
+  stat (now a 3-up strip: Timezone/Notifications/Security). The `watch_moderation_defaults` DB table itself is
+  left in place, unread by any code path — not dropped this pass (a destructive migration wasn't asked for).
+- **Live bug, found while testing: connecting a Watcher to a Telegram group failed with a raw Postgres error**
+  — "there is no unique or exclusion constraint matching the ON CONFLICT specification" — visible directly in
+  the Connect modal instead of succeeding. Root cause: `createAccountCommunity` (`watch-runtime.ts`) called
+  `.upsert(..., {onConflict: "platform,chat_id"})`, but the ONLY unique constraint that could match a
+  standalone (`panel_id: null`) row on those two columns is `idx_communities_standalone_chat`, a **partial**
+  index (`where panel_id is null`, migration 0069) — Postgres requires an `ON CONFLICT` target to match a
+  partial index's `WHERE` predicate exactly for inference, and PostgREST's `upsert()` has no way to express
+  that predicate, so the call failed every time it reached a real database (never caught by tests — the test
+  suite's fake DB mock's `upsert()` never modeled this real Postgres constraint-matching rule, since it's a
+  live-DB-specific failure mode).
+- **Fix**: replaced the upsert with select-then-branch, reusing `existingForChat` (already fetched a few lines
+  above for the community-cap check) — `UPDATE ... WHERE id = existingForChat.id` when it exists, else a plain
+  `INSERT`. A genuine concurrent-insert race (two requests for the same brand-new chat at once) is handled by
+  catching a real `23505` and re-selecting the winner's row instead of surfacing a raw DB error — same
+  tolerant-idempotency pattern already used elsewhere in this codebase's webhook handlers.
+- **Swept for the same bug class elsewhere**: found `onConflict: "panel_id,platform,chat_id"` in
+  `customer-moderator.ts` and `community-runtime.ts` — both confirmed safe (real, always-non-null `panel_id`
+  in those Panel-distributed code paths, correctly matching the real plain 3-column unique index
+  `communities_panel_platform_chat_uidx`, migration 0062 — the NULL-uniqueness gap that necessitated the
+  partial index in the first place only applies to the standalone/`panel_id: null` case this pass fixed).
+- New tests (`watch-runtime.test.ts`, +2): the exact live-bug repro proving reconnecting the same chat with a
+  new title/handle actually UPDATES the existing row (not a second row, not a silent no-op), and a dedicated
+  concurrent-insert-race test (scripted 23505 on the first insert attempt, proves the retry correctly returns
+  the winner's row). 1326 tests pass (down from 1333 — 9 tests removed with the deleted
+  `watch-moderation-defaults.test.ts` file, +2 new), `tsc --noEmit` clean, production build clean. Diff
+  reviewed: every changed file maps directly to this scope.
+- **Deployed to Preview this pass** (this release + the two prior undeployed ones, v1.47.12/v1.47.13, all went
+  out together) — see the deploy note below for the live URL/verification.
+
 ### 2026-08-19 — Watchers restructured into a scalable CRM master/detail layout (v1.47.13)
 - **Root UX problem.** `/watchers` was a flat table; opening a Watcher fully REPLACED the workspace with a
   large standalone detail page — no persistent way to jump between Watchers without going back to the list

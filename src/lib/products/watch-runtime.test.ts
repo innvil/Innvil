@@ -342,6 +342,48 @@ test("REQUIRED: connecting the same chat twice reuses the same standalone commun
   assert.equal(admin.__store.communities.length, 1);
 });
 
+test("REQUIRED (live bug): reconnecting the same chat with a new title/handle actually UPDATES the existing row -- proves the fix uses select-then-update, never an upsert() ON CONFLICT target that real Postgres can't match against the partial idx_communities_standalone_chat index ('there is no unique or exclusion constraint matching the ON CONFLICT specification')", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT] });
+  const first = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-1001", title: "Old Title" });
+  const second = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-1001", title: "New Title", handle: "@groupwan" });
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  if (second.ok) assert.equal(second.data.title, "New Title");
+  assert.equal(admin.__store.communities.length, 1);
+  assert.equal(admin.__store.communities[0].handle, "@groupwan");
+});
+
+test("REQUIRED: a lost concurrent-insert race (23505 duplicate key) is handled gracefully -- returns the winner's row instead of surfacing a raw DB error", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT] });
+  let firstInsertAttempt = true;
+  const originalFrom = admin.from.bind(admin);
+  admin.from = (table: string) => {
+    const builder = originalFrom(table);
+    if (table !== "communities") return builder;
+    const originalInsert = (builder as Row & { insert: (row: Row) => Row }).insert.bind(builder);
+    (builder as Row & { insert: (row: Row) => unknown }).insert = (row: Row) => {
+      const chain = originalInsert(row) as { single: () => Promise<{ data: Row | null; error: Row | null }> };
+      const originalSingle = chain.single.bind(chain);
+      chain.single = async () => {
+        if (firstInsertAttempt) {
+          firstInsertAttempt = false;
+          // Simulate a concurrent request winning the same insert -- its row
+          // lands in the store right as ours collides with it.
+          admin.__store.communities.push({ id: "winner-row", panel_id: null, project_id: row.project_id, platform: row.platform, chat_id: row.chat_id, title: "Winner's Community" });
+          return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint \"idx_communities_standalone_chat\"" } };
+        }
+        return originalSingle();
+      };
+      return chain;
+    };
+    return builder;
+  };
+  const result = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-1001" });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.data.id, "winner-row");
+  assert.equal(admin.__store.communities.length, 1);
+});
+
 test("REQUIRED: a chat already connected to a different Project cannot be reconnected to this one", async () => {
   const otherProject = { id: "proj-2", account_id: "acct-1", panel_id: null, name: "Other" };
   const admin = fakeAdmin({

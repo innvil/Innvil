@@ -391,14 +391,48 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
     }
   }
 
-  const { data, error } = await admin
-    .from("communities")
-    .upsert(
-      { panel_id: null, project_id: projectId, platform: input.platform, chat_id: chatId, handle: input.handle ?? null, title: input.title ?? null, chat_type: input.chatType ?? null },
-      { onConflict: "platform,chat_id", ignoreDuplicates: false }
-    )
-    .select("id, project_id, platform, chat_id, title")
-    .single();
+  // NOT an upsert with onConflict -- the only unique constraint that could
+  // match (platform, chat_id) for a standalone row is the PARTIAL index
+  // idx_communities_standalone_chat (`where panel_id is null`, migration
+  // 0069). Postgres requires an ON CONFLICT target to match a partial
+  // index's WHERE predicate exactly to use it for inference, and PostgREST's
+  // upsert() has no way to express that predicate -- every call here failed
+  // with "there is no unique or exclusion constraint matching the ON
+  // CONFLICT specification". `existingForChat` (already resolved above,
+  // same platform+chat_id+panel_id-is-null scope) is reused directly instead:
+  // update by id when it exists, else a plain insert.
+  let data: Record<string, unknown> | null = null;
+  let error: { message: string; code?: string } | null = null;
+  if (existingForChat) {
+    const res = await admin
+      .from("communities")
+      .update({ handle: input.handle ?? null, title: input.title ?? null, chat_type: input.chatType ?? null })
+      .eq("id", existingForChat.id)
+      .select("id, project_id, platform, chat_id, title")
+      .single();
+    data = res.data as Record<string, unknown> | null;
+    error = res.error;
+  } else {
+    const res = await admin
+      .from("communities")
+      .insert({ panel_id: null, project_id: projectId, platform: input.platform, chat_id: chatId, handle: input.handle ?? null, title: input.title ?? null, chat_type: input.chatType ?? null })
+      .select("id, project_id, platform, chat_id, title")
+      .single();
+    data = res.data as Record<string, unknown> | null;
+    error = res.error;
+    if (error?.code === "23505") {
+      // Lost a genuine concurrent-insert race for the same chat -- return the
+      // row the winner just created instead of surfacing a raw DB error.
+      const retry = await admin
+        .from("communities")
+        .select("id, project_id, platform, chat_id, title")
+        .eq("platform", input.platform)
+        .eq("chat_id", chatId)
+        .is("panel_id", null)
+        .maybeSingle();
+      if (retry.data) { data = retry.data as Record<string, unknown>; error = null; }
+    }
+  }
   if (error || !data) return { ok: false, error: error?.message ?? "Could not save the community." };
   return { ok: true, data: { id: data.id as string, projectId: data.project_id as string, platform: data.platform as string, chatId: data.chat_id as string, title: (data.title as string | null) ?? null } };
 }
