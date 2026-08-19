@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isTrustedWatchHost, WATCH_ROOT_DOMAIN } from "./config";
+import { isTrustedWatchHost, isWatchHostname, WATCH_ROOT_DOMAIN } from "./config";
+
+const PREVIEW_ALIAS = "innvil-git-rebrand-innvil-v020-ako-me.vercel.app";
 
 /**
  * The allowlist behind the password-reset redirect-origin resolution in
@@ -31,4 +33,45 @@ test("REQUIRED: the plain apex/app host is not trusted by this allowlist (falls 
 test("an empty or malformed host is never trusted", () => {
   assert.equal(isTrustedWatchHost(""), false);
   assert.equal(isTrustedWatchHost("   "), false);
+});
+
+/**
+ * isWatchHostname -- the classification `isWatchHost()` (watch-host.ts)
+ * delegates to for deciding which product experience to render. Production
+ * rule is unconditional (`WATCH_ROOT_DOMAIN`, any env); the one stable
+ * Vercel Preview branch alias is a NAMED, Preview-only exception -- never a
+ * `*.vercel.app` wildcard.
+ */
+
+test("REQUIRED: watch.innvil.cloud is classified as Watch in any environment", () => {
+  assert.equal(isWatchHostname(WATCH_ROOT_DOMAIN, undefined), true);
+  assert.equal(isWatchHostname(WATCH_ROOT_DOMAIN, "production"), true);
+  assert.equal(isWatchHostname(WATCH_ROOT_DOMAIN, "preview"), true);
+});
+
+test("REQUIRED: the plain apex innvil.cloud is never classified as Watch", () => {
+  assert.equal(isWatchHostname("innvil.cloud", undefined), false);
+  assert.equal(isWatchHostname("innvil.cloud", "production"), false);
+  assert.equal(isWatchHostname("innvil.cloud", "preview"), false);
+});
+
+test("REQUIRED: the stable Preview branch alias is classified as Watch ONLY when VERCEL_ENV=preview", () => {
+  assert.equal(isWatchHostname(PREVIEW_ALIAS, "preview"), true);
+});
+
+test("REQUIRED: an unrelated Vercel preview hostname is never classified as Watch, even in Preview -- no wildcard match", () => {
+  assert.equal(isWatchHostname("innvil-abc123xyz-ako-me.vercel.app", "preview"), false);
+  assert.equal(isWatchHostname("some-other-branch-ako-me.vercel.app", "preview"), false);
+  assert.equal(isWatchHostname("innvil-git-some-other-branch-ako-me.vercel.app", "preview"), false);
+});
+
+test("REQUIRED: the same Preview alias hostname is NOT treated as Watch outside Preview (unset/production/development)", () => {
+  assert.equal(isWatchHostname(PREVIEW_ALIAS, undefined), false);
+  assert.equal(isWatchHostname(PREVIEW_ALIAS, "production"), false);
+  assert.equal(isWatchHostname(PREVIEW_ALIAS, "development"), false);
+});
+
+test("comparison is case-insensitive for both the production and preview rules", () => {
+  assert.equal(isWatchHostname(WATCH_ROOT_DOMAIN.toUpperCase(), "production"), true);
+  assert.equal(isWatchHostname(PREVIEW_ALIAS.toUpperCase(), "preview"), true);
 });

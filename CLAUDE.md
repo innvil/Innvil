@@ -127,6 +127,45 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-19 — Stable Vercel Preview alias now classifies as Innvil Watch, for this branch's QA only (v1.47.9)
+- **Root cause**: `isWatchHost()` (`watch-host.ts`) did an exact-match comparison against `WATCH_ROOT_DOMAIN`
+  (`watch.innvil.cloud`) only — the stable Preview branch alias confirmed working in the prior pass
+  (`innvil-git-rebrand-innvil-v020-ako-me.vercel.app`) never matched that, so every Watch-gated surface
+  (`app/page.tsx`'s root routing, `product-brand.ts`'s auth branding, `requireWatchPage()`) fell through to the
+  main Innvil/Forge experience when opened on that alias — the main landing rendered instead of Watch, exactly
+  as reported.
+- **Fix — one new named exception, Preview-only, never a wildcard.** New `isWatchHostname(host, vercelEnv)` in
+  `config.ts` (pure, directly testable): the existing Production rule (`WATCH_ROOT_DOMAIN`, exact match, any
+  environment) plus a single additional check — a NAMED constant, `WATCH_PREVIEW_ALIAS_HOST` =
+  `"innvil-git-rebrand-innvil-v020-ako-me.vercel.app"` — matched only when `process.env.VERCEL_ENV === "preview"`
+  (Vercel's own automatically-set env var; unset/`"production"`/`"development"` never match). Explicitly NOT
+  derived by reconstructing Vercel's branch-name slugification (lowercasing/dot-stripping/team-suffix rules) —
+  not worth reverse-engineering for a one-off QA convenience when the alias is already known and stable across
+  redeploys of this branch. Explicitly NOT a `*.vercel.app` wildcard — every other preview hostname (this
+  branch's own raw per-deployment hash URLs, and any other branch's alias) is unaffected. `isWatchHost()` now
+  delegates to this function instead of comparing inline.
+- **Production is provably unchanged**: the Production branch of `isWatchHostname` is byte-identical to the old
+  logic (still just `host === WATCH_ROOT_DOMAIN`), and the new Preview branch is additive and gated on an env
+  var that's never `"preview"` in Production — confirmed both by the pure function's own tests and by
+  `WATCH_ROOT_DOMAIN`/`isTrustedWatchHost` (the password-reset redirect-origin allowlist) being completely
+  untouched.
+- **`proxy.ts` needed no change** — confirmed by reading it first: it already treats every `*.vercel.app` host
+  as ordinary app-host traffic (`h.endsWith(".vercel.app")`, no panel-subdomain rewrite attempted), so API/
+  webhook routing on the Preview alias was never broken and required no fix.
+- New tests (`config.test.ts`, +7): `watch.innvil.cloud` classified as Watch in every environment; the plain
+  apex `innvil.cloud` never classified as Watch; the exact stable Preview alias classified as Watch only when
+  `VERCEL_ENV=preview`; an unrelated Vercel preview hostname (including a differently-named branch alias and a
+  raw per-deployment hash URL shape) never classified as Watch even in Preview; the SAME alias hostname is NOT
+  Watch outside Preview (unset/production/development); case-insensitivity for both rules. 1308 tests pass (up
+  from 1302), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 3 files touched
+  (`config.ts`, `config.test.ts`, `watch-host.ts`) — no scope creep into `proxy.ts`, `product-brand.ts`,
+  `watch-page.ts`, or `app/page.tsx` (all three consumers benefit automatically via the shared `isWatchHost()`
+  call, none needed their own edit).
+- **Deployed to Preview only, verified live**: opening `https://innvil-git-rebrand-innvil-v020-ako-me.vercel.app`
+  now renders the Watch landing/dashboard instead of the main Innvil landing; Watch metadata/branding confirmed
+  resolving correctly on that alias. **Production was never deployed to or touched** — no `vercel deploy --prod`
+  was run this pass.
+
 ### 2026-08-19 — Full release-readiness audit of standalone Innvil Watch (report-only, no code changes, v1.47.7 unchanged)
 - **Classification: NOT READY — BLOCKERS REMAIN.** Not because of a known broken feature (none was found this
   pass), but because the entire standalone-Watch commercial pipeline (Free Trial, direct paid subscription,

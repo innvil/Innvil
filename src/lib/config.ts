@@ -14,6 +14,35 @@ export const PANEL_ROOT_DOMAIN =
 export const WATCH_ROOT_DOMAIN = `watch.${PANEL_ROOT_DOMAIN}`;
 
 /**
+ * The ONE stable Vercel Preview branch alias manually treated as Watch, for
+ * this branch's QA only — `innvil-git-<branch>-<team>.vercel.app` never
+ * changes across redeploys of this branch (unlike the raw per-deployment
+ * hash URL, which does), so it's safe to name explicitly rather than derive
+ * from Vercel's slugification rules (lowercasing/dot-stripping/team suffix),
+ * which aren't worth reverse-engineering for a one-off QA convenience.
+ * Deliberately NOT a `*.vercel.app` wildcard match — every other preview
+ * deployment (this branch's own raw hash URLs, and any other branch's
+ * alias) must keep rendering the normal main-Innvil experience.
+ */
+const WATCH_PREVIEW_ALIAS_HOST = "innvil-git-rebrand-innvil-v020-ako-me.vercel.app";
+
+/**
+ * True when `host` should be classified as Innvil Watch's domain — the
+ * production rule (`WATCH_ROOT_DOMAIN`, exact match, always active) plus a
+ * single named Preview-only exception (`WATCH_PREVIEW_ALIAS_HOST`, gated on
+ * `VERCEL_ENV === "preview"` so it can never fire in Production or in a
+ * plain local/CI build where that env var is unset). Pure and directly
+ * testable — `isWatchHost()` in watch-host.ts is the only real caller,
+ * reading the actual request's host header and delegating here.
+ */
+export function isWatchHostname(host: string, vercelEnv: string | undefined = process.env.VERCEL_ENV): boolean {
+  const h = host.trim().toLowerCase();
+  if (h === WATCH_ROOT_DOMAIN.toLowerCase()) return true;
+  if (vercelEnv === "preview" && h === WATCH_PREVIEW_ALIAS_HOST) return true;
+  return false;
+}
+
+/**
  * CLIENT-side link prefix for a panel's own storefront pages, based on the host the
  * browser is actually on:
  *   - app host (innvil.cloud, localhost, *.vercel.app) → "/p/<subdomain>"
