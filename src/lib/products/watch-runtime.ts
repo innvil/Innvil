@@ -697,6 +697,18 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
   };
 }
 
+/** Pure decision: what a Watcher's provisioning_status should resolve to
+ *  once it has a live Telegram credential again (initial connect OR a
+ *  reconnect after disconnect) -- "active" when it already has real
+ *  `moderator_deployments` records (those existing deployments are what
+ *  becomes operational again, never a new one), "bot_ready" when it has
+ *  none yet. Kept here (not inline in the "use server" watch-moderator.ts
+ *  action file, whose every export must be async) so it's directly
+ *  unit-testable. */
+export function nextProvisioningStatusAfterConnect(deploymentCount: number): "active" | "bot_ready" {
+  return deploymentCount > 0 ? "active" : "bot_ready";
+}
+
 export interface SlotBreakdownByWatcher {
   watcherId: string;
   watcherName: string;

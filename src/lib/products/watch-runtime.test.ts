@@ -6,7 +6,7 @@ import {
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   getAccountProjectDetail, getAccountCommunityDetail, getAccountWatcherDetail, listAccountAttentionItems,
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
-  getAccountPaidPlan,
+  getAccountPaidPlan, nextProvisioningStatusAfterConnect,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 
@@ -1465,4 +1465,15 @@ test("REQUIRED: the full Watch dashboard read set is zero-safe for a genuinely b
 
   // No Panel record was ever required or touched to answer any of the above.
   assert.equal((admin.__store.panels ?? []).length, 0);
+});
+
+/* ---------------------------------- Telegram bot reconnect status decision --- */
+
+test("REQUIRED: nextProvisioningStatusAfterConnect resolves to active when real deployment records already exist", () => {
+  assert.equal(nextProvisioningStatusAfterConnect(1), "active");
+  assert.equal(nextProvisioningStatusAfterConnect(3), "active");
+});
+
+test("REQUIRED: nextProvisioningStatusAfterConnect resolves to bot_ready for a Watcher with zero deployments", () => {
+  assert.equal(nextProvisioningStatusAfterConnect(0), "bot_ready");
 });

@@ -127,6 +127,70 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Watcher Profile: Disconnect / Replace Telegram bot token (v1.47.21)
+- **New, narrowly-scoped feature**: a Watcher Profile's Telegram bot integration can now be disconnected and
+  reconnected/rotated without touching anything else — the Watcher Profile (name/persona/settings), its
+  Communities, its `moderator_deployments` records, and all Activity/moderation history are completely
+  untouched by either operation. Deliberately NOT a general Telegram identity feature and does NOT touch
+  Profile's personal-Telegram-account linking (`ConnectTelegramCard`, a structurally separate table/flow).
+- **Disconnect (`disconnectAccountModeratorBot`, `watch-moderator.ts`)**: best-effort `deleteWebhook` on
+  Telegram using the current credential ONE LAST TIME (never blocks on Telegram being unreachable — the owner's
+  explicit disconnect request always succeeds on our side), then the stored `credential_enc` is nulled and
+  `telegram_bot_integrations.manager_relationship` set to `'revoked'` (row itself is KEPT, preserving the last-
+  known @username for display — never deleted, so history like "previously @mrpreswan_bot" survives). The bot
+  is never deleted from Telegram/BotFather — only Innvil's own ability to act on its updates is removed.
+  `virtual_moderators.provisioning_status` moves to a new **`'disconnected'`** value (migration
+  `0085_watch_bot_disconnect.sql`, additive to the existing CHECK constraint) — distinct from every
+  pre-connection status (`draft`/`cancelled`/`expired`/...), since none of those honestly describe "this
+  Watcher HAD a working bot, the owner deliberately disconnected it." `moderator_deployments` rows are never
+  disabled/deleted here — they're left exactly as they were, and the Watcher detail page (Deployments tab)
+  shows an explicit amber note ("these deployments are preserved but not currently operational") rather than
+  implying anything was removed.
+- **Reconnect / Replace token (`replaceAccountModeratorBotToken`)** covers BOTH first-time connect and
+  rotating an already-connected bot's token via one flow: the new token is ALWAYS verified against Telegram
+  (`verifyBotToken`, the SAME helper `connectCustomerBotToken`'s existing customer-facing flow already uses)
+  **before** anything is written — an invalid token never touches stored state, so a Watcher can never be left
+  partially connected. Bot username/id come ONLY from Telegram's own verified response, never from user input.
+  Once validated, a single upsert overwrites the old credential (`set_telegram_bot_key`) — there is no window
+  where two credentials are simultaneously live for the same integration row. Existing `moderator_deployments`
+  rows are never touched — the moment a live credential exists again, those SAME rows become operational on
+  their own, so reconnecting can never produce a duplicate deployment. New pure
+  `nextProvisioningStatusAfterConnect(deploymentCount)` (`watch-runtime.ts`, directly unit-tested — kept out of
+  `watch-moderator.ts` itself since every export of a `"use server"` file must be async, the same lesson
+  learned the hard way in the v1.11.1 incident) resolves back to `'active'` when real deployment records
+  already exist, `'bot_ready'` otherwise.
+- **Security**: the token is never read back from the server after storage (`getWatcherTelegramIntegration`
+  returns only `{connected, username, telegramBotId, deploymentCount}` — never the credential), never logged,
+  and the new `WatcherTelegramCard.tsx` UI clears its local `token` state immediately on submit regardless of
+  outcome — there is no "reveal token" control anywhere.
+- **Confirmation UX**: Disconnect requires an explicit second click; when the Watcher has ≥1 deployment, the
+  confirm panel shows the exact requested warning shape ("This Watcher is deployed to N Communities.
+  Disconnecting its Telegram bot will stop Telegram activity for those deployments until a bot is
+  reconnected."). Copy throughout says "Disconnect Telegram bot," never "Delete bot."
+- **Audit**: both operations write to the existing `audit_logs` table (`watch.moderator_bot_disconnected`
+  / `watch.moderator_bot_token_replaced`) with only `{moderatorId, username}` in `meta` — the token itself is
+  never included, by construction (callers never have it in scope at logging time).
+- **Account isolation**: both actions reuse `ctxModerator()`, the SAME ownership guard
+  (`virtual_moderators.account_id === signed-in account`) every other Watcher action in this file already uses
+  — never a second/parallel check.
+- **UI**: new `WatcherTelegramCard.tsx`, mounted on the Watcher detail page's existing **Settings** tab
+  (`app/watchers/[id]/page.tsx`) — Connected state shows `@username` + Replace/Disconnect; Disconnected state
+  shows "Not connected" (or "Previously @username" once a bot has existed) + Connect. `WatcherConnectCta` /
+  `WatcherConnectModal` (the existing managed-bot creation flow) are completely untouched — this is an
+  additional, independent control for the token-paste path, not a replacement.
+- New tests: `watch-runtime.test.ts` (+2 — `nextProvisioningStatusAfterConnect`'s both branches). **No dedicated
+  DB/Telegram-mocked action-level test file was added for `disconnectAccountModeratorBot`/
+  `replaceAccountModeratorBotToken`/`getWatcherTelegramIntegration` themselves** — consistent with this exact
+  file's own pre-existing convention (every other function in `watch-moderator.ts`, including the original
+  `connectCustomerBotToken`/`connectAccountCommunity` this pass extends, has zero dedicated tests, since
+  `ctxModerator()` depends on `getAuthedAdmin()`'s real session cookie resolution, the same session-auth-wrapping
+  reason this codebase doesn't DB-mock comparable action files elsewhere). Verified instead via `tsc --noEmit` +
+  full test suite (1373 pass, up from 1371) + production build + thorough code review of the new functions
+  against every explicit requirement (validate-before-write, no duplicate deployments, no token echo, audit
+  metadata excludes the token, account isolation via the existing guard).
+- **Run migration `0085`** before this governs any live account.
+- **Not deployed automatically, per explicit instruction.**
+
 ### 2026-08-20 — Needs Attention: full plan capacity is healthy, not a warning (v1.47.20)
 - **Live-observed gap, reported directly by the user**: a Bronze account exactly at 1/1 Community capacity showed
   a MEDIUM "Community capacity is at 1/1 on your current plan" item inside "Needs attention (2)" — alongside a

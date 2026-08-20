@@ -12,6 +12,7 @@ import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { DeploymentToggle } from "@/src/components/watch/DeploymentToggle";
 import { WatcherConnectCta } from "@/src/components/watch/WatcherDetailClient";
 import { WatcherPersonaTab } from "@/src/components/watch/WatcherPersonaTab";
+import { WatcherTelegramCard } from "@/src/components/watch/WatcherTelegramCard";
 import { WatchersWorkspaceClient } from "@/src/components/watch/WatchersWorkspaceClient";
 
 export const metadata: Metadata = { title: "Watcher — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
@@ -28,6 +29,7 @@ const STATUS_LABEL: Record<string, string> = {
   telegram_creation_failed: "Telegram creation failed",
   credential_setup_failed: "Credential setup failed",
   expired: "Connection attempt expired",
+  disconnected: "Telegram bot disconnected",
 };
 
 export default async function WatcherDetailPage({
@@ -58,6 +60,12 @@ export default async function WatcherDetailPage({
   const deploymentTable = (
     <div className="w-card p-5">
       <SectionHeader icon={Bot} title="Deployments" />
+      {detail.provisioningStatus === "disconnected" && detail.deployments.length > 0 && (
+        <p className="text-xs w-amber mb-3">
+          This Watcher's Telegram bot is disconnected — these deployments are preserved but not currently
+          operational. Reconnect a bot on the Settings tab to resume.
+        </p>
+      )}
       {detail.deployments.length === 0 ? (
         <EmptyRow text="This Watcher isn't deployed to any Community yet." />
       ) : (
@@ -163,17 +171,20 @@ export default async function WatcherDetailPage({
       id: "settings",
       label: "Settings",
       content: (
-        <div className="w-card p-5 max-w-lg">
-          <SectionHeader icon={SettingsIcon} title="Watcher" />
-          <div className="space-y-2.5 text-sm">
-            <div className="flex items-center justify-between"><span className="w-text-dim">Name</span><span className="w-text">{detail.name}</span></div>
-            <div className="flex items-center justify-between"><span className="w-text-dim">Watcher ID</span><span className="w-text w-mono text-xs">{detail.id}</span></div>
-            <div className="flex items-center justify-between"><span className="w-text-dim">Connection status</span><span className="w-text">{STATUS_LABEL[detail.provisioningStatus] ?? detail.provisioningStatus}</span></div>
-            <div className="flex items-center justify-between"><span className="w-text-dim">Active deployments</span><span className="w-text">{detail.deployments.filter((d) => d.enabled).length}</span></div>
+        <div className="space-y-5">
+          <div className="w-card p-5 max-w-lg">
+            <SectionHeader icon={SettingsIcon} title="Watcher" />
+            <div className="space-y-2.5 text-sm">
+              <div className="flex items-center justify-between"><span className="w-text-dim">Name</span><span className="w-text">{detail.name}</span></div>
+              <div className="flex items-center justify-between"><span className="w-text-dim">Watcher ID</span><span className="w-text w-mono text-xs">{detail.id}</span></div>
+              <div className="flex items-center justify-between"><span className="w-text-dim">Connection status</span><span className="w-text">{STATUS_LABEL[detail.provisioningStatus] ?? detail.provisioningStatus}</span></div>
+              <div className="flex items-center justify-between"><span className="w-text-dim">Active deployments</span><span className="w-text">{detail.deployments.filter((d) => d.enabled).length}</span></div>
+            </div>
+            <p className="text-xs w-text-faint mt-4">
+              Persona and behavior are edited on the Persona tab above. Renaming or deleting a Watcher isn't available yet.
+            </p>
           </div>
-          <p className="text-xs w-text-faint mt-4">
-            Persona and behavior are edited on the Persona tab above. Renaming or deleting a Watcher isn't available yet.
-          </p>
+          <WatcherTelegramCard moderatorId={detail.id} />
         </div>
       ),
     },
