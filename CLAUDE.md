@@ -127,6 +127,43 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Needs Attention: full plan capacity is healthy, not a warning (v1.47.20)
+- **Live-observed gap, reported directly by the user**: a Bronze account exactly at 1/1 Community capacity showed
+  a MEDIUM "Community capacity is at 1/1 on your current plan" item inside "Needs attention (2)" — alongside a
+  genuine LOW item ("Ms VP isn't deployed to a community yet"). Root cause: `listAccountAttentionItems`
+  (`watch-runtime.ts`) fired a MEDIUM item whenever usage was `>= 90%` of the plan limit (`CAPACITY_ATTENTION_
+  THRESHOLD = 0.9`) — a "nearing/at capacity, consider upgrading" nudge that reads as upsell framing dressed up
+  as an operational warning, and is trivially true for ANY fully-utilized account on ANY plan.
+- **Final semantics** (explicit product decision): being AT/full capacity (used === total) is a normal, healthy
+  state — it means the customer is using exactly what they purchased, never a problem. "Needs attention" is
+  reserved for incomplete, blocked, failed, expired, or genuinely INCONSISTENT states — never "you're fully
+  using your plan." The only capacity-related condition that still surfaces is usage **exceeding** the current
+  entitlement's limit (`capacityExceedsLimit(used, total) = total > 0 && used > total`) — a real anomaly (e.g. a
+  downgrade left more Communities/deployments active than the new plan allows; this codebase never deletes
+  resources on downgrade/expiry, confirmed unchanged) that can never happen through normal server-side-enforced
+  creation, but is a real, representable state worth surfacing.
+- **Plan-agnostic by construction** — `capacityExceedsLimit` is a plain `used > total` comparison with zero
+  plan-name branches; applies identically to Bronze/Silver/Gold/Platinum/Enterprise-BYO capacity, per explicit
+  instruction not to scatter tier-specific exceptions.
+- **Structural capacity stays fully visible, per explicit instruction** — `CapacityRow` (`WatchUI.tsx`, used on
+  both Overview and Usage's Plan Capacity card) now shows a small neutral-teal **"· Capacity full"** note when
+  `used >= total`, alongside the existing "X of Y" + progress bar — informational, never colored as a warning.
+  The change is scoped entirely to whether "full" counts toward the Needs Attention list/badge — nothing about
+  capacity became less visible.
+- **Everything else in the resolver is untouched**: HIGH (a Community with no active Watcher) and LOW
+  (undeployed/paused Watcher) conditions are exactly as before — only the MEDIUM capacity branch's threshold
+  changed. `watch-notifications.ts`'s email-digest sweep needed no code change (it only reuses
+  `listAccountAttentionItems` directly) — its doc comment was corrected for accuracy.
+- New/updated tests (`watch-runtime.test.ts`): exactly-at-limit Watcher-slot and Community capacity now assert
+  **no** attention item (was the opposite before — that assertion was itself testing the now-rejected behavior,
+  rewritten rather than blindly preserved), two new genuine-over-capacity regression tests (6 active deployments
+  on a 5-slot plan; 3 Communities on a 2-community plan) confirming the real-inconsistency case still surfaces
+  as MEDIUM, existing under-limit/saved-profiles-alone/undeployed-Watcher-stays-LOW/severity-sort tests all still
+  pass unchanged. 1371 tests pass (up from 1368), `tsc --noEmit` clean, production build clean. Diff reviewed:
+  exactly 4 files, no plan-name-specific checks, no duplicated capacity math, no upsell copy in the operational
+  path, no unrelated UI changes.
+- **Not deployed automatically, per explicit instruction.**
+
 ### 2026-08-20 — Watch sidebar now links to Super Admin for super_admin-role accounts (v1.47.19)
 - **Live gap, found while testing**: a super admin signed in on the Watch host (`watch.innvil.cloud`/the Watch
   Preview alias) had no way to REACH `/superadmin` from inside Watch's own UI — `WatchShell.tsx`'s sidebar had

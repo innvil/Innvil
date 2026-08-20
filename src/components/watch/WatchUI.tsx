@@ -67,11 +67,18 @@ export function EmptyRow({ text }: { text: string }) {
 }
 
 export function CapacityRow({ label, used, total }: { label: string; used: number; total: number }) {
+  // "Full" is a normal, healthy state (not a warning) -- see
+  // watch-runtime.ts's listAccountAttentionItems doc comment. Shown as a
+  // plain informational note, deliberately neutral-teal, never amber/red.
+  const full = total > 0 && used >= total;
   return (
     <div>
       <div className="flex items-center justify-between text-xs mb-1">
         <span className="w-text-dim">{label}</span>
-        <span className="w-text">{used} of {total}</span>
+        <span className="w-text">
+          {used} of {total}
+          {full && <span className="w-teal ml-1.5">· Capacity full</span>}
+        </span>
       </div>
       <div className="h-1.5 rounded-full w-surface-raised overflow-hidden">
         <div className="h-full w-teal-bg rounded-full" style={{ width: `${Math.min(100, (used / Math.max(1, total)) * 100)}%` }} />

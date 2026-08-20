@@ -8,7 +8,7 @@ import { listAccountAttentionItems, type AttentionSeverity } from "./watch-runti
  * Real account-level Watch notification preferences + delivery (migration
  * 0074, categories split out in migration 0078). Scoped to signals this
  * codebase can compute honestly today -- Needs Attention (a Community with
- * no active Watcher, capacity nearing the plan limit, or a Watcher needing
+ * no active Watcher, usage genuinely EXCEEDING the plan's limit, or a Watcher needing
  * status attention) -- the same real, already-shown-on-Overview data, never
  * a fabricated event. Split into three categories mapping 1:1 onto
  * `listAccountAttentionItems`'s own real severity partition (high/medium/

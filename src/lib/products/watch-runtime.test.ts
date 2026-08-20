@@ -1068,10 +1068,9 @@ test("listAccountAttentionItems does not flag a Community whose Watcher is merel
   assert.match(items[1].text, /Kwan is paused/);
 });
 
-test("REQUIRED: listAccountAttentionItems flags Watcher slot capacity nearing the plan limit as MEDIUM -- based on ACTIVE DEPLOYMENTS, not saved profile count", async () => {
-  // Standard = 5 slots. 5 saved Watcher profiles with ZERO deployments must
-  // NOT trigger this (that was the old, buggy semantics) -- only 5 actually
-  // DEPLOYED (enabled) Watchers should.
+test("REQUIRED: being EXACTLY AT full Watcher slot capacity is healthy -- no attention item, no upsell framing", async () => {
+  // Standard = 5 slots. 5/5 active deployments (100%) is a customer fully
+  // using what they purchased -- a normal, healthy state, not a problem.
   const moderators = Array.from({ length: 5 }, (_, i) => ({ id: `m${i}`, account_id: "acct-1", name: `M${i}` }));
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW],
@@ -1082,10 +1081,62 @@ test("REQUIRED: listAccountAttentionItems flags Watcher slot capacity nearing th
     moderator_deployments: moderators.map((m, i) => ({ id: `d${i}`, panel_id: null, moderator_id: m.id, community_id: "c1", enabled: true })),
   });
   const items = await listAccountAttentionItems(admin, "acct-1");
-  const watcherCapacityItem = items.find((i) => i.id === "capacity-watchers");
-  assert.ok(watcherCapacityItem, "5/5 active deployments (100%) must trigger the capacity attention item");
-  assert.equal(watcherCapacityItem?.severity, "medium");
-  assert.equal(watcherCapacityItem?.href, "/usage");
+  assert.equal(items.some((i) => i.id === "capacity-watchers"), false, "5/5 (exactly at limit) must NOT be an attention item");
+});
+
+test("REQUIRED: being EXACTLY AT full Community capacity is healthy -- no attention item", async () => {
+  // Standard = 2 communities. Exactly 2/2 connected is healthy/full, not a warning.
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [ENTITLED_STANDARD],
+    projects: [DASH_PROJECT],
+    virtual_moderators: [{ id: "m1", account_id: "acct-1", name: "Kwan" }],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "Chat A" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", title: "Chat B" },
+    ],
+  });
+  const items = await listAccountAttentionItems(admin, "acct-1");
+  assert.equal(items.some((i) => i.id === "capacity-communities"), false, "2/2 (exactly at limit) must NOT be an attention item");
+});
+
+test("REQUIRED: Watcher slot usage genuinely EXCEEDING the plan limit (a real inconsistency) still surfaces MEDIUM attention", async () => {
+  // Simulates a legacy/state-inconsistency scenario (e.g. a downgrade that
+  // left more active deployments than the new plan allows) -- resources are
+  // never deleted server-side, so this is a real, representable state, never
+  // reachable through normal server-enforced creation.
+  const moderators = Array.from({ length: 6 }, (_, i) => ({ id: `m${i}`, account_id: "acct-1", name: `M${i}` }));
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [ENTITLED_STANDARD], // standard: 5 slots
+    projects: [DASH_PROJECT],
+    virtual_moderators: moderators,
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "Chat" }],
+    moderator_deployments: moderators.map((m, i) => ({ id: `d${i}`, panel_id: null, moderator_id: m.id, community_id: "c1", enabled: true })), // 6 active on a 5-slot plan
+  });
+  const items = await listAccountAttentionItems(admin, "acct-1");
+  const item = items.find((i) => i.id === "capacity-watchers");
+  assert.ok(item, "6 active deployments on a 5-slot plan is a genuine over-capacity inconsistency and must still surface");
+  assert.equal(item?.severity, "medium");
+  assert.match(item!.text, /exceeds/i);
+});
+
+test("REQUIRED: Community usage genuinely EXCEEDING the plan limit still surfaces MEDIUM attention", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [ENTITLED_STANDARD], // standard: 2 communities
+    projects: [DASH_PROJECT],
+    virtual_moderators: [{ id: "m1", account_id: "acct-1", name: "Kwan" }],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "Chat A" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", title: "Chat B" },
+      { id: "c3", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1003", title: "Chat C" }, // 3 on a 2-community plan
+    ],
+  });
+  const items = await listAccountAttentionItems(admin, "acct-1");
+  const item = items.find((i) => i.id === "capacity-communities");
+  assert.ok(item, "3 Communities on a 2-community plan is a genuine over-capacity inconsistency and must still surface");
+  assert.equal(item?.severity, "medium");
 });
 
 test("listAccountAttentionItems does NOT flag capacity from saved Watcher profiles alone -- only actual active deployments count", async () => {
@@ -1100,7 +1151,7 @@ test("listAccountAttentionItems does NOT flag capacity from saved Watcher profil
   assert.equal(items.some((i) => i.id === "capacity-watchers"), false);
 });
 
-test("listAccountAttentionItems does not flag capacity well under the threshold", async () => {
+test("listAccountAttentionItems does not flag capacity well under the limit", async () => {
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW],
     product_entitlements: [ENTITLED_STANDARD],

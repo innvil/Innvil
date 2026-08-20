@@ -1022,11 +1022,21 @@ export interface AttentionItem {
   actionLabel: string;
 }
 
-/** Nearing-capacity threshold for the MEDIUM "capacity nearing limit" items
- *  below -- 90% is the standard "about to run out, plan ahead" line, not a
- *  hard cap (the hard cap is already enforced server-side at creation time
- *  by `checkDeploymentSlotCaps`/`communityCountExceeded`). */
-const CAPACITY_ATTENTION_THRESHOLD = 0.9;
+/** Being AT full plan capacity (used === total) is a normal, healthy, fully
+ *  expected state -- a customer using everything they paid for is not a
+ *  problem, and treating it as one reads as an upsell nudge dressed up as an
+ *  operational warning (explicit product decision, 2026-08-20). The only
+ *  capacity-related condition that's genuinely attention-worthy is usage
+ *  EXCEEDING the current entitlement's limit -- a real inconsistency (e.g. a
+ *  downgrade left more Communities connected than the new plan allows;
+ *  resources are never deleted on downgrade, see watch-runtime.ts's existing
+ *  "preserve resources" convention), never a normal outcome of server-side
+ *  enforcement, which already caps creation at the limit
+ *  (`checkDeploymentSlotCaps`/`communityCountExceeded`). Plan-agnostic by
+ *  construction -- a plain `used > total` comparison, no plan-name branches. */
+function capacityExceedsLimit(used: number, total: number): boolean {
+  return total > 0 && used > total;
+}
 
 /** A genuinely actionable "needs attention" list -- every item is computed
  *  from real, already-queryable state (no stored notification system, no
@@ -1035,7 +1045,9 @@ const CAPACITY_ATTENTION_THRESHOLD = 0.9;
  *  mapping per condition (never a fabricated composite score):
  *
  *  HIGH   — a Community has no ACTIVE Watcher at all (nothing is moderating it)
- *  MEDIUM — Watcher or Community capacity is at/above 90% of the plan limit
+ *  MEDIUM — Watcher or Community usage EXCEEDS the plan's limit (a genuine
+ *           inconsistency, e.g. post-downgrade) -- never merely AT/near the
+ *           limit, which is a normal, healthy, fully-utilized state
  *  LOW    — a Watcher is deployed but every one of its deployments is paused,
  *           or a Watcher exists but isn't deployed anywhere yet
  *
@@ -1068,22 +1080,22 @@ export async function listAccountAttentionItems(admin: SupabaseClient, accountId
   }
 
   if (capacity) {
-    if (capacity.slotsTotal > 0 && capacity.activeDeploymentCount / capacity.slotsTotal >= CAPACITY_ATTENTION_THRESHOLD) {
+    if (capacityExceedsLimit(capacity.activeDeploymentCount, capacity.slotsTotal)) {
       items.push({
         id: "capacity-watchers",
         severity: "medium",
-        text: `Watcher slot capacity is at ${capacity.activeDeploymentCount}/${capacity.slotsTotal} on your current plan`,
+        text: `Watcher slot usage (${capacity.activeDeploymentCount}) exceeds your current plan's limit (${capacity.slotsTotal})`,
         href: "/usage",
-        actionLabel: "View usage",
+        actionLabel: "Review usage",
       });
     }
-    if (capacity.communitiesTotal > 0 && capacity.communitiesUsed / capacity.communitiesTotal >= CAPACITY_ATTENTION_THRESHOLD) {
+    if (capacityExceedsLimit(capacity.communitiesUsed, capacity.communitiesTotal)) {
       items.push({
         id: "capacity-communities",
         severity: "medium",
-        text: `Community capacity is at ${capacity.communitiesUsed}/${capacity.communitiesTotal} on your current plan`,
+        text: `Community usage (${capacity.communitiesUsed}) exceeds your current plan's limit (${capacity.communitiesTotal})`,
         href: "/usage",
-        actionLabel: "View usage",
+        actionLabel: "Review usage",
       });
     }
   }
