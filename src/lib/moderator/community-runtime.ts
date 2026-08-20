@@ -2101,7 +2101,7 @@ async function handleHumanMessage(
   // "Project knowledge" block entirely rather than injecting an empty one.
   const projectKnowledge = action.type === "ANSWER" ? await loadRelevantKnowledge(admin, panelId, community.id, event.text) : undefined;
 
-  const primaryResult = await respondAsDeployment({
+  let primaryResult = await respondAsDeployment({
     admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
     deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, accountId, paidTier, now,
     recentContext,
@@ -2112,6 +2112,41 @@ async function handleHumanMessage(
     projectKnowledge,
     timer,
   });
+  let respondingDeployment = deployment;
+
+  // ---- decline-fallback reroute (explicit product decision, 2026-08-20) ----
+  // The primary responder was picked by continuity/quietest-longest (this
+  // message didn't clearly ADDRESS anyone -- if it had, `deployment` above
+  // would already BE the named moderator). If that pick's own model
+  // declines to answer (a reasoned "this isn't really about/for me", not an
+  // infra failure -- generation timeouts/failures/quota exhaustion are a
+  // different problem a reroute wouldn't fix), and a DIFFERENT deployed
+  // moderator's name appears anywhere in the message ("how about Ms VP?"),
+  // retry with that moderator once, treating it as directed. Bounded to a
+  // SINGLE retry -- never chains further even if the reroute also declines.
+  if (!primaryResult.replied && primaryResult.modelDeclined) {
+    const lowerText = event.text.toLowerCase();
+    const named = deployments.find(
+      (d) => d.deploymentId !== deployment.deploymentId && d.moderatorName.trim() && lowerText.includes(d.moderatorName.trim().toLowerCase())
+    );
+    if (named) {
+      const rerouted = await respondAsDeployment({
+        admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
+        deployment: named, actionType: action.type, reasons: [...action.reasons, "decline_fallback_reroute"], isTrialEntitlement, accountId, paidTier, now,
+        recentContext,
+        isDirectedAtBot: true,
+        addressedWithTypo: false,
+        otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== named.deploymentId).map((d) => d.moderatorName),
+        collabContact,
+        projectKnowledge,
+        timer,
+      });
+      if (rerouted.replied) {
+        primaryResult = rerouted;
+        respondingDeployment = named;
+      }
+    }
+  }
 
   // ---- explicit multi-target address: additional independent responders ----
   // Human group conversation is not turn-based -- the primary moderator
@@ -2133,15 +2168,15 @@ async function handleHumanMessage(
       deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername }))
     );
     if (multiTargets) {
-      // A genuine room-wide address ("everyone"/"everybody") scales the
-      // additional-responder cap with how many moderators are actually
-      // deployed here, instead of the fixed small-group cap -- see
-      // roomWideResponderCount's doc comment for the worked examples this
-      // matches (2 deployed -> 1 responds, 5 -> 3, 10 -> 5).
+      // A genuine room-wide address ("everyone"/"everybody") engages every
+      // currently deployed moderator (not the fixed small-group cap used
+      // for "you both"/"you guys") -- capped at MAX_ROOM_WIDE_RESPONDERS
+      // for a very large deployment. See roomWideResponderCount's own doc
+      // comment (chatter-coordinator.ts).
       const additionalCap = isRoomWideAddress(event.text)
         ? Math.max(0, roomWideResponderCount(deployments.length) - 1)
         : undefined;
-      const additionalIds = resolveAdditionalResponderIds(deployment.deploymentId, multiTargets, additionalCap);
+      const additionalIds = resolveAdditionalResponderIds(respondingDeployment.deploymentId, multiTargets, additionalCap);
       // Whether the human's request is inherently per-person ("tell me about
       // yourself") vs. a shared/collective one a single sufficient answer
       // already covers ("why are you two replying like that?") -- decided
@@ -2152,7 +2187,7 @@ async function handleHumanMessage(
       // second additional responder (when the cap allows one) sees BOTH
       // prior replies, not just the primary's.
       const priorResponses: { moderatorName: string; text: string }[] = primaryResult.replied
-        ? [{ moderatorName: deployment.moderatorName, text: primaryResult.text }]
+        ? [{ moderatorName: respondingDeployment.moderatorName, text: primaryResult.text }]
         : [];
       for (const id of additionalIds) {
         const additionalDeployment = deployments.find((d) => d.deploymentId === id);
@@ -2258,7 +2293,7 @@ export async function respondAsDeployment(params: {
    *  doc comment). Only ever set for ANSWER. */
   projectKnowledge?: KnowledgeContextEntry[];
   timer: RequestTimer;
-}): Promise<{ replied: false } | { replied: true; text: string }> {
+}): Promise<{ replied: false; modelDeclined?: boolean } | { replied: true; text: string }> {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, accountId, paidTier, now, recentContext,
     isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
@@ -2368,7 +2403,7 @@ export async function respondAsDeployment(params: {
     }
     if ("noReply" in generation) {
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
-      return { replied: false };
+      return { replied: false, modelDeclined: true };
     }
     replyText = generation.reply;
   }

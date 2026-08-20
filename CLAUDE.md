@@ -127,6 +127,42 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Explicit product decisions: "everyone" engages every deployed moderator + decline-fallback reroute (v1.47.22)
+- **Live bug report, investigated via direct DB query before touching anything**: (1) "hi everyone, how are you
+  guys?" with 2 moderators deployed only got one reply; (2) "doing fine, how about Ms VP?" (right after Mr Pres
+  had just replied) got no reply at all from either moderator.
+- **Root cause 1**: `roomWideResponderCount()` (v1.13.1) scaled "everyone"/"everybody" responders as
+  `ceil(deployed/2)` — 2 deployed → 1 responds, by design, not a bug. **Explicit product decision (confirmed
+  with the user via AskUserQuestion): "everyone" should engage every currently deployed moderator**, matching
+  the old panel-based product's behavior, not a fraction of the team. `roomWideResponderCount()` now returns
+  `min(activeModeratorCount, MAX_ROOM_WIDE_RESPONDERS)` (new cap = 5, so a very large deployment — up to 20
+  Active Moderator Slots on Pro — still can't pile on unboundedly), never less than the deployed count for a
+  realistic (≤5) team. Supersedes the old `ceil(n/2)` scaling entirely; the small explicit plural ("you both",
+  `MAX_ADDITIONAL_RESPONDERS = 2`) is a separate, already-correct category, untouched.
+- **Root cause 2, found by tracing the real activity log**: "how about Ms VP?" has no `@mention`/comma-before-
+  name, so (correctly, per the existing referential-vs-vocative rule from v1.9.3) it wasn't treated as directed
+  at Ms VP — continuity picked Mr Pres (he'd replied last), Mr Pres tried to answer, and the model correctly
+  **declined** rather than fabricate an answer about someone else (`MODEL_DECLINED`) — which previously just
+  produced silence with no recovery. **Explicit product decision: when the picked responder's own model
+  declines, and a DIFFERENTLY-deployed moderator's name appears anywhere in the message, retry once with that
+  moderator, treated as directed.** `respondAsDeployment()` now returns `{replied:false, modelDeclined?:
+  boolean}` (was a bare `{replied:false}`) so `handleHumanMessage` can distinguish "the model made a reasoned
+  decline" from every other reason a responder might not reply (generation timeout/failure, quota exhaustion —
+  none of those are retried, since a different moderator wouldn't fix an infra failure). The reroute is bounded
+  to exactly ONE retry — never chains further even if the reroute itself also declines — and the downstream
+  multi-target/additional-responder logic was updated to key off whichever deployment actually ended up
+  responding (`respondingDeployment`), not always the originally-picked one, so a rerouted reply is correctly
+  excluded from any further additional-responder fan-out and correctly attributed in `priorResponsesToThisMessage`.
+- New/updated tests: `chatter-coordinator.test.ts` — `roomWideResponderCount`'s pinned examples rewritten for the
+  new "everyone = every deployed moderator" semantics (2→2, 3→3, 5→5, capped at 5 for 10/20 deployed), the small-
+  plural cap test unaffected. 1373 tests pass (unchanged count — 2 old pinned examples replaced by 2 new ones),
+  `tsc --noEmit` clean, production build clean. **The decline-fallback reroute itself (community-runtime.ts) has
+  no new dedicated DB/AI-network-mocked test** — reaching it requires a full fake admin plus a mocked model
+  "decline" response, the same category of orchestration this codebase already leaves to typecheck + build +
+  code review for comparably deep paths (documented precedent throughout this file); the pure logic change
+  (`roomWideResponderCount`) is fully unit-tested.
+- **Not deployed automatically, per explicit instruction.**
+
 ### 2026-08-20 — Watcher Profile: Disconnect / Replace Telegram bot token (v1.47.21)
 - **New, narrowly-scoped feature**: a Watcher Profile's Telegram bot integration can now be disconnected and
   reconnected/rotated without touching anything else — the Watcher Profile (name/persona/settings), its

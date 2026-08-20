@@ -1233,17 +1233,16 @@ test('"everyone" now resolves via resolveMultiTargetAddress like the other plura
   assert.deepEqual(new Set(targets), new Set(["dep-kwan", "dep-test", "dep-third"]));
 });
 
-test("REQUIRED: roomWideResponderCount matches the exact product examples -- 2 deployed -> 1, 5 -> 3, 10 -> 5", () => {
-  assert.equal(roomWideResponderCount(2), 1);
-  assert.equal(roomWideResponderCount(5), 3);
-  assert.equal(roomWideResponderCount(10), 5);
+test("REQUIRED: roomWideResponderCount engages EVERY deployed moderator for a realistic team size (explicit product decision, 2026-08-20 -- supersedes the earlier ceil(n/2) scaling)", () => {
+  assert.equal(roomWideResponderCount(2), 2);
+  assert.equal(roomWideResponderCount(3), 3);
+  assert.equal(roomWideResponderCount(5), 5);
 });
 
-test("roomWideResponderCount rounds up and never drops below 1", () => {
+test("roomWideResponderCount caps at MAX_ROOM_WIDE_RESPONDERS (5) for a large deployment, never drops below 1", () => {
   assert.equal(roomWideResponderCount(1), 1);
-  assert.equal(roomWideResponderCount(3), 2);
-  assert.equal(roomWideResponderCount(4), 2);
-  assert.equal(roomWideResponderCount(7), 4);
+  assert.equal(roomWideResponderCount(10), 5);
+  assert.equal(roomWideResponderCount(20), 5);
 });
 
 test("a small explicit plural (\"you both\") still uses the fixed MAX_ADDITIONAL_RESPONDERS cap, not the room-wide scale -- unaffected by this change", () => {

@@ -492,12 +492,22 @@ export function isRoomWideAddress(text: string): boolean {
   return ROOM_WIDE_ADDRESS_RE.test(text.trim());
 }
 
+/** Total responders (including the primary) never exceed this for a
+ *  room-wide address, regardless of how many moderators are deployed --
+ *  matches the panel-based product's own "everyone responds" behavior for
+ *  a realistic-sized team, while still protecting a large Pro-tier
+ *  community (up to 20 Active Moderator Slots) from an "everyone" message
+ *  piling on 20 replies at once. */
+const MAX_ROOM_WIDE_RESPONDERS = 5;
+
 /** How many moderators (including the primary) should independently respond
  *  to a genuine room-wide address, given how many are actively deployed in
- *  the community. Roughly half, rounded up, with a floor of 1 -- matches the
- *  explicit product examples: 2 deployed -> 1 responds, 5 -> 3, 10 -> 5. */
+ *  the community. Explicit product decision (2026-08-20, supersedes the
+ *  earlier ceil(n/2) scaling): a room-wide address engages EVERY currently
+ *  deployed moderator, not merely a fraction of the team -- floor of 1,
+ *  capped at MAX_ROOM_WIDE_RESPONDERS for a very large deployment. */
 export function roomWideResponderCount(activeModeratorCount: number): number {
-  return Math.max(1, Math.ceil(activeModeratorCount / 2));
+  return Math.max(1, Math.min(activeModeratorCount, MAX_ROOM_WIDE_RESPONDERS));
 }
 
 /** A LEADING vocative list of 2+ distinct moderators joined by "and"/commas
