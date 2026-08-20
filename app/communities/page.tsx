@@ -2,9 +2,16 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { Users } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { listAccountCommunities, getCommunityOperationalStats, communityOperationalStatus, type CommunityOperationalStatus } from "@/src/lib/products/watch-runtime";
+import {
+  listAccountCommunities, getCommunityOperationalStats, communityOperationalStatus, getAccountCapacity,
+  type CommunityOperationalStatus,
+} from "@/src/lib/products/watch-runtime";
+import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
+import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
+import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier } from "@/src/lib/money";
 import { WatchShell } from "@/src/components/watch/WatchShell";
-import { EmptyRow, OperationalStatusBadge, relTime, WatcherNamesCell } from "@/src/components/watch/WatchUI";
+import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
+import { EmptyRow, OperationalStatusBadge, CapacityRow, relTime, WatcherNamesCell } from "@/src/components/watch/WatchUI";
 
 export const metadata: Metadata = { title: "Communities — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -22,10 +29,13 @@ export default async function CommunitiesPage({
 }) {
   const { status } = await searchParams;
   const { accountId, admin } = await requireWatchPage();
-  const [communities, statsMap, shell] = await Promise.all([
+  const [communities, statsMap, shell, capacity, expansion, gateways] = await Promise.all([
     listAccountCommunities(admin, accountId),
     getCommunityOperationalStats(admin, accountId),
     getWatchShellContext(admin, accountId),
+    getAccountCapacity(admin, accountId),
+    getCommunityExpansionState(admin, accountId),
+    listAvailableDirectWatchGateways(),
   ]);
 
   const filtered = status ? communities.filter((c) => communityOperationalStatus(c) === status) : communities;
@@ -50,6 +60,36 @@ export default async function CommunitiesPage({
             ))}
           </div>
         </div>
+
+        {/* ---- Community capacity / Community Expansion: the operational discovery +
+             management surface for this add-on (Plans stays the explanation/comparison
+             page, Billing stays payment/history). Plain capacity is shown for every
+             tier (a genuine hard cap for Bronze/Silver/Trial -- no purchase path).
+             The full purchase/manage card only renders for a Gold/Platinum tier
+             (capacity.communityExpansionEligible is structurally false for Trial/
+             Bronze/Silver/Enterprise -- Enterprise isn't even a ModeratorPlanTier
+             value), and is the EXACT SAME component/actions Usage already uses --
+             no second pricing/purchase/manage implementation. ---- */}
+        {capacity && (
+          <div className={capacity.communityExpansionEligible ? "grid grid-cols-1 lg:grid-cols-2 gap-4" : undefined}>
+            <div className="w-card p-5">
+              <p className="text-xs uppercase tracking-wide w-text-faint font-semibold mb-3">Community capacity</p>
+              <CapacityRow label="Communities" used={capacity.communitiesUsed} total={capacity.communitiesTotal} />
+            </div>
+            {capacity.communityExpansionEligible && (
+              <CommunityExpansionCard
+                tier={capacity.tier as CommunityExpansionEligibleTier}
+                billingInterval={capacity.billingInterval}
+                active={expansion != null}
+                cancelAtPeriodEnd={expansion?.cancelAtPeriodEnd ?? false}
+                included={MODERATOR_COMMUNITY_CAPACITY[capacity.tier as CommunityExpansionEligibleTier].included}
+                max={MODERATOR_COMMUNITY_CAPACITY[capacity.tier as CommunityExpansionEligibleTier].maxWithAddons}
+                used={communities.length}
+                availableGateways={gateways}
+              />
+            )}
+          </div>
+        )}
 
         {communities.length === 0 ? (
           <div className="w-card p-10 text-center">

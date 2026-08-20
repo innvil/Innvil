@@ -127,6 +127,47 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Community Expansion is now discoverable/manageable from Communities, not just Usage (v1.47.23)
+- **Communities is now the operational Community Expansion surface** ("what is my Community capacity, and can I
+  expand it?"). **Plans stays the explanation/comparison page** (already showed "3 included, expandable to 5"
+  copy, unchanged). **Billing stays payment/subscription/add-on state + ledger/history** (already showed the
+  folded-in renewal price + payment-history labeling, unchanged). Nothing about this pass touches either of
+  those two pages.
+- **Zero new pricing/purchase/manage logic, per explicit instruction — the EXACT SAME already-built, already-
+  tested component is reused, not duplicated.** `CommunityExpansionCard` (`components/watch/`, first shipped on
+  Usage in the Community Expansion feature) is now ALSO mounted on `/communities`, fed by the SAME canonical
+  reads Usage already uses (`getAccountCapacity`, `getCommunityExpansionState`, `listAvailableDirectWatchGateways`,
+  `MODERATOR_COMMUNITY_CAPACITY`) — same purchase actions (`purchaseCommunityExpansionWithCreditAction`/
+  `createCommunityExpansionCheckout`), same server-verified settlement, same removal guard
+  (`scheduleCommunityExpansionRemoval` in `innvil-credit.ts` — already blocks removal server-side when usage
+  exceeds the plan's included cap, with a clear message; unchanged, just newly reachable from a second surface).
+- **Placement**: a plain `CapacityRow` ("Communities: X of Y") always renders above the Communities table, for
+  EVERY tier — a genuine hard-cap display for Bronze/Silver/Trial, with no purchase CTA at all (there's nothing
+  to purchase there). For a Gold/Platinum account (`capacity.communityExpansionEligible`), the full
+  `CommunityExpansionCard` renders alongside it — not-purchased state shows the fixed package + canonical price
+  + Add button; active state shows "Community Expansion — Active" + effective capacity + a Remove action (the
+  existing inline control IS the manage flow — no second "Manage" button was invented); scheduled-for-removal
+  state already shows the real pending-cancellation note. Enterprise is structurally excluded (`Enterprise` isn't
+  a `ModeratorPlanTier` value, confirmed unchanged from v1.34.0 — cannot compile into `communityExpansionEligible`
+  even by accident), and Trial's `getAccountCapacity` branch never sets it either.
+- **Needs Attention untouched, already correct** — the v1.47.20 fix (full/at-capacity is healthy, only genuine
+  over-capacity surfaces) already covers Gold-at-3/3 and Platinum-at-5/5 correctly; no new attention logic was
+  needed or added for this pass.
+- **Capacity agreement is structural, not re-verified per page** — Communities, Usage, and Community-creation
+  enforcement (`requireAccountWatchContext` in `watch-runtime.ts`) all resolve effective capacity through the
+  ONE canonical path already established in the Community Expansion feature (v1.34.0) — this pass added no
+  second resolver, so the three surfaces cannot drift apart by construction.
+- **Tests**: no new test file — the full business-logic surface this pass exposes (eligibility per tier incl.
+  Bronze/Silver/Trial/Enterprise exclusion, exact canonical pricing, active/removal/removal-blocked states,
+  server-side capacity enforcement at Community creation, account isolation, zero-Panel standalone support) was
+  already covered by the existing 11+41 tests in `watch-community-expansion.test.ts`/`innvil-credit.test.ts`
+  from the original v1.34.0 feature — re-run and confirmed still passing unchanged (1373 tests total, `tsc
+  --noEmit` clean, production build clean). This pass is UI composition only (one file,
+  `app/communities/page.tsx`, +43/-3 lines) — no new business logic exists to test, and this codebase has no
+  server-component-rendering test infrastructure to assert page-level JSX composition directly (consistent
+  with every other Watch page in this codebase, verified instead via typecheck + build + code review).
+- **Not deployed automatically, per explicit instruction.**
+
 ### 2026-08-20 — Explicit product decisions: "everyone" engages every deployed moderator + decline-fallback reroute (v1.47.22)
 - **Live bug report, investigated via direct DB query before touching anything**: (1) "hi everyone, how are you
   guys?" with 2 moderators deployed only got one reply; (2) "doing fine, how about Ms VP?" (right after Mr Pres
