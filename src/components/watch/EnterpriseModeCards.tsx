@@ -21,6 +21,7 @@ const MODE_ICON: Record<EnterpriseMode, typeof Server> = { managed: Server, byo:
  *  Managed. */
 export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
   const [mode, setMode] = useState<EnterpriseMode>("managed");
+  const [managedSlots, setManagedSlots] = useState(50);
   const comparison = compareEnterpriseModesAtSlots(50); // the one real, equivalent-capacity point (BYO 50's own tier)
 
   return (
@@ -58,7 +59,7 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
 
       {mode === "managed" ? (
         <div className="mb-5">
-          <ManagedEnterpriseCalculator />
+          <ManagedEnterpriseCalculator slots={managedSlots} onSlotsChange={setManagedSlots} />
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
@@ -86,7 +87,18 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
       )}
 
       <div className="max-w-md">
-        <SupportContactForm key={mode} defaultSubject={ENTERPRISE_MODES[mode].inquirySubject} defaultBody={buildEnterpriseInquiryBody(mode, baseBody)} />
+        {/* key stays scoped to `mode` only (not `managedSlots`) -- SupportContactForm
+            seeds its body from `defaultBody` ONCE at mount and is freely editable
+            afterward; remounting on every slot-slider tweak would silently wipe
+            anything the customer had already typed. The pre-filled body reflects
+            whatever slot count was selected the moment Managed mode was entered --
+            the visible calculator numbers stay live regardless, and the message
+            itself is always editable before sending. */}
+        <SupportContactForm
+          key={mode}
+          defaultSubject={ENTERPRISE_MODES[mode].inquirySubject}
+          defaultBody={buildEnterpriseInquiryBody(mode, baseBody, mode === "managed" ? managedSlots : undefined)}
+        />
       </div>
     </div>
   );

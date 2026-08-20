@@ -59,14 +59,22 @@ export const ENTERPRISE_MODES: Record<EnterpriseMode, EnterpriseModeMeta> = {
  *  inquiry's subject line (`ENTERPRISE_MODES[mode].inquirySubject`) already
  *  says "Innvil Watch Enterprise — Managed"/"...— Bring Your Own Provider",
  *  so repeating "Enterprise mode: X" as the first line of the body was pure
- *  redundancy (a live screenshot showed both lines back to back). `mode` is
- *  still a parameter so callers don't need to change and so this stays the
- *  single place body composition happens if it needs mode-specific content
- *  again later. Never includes internal ids -- `baseUsageContext` is
- *  caller-supplied plain text, already stripped of ids by the Billing page. */
-export function buildEnterpriseInquiryBody(mode: EnterpriseMode, baseUsageContext: string): string {
-  void mode;
-  return baseUsageContext;
+ *  redundancy (a live screenshot showed both lines back to back).
+ *
+ *  For Managed specifically, `managedSlots` (when given) appends the
+ *  customer's ACTUAL configured slot count from ManagedEnterpriseCalculator
+ *  plus its live-computed price/Community allowance -- computed via the
+ *  SAME canonical `managedEnterprisePrice`/`managedEnterpriseCommunities`
+ *  functions the calculator itself uses, never a duplicated formula. Closes
+ *  the gap where the calculator's selection never reached the actual
+ *  submitted inquiry (a real "configure something, submit something else"
+ *  disconnect) -- the request now reflects exactly what was configured. */
+export function buildEnterpriseInquiryBody(mode: EnterpriseMode, baseUsageContext: string, managedSlots?: number): string {
+  if (mode !== "managed" || !managedSlots || managedSlots < 1) return baseUsageContext;
+  const price = managedEnterprisePrice(managedSlots);
+  const communities = managedEnterpriseCommunities(managedSlots);
+  const configuredLine = `Requested Managed Enterprise capacity: ${managedSlots} Watcher slots (~$${price.toFixed(2)}/mo, ${communities} Communities included).`;
+  return `${configuredLine}\n\n${baseUsageContext}`;
 }
 
 /** Managed Enterprise price at a given Watcher slot count -- a thin,

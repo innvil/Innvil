@@ -127,6 +127,77 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Managed Enterprise: the configurator now actually reaches the submitted request (v1.47.24)
+- **Investigated first, per explicit instruction, before writing any code.** Confirmed the FULL scope of what
+  "resume the roadmap" was asking for (Watcher Presence Scheduling, then Managed Enterprise) is far larger than
+  one pass can safely deliver — Presence Scheduling has a real, detailed, un-implemented spec (Phase 4.U,
+  `docs/moderator/watcher-presence-scheduling-spec.md`) requiring a genuinely new scheduler/cron/AI-transition-
+  message system, and Managed Enterprise has **no representable entitlement at all today** —
+  `ModeratorPlanTier`/`resolveAccountWatchTier`/`product_entitlements.subscription_ref` parsing only recognize
+  `basic/standard/premium/pro` (Bronze/Silver/Gold/Platinum); "Enterprise" is not a tier value anywhere in the
+  type system and cannot compile into `getAccountCapacity`/`listAccountAttentionItems`/Community-creation
+  enforcement even by accident (confirmed unchanged from the v1.34.0 investigation). Building a real self-serve
+  Enterprise entitlement + variable-slot capacity resolver is a genuine, separate architecture decision (does an
+  Enterprise account get a NEW tier value, a separate table, a slot-count column on `product_entitlements`?) —
+  attempting that as a rushed side-effect of this pass would be exactly the kind of half-finished, invented
+  architecture the task's own instructions explicitly forbid ("Do not invent... Preserve the actual intended
+  model"). **Per explicit instruction that Managed Enterprise is this phase's actual goal and given the honest
+  finding above, this pass scoped down to the concrete, safe, real gap that WAS found**, and Presence
+  Scheduling was NOT started (remains Phase 4.U, unchanged, NOTED-not-built).
+- **What was actually found, live, in the existing Managed Enterprise UI**: `ManagedEnterpriseCalculator`
+  (Plans page) already computed a real live price/Community-allowance via the canonical
+  `moderatorEnterpriseSlotPrice`/`moderatorEnterpriseIncludedCommunities` formulas (money.ts, unchanged, still
+  the single source of truth — Platinum base $379.99, +$15/slot for 21–50, +$13/slot for 51+, min 21 slots via
+  `MODERATOR_ENTERPRISE_MIN_SLOTS`) — but the selected slot count was **local component state that never
+  reached the actual submitted inquiry**. A customer could configure "150 slots," see the live price, then
+  submit a request whose body said nothing about their selection — a real "configure X, submit Y" dead
+  disconnect (`EnterpriseModeCards.tsx`/`buildEnterpriseInquiryBody`).
+- **Fix**: `ManagedEnterpriseCalculator` is now a controlled component (`slots`/`onSlotsChange` props, state
+  lifted to `EnterpriseModeCards`); `buildEnterpriseInquiryBody(mode, baseUsageContext, managedSlots?)` gained
+  an optional third parameter that appends "Requested Managed Enterprise capacity: N Watcher slots (~$X.XX/mo,
+  Y Communities included)" — computed via the SAME canonical functions the calculator itself uses, never a
+  duplicated formula — ONLY for `mode === "managed"` and only when a slot count is actually given (existing
+  2-arg call shape is unaffected, verified by test). `SupportContactForm`'s remount key deliberately stays
+  scoped to `mode` only (not `managedSlots`) — it seeds its body from `defaultBody` ONCE at mount and is freely
+  editable afterward; remounting on every slider tweak would have silently wiped anything the customer had
+  already typed, a worse problem than the one being fixed.
+- **Also replaced the calculator's fixed 7-option dropdown (25/30/40/50/75/100/150) with a real numeric input**
+  (`min={MODERATOR_ENTERPRISE_MIN_SLOTS}`, no max) — the canonical formula has no real step size or ceiling
+  (`Math.round`, unbounded above), and the old dropdown's own lowest option (25) silently skipped the TRUE
+  minimum (21–24), which is exactly the "do not invent limits" the task warned against.
+- **Confirmed unchanged, by construction, not by new code**: BYO pricing/copy/tiers (untouched file sections),
+  Community Expansion (still structurally Gold/Platinum-only — `Enterprise` isn't a `ModeratorPlanTier`, so
+  `isCommunityExpansionEligibleTier`/`CommunityExpansionCard` can never apply to it), Needs Attention (no
+  Enterprise-shaped attention item exists to add, since no Enterprise capacity resolver exists to compute one
+  from), Panel coupling (zero — this pass touched only pure pricing/UI-composition files), self-serve
+  Bronze/Silver/Gold/Platinum/Trial behavior (zero files touched outside the Enterprise UI/pricing module).
+- New tests (`watch-enterprise.test.ts`, +3): the 3-arg form includes the real configured slot count + live
+  price/Community count (never a duplicated formula, checked by computing the expected values via the same
+  functions), the slot-count line is correctly omitted for BYO even if a count were somehow passed, and the
+  existing 2-arg call shape is confirmed unaffected (backward compatible — no existing caller needed to change).
+  1376 tests pass (up from 1373), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 4 files
+  (2 components + the pricing/copy module + its test file), no BYO changes, no capacity-resolver changes, no
+  Panel coupling, no dead controls introduced (the fix REMOVES a dead-data gap, doesn't add one).
+- **Provisioning model, confirmed unchanged and stated honestly**: Managed Enterprise remains **manual/
+  request-based**, exactly as it already was — `SupportContactForm` → the real, already-account-scoped
+  `sendOwnerSupportMessage` channel (verified again this pass, unchanged). There is still no automated checkout
+  and **no code path that grants an Enterprise entitlement from this request** — a human on Innvil's side still
+  has to provision it, matching "do not invent an automated checkout if Enterprise is currently provisioned
+  manually" and "do not immediately grant Enterprise entitlement unless that is already the canonical backend
+  behavior" (it is not).
+- **Not deployed automatically, per explicit instruction.**
+- **Deliberately NOT implemented this pass, honestly flagged rather than silently skipped**: Watcher Presence
+  Scheduling (Phase 4.U — a real scheduler/cron/AI-transition system, genuinely separate-sized work); a real
+  Managed Enterprise entitlement/capacity resolver (would require a genuine new architecture decision — how a
+  variable, contact-provisioned slot count is represented in `product_entitlements`, then threaded through
+  `getAccountCapacity`/Usage/Communities/Community-creation enforcement — none of that exists today, and
+  building it without that decision being made first would mean guessing at product architecture); Enterprise
+  on Usage/Communities/Needs Attention (nothing to display — no account can hold this entitlement yet);
+  Enterprise availability for Presence Scheduling/Auto-Posting/other paid-tier features (moot until an
+  Enterprise entitlement exists to gate on); anything BYO (explicitly out of scope per instruction, and
+  untouched — confirmed via diff review). **Explicit confirmation, per the task's own final-report requirement:
+  BYO provider/API refinement was NOT implemented in this phase.**
+
 ### 2026-08-20 — Community Expansion is now discoverable/manageable from Communities, not just Usage (v1.47.23)
 - **Communities is now the operational Community Expansion surface** ("what is my Community capacity, and can I
   expand it?"). **Plans stays the explanation/comparison page** (already showed "3 included, expandable to 5"

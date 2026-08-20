@@ -49,6 +49,25 @@ test("REQUIRED: no internal ids leak into the inquiry body -- only whatever plai
   assert.doesNotMatch(body, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i, "must never contain a UUID-shaped internal id");
 });
 
+test("REQUIRED: buildEnterpriseInquiryBody includes the ACTUAL configured Managed slot count + live-computed price/Communities when given, never a duplicated formula", () => {
+  const body = buildEnterpriseInquiryBody("managed", "Current plan: Gold\n", 50);
+  assert.match(body, /50 Watcher slots/);
+  assert.match(body, new RegExp(`\\$${managedEnterprisePrice(50).toFixed(2)}`));
+  assert.match(body, new RegExp(`${managedEnterpriseCommunities(50)} Communities included`));
+  assert.match(body, /Current plan: Gold/, "still includes the base usage context, not a replacement");
+});
+
+test("buildEnterpriseInquiryBody's slot-count line is omitted for BYO mode even if a slot count is somehow passed", () => {
+  const body = buildEnterpriseInquiryBody("byo", "Current plan: Platinum\n", 50);
+  assert.doesNotMatch(body, /Watcher slots/);
+  assert.equal(body, "Current plan: Platinum\n");
+});
+
+test("buildEnterpriseInquiryBody without a slot count (the existing 2-arg call shape) is unaffected -- backward compatible", () => {
+  const body = buildEnterpriseInquiryBody("managed", "Current plan: Gold\n");
+  assert.equal(body, "Current plan: Gold\n");
+});
+
 /* ==================================================== managed pricing ==== */
 
 test("REQUIRED: managedEnterprisePrice is the SAME canonical formula as moderatorEnterpriseSlotPrice, never a duplicate", () => {
