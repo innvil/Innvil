@@ -7,7 +7,7 @@ import {
 } from "@/src/lib/products/watch-runtime";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
-import { resolveAccountBillingPeriod, getWatchAiResponseUsage, aiResponsePoolLimit } from "@/src/lib/products/watch-ai-usage";
+import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
 import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
 import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
 import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
@@ -38,7 +38,7 @@ export default async function UsagePage() {
   const activeWatcherCount = new Set(communities.flatMap((c) => c.watchers.filter((w) => w.enabled).map((w) => w.watcherId))).size;
   const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
 
-  // MODERATOR_AI_RESPONSE_POOL (money.ts) -- the one canonical monthly usage
+  // MODERATOR_AI_GENERATION_POOL (money.ts) -- the one canonical monthly usage
   // limit approved in the Watch plan/entitlement configuration. Only shown
   // for a real paid (non-trial) tier with a resolvable real subscription
   // period -- never fabricated for the trial (which has its own, separate
@@ -46,7 +46,7 @@ export default async function UsagePage() {
   // legacy never-expiring row predating migration 0080).
   // Managed Enterprise (2026-08-22 repricing) has its own fixed 50,000/mo
   // AI Generation pool (MANAGED_ENTERPRISE_50.aiGenerations) -- read
-  // separately from MODERATOR_AI_RESPONSE_POOL's 4 self-serve-tier values,
+  // separately from MODERATOR_AI_GENERATION_POOL's 4 self-serve-tier values,
   // since there is currently no representable BYO Enterprise entitlement
   // row anywhere in this schema (the manual devops grant tool that creates
   // an "enterprise" entitlement has no Managed/BYO distinction), so every
@@ -54,8 +54,8 @@ export default async function UsagePage() {
   // fabricated for a real BYO account once one becomes representable.
   const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? capacity.tier : null;
   const isEnterprise = capacity?.tier === "enterprise";
-  const aiUsageLimit = paidTier ? aiResponsePoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
-  const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiResponseUsage(admin, accountId, aiPeriod.start) : null;
+  const aiUsageLimit = paidTier ? aiGenerationPoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
+  const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiGenerationUsage(admin, accountId, aiPeriod.start) : null;
 
   // Trial's own real, measurable current-period consumption: the 20/day
   // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
@@ -63,7 +63,7 @@ export default async function UsagePage() {
   // reactiveQuotaDay -- no per-community timezone field exists yet, see that
   // function's own doc comment). This is a DAILY limit, not monthly -- the
   // trial has no monthly/subscription-period consumption concept at all
-  // (MODERATOR_AI_RESPONSE_POOL explicitly excludes trial), so it is shown
+  // (MODERATOR_AI_GENERATION_POOL explicitly excludes trial), so it is shown
   // under its own real "today" period rather than forced into a fabricated
   // monthly bucket. Summed across every Community the account has (the trial
   // is capped at 1, but this generalizes rather than assuming exactly one).
@@ -103,7 +103,7 @@ export default async function UsagePage() {
 
         {/* ---- Current Period Usage: real metered consumption against a canonical
              limit, distinct from the structural resource capacity below. Paid
-             tiers show the one canonical monthly pool (MODERATOR_AI_RESPONSE_POOL);
+             tiers show the one canonical monthly pool (MODERATOR_AI_GENERATION_POOL);
              the Free Trial shows its own real, separately-scoped DAILY quota
              (TRIAL_REACTIVE_DAILY_LIMIT) -- these are two different real metrics
              with two different real periods, never forced into one fabricated
@@ -137,7 +137,7 @@ export default async function UsagePage() {
 
               {isTrial && trialReactiveUsed != null && (
                 <div className="w-card p-5">
-                  <SectionHeader icon={MessageSquare} title="AI responses (today)" />
+                  <SectionHeader icon={MessageSquare} title="AI Generations (today)" />
                   <div className="flex items-end justify-between gap-3 mb-2">
                     <p className="w-display text-2xl w-text">
                       {trialReactiveUsed.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {TRIAL_REACTIVE_DAILY_LIMIT.toLocaleString()} today</span>

@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  resolveAccountBillingPeriod, getWatchAiResponseUsage, incrementWatchAiResponseUsage,
-  aiResponsePoolLimit, hasAiResponsePoolRemaining,
+  resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage,
+  aiGenerationPoolLimit, hasAiGenerationPoolRemaining,
 } from "./watch-ai-usage";
 import { WATCH_PRODUCT_SLUG } from "./watch";
-import { MODERATOR_AI_RESPONSE_POOL } from "@/src/lib/money";
+import { MODERATOR_AI_GENERATION_POOL } from "@/src/lib/money";
 
 /**
- * MODERATOR_AI_RESPONSE_POOL (money.ts) is the ONE canonical monthly usage
+ * MODERATOR_AI_GENERATION_POOL (money.ts) is the ONE canonical monthly usage
  * limit that exists in the approved Watch plan/entitlement configuration
  * today. These tests cover the real usage-tracking layer built on top of
  * it -- period resolution (the account's REAL current subscription period,
@@ -84,55 +84,55 @@ test("resolveAccountBillingPeriod returns null when the Watch product catalog ro
 
 /* --------------------------------------------------------------- read / increment ---- */
 
-test("getWatchAiResponseUsage returns 0 for a brand-new period with no recorded usage yet", async () => {
+test("getWatchAiGenerationUsage returns 0 for a brand-new period with no recorded usage yet", async () => {
   const admin = fakeAdmin({});
-  assert.equal(await getWatchAiResponseUsage(admin, "acct-1", "2026-08-01T00:00:00Z"), 0);
+  assert.equal(await getWatchAiGenerationUsage(admin, "acct-1", "2026-08-01T00:00:00Z"), 0);
 });
 
-test("REQUIRED: incrementWatchAiResponseUsage is atomic (upsert-and-increment) and account/period scoped", async () => {
+test("REQUIRED: incrementWatchAiGenerationUsage is atomic (upsert-and-increment) and account/period scoped", async () => {
   const admin = fakeAdmin({});
   const period = { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z" };
-  await incrementWatchAiResponseUsage(admin, "acct-1", period);
-  await incrementWatchAiResponseUsage(admin, "acct-1", period);
-  await incrementWatchAiResponseUsage(admin, "acct-1", period);
-  assert.equal(await getWatchAiResponseUsage(admin, "acct-1", period.start), 3);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", period);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", period);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", period);
+  assert.equal(await getWatchAiGenerationUsage(admin, "acct-1", period.start), 3);
 });
 
 test("REQUIRED: usage is isolated per account -- one account's increments never affect another's count", async () => {
   const admin = fakeAdmin({});
   const period = { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z" };
-  await incrementWatchAiResponseUsage(admin, "acct-1", period);
-  await incrementWatchAiResponseUsage(admin, "acct-1", period);
-  await incrementWatchAiResponseUsage(admin, "acct-2", period);
-  assert.equal(await getWatchAiResponseUsage(admin, "acct-1", period.start), 2);
-  assert.equal(await getWatchAiResponseUsage(admin, "acct-2", period.start), 1);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", period);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", period);
+  await incrementWatchAiGenerationUsage(admin, "acct-2", period);
+  assert.equal(await getWatchAiGenerationUsage(admin, "acct-1", period.start), 2);
+  assert.equal(await getWatchAiGenerationUsage(admin, "acct-2", period.start), 1);
 });
 
 test("REQUIRED: a new period (different period_start, e.g. after renewal) starts fresh at 0 -- no manual reset logic needed", async () => {
   const admin = fakeAdmin({});
   const augPeriod = { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z" };
   const sepPeriod = { start: "2026-09-01T00:00:00Z", end: "2026-10-01T00:00:00Z" };
-  await incrementWatchAiResponseUsage(admin, "acct-1", augPeriod);
-  await incrementWatchAiResponseUsage(admin, "acct-1", augPeriod);
-  assert.equal(await getWatchAiResponseUsage(admin, "acct-1", sepPeriod.start), 0);
-  assert.equal(await getWatchAiResponseUsage(admin, "acct-1", augPeriod.start), 2);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", augPeriod);
+  await incrementWatchAiGenerationUsage(admin, "acct-1", augPeriod);
+  assert.equal(await getWatchAiGenerationUsage(admin, "acct-1", sepPeriod.start), 0);
+  assert.equal(await getWatchAiGenerationUsage(admin, "acct-1", augPeriod.start), 2);
 });
 
 /* --------------------------------------------------------------- pool limit ---- */
 
-test("REQUIRED: aiResponsePoolLimit returns the exact canonical MODERATOR_AI_RESPONSE_POOL value per tier", () => {
+test("REQUIRED: aiGenerationPoolLimit returns the exact canonical MODERATOR_AI_GENERATION_POOL value per tier", () => {
   for (const tier of ["basic", "standard", "premium", "pro"] as const) {
-    assert.equal(aiResponsePoolLimit(tier), MODERATOR_AI_RESPONSE_POOL[tier]);
+    assert.equal(aiGenerationPoolLimit(tier), MODERATOR_AI_GENERATION_POOL[tier]);
   }
 });
 
-test("REQUIRED: hasAiResponsePoolRemaining is true strictly below the limit, false at and above it", () => {
-  assert.equal(hasAiResponsePoolRemaining(1199, "basic"), true);
-  assert.equal(hasAiResponsePoolRemaining(1200, "basic"), false);
-  assert.equal(hasAiResponsePoolRemaining(1201, "basic"), false);
+test("REQUIRED: hasAiGenerationPoolRemaining is true strictly below the limit, false at and above it", () => {
+  assert.equal(hasAiGenerationPoolRemaining(1999, "basic"), true);
+  assert.equal(hasAiGenerationPoolRemaining(2000, "basic"), false);
+  assert.equal(hasAiGenerationPoolRemaining(2001, "basic"), false);
 });
 
-test("hasAiResponsePoolRemaining is independently correct per tier (higher tiers have real headroom where lower ones don't)", () => {
-  assert.equal(hasAiResponsePoolRemaining(2000, "basic"), false); // basic pool is 1200
-  assert.equal(hasAiResponsePoolRemaining(2000, "standard"), true); // standard pool is 2400
+test("hasAiGenerationPoolRemaining is independently correct per tier (higher tiers have real headroom where lower ones don't)", () => {
+  assert.equal(hasAiGenerationPoolRemaining(2000, "basic"), false); // basic pool is exactly 2000
+  assert.equal(hasAiGenerationPoolRemaining(2000, "standard"), true); // standard pool is 5000
 });

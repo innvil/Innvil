@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — "AI Generations": new pooled allowances + a real counting-semantics change (v1.47.28)
+- **Phase 2 of the pricing overhaul (self-serve base price cut was Phase 1, v1.47.27).** Renamed the pooled
+  monthly self-serve usage unit from "AI response(s)" to **"AI Generations"** throughout, and changed BOTH the
+  allowance values and WHEN a unit is actually consumed.
+- **New allowances** (`MODERATOR_AI_GENERATION_POOL` in `money.ts`, was `MODERATOR_AI_RESPONSE_POOL`): Bronze
+  1,200→**2,000**, Silver 2,400→**5,000**, Gold 4,200→**10,000**, Platinum 7,200→**20,000**, per billing period,
+  pooled per ACCOUNT (never per-Watcher). Enterprise keeps its own separate, much larger fixed pool
+  (`ENTERPRISE_MANAGED_50_AI_GENERATIONS` = 50,000, added in v1.47.26) — never this `Record`.
+- **Real counting-semantics change, not just a rename.** Was: incremented only after the Telegram send actually
+  succeeded (`sent.sentMessageId` truthy). Now: incremented the moment the underlying provider call **succeeds**
+  (right after `generateChatterReply` returns a real reply, in `respondAsDeployment`, `community-runtime.ts`) —
+  moved BEFORE the Telegram send, unconditional on delivery outcome. Concretely: a provider timeout/auth
+  failure/outage/declined generation still counts **0** (every one of those paths `return`s before reaching the
+  new increment line); a successful generation whose Telegram delivery subsequently fails still counts **1**
+  (the provider spend already happened). Deterministic/zero-call paths (SILENCE, REACT, SHORT_ACK, moderation)
+  are unaffected — they never reached the increment either way. **The trial's own SEPARATE reactive-quota
+  counter (`TRIAL_REACTIVE_DAILY_LIMIT`, a different daily/per-Community mechanism) keeps its existing
+  count-on-confirmed-send rule, unchanged** — the two are different products with different counting rules,
+  never conflated.
+- **Full terminology rename, values-and-names kept in lockstep so nothing could drift**:
+  `MODERATOR_AI_RESPONSE_POOL`→`MODERATOR_AI_GENERATION_POOL`, `aiResponsePoolLimit`→`aiGenerationPoolLimit`,
+  `hasAiResponsePoolRemaining`→`hasAiGenerationPoolRemaining`, `getWatchAiResponseUsage`→
+  `getWatchAiGenerationUsage`, `incrementWatchAiResponseUsage`→`incrementWatchAiGenerationUsage`,
+  `customerModeratorAiResponsePool`→`customerModeratorAiGenerationPool` (the older Panel-distributed customer-
+  entitlement variant), the `SILENCE` reason code `ai_response_pool_exhausted`→`ai_generation_pool_exhausted`.
+  **Deliberately did NOT rename the underlying DB table/RPC** (`watch_ai_response_usage` /
+  `increment_watch_ai_response_usage`) — that would require a migration touching live data for zero customer-
+  visible benefit; only the exported function/constant names and all customer-facing copy changed. Usage page
+  card titles renamed ("AI responses" → "AI Generations", "AI responses (today)" → "AI Generations (today)" for
+  the trial's own daily card).
+- New/updated tests: `money.test.ts` (repriced pool values), `watch-ai-usage.test.ts` (renamed + repriced
+  boundary tests), `customer-entitlement.test.ts` (renamed function, repriced values), `community-runtime.test.ts`
+  (renamed exhaustion reason code + repriced boundary fixtures, 2000 now the exact Bronze boundary). **The
+  positive "does the increment actually fire independent of delivery outcome" path is NOT covered by a new
+  end-to-end test** — consistent with this exact test file's own pre-existing, explicitly-stated convention of
+  never exercising `respondAsDeployment`'s successful-generation path in tests (it would require a real
+  `generateChatterReply`/AI provider call, which risks hitting a live provider if a key happens to be configured
+  in the test shell); verified instead via code review of the exact reordering (the increment call was moved to
+  execute unconditionally right after `generation.ok`, strictly before the `SEND_TEXT`/`executeAction` call, with
+  no remaining reference to `sent.sentMessageId` anywhere near it). 1392 tests pass, `tsc --noEmit` clean,
+  production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Still not built** (unchanged scope from v1.47.26/27): a self-serve Media Moderation + add-on, the Plans-page
+  FAQ removal/relocation and Watcher-slot-education relocation, and a broader terminology sweep beyond the two
+  Usage-page card titles + the internal identifier rename above (e.g. any remaining "reply"/"response" wording
+  in onboarding copy, emails, or the storefront AI Moderator surface was not audited this pass).
+
 ### 2026-08-22 — Self-serve Innvil Watch plan prices cut (v1.47.27)
 - **Phase 1 of the broader pricing overhaul you asked to sequence next.** Bronze/Silver/Gold/Platinum monthly
   prices cut in `money.ts` — `MODERATOR_BASIC_PRICE` $49.99→**$29.99**, `MODERATOR_STANDARD_PRICE` $129.99→

@@ -13,7 +13,7 @@ import {
   buildStandaloneModeratorSettings, resolveStandaloneModeratorSettings, resolveWatcherAccountId,
 } from "@/src/lib/products/watch-runtime";
 import { hasVirtualModerator, virtualModNaturalChatter, virtualModModeration, moderatorEntitlementSource, CAPACITY } from "./plan";
-import { hasAiResponsePoolRemaining } from "@/src/lib/products/watch-ai-usage";
+import { hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 
 /** Minimal fake mimicking ONLY the .from(table).insert(row) shape
  *  isDuplicateUpdate uses, enforcing a real (integration_id, update_id)
@@ -1219,7 +1219,7 @@ test("REQUIRED (multi-Watcher, requirement 8): mentioning a DIFFERENT deployed W
   assert.deepEqual(result, { handled: false, collabRoutable: false });
 });
 
-/* --------------------------------------------------- MODERATOR_AI_RESPONSE_POOL gate ---- */
+/* --------------------------------------------------- MODERATOR_AI_GENERATION_POOL gate ---- */
 /* Live-approved monthly usage limit (money.ts), never enforced until now.
    respondAsDeployment gates CASUAL_CHAT/ANSWER generation on real usage
    for a paid direct-Watch account with a resolvable billing period --
@@ -1279,7 +1279,7 @@ const AI_GATE_DEPLOYMENT: ChatterDeployment = {
 };
 
 test("REQUIRED: an exhausted AI response pool resolves to SILENCE for a paid account, structurally before any generation/send/increment", async () => {
-  const admin = fakeAdminForAiUsageGate({ periodStart: "2026-08-01T00:00:00Z", periodEnd: "2026-09-01T00:00:00Z", usedCount: 1200 }); // basic's pool is exactly 1200
+  const admin = fakeAdminForAiUsageGate({ periodStart: "2026-08-01T00:00:00Z", periodEnd: "2026-09-01T00:00:00Z", usedCount: 2000 }); // basic's pool is exactly 2000 (2026-08-22 repriced allowance)
   const result = await respondAsDeployment({
     admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
     deployment: AI_GATE_DEPLOYMENT, actionType: "ANSWER", reasons: ["directed"], isTrialEntitlement: false,
@@ -1289,7 +1289,7 @@ test("REQUIRED: an exhausted AI response pool resolves to SILENCE for a paid acc
   assert.deepEqual(result, { replied: false });
   assert.equal(admin.__activityLog.length, 1);
   assert.equal(admin.__activityLog[0].decision, "SILENCE");
-  assert.equal(admin.__activityLog[0].reason_code, "ai_response_pool_exhausted");
+  assert.equal(admin.__activityLog[0].reason_code, "ai_generation_pool_exhausted");
 });
 
 test("REQUIRED: with accountId null (trial account / Panel-distributed deployment, as handleCommunityUpdate resolves), the pool gate's own billing-period/usage tables are never queried at all", async () => {
@@ -1309,7 +1309,7 @@ test("REQUIRED: with accountId null (trial account / Panel-distributed deploymen
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
   // SHORT_ACK never reaches the pool gate at all regardless of accountId --
-  // deterministic, zero Sonnet calls, matches MODERATOR_AI_RESPONSE_POOL's
+  // deterministic, zero Sonnet calls, matches MODERATOR_AI_GENERATION_POOL's
   // own doc comment -- this exercises accountId: null specifically (the
   // real shape handleCommunityUpdate resolves for a trial account or a
   // Panel-distributed deployment).
@@ -1324,7 +1324,7 @@ test("REQUIRED: with accountId null (trial account / Panel-distributed deploymen
   assert.equal(queriedTables.includes("watch_ai_response_usage"), false);
 });
 
-test("REQUIRED: with real headroom remaining, the pool gate itself never fires -- proven via the pure hasAiResponsePoolRemaining check the gate is built on (no live AI call risked in this test)", () => {
+test("REQUIRED: with real headroom remaining, the pool gate itself never fires -- proven via the pure hasAiGenerationPoolRemaining check the gate is built on (no live AI call risked in this test)", () => {
   // respondAsDeployment's positive path (headroom exists -> proceed to
   // generation) is intentionally NOT exercised end-to-end here -- doing so
   // would require actually calling generateChatterReply, which could hit a
@@ -1333,8 +1333,8 @@ test("REQUIRED: with real headroom remaining, the pool gate itself never fires -
   // covered at the pure-function level (watch-ai-usage.test.ts); this pins
   // the exact worked example used by the exhausted-pool test above, so the
   // two tests can never silently drift apart on what "exhausted" means.
-  assert.equal(hasAiResponsePoolRemaining(1199, "basic"), true);
-  assert.equal(hasAiResponsePoolRemaining(1200, "basic"), false);
+  assert.equal(hasAiGenerationPoolRemaining(1999, "basic"), true);
+  assert.equal(hasAiGenerationPoolRemaining(2000, "basic"), false);
 });
 
 test("an arbitrary external @username with no other link and no other suspicious content is NOT exempt by this mechanism -- it still reaches real moderation logic (proven by requiring a DB touch, unlike the self-mention cases above which never touch the DB at all)", async () => {

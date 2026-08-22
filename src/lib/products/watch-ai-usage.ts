@@ -1,10 +1,10 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { MODERATOR_AI_RESPONSE_POOL, type ModeratorPlanTier } from "@/src/lib/money";
+import { MODERATOR_AI_GENERATION_POOL, type ModeratorPlanTier } from "@/src/lib/money";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 
 /**
- * Real usage accounting for MODERATOR_AI_RESPONSE_POOL (money.ts) -- the
+ * Real usage accounting for MODERATOR_AI_GENERATION_POOL (money.ts) -- the
  * ONE canonical monthly usage limit that exists anywhere in the approved
  * Watch plan/entitlement configuration. Everything else requested in the
  * broader "usage limits" brief (messages, provider requests, tokens, BYO
@@ -47,7 +47,7 @@ export async function resolveAccountBillingPeriod(admin: SupabaseClient, account
 /** Plain read of the account's AI-response count for a given period --
  *  zero if no usage has been recorded yet this period (never an error, a
  *  brand-new period always starts at 0). */
-export async function getWatchAiResponseUsage(admin: SupabaseClient, accountId: string, periodStart: string): Promise<number> {
+export async function getWatchAiGenerationUsage(admin: SupabaseClient, accountId: string, periodStart: string): Promise<number> {
   const { data } = await admin
     .from("watch_ai_response_usage")
     .select("response_count")
@@ -57,13 +57,19 @@ export async function getWatchAiResponseUsage(admin: SupabaseClient, accountId: 
   return (data?.response_count as number | undefined) ?? 0;
 }
 
-/** Atomically increments this account's usage for the given period --
- *  only ever called AFTER a conversational AI response has actually been
- *  sent successfully (see community-runtime.ts's respondAsDeployment,
- *  mirrors the trial reactive-quota's exact same "record only on confirmed
- *  send" discipline). Race-safe under concurrent responders via the DB-level
- *  atomic upsert (increment_watch_ai_response_usage). */
-export async function incrementWatchAiResponseUsage(admin: SupabaseClient, accountId: string, period: WatchBillingPeriod): Promise<void> {
+/** Atomically increments this account's usage for the given period -- as of
+ *  the 2026-08-22 counting-semantics change, called right after a
+ *  CONVERSATIONAL AI GENERATION succeeds (see community-runtime.ts's
+ *  respondAsDeployment), never gated on the subsequent Telegram send. A
+ *  provider timeout/auth failure/outage/declined generation never reaches
+ *  this call at all (all `return` earlier); a successful generation whose
+ *  delivery later fails still counts. This intentionally differs from the
+ *  trial's SEPARATE reactive-quota counter, which still counts only on a
+ *  confirmed send. Race-safe under concurrent responders via the DB-level
+ *  atomic upsert (increment_watch_ai_response_usage -- the underlying table/
+ *  RPC names are unchanged; only the customer-facing terminology and the
+ *  counting rule changed). */
+export async function incrementWatchAiGenerationUsage(admin: SupabaseClient, accountId: string, period: WatchBillingPeriod): Promise<void> {
   await admin.rpc("increment_watch_ai_response_usage", {
     p_account_id: accountId,
     p_period_start: period.start,
@@ -72,18 +78,18 @@ export async function incrementWatchAiResponseUsage(admin: SupabaseClient, accou
 }
 
 /** Pure -- the pool's total for a tier, or null when the tier has no fixed
- *  pool (Enterprise is custom/no fixed pool, per MODERATOR_AI_RESPONSE_POOL's
+ *  pool (Enterprise is custom/no fixed pool, per MODERATOR_AI_GENERATION_POOL's
  *  own doc comment -- deliberately not represented in that Record at all,
  *  so any lookup beyond the 4 self-serve tiers must go through this
  *  function rather than indexing the Record directly and risking a
  *  runtime `undefined`). */
-export function aiResponsePoolLimit(tier: ModeratorPlanTier): number {
-  return MODERATOR_AI_RESPONSE_POOL[tier];
+export function aiGenerationPoolLimit(tier: ModeratorPlanTier): number {
+  return MODERATOR_AI_GENERATION_POOL[tier];
 }
 
 /** Pure -- true when the account still has pool headroom this period.
  *  `usedCount` is the caller's already-read current usage (never re-fetched
  *  here, keeping this function I/O-free and directly testable). */
-export function hasAiResponsePoolRemaining(usedCount: number, tier: ModeratorPlanTier): boolean {
-  return usedCount < aiResponsePoolLimit(tier);
+export function hasAiGenerationPoolRemaining(usedCount: number, tier: ModeratorPlanTier): boolean {
+  return usedCount < aiGenerationPoolLimit(tier);
 }

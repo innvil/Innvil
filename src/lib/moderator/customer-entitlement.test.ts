@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   resolveTrialQualification, isTrialCurrentlyAccessible, trialAccessGranted, sumNetOrderSpend,
-  customerModeratorCommunityExpansionCeiling, customerModeratorAiResponsePool,
+  customerModeratorCommunityExpansionCeiling, customerModeratorAiGenerationPool,
   TRIAL_ESTABLISHED_MIN_AGE_DAYS, TRIAL_ESTABLISHED_MIN_SPEND, TRIAL_HIGH_VALUE_MIN_SPEND, TRIAL_WALLET_MIN_BALANCE,
   CUSTOMER_TRIAL_DURATION_DAYS,
   type TrialEligibilityInput,
@@ -234,16 +234,16 @@ test("no entitlement: zero community expansion ceiling", () => {
 });
 
 test("REQUIRED: pooled AI conversational response allowance matches the approved table per paid tier", () => {
-  assert.equal(customerModeratorAiResponsePool("basic"), 1200);
-  assert.equal(customerModeratorAiResponsePool("standard"), 2400);
-  assert.equal(customerModeratorAiResponsePool("premium"), 4200);
-  assert.equal(customerModeratorAiResponsePool("pro"), 7200);
+  assert.equal(customerModeratorAiGenerationPool("basic"), 2000);
+  assert.equal(customerModeratorAiGenerationPool("standard"), 5000);
+  assert.equal(customerModeratorAiGenerationPool("premium"), 10000);
+  assert.equal(customerModeratorAiGenerationPool("pro"), 20000);
 });
 
 test("trial has no monthly AI response pool -- it uses its own separate daily reactive quota instead, never double-counted", () => {
-  assert.equal(customerModeratorAiResponsePool("trial"), 0);
+  assert.equal(customerModeratorAiGenerationPool("trial"), 0);
 });
 
 test("no entitlement: zero AI response pool", () => {
-  assert.equal(customerModeratorAiResponsePool(null), 0);
+  assert.equal(customerModeratorAiGenerationPool(null), 0);
 });

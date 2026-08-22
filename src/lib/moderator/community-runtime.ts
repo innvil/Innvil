@@ -42,7 +42,7 @@ import { extractVideoFrames } from "./media-frame-extractor";
 import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
 import { resolveStandaloneModeratorSettings, resolveWatcherAccountId } from "@/src/lib/products/watch-runtime";
-import { resolveAccountBillingPeriod, getWatchAiResponseUsage, incrementWatchAiResponseUsage, hasAiResponsePoolRemaining } from "@/src/lib/products/watch-ai-usage";
+import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 /**
@@ -2268,7 +2268,7 @@ export async function respondAsDeployment(params: {
   isTrialEntitlement: boolean;
   /** Direct-Watch account id, resolved only for a standalone (Panel-less)
    *  integration -- null for a Panel-distributed deployment or a trial
-   *  account, in which case the MODERATOR_AI_RESPONSE_POOL gate below never
+   *  account, in which case the MODERATOR_AI_GENERATION_POOL gate below never
    *  applies (see handleCommunityUpdate's resolution). */
   accountId: string | null;
   /** The account's real current paid tier -- null unless accountId is also
@@ -2318,7 +2318,7 @@ export async function respondAsDeployment(params: {
     // Deterministic, zero Sonnet calls.
     replyText = shortAckText(deployment.persona);
   } else {
-    // MODERATOR_AI_RESPONSE_POOL (money.ts) -- direct-Watch paid accounts
+    // MODERATOR_AI_GENERATION_POOL (money.ts) -- direct-Watch paid accounts
     // only (accountId/paidTier both set only in that case, see
     // handleCommunityUpdate). Deliberately scoped to CASUAL_CHAT/ANSWER
     // only (this whole branch) -- SHORT_ACK never reaches here, matching
@@ -2332,10 +2332,10 @@ export async function respondAsDeployment(params: {
     if (accountId && paidTier) {
       aiUsagePeriod = await resolveAccountBillingPeriod(admin, accountId);
       if (aiUsagePeriod) {
-        const used = await getWatchAiResponseUsage(admin, accountId, aiUsagePeriod.start);
-        if (!hasAiResponsePoolRemaining(used, paidTier)) {
-          await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "SILENCE", "ai_response_pool_exhausted", {
-            reasons: ["ai_response_pool_exhausted"],
+        const used = await getWatchAiGenerationUsage(admin, accountId, aiUsagePeriod.start);
+        if (!hasAiGenerationPoolRemaining(used, paidTier)) {
+          await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "SILENCE", "ai_generation_pool_exhausted", {
+            reasons: ["ai_generation_pool_exhausted"],
             attemptedAction: actionType,
           });
           return { replied: false };
@@ -2406,6 +2406,20 @@ export async function respondAsDeployment(params: {
       return { replied: false, modelDeclined: true };
     }
     replyText = generation.reply;
+
+    // 2026-08-22 counting-semantics change: an "AI Generation" is consumed
+    // the moment the provider successfully produces a usable reply -- NOT
+    // gated on the subsequent Telegram send. A timeout/auth failure/outage/
+    // declined generation (all handled above, all `return` before reaching
+    // this line) counts as 0; a successful generation whose Telegram
+    // delivery later fails still counts as 1 (the customer's provider spend
+    // already happened). This intentionally differs from the trial's
+    // SEPARATE reactive-quota counter below, which still counts only on a
+    // confirmed send -- the two are different products with different
+    // counting rules, never conflated.
+    if (accountId && aiUsagePeriod) {
+      await incrementWatchAiGenerationUsage(admin, accountId, aiUsagePeriod);
+    }
   }
 
   const sendAction: CommunityAction = {
@@ -2429,15 +2443,9 @@ export async function respondAsDeployment(params: {
   if (isTrialEntitlement && sent.sentMessageId) {
     await recordReactiveQuotaUse(admin, panelId, communityId, reactiveQuotaDay(now));
   }
-  // Same "only on a confirmed successful send" discipline as the trial quota
-  // above, for the separate paid MODERATOR_AI_RESPONSE_POOL. `aiUsagePeriod`
-  // is only ever set when this was a real CASUAL_CHAT/ANSWER generation for
-  // a paid direct-Watch account with a resolvable period (see the gate
-  // above) -- SHORT_ACK, trial accounts, Panel-distributed deployments, and
-  // accounts with no trackable period never reach this increment.
-  if (accountId && aiUsagePeriod && sent.sentMessageId) {
-    await incrementWatchAiResponseUsage(admin, accountId, aiUsagePeriod);
-  }
+  // The paid MODERATOR_AI_GENERATION_POOL is now incremented earlier, right
+  // after a successful generation (see above) -- never here, and never
+  // gated on `sent.sentMessageId`.
 
   if (sent.sentMessageId) {
     await admin.from("community_messages").insert({
@@ -2579,7 +2587,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // existing (unlimited) behavior.
     const entitlementSource = moderatorEntitlementSource(settings);
     const isTrialEntitlement = entitlementSource === "trial";
-    // MODERATOR_AI_RESPONSE_POOL (money.ts) usage gate -- direct-Watch
+    // MODERATOR_AI_GENERATION_POOL (money.ts) usage gate -- direct-Watch
     // accounts only (integration.panel_id null), never the legacy Panel-
     // distributed Virtual Moderator system, which has its own separate
     // commercial model. `resolveStandaloneModeratorSettings` already

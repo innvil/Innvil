@@ -31,7 +31,7 @@
    prevents any "dip below $20 to extend the trial" exploit.
    ========================================================= */
 
-import { MODERATOR_AI_RESPONSE_POOL, MODERATOR_COMMUNITY_CAPACITY, type ModeratorPlanTier } from "@/src/lib/money";
+import { MODERATOR_AI_GENERATION_POOL, MODERATOR_COMMUNITY_CAPACITY, type ModeratorPlanTier } from "@/src/lib/money";
 import { CAPACITY, TRIAL_CAPACITY, type ModeratorCapacity } from "./plan";
 
 export const TRIAL_ESTABLISHED_MIN_AGE_DAYS = 30;
@@ -142,14 +142,14 @@ export function customerModeratorCommunityExpansionCeiling(source: "trial" | Mod
 }
 
 /** Pooled monthly AI-generated CONVERSATIONAL response allowance for a paid
- *  tier (see money.ts MODERATOR_AI_RESPONSE_POOL). The trial uses its own,
+ *  tier (see money.ts MODERATOR_AI_GENERATION_POOL). The trial uses its own,
  *  separate, already-enforced daily quota (plan.ts TRIAL_REACTIVE_DAILY_LIMIT)
  *  instead of a monthly pool, so this returns 0 for "trial" rather than a
  *  number that would double-count against a different mechanism. Not yet
  *  metered against real usage (no counter exists) — the number only. */
-export function customerModeratorAiResponsePool(source: "trial" | ModeratorPlanTier | null): number {
+export function customerModeratorAiGenerationPool(source: "trial" | ModeratorPlanTier | null): number {
   if (!source || source === "trial") return 0;
-  return MODERATOR_AI_RESPONSE_POOL[source];
+  return MODERATOR_AI_GENERATION_POOL[source];
 }
 
 export type ModeratorPricingTier = { tier: ModeratorPlanTier; price: number; slots: number };

@@ -5,7 +5,7 @@ import {
   MODERATOR_ENTERPRISE_MIN_SLOTS, MODERATOR_COMMISSION_SHARE, MODERATOR_RENTAL_DISCOUNT,
   MODERATOR_COMMUNITY_CAPACITY, MODERATOR_ADDITIONAL_COMMUNITY_PRICE, MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE,
   MODERATOR_AUTOPOST_INCLUDED_PER_DAY, MODERATOR_AUTOPOST_MAX_PER_DAY, MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE,
-  MODERATOR_AI_RESPONSE_POOL,
+  MODERATOR_AI_GENERATION_POOL,
   moderatorPlanPrice, moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, moderatorAutopostFrequencyAddonPrice,
   COMMUNITY_EXPANSION_ELIGIBLE_TIERS, COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier,
   type ModeratorPlanTier,
@@ -145,11 +145,11 @@ test("MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE is the per-extra-post-per-day un
 
 /* ------------------------------------------------------ AI conversational pool ---- */
 
-test("REQUIRED: pooled monthly AI conversational response allowance matches the approved table", () => {
-  assert.equal(MODERATOR_AI_RESPONSE_POOL.basic, 1200);
-  assert.equal(MODERATOR_AI_RESPONSE_POOL.standard, 2400);
-  assert.equal(MODERATOR_AI_RESPONSE_POOL.premium, 4200);
-  assert.equal(MODERATOR_AI_RESPONSE_POOL.pro, 7200);
+test("REQUIRED: pooled monthly AI Generations allowance matches the 2026-08-22 repriced table", () => {
+  assert.equal(MODERATOR_AI_GENERATION_POOL.basic, 2000);
+  assert.equal(MODERATOR_AI_GENERATION_POOL.standard, 5000);
+  assert.equal(MODERATOR_AI_GENERATION_POOL.premium, 10000);
+  assert.equal(MODERATOR_AI_GENERATION_POOL.pro, 20000);
 });
 
 test("REQUIRED: slot counts per tier match the approved pricing table (Basic 2 / Standard 5 / Premium 10 / Pro 20)", () => {

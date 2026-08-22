@@ -213,18 +213,25 @@ export function moderatorAutopostFrequencyAddonPrice(postsPerDay: number): numbe
   return round4(extra * MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE);
 }
 
-/** Pooled monthly AI-generated CONVERSATIONAL response allowance --
- *  CASUAL_CHAT/ANSWER generations only. SILENCE, REACT, deterministic
- *  SHORT_ACK, GM/GN template sends, and no-generation moderation actions
- *  never consume it (no model call happens for any of them). Pooled across
- *  the whole subscription, not divided per moderator. Not yet enforced (no
- *  usage counter exists) -- defined now so metering doesn't have to retrofit
- *  the number later. Enterprise is custom, no fixed pool. */
-export const MODERATOR_AI_RESPONSE_POOL: Record<ModeratorPlanTier, number> = {
-  basic: 1200,
-  standard: 2400,
-  premium: 4200,
-  pro: 7200,
+/** Pooled monthly "AI Generations" allowance -- the customer-facing unit for
+ *  CASUAL_CHAT/ANSWER conversational generations only. SILENCE, REACT,
+ *  deterministic SHORT_ACK, GM/GN template sends, and no-generation
+ *  moderation actions never consume it (no model call happens for any of
+ *  them). Pooled per ACCOUNT, never divided/multiplied per Watcher. Enforced
+ *  via watch-ai-usage.ts, incremented on a successful PROVIDER generation
+ *  (see community-runtime.ts's respondAsDeployment -- counted even if the
+ *  subsequent Telegram delivery fails; never counted on a timeout, auth/
+ *  provider failure, or a declined/failed generation, and a retried call
+ *  that eventually succeeds still counts only once). Repriced 2026-08-22
+ *  alongside the base plan price cut (basic 1200->2000, standard 2400->5000,
+ *  premium 4200->10000, pro 7200->20000). Enterprise has its own SEPARATE,
+ *  much larger fixed pool (ENTERPRISE_MANAGED_50_AI_GENERATIONS above),
+ *  never this Record. */
+export const MODERATOR_AI_GENERATION_POOL: Record<ModeratorPlanTier, number> = {
+  basic: 2000,
+  standard: 5000,
+  premium: 10000,
+  pro: 20000,
 };
 
 /** Suggested default for the customer-facing automator subscription. Owners can override
