@@ -7,7 +7,7 @@ import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-peri
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
 import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
-import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier } from "@/src/lib/money";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 
 type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -118,6 +118,22 @@ export function BillingPlanPicker({
                         : <>+${COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier].toFixed(2)}/mo</>}
                     </p>
                   )}
+                </div>
+              </div>
+              <div className="mb-4 border-t w-line-soft pt-3">
+                <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">AI & moderation</p>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="w-text-dim">AI Generations</span>
+                    <span className="w-text font-semibold">{MODERATOR_AI_GENERATION_POOL[o.tier].toLocaleString()}/mo</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="w-text-dim">Link & spam moderation</span>
+                    <span className="w-text font-semibold">Included</span>
+                  </div>
+                  <p className="text-[11px] w-text-faint">
+                    Media Moderation +: +${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}/mo for {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} units
+                  </p>
                 </div>
               </div>
               {isCurrent ? (

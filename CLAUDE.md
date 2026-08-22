@@ -127,6 +127,46 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Plans page cleanup: FAQ + Watcher-slot education relocated to the Help Center, value-first plan cards (v1.47.30)
+- **Phase 4 of the pricing overhaul** (Phase 1 = self-serve price cut v1.47.27, Phase 2 = AI Generations rename/
+  semantics v1.47.28, Phase 3 = Media Moderation + entitlement v1.47.29). Scoped to the Plans page structure and
+  the plan-card content — no further pricing/entitlement changes this pass.
+- **Removed the giant "Understanding Watcher slots" section (4 `SlotDiagram`s + 3 explanatory callouts) and the
+  19-question FAQ from `/plans` entirely** — investigated first and found this content wasn't actually
+  duplicated-and-orphaned: `SlotInfoPopover`/`CommunityExpansionInfoPopover` (already live on every plan card,
+  shipped earlier this session) already link straight to real Help Center articles
+  (`/support/watchers/watcher-profiles-deployments-slots`, `/support/plans-billing/community-expansion`) that
+  cover the exact same material. The FAQ's remaining Enterprise/Free-Trial content had a close-but-stale
+  existing home too (`plans-and-billing`) or no home at all (a dedicated Enterprise explainer never existed).
+- **New Help Center article `innvil-watch-enterprise`** (`src/lib/watch-help/content.ts`, category
+  `plans-billing`) — Managed Enterprise 50 vs. BYO 50 vs. BYO Unlimited, sourced from the SAME
+  `MANAGED_ENTERPRISE_50`/`WATCH_ENTERPRISE_BYO_TIERS` constants the Plans page's own Enterprise cards render,
+  never a second hardcoded copy of the pricing. `plans-and-billing`'s stale "Enterprise is a custom, contact-us
+  arrangement" line (still describing the pre-v1.47.26 model) corrected to state the real three fixed packages,
+  and extended with two new real facts that had no home anywhere in the Help Center before: the per-tier AI
+  Generations allowances and the Media Moderation + add-on pricing (both from money.ts, v1.47.28/29).
+- **Plans page now ends with a single compact card** — "Watcher slots, Community allowances, and Enterprise are
+  explained in the Help Center" + a link to `/support/plans-billing` — replacing the two large removed sections.
+  The page itself keeps: Free Trial card, the 4-tier plan picker, and Enterprise (all real, functional
+  surfaces) — no FAQ, no diagrams, no duplicated explanatory prose.
+- **Plan cards redesigned around total value, not just price+slots+communities.** `BillingPlanPicker.tsx` gained
+  a new "AI & moderation" section per card: the real per-tier AI Generations allowance
+  (`MODERATOR_AI_GENERATION_POOL`), a "Link & spam moderation — Included" line (verified first: this capability
+  has no usage cap or AI-Generation-pool dependency anywhere in the runtime — `runLinkModeration`'s
+  classification calls are structurally separate from `respondAsDeployment`'s AI-Generation gate, so "Included"
+  is accurate; deliberately did NOT claim "Unlimited," since no capability advertised here is actually
+  uncapped in the sense that word implies), and the real Media Moderation + price/unit line
+  (`MODERATOR_MEDIA_ADDON`) — informational only, no toggle/CTA, since there's still no self-serve purchase
+  action for it (v1.47.29's own documented scope boundary).
+- New/updated tests: `content.test.ts` (+2 — the new Enterprise article's pricing matches the real canonical
+  constants exactly and never states the superseded $599/$799/$829.99 figures; `plans-and-billing`'s new AI
+  Generations/Media Moderation + facts match the real constants). 1409 tests pass (up from 1407), `tsc --noEmit`
+  clean, production build clean (`/plans` and `/support/[category]` both present, unchanged route count).
+- **Not deployed automatically, per standing instruction.**
+- **This completes the 4-phase pricing overhaul requested this session.** Nothing further is queued from that
+  brief; the two items flagged as separately-scoped, larger follow-ups remain: the Media Moderation + self-serve
+  purchase/checkout pipeline (v1.47.29) and any deeper terminology sweep beyond what's already been renamed.
+
 ### 2026-08-22 — Self-serve "Media Moderation +" add-on — entitlement/pricing layer only (v1.47.29)
 - **Phase 3 of the pricing overhaul (Phase 1 = self-serve price cut v1.47.27, Phase 2 = AI Generations rename/
   semantics v1.47.28).** Scoped deliberately: this pass builds the REAL entitlement/pricing representation for

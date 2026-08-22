@@ -14,8 +14,9 @@
 
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
-import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 import { INNVIL_CREDIT_DISCOUNT, ANNUAL_CREDIT_DISCOUNT_BPS } from "@/src/lib/products/innvil-credit-pricing";
+import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 
 export type HelpCategoryId =
   | "getting-started" | "watchers" | "communities" | "plans-billing" | "innvil-credit" | "account" | "troubleshooting";
@@ -211,11 +212,28 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["plans", "billing", "pricing", "annual", "monthly"],
     body: [
       `Self-serve monthly plans: ${planLine}. Each includes a Watcher-slot allowance (${slotLine}) and a separate Community allowance.`,
+      `Each plan also includes a pooled monthly AI Generations allowance — Bronze ${MODERATOR_AI_GENERATION_POOL.basic.toLocaleString()}, Silver ${MODERATOR_AI_GENERATION_POOL.standard.toLocaleString()}, Gold ${MODERATOR_AI_GENERATION_POOL.premium.toLocaleString()}, Platinum ${MODERATOR_AI_GENERATION_POOL.pro.toLocaleString()} per billing period, shared across every Watcher on the account. An AI Generation is counted once your Watcher's AI reply is successfully generated — deterministic actions like silence, reactions, short acknowledgements, and moderation decisions never consume one.`,
+      `Media Moderation + is an optional add-on available on every self-serve plan — Bronze +$${MODERATOR_MEDIA_ADDON.basic.price.toFixed(2)}/mo, Silver +$${MODERATOR_MEDIA_ADDON.standard.price.toFixed(2)}/mo, Gold +$${MODERATOR_MEDIA_ADDON.premium.price.toFixed(2)}/mo, Platinum +$${MODERATOR_MEDIA_ADDON.pro.price.toFixed(2)}/mo, each with its own included Media Moderation Unit allowance per period.`,
       `Annual billing is available on every self-serve plan, at ${annualDiscountPct}% off 12 months of the regular price — paid upfront with Innvil Credit only, no direct crypto option for annual.`,
       "Watch is billed with crypto payments (Cryptomus, NOWPayments, or Binance Pay, depending on what's configured) or Innvil Credit, a discounted second way to pay. There is currently no auto-renewal — you renew manually from the Billing page when your period ends; nothing about your existing Projects, Communities, or Watchers is affected while a subscription is expired.",
-      "Enterprise (beyond Platinum) is a custom, contact-us arrangement — Managed (Innvil supplies the provider capacity) or Bring Your Own Provider (you supply your own credentials, same dashboard either way).",
+      `Enterprise (beyond Platinum) is three fixed packages: Managed Enterprise 50 ($${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo), Bring Your Own Provider 50 ($${WATCH_ENTERPRISE_BYO_TIERS[0].price}/mo), and Bring Your Own Provider Unlimited ($${WATCH_ENTERPRISE_BYO_TIERS[1].price}/mo) — see the Innvil Watch Enterprise article for what each includes.`,
     ],
-    related: ["start-the-free-trial", "innvil-credit", "crypto-payments", "community-expansion"],
+    related: ["start-the-free-trial", "innvil-credit", "crypto-payments", "community-expansion", "innvil-watch-enterprise"],
+  },
+  {
+    slug: "innvil-watch-enterprise",
+    category: "plans-billing",
+    title: "Innvil Watch Enterprise",
+    description: "Managed vs. Bring Your Own Provider — three fixed packages beyond Platinum.",
+    keywords: ["enterprise", "managed", "byo", "bring your own provider", "watcher slots"],
+    body: [
+      `Enterprise is for accounts that need more than Platinum's ${watchPlanOptions().find((p) => p.displayName === "Platinum")!.slots} Watcher slots or ${watchPlanOptions().find((p) => p.displayName === "Platinum")!.communitiesMax} Communities. It's still the same Innvil Watch product — same CRM, Projects, Communities, and Watchers — never a separate dashboard or domain.`,
+      `Managed Enterprise 50 — $${MANAGED_ENTERPRISE_50.price.toFixed(2)}/month, fixed. Includes ${MANAGED_ENTERPRISE_50.slots} Watcher slots, ${MANAGED_ENTERPRISE_50.communities} Communities, and ${MANAGED_ENTERPRISE_50.aiGenerations.toLocaleString()} pooled AI Generations per month, funded by Innvil. You never manage a provider credential yourself. A custom quote is available for more than ${MANAGED_ENTERPRISE_50.slots} slots.`,
+      `Bring Your Own Provider 50 — $${WATCH_ENTERPRISE_BYO_TIERS[0].price}/month, up to ${WATCH_ENTERPRISE_BYO_TIERS[0].maxSlots} licensed Watcher deployments. Bring Your Own Provider Unlimited — $${WATCH_ENTERPRISE_BYO_TIERS[1].price}/month, unlimited licensed Watcher deployments (never unlimited compute, storage, bandwidth, or provider usage — normal fair-use limits still apply). With either BYO package, you supply and pay for your own supported provider credentials directly — Innvil's fee is lower because it doesn't include that usage cost. This is never a guarantee your total spend (Innvil fee + your own provider usage) is lower overall.`,
+      "Both Managed and BYO packages can add the optional Media Moderation + add-on, priced separately per package.",
+      "Enterprise is provisioned manually — reach out from the Plans page and it's finalized with you directly.",
+    ],
+    related: ["plans-and-billing", "community-capacity"],
   },
   {
     slug: "innvil-credit",

@@ -4,7 +4,8 @@ import {
   HELP_ARTICLES, HELP_CATEGORIES, getArticle, articlesByCategory, relatedArticles, searchArticles, popularArticles,
 } from "./content";
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
-import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
+import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 
 /* ------------------------------------------------------------- structure ---- */
 
@@ -130,4 +131,24 @@ test("Community capacity article's included-per-plan numbers match the canonical
   const text = a.body.join(" ");
   assert.ok(text.includes(String(MODERATOR_COMMUNITY_CAPACITY.basic.included)));
   assert.ok(text.includes(String(MODERATOR_COMMUNITY_CAPACITY.premium.included)));
+});
+
+test("REQUIRED: the Innvil Watch Enterprise article states the real, current fixed pricing for all three packages", () => {
+  const a = getArticle("innvil-watch-enterprise")!;
+  const text = a.body.join(" ");
+  assert.ok(text.includes(`$${MANAGED_ENTERPRISE_50.price.toFixed(2)}`), "Managed Enterprise 50's real price");
+  assert.ok(text.includes(String(MANAGED_ENTERPRISE_50.slots)), "Managed Enterprise 50's real slot count");
+  assert.ok(text.includes(MANAGED_ENTERPRISE_50.aiGenerations.toLocaleString()), "Managed Enterprise 50's real pooled AI Generations figure");
+  assert.ok(text.includes(`$${WATCH_ENTERPRISE_BYO_TIERS[0].price}`), "BYO 50's real price");
+  assert.ok(text.includes(`$${WATCH_ENTERPRISE_BYO_TIERS[1].price}`), "BYO Unlimited's real price");
+  assert.doesNotMatch(text, /\$599|\$799|\$829\.99/, "must never state the superseded pre-repricing figures");
+});
+
+test("REQUIRED: Plans and Billing article states the real per-tier AI Generations allowances and Media Moderation + pricing", () => {
+  const a = getArticle("plans-and-billing")!;
+  const text = a.body.join(" ");
+  assert.ok(text.includes(MODERATOR_AI_GENERATION_POOL.basic.toLocaleString()));
+  assert.ok(text.includes(MODERATOR_AI_GENERATION_POOL.pro.toLocaleString()));
+  assert.ok(text.includes(`$${MODERATOR_MEDIA_ADDON.basic.price.toFixed(2)}`));
+  assert.ok(text.includes(`$${MODERATOR_MEDIA_ADDON.pro.price.toFixed(2)}`));
 });
