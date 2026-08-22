@@ -127,6 +127,78 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Innvil Watch Enterprise repriced to three fixed, accessible packages (v1.47.26)
+- **Explicit business decision: Enterprise moves from an open-ended per-slot calculation to three flat,
+  headline packages** — Managed Enterprise 50 ($399/mo), BYO Enterprise 50 ($299/mo), BYO Enterprise Unlimited
+  ($499/mo). Enterprise stays part of the SAME Innvil Watch product (no separate product/dashboard/runtime/
+  domain) — Managed and BYO remain commercial/provider MODES of one product, unchanged from prior sessions.
+- **Managed Enterprise 50** (`MANAGED_ENTERPRISE_50` in `watch-enterprise.ts`) — $399/mo fixed, 50 Watcher
+  slots, and a real 50,000/mo **AI Generations** allowance, pooled per ACCOUNT (never per-Watcher — 50 deployed
+  Watchers share the one 50,000 pool, never 50,000 each). Community count (8, at 50 slots) is still sourced from
+  the pre-existing canonical `moderatorEnterpriseIncludedCommunities` formula — that axis wasn't repriced, only
+  the headline dollar figure and the AI Generation pool size changed. `moderatorEnterpriseSlotPrice` (the old
+  dynamic per-slot formula) is now used ONLY for a genuinely CUSTOM Managed quote above 50 slots — the
+  `ManagedEnterpriseCalculator` UI was relabeled accordingly (minimum raised to 51 slots), with an honest note
+  that the custom-quote estimate is not a simple mathematical continuation of the flat 50-slot price (no
+  above-50 rate was specified in this repricing — inventing one wasn't done; a custom quote is confirmed with
+  support before billing).
+- **BYO Enterprise repriced**: `WATCH_ENTERPRISE_BYO_TIERS` — BYO 50 $599→**$299**/mo, BYO Unlimited $799→
+  **$499**/mo. "Unlimited" still means unlimited LICENSED Watcher deployments only — never unlimited compute/
+  storage/bandwidth/queues/concurrency/media processing/provider spend; no fair-use/infrastructure safeguard
+  was touched. **BYO still has zero real credentials-connection backend** (unchanged finding, re-confirmed) —
+  there is no code path that could fall back to an Innvil-owned conversational credential for a BYO account
+  because there is still no BYO provider-call code path at all yet; the "BYO never falls back to Innvil
+  credentials" invariant holds by construction, not by a new guard.
+- **New optional Media Moderation + add-on for Enterprise** (`ENTERPRISE_MEDIA_ADDON` in `money.ts`) — layered
+  on top of any of the three fixed packages, never bundled into the base price: Managed 50+ and BYO 50+ are both
+  +$39.99/mo for 8,000 Media Moderation Units/mo; BYO Unlimited+ is +$49.99/mo for 10,000 units/mo (worked
+  totals: $438.99 / $338.99 / $548.99). New `enterpriseMediaAddon()`/`enterprisePackageTotalWithMedia()` in
+  `watch-enterprise.ts`; the Enterprise cards (`EnterpriseModeCards.tsx`) gained a real checkbox per package that
+  live-recomputes the displayed total. Terminology stays provider-neutral ("Media Moderation Units", 1 photo or
+  1 sampled video frame = 1 unit) — no Sightengine-specific wording/economics exposed, and video moderation's
+  existing `MEDIA_MODERATION_VIDEO_ENABLED` production-readiness gate is completely untouched by this pricing
+  change (still pending its own separate enablement decision).
+- **`compareEnterpriseModesAtSlots(50)`** now compares the FIXED $399 Managed price against BYO 50's $299 (was
+  the superseded $829.99 dynamic-formula value) — savings recalculated: $100/mo, 25.1%. Every base package
+  still works as a complete, real offering with the Media Moderation + checkbox left OFF (no forced bundling).
+- **Usage page**: Managed Enterprise accounts now see a real "AI Generations" card (was previously excluded
+  entirely, since `MODERATOR_AI_RESPONSE_POOL` has no Enterprise entry) — `50,000` read from
+  `MANAGED_ENTERPRISE_50.aiGenerations`. **Honest limitation, not silently assumed**: there is currently no
+  Managed-vs-BYO distinction persisted anywhere on an Enterprise `product_entitlements` row (the manual
+  superadmin devops grant tool that creates one has no such option) — so every `tier === "enterprise"` account
+  today IS de facto Managed, and the Usage card reflects that; a real BYO Enterprise entitlement is not
+  representable in the schema yet, so there is nothing to incorrectly display for it. Renamed the paid/Enterprise
+  usage card's title from "AI responses" to "AI Generations" (terminology-only rename on this one card; the
+  broader reply-counting semantics change and the trial's own "AI responses (today)" label are a separate,
+  larger, NOT-yet-implemented task — see below).
+- **Plans page**: the two stale hardcoded Enterprise FAQ answers (still quoting the old $379.99/$599 figures)
+  corrected to the new fixed pricing. The FAQ section itself was NOT removed/relocated this pass — that's part
+  of a separate, larger, explicitly-scoped-out Plans-page redesign task (self-serve base-price cut, FAQ removal,
+  Watcher-slot education relocation) that has not been started.
+- New/updated tests: `watch-enterprise.test.ts` (rewrote the Managed/BYO pricing section for the new fixed
+  values, +8 net new tests — the fixed $399 package proven distinct from the superseded dynamic formula's value
+  at 50 slots, the 50,000 account-pooled AI Generation figure, Media Moderation + pricing/units per package
+  including the 3 worked totals, the corrected savings comparison, the custom-quote-only fixed-formula path
+  above 50 slots, `buildEnterpriseInquiryBody`'s new default-to-fixed-package vs. custom-quote-above-50 branching
+  incl. the exact 50-slot boundary). 1387 tests pass, `tsc --noEmit` clean, production build clean. Diff reviewed
+  (7 files, all directly in scope — no changes to Telegram runtime, moderation runtime, Watcher runtime,
+  Projects, Communities, scheduling, or BYO provider routing).
+- **Not deployed automatically, per explicit instruction.**
+- **Deliberately NOT done this pass** (explicitly out of scope for this Enterprise-focused repricing, and
+  honestly flagged rather than silently attempted): the self-serve Bronze/Silver/Gold/Platinum base-price cut
+  ($29.99/$59.99/$99.99/$199.00) and its own new "AI Generations" pooled allowance model
+  (2,000/5,000/10,000/20,000) — `MODERATOR_BASIC_PRICE`/`STANDARD`/`PREMIUM`/`PRO` in `money.ts` are unchanged,
+  still $49.99/$129.99/$219.99/$379.99; the AI-Generation COUNTING SEMANTICS change (count on successful
+  provider generation regardless of subsequent Telegram delivery outcome, vs. today's "count only on confirmed
+  Telegram send" in `respondAsDeployment`) was NOT implemented — the current pool still increments only after
+  `sent.sentMessageId` is truthy; a self-serve Media Moderation + add-on (Bronze+/Silver+/Gold+/Platinum+); the
+  Plans page's FAQ removal/relocation and Watcher-slot-education relocation; and the checkout/payment-provider
+  investigation for whether any external subscription object needs a manual update for existing Enterprise
+  contracts (Enterprise remains entirely manual/inquiry-based — `EnterpriseModeCards` only ever opens a support
+  ticket via the existing `sendOwnerSupportMessage` channel, there is still no self-serve Enterprise checkout of
+  any kind, so there is no external payment-provider object to reconcile for this repricing). Each of these is a
+  separate, real, larger body of work — reported here, not silently rolled into this pass.
+
 ### 2026-08-20 — Managed Enterprise now has a real, representable entitlement (v1.47.25)
 - **Follows directly from v1.47.24's finding**: Managed Enterprise had no way to actually EXIST as an account
   entitlement — `ModeratorPlanTier` only recognized Bronze/Silver/Gold/Platinum, so there was no capacity

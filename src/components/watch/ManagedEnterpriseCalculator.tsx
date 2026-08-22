@@ -1,10 +1,12 @@
 "use client";
 
 import React from "react";
-import { managedEnterprisePrice, managedEnterpriseCommunities } from "@/src/lib/products/watch-enterprise";
-import { MODERATOR_ENTERPRISE_MIN_SLOTS } from "@/src/lib/products/watch-plans";
+import { managedEnterprisePrice, managedEnterpriseCommunities, MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
 
-/** Managed Enterprise pricing calculator — every number is computed live
+/** CUSTOM Managed Enterprise pricing calculator, for a slot count ABOVE the
+ *  fixed, headline Managed Enterprise 50 package ($399/mo, 50 slots, 50,000
+ *  pooled AI Generations/mo — shown as its own static card elsewhere). Every
+ *  number here is computed live
  *  via the SAME canonical formula (`moderatorEnterpriseSlotPrice`/
  *  `moderatorEnterpriseIncludedCommunities` in money.ts) the Panel-side
  *  Enterprise sale already uses, never a second frontend-only pricing
@@ -35,12 +37,12 @@ export function ManagedEnterpriseCalculator({ slots, onSlotsChange }: { slots: n
         <input
           id="managed-slots"
           type="number"
-          min={MODERATOR_ENTERPRISE_MIN_SLOTS}
+          min={MANAGED_ENTERPRISE_50.slots + 1}
           step={1}
           value={slots}
           onChange={(e) => {
             const n = Number(e.target.value);
-            if (Number.isFinite(n)) onSlotsChange(Math.max(MODERATOR_ENTERPRISE_MIN_SLOTS, Math.round(n)));
+            if (Number.isFinite(n)) onSlotsChange(Math.max(MANAGED_ENTERPRISE_50.slots + 1, Math.round(n)));
           }}
           className="w-24 text-sm w-surface border w-line-soft rounded-lg px-2.5 py-1.5 w-text outline-none focus:w-teal-border text-right"
         />
@@ -56,8 +58,10 @@ export function ManagedEnterpriseCalculator({ slots, onSlotsChange }: { slots: n
         </div>
       </div>
       <p className="text-[11px] w-text-faint mt-3">
-        Platinum base ($379.99) + $15/slot for slots {MODERATOR_ENTERPRISE_MIN_SLOTS}–50, +$13/slot for slots 51+.
-        Minimum {MODERATOR_ENTERPRISE_MIN_SLOTS} slots — this is where Enterprise starts (20 slots is Platinum's own included capacity).
+        For a custom quote above the standard {MANAGED_ENTERPRISE_50.slots}-slot Managed Enterprise 50 package
+        (${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo). This estimate uses Innvil's existing per-slot Enterprise
+        pricing formula and is confirmed with support before billing — it isn't a simple continuation of the
+        flat {MANAGED_ENTERPRISE_50.slots}-slot price.
       </p>
     </div>
   );

@@ -103,6 +103,41 @@ export function moderatorEnterpriseIncludedCommunities(totalSlots: number): numb
   return 5;
 }
 
+/**
+ * Fixed Enterprise packages (2026-08-22 repricing) -- Enterprise is now
+ * substantially more accessible via three flat, non-formula packages,
+ * rather than requiring the per-slot custom calculation above for the
+ * common case. `moderatorEnterpriseSlotPrice`/`moderatorEnterpriseIncluded
+ * Communities` above remain available for a genuinely CUSTOM Managed quote
+ * ABOVE 50 slots -- these fixed packages are now the headline, default
+ * Enterprise offering (see watch-enterprise.ts). "Unlimited" (BYO) means
+ * unlimited LICENSED Watcher deployments only -- never unlimited compute/
+ * storage/bandwidth/queues/concurrency/media processing/provider spend;
+ * existing fair-use/infrastructure safeguards are unaffected by this pricing
+ * change.
+ */
+export const ENTERPRISE_MANAGED_50_PRICE = 399;
+export const ENTERPRISE_MANAGED_50_SLOTS = 50;
+/** Innvil-funded, account-pooled (never per-Watcher) monthly AI Generation
+ *  allowance for the fixed Managed Enterprise 50 package. */
+export const ENTERPRISE_MANAGED_50_AI_GENERATIONS = 50000;
+export const ENTERPRISE_BYO_50_PRICE = 299;
+export const ENTERPRISE_BYO_50_SLOTS = 50;
+export const ENTERPRISE_BYO_UNLIMITED_PRICE = 499;
+
+/** Optional Media Moderation + add-on for Enterprise -- layered on top of
+ *  any of the three fixed packages above (never bundled into the base
+ *  price, never a separate duplicated plan). Provider-neutral "Media
+ *  Moderation Units" (see the media-moderation runtime's own unit
+ *  semantics -- 1 classified photo or 1 sampled video frame = 1 unit),
+ *  never Sightengine-specific terminology/economics exposed here. */
+export interface EnterpriseMediaAddonPricing { price: number; units: number; }
+export const ENTERPRISE_MEDIA_ADDON: Record<"managed50" | "byo50" | "byoUnlimited", EnterpriseMediaAddonPricing> = {
+  managed50: { price: 39.99, units: 8000 },
+  byo50: { price: 39.99, units: 8000 },
+  byoUnlimited: { price: 49.99, units: 10000 },
+};
+
 /** Community entitlement is a SEPARATE axis from Active Moderator Slots (a
  *  purchased community never grants extra slots; deploying into it still
  *  needs an available slot). `included` is what the tier ships with;

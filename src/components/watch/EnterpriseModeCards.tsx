@@ -6,6 +6,7 @@ import { SupportContactForm } from "./SupportContactForm";
 import { ManagedEnterpriseCalculator } from "./ManagedEnterpriseCalculator";
 import {
   ENTERPRISE_MODES, buildEnterpriseInquiryBody, WATCH_ENTERPRISE_BYO_TIERS, compareEnterpriseModesAtSlots,
+  MANAGED_ENTERPRISE_50, enterpriseMediaAddon, enterprisePackageTotalWithMedia,
   type EnterpriseMode,
 } from "@/src/lib/products/watch-enterprise";
 
@@ -21,8 +22,10 @@ const MODE_ICON: Record<EnterpriseMode, typeof Server> = { managed: Server, byo:
  *  Managed. */
 export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
   const [mode, setMode] = useState<EnterpriseMode>("managed");
-  const [managedSlots, setManagedSlots] = useState(50);
-  const comparison = compareEnterpriseModesAtSlots(50); // the one real, equivalent-capacity point (BYO 50's own tier)
+  const [managedSlots, setManagedSlots] = useState(MANAGED_ENTERPRISE_50.slots + 1);
+  const [managedMediaAddon, setManagedMediaAddon] = useState(false);
+  const [byoMediaAddon, setByoMediaAddon] = useState<Record<string, boolean>>({});
+  const comparison = compareEnterpriseModesAtSlots(MANAGED_ENTERPRISE_50.slots); // the one real, equivalent-capacity point (BYO 50's own tier)
 
   return (
     <div>
@@ -48,9 +51,9 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
               </div>
               <p className="text-xs w-text-faint mb-2">{meta.tagline}</p>
               {m === "managed" ? (
-                <p className="text-xs w-text-dim">Innvil supplies and manages the supported provider capacity for your Watchers — starting from $379.99/mo.</p>
+                <p className="text-xs w-text-dim">Innvil manages and pays for your Watchers' conversational provider — ${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo for {MANAGED_ENTERPRISE_50.slots} slots.</p>
               ) : (
-                <p className="text-xs w-text-dim">Your own supported provider credentials — from $599/mo, provider usage billed directly through your own account.</p>
+                <p className="text-xs w-text-dim">Your own supported provider credentials — from ${WATCH_ENTERPRISE_BYO_TIERS[0].price}/mo. Lower Innvil platform fee; provider usage is paid separately.</p>
               )}
             </button>
           );
@@ -59,18 +62,47 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
 
       {mode === "managed" ? (
         <div className="mb-5">
+          <div className="w-surface-raised border w-teal-border rounded-lg p-4 mb-3">
+            <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">Managed Enterprise 50</p>
+            <p className="w-display text-xl w-teal mb-1">
+              ${(managedMediaAddon ? enterprisePackageTotalWithMedia(MANAGED_ENTERPRISE_50.price, "managed50") : MANAGED_ENTERPRISE_50.price).toFixed(2)}
+              <span className="text-xs w-text-faint font-normal">/mo</span>
+            </p>
+            <p className="text-xs w-text-dim">{MANAGED_ENTERPRISE_50.slots} Watcher slots · {MANAGED_ENTERPRISE_50.communities} Communities included · {MANAGED_ENTERPRISE_50.aiGenerations.toLocaleString()} pooled AI Generations/mo</p>
+            <label className="flex items-center gap-2 mt-2.5 text-xs w-text-dim cursor-pointer">
+              <input type="checkbox" checked={managedMediaAddon} onChange={(e) => setManagedMediaAddon(e.target.checked)} />
+              Media Moderation + (+${enterpriseMediaAddon("managed50").price.toFixed(2)}/mo, {enterpriseMediaAddon("managed50").units.toLocaleString()} Media Moderation Units/mo)
+            </label>
+          </div>
+          <p className="text-xs w-text-faint mb-2">Need more than {MANAGED_ENTERPRISE_50.slots} Watcher slots?</p>
           <ManagedEnterpriseCalculator slots={managedSlots} onSlotsChange={setManagedSlots} />
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
-          {WATCH_ENTERPRISE_BYO_TIERS.map((tier) => (
-            <div key={tier.id} className="w-surface-raised border w-line-soft rounded-lg p-4">
-              <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">{tier.label}</p>
-              <p className="w-display text-xl w-teal mb-1">${tier.price}<span className="text-xs w-text-faint font-normal">/mo</span></p>
-              <p className="text-xs w-text-dim">{tier.maxSlots ? `Up to ${tier.maxSlots} licensed Watcher deployments` : "Unlimited licensed Watcher deployments"}</p>
-              <p className="text-[11px] w-text-faint mt-1.5">Community capacity: Custom</p>
-            </div>
-          ))}
+          {WATCH_ENTERPRISE_BYO_TIERS.map((tier) => {
+            const addonKey = tier.id === "byo_50" ? "byo50" : "byoUnlimited";
+            const addon = enterpriseMediaAddon(addonKey);
+            const enabled = !!byoMediaAddon[tier.id];
+            return (
+              <div key={tier.id} className="w-surface-raised border w-line-soft rounded-lg p-4">
+                <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">{tier.label}</p>
+                <p className="w-display text-xl w-teal mb-1">
+                  ${(enabled ? enterprisePackageTotalWithMedia(tier.price, addonKey) : tier.price).toFixed(2)}
+                  <span className="text-xs w-text-faint font-normal">/mo</span>
+                </p>
+                <p className="text-xs w-text-dim">{tier.maxSlots ? `Up to ${tier.maxSlots} licensed Watcher deployments` : "Unlimited licensed Watcher deployments"}</p>
+                <p className="text-[11px] w-text-faint mt-1.5">Community capacity: Custom</p>
+                <label className="flex items-center gap-2 mt-2.5 text-xs w-text-dim cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={(e) => setByoMediaAddon((prev) => ({ ...prev, [tier.id]: e.target.checked }))}
+                  />
+                  Media Moderation + (+${addon.price.toFixed(2)}/mo, {addon.units.toLocaleString()} Media Moderation Units/mo)
+                </label>
+              </div>
+            );
+          })}
         </div>
       )}
 

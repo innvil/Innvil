@@ -13,18 +13,31 @@
  * BYO      — the customer supplies their own supported provider
  *            credentials; provider usage is billed directly through their
  *            own provider account, never through Innvil. Pricing is the
- *            explicit two-tier model previously recorded in CLAUDE.md's
- *            "Phase 4.S — Future Enterprise BYO pricing" planning note
- *            (BYO 50 = $599/mo up to 50 licensed deployments, BYO Unlimited
- *            = $799/mo) — promoted from planning note to live Billing copy
- *            as an explicit business decision this pass (see the dated
- *            changelog entry). There is still NO real BYO credentials-
- *            connection backend anywhere in this codebase -- this module
- *            covers PRICING/COPY only, never a fake "Connect Provider"
- *            workflow.
+ *            explicit two-tier model, repriced 2026-08-22 (BYO 50 = $299/mo
+ *            up to 50 licensed deployments, BYO Unlimited = $499/mo
+ *            unlimited licensed deployments). There is still NO real BYO
+ *            credentials-connection backend anywhere in this codebase --
+ *            this module covers PRICING/COPY only, never a fake
+ *            "Connect Provider" workflow. BYO NEVER receives an
+ *            Innvil-funded AI Generation pool and must NEVER silently fall
+ *            back to an Innvil-owned conversational credential -- the
+ *            customer's own provider is the only credential ever used for a
+ *            BYO account's conversational generation.
+ *
+ * As of 2026-08-22, Enterprise is headlined by three FIXED packages rather
+ * than an open-ended per-slot calculation: Managed Enterprise 50 ($399/mo,
+ * fixed), BYO Enterprise 50 ($299/mo, fixed), BYO Enterprise Unlimited
+ * ($499/mo, fixed). The per-slot formula (moderatorEnterpriseSlotPrice)
+ * remains available for a genuinely CUSTOM Managed quote ABOVE 50 slots --
+ * it is no longer used to price the standard 50-slot Managed offering.
  */
 
-import { moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities } from "@/src/lib/money";
+import {
+  moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities,
+  ENTERPRISE_MANAGED_50_PRICE, ENTERPRISE_MANAGED_50_SLOTS, ENTERPRISE_MANAGED_50_AI_GENERATIONS,
+  ENTERPRISE_BYO_50_PRICE, ENTERPRISE_BYO_UNLIMITED_PRICE, ENTERPRISE_MEDIA_ADDON,
+  type EnterpriseMediaAddonPricing,
+} from "@/src/lib/money";
 
 export type EnterpriseMode = "managed" | "byo";
 
@@ -70,32 +83,53 @@ export const ENTERPRISE_MODES: Record<EnterpriseMode, EnterpriseModeMeta> = {
  *  submitted inquiry (a real "configure something, submit something else"
  *  disconnect) -- the request now reflects exactly what was configured. */
 export function buildEnterpriseInquiryBody(mode: EnterpriseMode, baseUsageContext: string, managedSlots?: number): string {
-  if (mode !== "managed" || !managedSlots || managedSlots < 1) return baseUsageContext;
-  const price = managedEnterprisePrice(managedSlots);
-  const communities = managedEnterpriseCommunities(managedSlots);
-  const configuredLine = `Requested Managed Enterprise capacity: ${managedSlots} Watcher slots (~$${price.toFixed(2)}/mo, ${communities} Communities included).`;
+  if (mode !== "managed") return baseUsageContext;
+  if (managedSlots && managedSlots > MANAGED_ENTERPRISE_50.slots) {
+    const price = managedEnterprisePrice(managedSlots);
+    const communities = managedEnterpriseCommunities(managedSlots);
+    const configuredLine = `Requested CUSTOM Managed Enterprise capacity: ${managedSlots} Watcher slots (~$${price.toFixed(2)}/mo, ${communities} Communities included) -- above the standard Managed Enterprise 50 package.`;
+    return `${configuredLine}\n\n${baseUsageContext}`;
+  }
+  const fixed = MANAGED_ENTERPRISE_50;
+  const configuredLine = `Requested Managed Enterprise 50: ${fixed.slots} Watcher slots, $${fixed.price.toFixed(2)}/mo, ${fixed.communities} Communities included, ${fixed.aiGenerations.toLocaleString()} pooled AI Generations/mo.`;
   return `${configuredLine}\n\n${baseUsageContext}`;
 }
 
-/** Managed Enterprise price at a given Watcher slot count -- a thin,
- *  Watch-flavored wrapper around the REAL canonical formula in money.ts
- *  (Platinum/Pro base + per-slot bands), never a duplicated calculation. */
+/** Managed Enterprise price at a given Watcher slot count -- used ONLY for
+ *  a genuinely CUSTOM quote above the fixed 50-slot package's own slot
+ *  count (see MANAGED_ENTERPRISE_50 below for the standard offering). A
+ *  thin, Watch-flavored wrapper around the REAL canonical formula in
+ *  money.ts (Platinum/Pro base + per-slot bands), never a duplicated
+ *  calculation. */
 export function managedEnterprisePrice(slots: number): number {
   return moderatorEnterpriseSlotPrice(slots);
 }
 
 /** Managed Enterprise's real, deterministic included-Community count at a
- *  given slot count -- also a direct passthrough to money.ts, never
- *  invented. Community capacity for BYO is NOT modeled by this formula (no
- *  canonical BYO Community rule is recorded anywhere) -- BYO stays "custom"
- *  in the UI rather than borrowing this number. */
+ *  given slot count (custom-quote path only) -- also a direct passthrough
+ *  to money.ts, never invented. */
 export function managedEnterpriseCommunities(slots: number): number {
   return moderatorEnterpriseIncludedCommunities(slots);
 }
 
+/** The fixed, headline Managed Enterprise package (2026-08-22 repricing) --
+ *  $399/mo for 50 Watcher slots and a 50,000/mo pooled (account-wide, never
+ *  per-Watcher) AI Generation allowance. Community count is still read from
+ *  the existing canonical formula at exactly 50 slots -- that axis wasn't
+ *  repriced, only the headline dollar figure and the AI Generation pool
+ *  size were. */
+export const MANAGED_ENTERPRISE_50 = {
+  price: ENTERPRISE_MANAGED_50_PRICE,
+  slots: ENTERPRISE_MANAGED_50_SLOTS,
+  aiGenerations: ENTERPRISE_MANAGED_50_AI_GENERATIONS,
+  communities: moderatorEnterpriseIncludedCommunities(ENTERPRISE_MANAGED_50_SLOTS),
+};
+
 /** BYO Enterprise's two fixed commercial tiers -- NOT a per-slot formula
- *  (unlike Managed). "50" and "Unlimited" are the only two BYO price points
- *  this codebase has ever recorded (Phase 4.S). */
+ *  (unlike a custom Managed quote). "50" and "Unlimited" remain the only two
+ *  BYO price points this codebase records; repriced 2026-08-22
+ *  ($599->$299, $799->$499). BYO never carries an AI Generation allowance --
+ *  the customer's own provider pays for and produces every generation. */
 export interface WatchByoTier {
   id: "byo_50" | "byo_unlimited";
   label: string;
@@ -103,9 +137,26 @@ export interface WatchByoTier {
   price: number;
 }
 export const WATCH_ENTERPRISE_BYO_TIERS: WatchByoTier[] = [
-  { id: "byo_50", label: "BYO 50", maxSlots: 50, price: 599 },
-  { id: "byo_unlimited", label: "BYO Unlimited", maxSlots: null, price: 799 },
+  { id: "byo_50", label: "BYO 50", maxSlots: 50, price: ENTERPRISE_BYO_50_PRICE },
+  { id: "byo_unlimited", label: "BYO Unlimited", maxSlots: null, price: ENTERPRISE_BYO_UNLIMITED_PRICE },
 ];
+
+/** Optional Media Moderation + add-on for a given Enterprise package --
+ *  layered on top of the base price, never bundled into it. Provider-
+ *  neutral Media Moderation Units (never Sightengine-specific terminology).
+ *  `null` for a slot count with no matching fixed package (no invented
+ *  pricing for a custom Managed quote's add-on -- not defined anywhere). */
+export function enterpriseMediaAddon(key: "managed50" | "byo50" | "byoUnlimited"): EnterpriseMediaAddonPricing {
+  return ENTERPRISE_MEDIA_ADDON[key];
+}
+
+/** Total monthly price for a fixed Enterprise package with Media
+ *  Moderation + enabled -- plain addition, rounded to 2dp to avoid
+ *  floating-point display drift (e.g. 399 + 39.99 must read $438.99, not
+ *  $438.99000000000004). */
+export function enterprisePackageTotalWithMedia(basePrice: number, addonKey: "managed50" | "byo50" | "byoUnlimited"): number {
+  return Math.round((basePrice + ENTERPRISE_MEDIA_ADDON[addonKey].price) * 100) / 100;
+}
 
 export interface EnterpriseSavingsComparison {
   slots: number;
@@ -126,7 +177,10 @@ export interface EnterpriseSavingsComparison {
 export function compareEnterpriseModesAtSlots(slots: number): EnterpriseSavingsComparison | null {
   const tier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.maxSlots === slots);
   if (!tier) return null;
-  const managedPrice = managedEnterprisePrice(slots);
+  // At exactly the fixed Managed Enterprise 50 package's own slot count,
+  // compare against its real FIXED price -- never the dynamic per-slot
+  // formula, which no longer prices the standard 50-slot offering.
+  const managedPrice = slots === MANAGED_ENTERPRISE_50.slots ? MANAGED_ENTERPRISE_50.price : managedEnterprisePrice(slots);
   const byoPrice = tier.price;
   const savingsAmount = Math.round((managedPrice - byoPrice) * 100) / 100;
   const savingsPercent = Math.round((savingsAmount / managedPrice) * 1000) / 10;

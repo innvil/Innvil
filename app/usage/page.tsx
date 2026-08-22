@@ -15,6 +15,7 @@ import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
 import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
 import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 
 export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
@@ -43,12 +44,18 @@ export default async function UsagePage() {
   // period -- never fabricated for the trial (which has its own, separate
   // daily reactive quota) or for an account with no trackable period (a
   // legacy never-expiring row predating migration 0080).
-  // MODERATOR_AI_RESPONSE_POOL has no defined value for Managed Enterprise
-  // (its own manually-provisioned capacity model has no metered AI-response
-  // concept recorded anywhere) -- excluded the same way trial already is,
-  // never a fabricated/estimated limit.
+  // Managed Enterprise (2026-08-22 repricing) has its own fixed 50,000/mo
+  // AI Generation pool (MANAGED_ENTERPRISE_50.aiGenerations) -- read
+  // separately from MODERATOR_AI_RESPONSE_POOL's 4 self-serve-tier values,
+  // since there is currently no representable BYO Enterprise entitlement
+  // row anywhere in this schema (the manual devops grant tool that creates
+  // an "enterprise" entitlement has no Managed/BYO distinction), so every
+  // `tier === "enterprise"` account today IS de facto Managed -- never
+  // fabricated for a real BYO account once one becomes representable.
   const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? capacity.tier : null;
-  const aiUsageCount = paidTier && aiPeriod ? await getWatchAiResponseUsage(admin, accountId, aiPeriod.start) : null;
+  const isEnterprise = capacity?.tier === "enterprise";
+  const aiUsageLimit = paidTier ? aiResponsePoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
+  const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiResponseUsage(admin, accountId, aiPeriod.start) : null;
 
   // Trial's own real, measurable current-period consumption: the 20/day
   // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
@@ -102,22 +109,22 @@ export default async function UsagePage() {
              with two different real periods, never forced into one fabricated
              shape. Nothing renders here for an account with neither (no active
              plan and no trial), since there is nothing real to meter. ---- */}
-        {((paidTier && aiUsageCount != null && aiPeriod) || (isTrial && trialReactiveUsed != null)) && (
+        {((aiUsageLimit != null && aiUsageCount != null && aiPeriod) || (isTrial && trialReactiveUsed != null)) && (
           <div>
             <h2 className="w-display text-sm w-text-dim mb-2">Current Period Usage</h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              {paidTier && aiUsageCount != null && aiPeriod && (
+              {aiUsageLimit != null && aiUsageCount != null && aiPeriod && (
                 <div className="w-card p-5">
-                  <SectionHeader icon={MessageSquare} title="AI responses" />
+                  <SectionHeader icon={MessageSquare} title="AI Generations" />
                   <div className="flex items-end justify-between gap-3 mb-2">
                     <p className="w-display text-2xl w-text">
-                      {aiUsageCount.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {aiResponsePoolLimit(paidTier).toLocaleString()} this period</span>
+                      {aiUsageCount.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {aiUsageLimit.toLocaleString()} this period</span>
                     </p>
                   </div>
                   <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
                     <div
                       className="h-full w-teal-bg rounded-full"
-                      style={{ width: `${Math.min(100, (aiUsageCount / Math.max(1, aiResponsePoolLimit(paidTier))) * 100)}%` }}
+                      style={{ width: `${Math.min(100, (aiUsageCount / Math.max(1, aiUsageLimit)) * 100)}%` }}
                     />
                   </div>
                   <p className="text-xs w-text-faint">
