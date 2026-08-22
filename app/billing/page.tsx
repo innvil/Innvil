@@ -49,14 +49,19 @@ export default async function BillingPage() {
   ]);
 
   const options = watchPlanOptions();
-  const isPaidActive = capacity && capacity.tier !== "trial";
+  // Managed Enterprise is a SEPARATE, manually-provisioned entitlement --
+  // never a self-serve tier (it has no WatchPlanOption row, no self-serve
+  // renew button, and Community Expansion is structurally Gold/Platinum
+  // only). isPaidActive covers ONLY the four self-serve tiers.
+  const isPaidActive = capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise";
   const isTrialActive = capacity?.tier === "trial";
-  const price = isPaidActive && capacity && capacity.tier !== "trial" ? options.find((o) => o.tier === capacity.tier)?.price : null;
+  const isEnterpriseActive = capacity?.tier === "enterprise";
+  const price = isPaidActive && capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? options.find((o) => o.tier === capacity.tier)?.price : null;
   // Community Expansion renews TOGETHER with the base subscription -- shown
   // as part of the SAME "current subscription" total, never a second/
   // separate billing line, since it has no billing period of its own.
   const expansionActive = expansion != null && !expansion.cancelAtPeriodEnd
-    && capacity && capacity.tier !== "trial" && isCommunityExpansionEligibleTier(capacity.tier)
+    && capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" && isCommunityExpansionEligibleTier(capacity.tier)
     ? COMMUNITY_EXPANSION_MONTHLY_PRICE[capacity.tier]
     : null;
   const combinedPrice = price != null ? price + (expansionActive ?? 0) : null;
@@ -71,7 +76,7 @@ export default async function BillingPage() {
 
         <div className="w-card p-5">
           <SectionHeader icon={ShieldCheck} title="Current subscription" />
-          {isPaidActive && capacity && capacity.tier !== "trial" ? (
+          {isPaidActive && capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div>
@@ -112,6 +117,31 @@ export default async function BillingPage() {
               ) : (
                 <RenewWatchButton tier={capacity.tier} label="Pay renewal" billingInterval={capacity.billingInterval} />
               )}
+            </div>
+          ) : isEnterpriseActive && capacity ? (
+            // Managed Enterprise -- deliberately no self-serve renew button,
+            // no Community Expansion line, no Innvil Credit discount claim
+            // (none of those apply to Enterprise's manually-provisioned
+            // commercial model). Period/billing-interval are still the SAME
+            // real, server-authoritative fields every other tier reads --
+            // just no automated action attached to them.
+            <div className="space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <p className="w-display text-lg w-teal">Managed Enterprise</p>
+                  <p className="text-xs w-text-faint mt-0.5">{capacity.slotsTotal} Watcher slots · {capacity.communitiesTotal} Communities included</p>
+                </div>
+                <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
+              </div>
+              {capacity.paidThrough ? (
+                <p className="text-xs w-text-dim">Current period ends <span className="w-text font-medium">{formatDate(capacity.paidThrough)}</span></p>
+              ) : (
+                <p className="text-xs w-text-faint">No tracked billing period on this subscription yet — it stays active until your next renewal.</p>
+              )}
+              <p className="text-xs w-text-faint">
+                Managed Enterprise capacity and billing are provisioned and renewed manually by the Innvil Enterprise team — contact support for changes or renewal.
+              </p>
+              <Link href="/support" className="text-xs w-teal hover:underline">Contact support</Link>
             </div>
           ) : paidPlan && paidPlan.expired ? (
             <div className="space-y-3">

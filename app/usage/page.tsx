@@ -43,7 +43,11 @@ export default async function UsagePage() {
   // period -- never fabricated for the trial (which has its own, separate
   // daily reactive quota) or for an account with no trackable period (a
   // legacy never-expiring row predating migration 0080).
-  const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" ? capacity.tier : null;
+  // MODERATOR_AI_RESPONSE_POOL has no defined value for Managed Enterprise
+  // (its own manually-provisioned capacity model has no metered AI-response
+  // concept recorded anywhere) -- excluded the same way trial already is,
+  // never a fabricated/estimated limit.
+  const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? capacity.tier : null;
   const aiUsageCount = paidTier && aiPeriod ? await getWatchAiResponseUsage(admin, accountId, aiPeriod.start) : null;
 
   // Trial's own real, measurable current-period consumption: the 20/day

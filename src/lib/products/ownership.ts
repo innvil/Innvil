@@ -93,7 +93,7 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
  * Innvil-Credit-only by product rule, enforced by callers, but stored here
  * too so Billing never has to re-derive it).
  */
-export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string, billingInterval: WatchBillingInterval = "monthly"): Promise<void> {
+export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string, billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
 
@@ -116,6 +116,14 @@ export async function activateWatchEntitlement(admin: SupabaseClient, accountId:
       current_period_start: period.start,
       current_period_end: period.end,
       billing_interval: billingInterval,
+      // Only meaningful for tier === "enterprise" (migration 0086) -- the
+      // manually-provisioned Watcher-slot count Managed Enterprise capacity
+      // resolves from (requireAccountWatchContext, watch-runtime.ts), never
+      // encoded into subscription_ref itself. Left OUT of the upsert object
+      // entirely (not overwritten with null) for every non-enterprise call,
+      // so re-activating/renewing a normal self-serve tier can never
+      // accidentally clear a stray value.
+      ...(enterpriseSlots != null ? { enterprise_slots: enterpriseSlots } : {}),
       // Annual is Innvil-Credit-only by product rule -- force it here so
       // Billing never has to re-derive it. Monthly is deliberately left
       // OUT of this object (not overwritten) since it can legitimately be

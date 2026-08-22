@@ -1477,3 +1477,67 @@ test("REQUIRED: nextProvisioningStatusAfterConnect resolves to active when real 
 test("REQUIRED: nextProvisioningStatusAfterConnect resolves to bot_ready for a Watcher with zero deployments", () => {
   assert.equal(nextProvisioningStatusAfterConnect(0), "bot_ready");
 });
+
+/* ---------------------------------- Managed Enterprise entitlement ---- */
+// "enterprise" is a distinct entitlement SOURCE, never a ModeratorPlanTier
+// value -- mirrors how "trial" already works. Never touches the fixed
+// CAPACITY/MODERATOR_COMMUNITY_CAPACITY tables (no "enterprise" row exists
+// in either), never eligible for Community Expansion (Gold/Platinum
+// self-serve only), and its slot count is the real, manually-provisioned
+// `product_entitlements.enterprise_slots` value (migration 0086) -- never
+// a fixed lookup.
+
+const ENTITLED_ENTERPRISE_50 = {
+  id: "e-ent", account_id: "acct-1", product_id: "product-watch", status: "active",
+  subscription_ref: "enterprise:manual-1", enterprise_slots: 50,
+};
+
+test("REQUIRED: a Managed Enterprise entitlement resolves real capacity from the provisioned slot count, not a fixed lookup", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.ok(capacity);
+  assert.equal(capacity?.tier, "enterprise");
+  assert.equal(capacity?.slotsTotal, 50);
+  assert.equal(capacity?.communitiesTotal, 8, "50 slots -> +30 extra above the Pro base -> 8 included Communities (moderatorEnterpriseIncludedCommunities)");
+});
+
+test("REQUIRED: Managed Enterprise is never Community-Expansion-eligible -- that stays a self-serve Gold/Platinum add-on only", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionEligible, false);
+  assert.equal(capacity?.communityExpansionActive, false);
+});
+
+test("REQUIRED: Managed Enterprise Watcher/Community creation enforces the REAL provisioned slot count, agreeing with displayed capacity", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50], projects: [STANDALONE_PROJECT] });
+  const watcher = await createAccountWatcher(admin, "acct-1", "Enterprise Watcher");
+  assert.equal(watcher.ok, true, "an entitled Enterprise account must be able to create a Watcher");
+});
+
+test("a self-serve Platinum entitlement is never accidentally resolved as enterprise, and vice versa", async () => {
+  const platinum = { id: "e-pro", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:deposit-1" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [platinum] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.tier, "pro");
+  assert.equal(capacity?.slotsTotal, 20, "Platinum's own fixed CAPACITY table value, never confused with a variable Enterprise slot count");
+});
+
+test("REQUIRED: Managed Enterprise entitlement never leaks across accounts", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const capacity = await getAccountCapacity(admin, "acct-2");
+  assert.equal(capacity, null, "a different account must never resolve another account's Enterprise entitlement");
+});
+
+test("Managed Enterprise entitlement with a missing/zero provisioned slot count never fabricates capacity", async () => {
+  const broken = { id: "e-ent-bad", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-2", enterprise_slots: null };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [broken] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity, null, "an inconsistent provisioning state (no real slot count) must never fabricate an entitlement");
+});
+
+test("Managed Enterprise zero-Panel: creating resources for an Enterprise account never touches the panels table", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50], projects: [STANDALONE_PROJECT] });
+  const watcher = await createAccountWatcher(admin, "acct-1", "Enterprise Watcher");
+  assert.equal(watcher.ok, true);
+  assert.equal((admin.__store.panels ?? []).length, 0);
+});

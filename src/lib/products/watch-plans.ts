@@ -42,13 +42,15 @@ export function watchPlanDisplayName(tier: ModeratorPlanTier): WatchPlanDisplayN
   return TIER_TO_DISPLAY[tier];
 }
 
-/** Same as watchPlanDisplayName, but also accepts "trial" -- the ONE
- *  display helper every surface that renders `AccountCapacity.tier` should
- *  call (WatchShell sidebar, Overview, Usage), so "trial" never gets passed
- *  into watchPlanDisplayName (which has no entry for it) or shown as the
- *  raw internal string. */
-export function watchAccessLabel(tier: ModeratorPlanTier | "trial"): string {
-  return tier === "trial" ? "Free Trial" : watchPlanDisplayName(tier);
+/** Same as watchPlanDisplayName, but also accepts "trial"/"enterprise" --
+ *  the ONE display helper every surface that renders `AccountCapacity.tier`
+ *  should call (WatchShell sidebar, Overview, Usage), so neither "trial"
+ *  nor "enterprise" ever gets passed into watchPlanDisplayName (which has
+ *  no entry for either) or shown as the raw internal string. */
+export function watchAccessLabel(tier: ModeratorPlanTier | "trial" | "enterprise"): string {
+  if (tier === "trial") return "Free Trial";
+  if (tier === "enterprise") return "Managed Enterprise";
+  return watchPlanDisplayName(tier);
 }
 
 /** Display name -> stable internal tier, for form input / checkout. Never

@@ -127,6 +127,61 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-20 — Managed Enterprise now has a real, representable entitlement (v1.47.25)
+- **Follows directly from v1.47.24's finding**: Managed Enterprise had no way to actually EXIST as an account
+  entitlement — `ModeratorPlanTier` only recognized Bronze/Silver/Gold/Platinum, so there was no capacity
+  resolver, no Usage/Communities display, nothing for a manually-provisioned Enterprise account to resolve to.
+  Per explicit product decision (confirmed via AskUserQuestion): Enterprise is now a real, resolvable
+  entitlement, represented the SAME way "trial" already is — a distinct entitlement SOURCE alongside
+  `ModeratorPlanTier`, never a member of it. This deliberately avoids the alternative (adding "enterprise" to
+  `ModeratorPlanTier` itself), which would have broken every `Record<ModeratorPlanTier, ...>` fixed-lookup table
+  in the codebase (`CAPACITY`, `MODERATOR_COMMUNITY_CAPACITY`) and silently pulled Enterprise into self-serve
+  pricing/discount/Community-Expansion code paths it must never touch.
+- **New migration `0086_watch_managed_enterprise.sql`** — `product_entitlements.enterprise_slots` (nullable
+  int, `>= 21` check) — the real, manually-provisioned Watcher-slot count, stored in its OWN column rather than
+  encoded into `subscription_ref` (which keeps the existing `"<tier>:<ref>"` parsing every self-serve tier
+  already relies on completely unchanged). **Run migration `0086`.**
+- **`activateWatchEntitlement`** (`ownership.ts`) gained an optional `enterpriseSlots` parameter — persists it
+  only when explicitly given (never overwrites a self-serve tier's row with a stray null). Same canonical
+  activation function every real purchase already uses — no second entitlement-writing path.
+- **New `resolveAccountEnterpriseEntitlement`** (`watch-runtime.ts`) — a SEPARATE resolver from
+  `resolveAccountWatchTier` (which still only ever returns the 4 self-serve tiers, unchanged) — reads
+  `subscription_ref` starting with `"enterprise:"` + the real `enterprise_slots` value, with the same
+  expiry/grandfather discipline as every other entitlement read. `requireAccountWatchContext` (the ONE
+  canonical resolver every Watcher/Community/Deployment/Usage/Communities/Billing surface already goes through)
+  now checks self-serve tier → Enterprise → trial, in that order, and for Enterprise computes capacity via the
+  SAME `moderatorEnterpriseIncludedCommunities()` formula the Plans-page calculator already uses — never a
+  second capacity model. `AccountWatchContext.tier`/`AccountCapacity.tier` widened to
+  `ModeratorPlanTier | "trial" | "enterprise"`.
+- **Community Expansion structurally excluded** — every eligibility check (`isCommunityExpansionEligibleTier`,
+  the `CAPACITY[tier]`/`MODERATOR_COMMUNITY_CAPACITY[tier]` indexing) is now guarded by an explicit
+  `tier !== "trial" && tier !== "enterprise"` narrow before it can be reached — a compile-time guarantee, not
+  just a runtime one, that Enterprise can never accidentally become eligible for the self-serve Gold/Platinum
+  add-on.
+- **Billing** (`app/billing/page.tsx`) gained a distinct "Managed Enterprise" current-subscription state —
+  real slot/Community counts, real tracked period if any, explicit honest copy that capacity/billing are
+  provisioned and renewed manually by the Innvil Enterprise team (no self-serve renew button, no Community
+  Expansion line, no Innvil Credit discount claim — none of those apply to Enterprise's commercial model).
+- **Usage** (`app/usage/page.tsx`) excludes Enterprise from the `MODERATOR_AI_RESPONSE_POOL` card the same way
+  Trial already is excluded — no canonical AI-response-pool value is defined for Enterprise anywhere, so
+  showing one would mean inventing a number. Enterprise's real structural capacity (slots/Communities) still
+  flows through the existing generic `StatCard`/`CapacityRow` displays unchanged, since those don't branch on
+  tier value at all.
+- **`watchAccessLabel`** widened to return "Managed Enterprise" for the new tier value (was "trial"/tier only).
+- New tests (`watch-runtime.test.ts`, +7): real capacity from the provisioned slot count (not a fixed lookup,
+  incl. the exact 50-slot → 8-Community worked example), Community Expansion structurally never eligible,
+  Watcher/Community creation enforces the real slot count, Platinum never confused with Enterprise (and vice
+  versa), cross-account isolation, a missing/zero `enterprise_slots` never fabricates an entitlement, and
+  zero-Panel confirmed (creating resources for an Enterprise account never touches `panels`). 1383 tests pass
+  (up from 1376), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per explicit instruction.**
+- **Deliberately not built this pass**: any UI/action for actually GRANTING an Enterprise entitlement with a
+  real slot count (the existing Preview-only `superadmin-watch-devops.ts` grant tool still only supports the 4
+  self-serve tiers — extending it to Enterprise, or building a real sales-provisioning flow, is the natural next
+  step now that the entitlement itself is representable); Watcher Presence Scheduling availability for
+  Enterprise (moot — Presence Scheduling itself still doesn't exist anywhere in this codebase); any BYO work
+  (untouched, confirmed via diff review).
+
 ### 2026-08-20 — Managed Enterprise: the configurator now actually reaches the submitted request (v1.47.24)
 - **Investigated first, per explicit instruction, before writing any code.** Confirmed the FULL scope of what
   "resume the roadmap" was asking for (Watcher Presence Scheduling, then Managed Enterprise) is far larger than

@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ModeratorPlanTier } from "@/src/lib/money";
-import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier, moderatorEnterpriseIncludedCommunities } from "@/src/lib/money";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
 import { hasActiveCommunityExpansion } from "./watch-community-expansion";
 import { normalizeModeratorPersona, DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "@/src/lib/moderator/domain";
@@ -42,9 +42,16 @@ import { periodHasExpired, type WatchBillingInterval } from "./watch-billing-per
 export interface AccountWatchContext {
   ok: true;
   accountId: string;
-  /** "trial" is a real, distinct entitlement SOURCE (not a ModeratorPlanTier
-   *  value) -- mirrors moderator/plan.ts's ModeratorEntitlementSource. */
-  tier: ModeratorPlanTier | "trial";
+  /** "trial" and "enterprise" are both real, distinct entitlement SOURCES,
+   *  never ModeratorPlanTier values -- "trial" mirrors moderator/plan.ts's
+   *  ModeratorEntitlementSource; "enterprise" is Managed Enterprise, a
+   *  manually-provisioned, variable-slot entitlement that deliberately
+   *  never flows through the fixed CAPACITY/MODERATOR_COMMUNITY_CAPACITY
+   *  lookup tables (which have no "enterprise" row) or any self-serve
+   *  pricing/discount path (moderatorPlanPrice, Innvil Credit discounts,
+   *  Community Expansion) -- those all stay keyed strictly by
+   *  ModeratorPlanTier, resolved separately via resolveAccountWatchTier. */
+  tier: ModeratorPlanTier | "trial" | "enterprise";
   maxCommunities: number;
   maxActiveSlots: number;
   /** Max SAVED Watcher identities -- distinct from maxActiveSlots (a
@@ -82,6 +89,42 @@ export async function resolveAccountWatchTier(admin: SupabaseClient, accountId: 
   if (!entitlement || entitlement.status !== "active") return null;
   if (periodHasExpired((entitlement.current_period_end as string | null) ?? null)) return null;
   return parseEntitlementTier((entitlement.subscription_ref as string | null) ?? null);
+}
+
+export interface AccountEnterpriseEntitlement {
+  slots: number;
+  currentPeriodEnd: string | null;
+  billingInterval: WatchBillingInterval;
+}
+
+/** The account's active Managed Enterprise entitlement, if any -- a
+ *  SEPARATE resolver from resolveAccountWatchTier (never returned by it;
+ *  "enterprise" is not, and must never become, a ModeratorPlanTier value).
+ *  Reads the manually-provisioned `enterprise_slots` column (migration
+ *  0086) directly rather than encoding the slot count into
+ *  `subscription_ref`, so the existing `"<tier>:<ref>"` parsing every
+ *  self-serve tier already relies on (parseEntitlementTier) never needs to
+ *  change. Same expiry discipline as resolveAccountWatchTier (a NULL
+ *  `current_period_end` is grandfathered as never-expiring; a real expired
+ *  period returns null, never a stale entitlement). */
+async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient, accountId: string): Promise<AccountEnterpriseEntitlement | null> {
+  const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
+  if (!product) return null;
+  const { data: entitlement } = await admin
+    .from("product_entitlements")
+    .select("status, subscription_ref, current_period_end, enterprise_slots, billing_interval")
+    .eq("account_id", accountId)
+    .eq("product_id", product.id)
+    .maybeSingle();
+  if (!entitlement || entitlement.status !== "active") return null;
+  const refTier = ((entitlement.subscription_ref as string | null) ?? "").split(":")[0];
+  if (refTier !== "enterprise") return null;
+  const currentPeriodEnd = (entitlement.current_period_end as string | null) ?? null;
+  if (periodHasExpired(currentPeriodEnd)) return null;
+  const slots = entitlement.enterprise_slots as number | null;
+  if (!slots || slots < 1) return null; // a provisioning inconsistency -- never a fabricated slot count
+  const billingInterval: WatchBillingInterval = entitlement.billing_interval === "annual" ? "annual" : "monthly";
+  return { slots, currentPeriodEnd, billingInterval };
 }
 
 export interface AccountPaidPlan {
@@ -206,6 +249,23 @@ async function requireAccountWatchContext(admin: SupabaseClient, accountId: stri
     const expanded = isCommunityExpansionEligibleTier(tier) && (await hasActiveCommunityExpansion(admin, accountId));
     const maxCommunities = expanded ? MODERATOR_COMMUNITY_CAPACITY[tier].maxWithAddons : CAPACITY[tier].maxCommunities;
     return { ok: true, accountId, tier, maxCommunities, maxActiveSlots: CAPACITY[tier].maxActiveSlots, maxSavedModerators: CAPACITY[tier].maxActiveSlots };
+  }
+  // Managed Enterprise -- checked before trial (a manually-provisioned
+  // Enterprise entitlement is a real paid state, same precedence tier as
+  // the self-serve check just above). Never touches CAPACITY/
+  // MODERATOR_COMMUNITY_CAPACITY or Community Expansion eligibility --
+  // Enterprise capacity is entirely the provisioned slot count + the SAME
+  // canonical moderatorEnterpriseIncludedCommunities formula the Plans-page
+  // calculator and Panel-side Enterprise sale already use, never a second
+  // capacity model.
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
+  if (enterprise) {
+    return {
+      ok: true, accountId, tier: "enterprise",
+      maxCommunities: moderatorEnterpriseIncludedCommunities(enterprise.slots),
+      maxActiveSlots: enterprise.slots,
+      maxSavedModerators: enterprise.slots,
+    };
   }
   if (await hasActiveWatchTrial(admin, accountId)) {
     return { ok: true, accountId, tier: "trial", maxCommunities: TRIAL_CAPACITY.maxCommunities, maxActiveSlots: TRIAL_CAPACITY.maxActiveSlots, maxSavedModerators: TRIAL_MAX_SAVED_MODERATORS };
@@ -629,7 +689,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
  *  consumed). `activeDeploymentCount` now matches the backend's own
  *  `activeSlotCount` computation exactly. */
 export interface AccountCapacity {
-  tier: ModeratorPlanTier | "trial";
+  tier: ModeratorPlanTier | "trial" | "enterprise";
   /** Only set when tier === "trial" -- the real, server-authoritative
    *  expiry every trial UI surface (Plans/Overview/Usage/sidebar) reads for
    *  "time remaining", never a client-computed/decrementing value. */
@@ -668,25 +728,37 @@ export interface AccountCapacity {
 export async function getAccountCapacity(admin: SupabaseClient, accountId: string): Promise<AccountCapacity | null> {
   const ctx = await requireAccountWatchContext(admin, accountId);
   if (!ctx.ok) return null;
-  const [watchers, communities, trial, paidPlan] = await Promise.all([
+  const isSelfServeTier = ctx.tier !== "trial" && ctx.tier !== "enterprise";
+  const [watchers, communities, trial, paidPlan, enterprise] = await Promise.all([
     listAccountWatchers(admin, accountId),
     listAccountCommunities(admin, accountId),
     ctx.tier === "trial" ? getWatchTrialState(admin, accountId) : Promise.resolve(null),
-    ctx.tier !== "trial" ? getAccountPaidPlan(admin, accountId) : Promise.resolve(null),
+    isSelfServeTier ? getAccountPaidPlan(admin, accountId) : Promise.resolve(null),
+    // A small extra query, mirroring the existing tier/getAccountPaidPlan
+    // split above -- requireAccountWatchContext already resolved enough to
+    // know it's "enterprise", but not the real period/billing-interval
+    // detail, which only this richer resolver carries.
+    ctx.tier === "enterprise" ? resolveAccountEnterpriseEntitlement(admin, accountId) : Promise.resolve(null),
   ]);
-  const eligible = ctx.tier !== "trial" && isCommunityExpansionEligibleTier(ctx.tier);
+  // Community Expansion is a self-serve Gold/Platinum add-on ONLY --
+  // structurally excluded for both trial and enterprise (isCommunity
+  // ExpansionEligibleTier only accepts a real ModeratorPlanTier, so this
+  // guard is what makes that a compile-time guarantee, not just a runtime
+  // one -- neither "trial" nor "enterprise" can reach it even by accident).
+  const eligible = ctx.tier !== "trial" && ctx.tier !== "enterprise" && isCommunityExpansionEligibleTier(ctx.tier);
   // Derived without a second DB read: requireAccountWatchContext already
   // resolved maxCommunities against the expanded ceiling when the add-on is
   // active -- if it differs from the tier's plain included count, expansion
-  // is on. (Never true for trial/ineligible tiers, whose included count IS
-  // their ceiling.)
-  const communityExpansionActive = eligible && ctx.tier !== "trial" && ctx.maxCommunities > CAPACITY[ctx.tier].maxCommunities;
+  // is on. (Never true for trial/enterprise/ineligible tiers, whose
+  // included count IS their ceiling.)
+  const communityExpansionActive =
+    eligible && ctx.tier !== "trial" && ctx.tier !== "enterprise" && ctx.maxCommunities > CAPACITY[ctx.tier].maxCommunities;
   return {
     tier: ctx.tier,
     trialEndsAt: trial?.endsAt ?? null,
     trialStartedAt: trial?.startedAt ?? null,
-    paidThrough: paidPlan?.currentPeriodEnd ?? null,
-    billingInterval: paidPlan?.billingInterval ?? "monthly",
+    paidThrough: paidPlan?.currentPeriodEnd ?? enterprise?.currentPeriodEnd ?? null,
+    billingInterval: paidPlan?.billingInterval ?? enterprise?.billingInterval ?? "monthly",
     watcherProfileCount: watchers.length,
     activeDeploymentCount: communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length,
     slotsTotal: ctx.maxActiveSlots,
