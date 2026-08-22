@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
@@ -111,12 +112,17 @@ export function BillingPlanPicker({
                     </span>
                   </div>
                   {expandable && isCommunityExpansionEligibleTier(o.tier) && (
-                    <p className="text-[11px] w-text-faint text-right">
-                      Community Expansion:{" "}
-                      {billingInterval === "annual"
-                        ? <>+${annualCreditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier]).toFixed(2)}/year <span className="w-teal">Innvil Credit only</span></>
-                        : <>+${COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier].toFixed(2)}/mo</>}
-                    </p>
+                    <div className="text-right">
+                      <p className="text-[11px] w-text-faint">
+                        Community Expansion:{" "}
+                        {billingInterval === "annual"
+                          ? <>+${annualCreditPriceUsd(COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier]).toFixed(2)}/year <span className="w-teal">Innvil Credit only</span></>
+                          : <>+${COMMUNITY_EXPANSION_MONTHLY_PRICE[o.tier].toFixed(2)}/mo</>}
+                      </p>
+                      <p className="text-[10px] w-text-faint">
+                        <Link href="/usage" className="w-teal hover:underline">Manage from Usage</Link> after subscribing
+                      </p>
+                    </div>
                   )}
                 </div>
               </div>
@@ -148,16 +154,23 @@ export function BillingPlanPicker({
               </div>
 
               {/* Media Moderation + -- deliberately visually prominent (an intentional
-                  upsell), but clearly marked optional. Informational only for now (no
-                  toggle/CTA) -- there is still no self-serve purchase action for this
-                  add-on, so a working control would be dishonest. */}
+                  upsell), but clearly marked optional. There is still no self-serve
+                  purchase action for this add-on, so the CTA points at the real
+                  existing support/inquiry channel instead of a fake "Buy" button --
+                  never a checkout path that doesn't exist. */}
               <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
                 <div className="flex items-center justify-between mb-1">
                   <p className="w-display text-xs w-teal">Media Moderation +</p>
                   <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Optional add-on</span>
                 </div>
                 <p className="text-[11px] w-text-faint mb-2">Photo & video media safety — {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} Media Moderation Units/mo</p>
-                <p className="w-display text-base w-text">+${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}<span className="text-[11px] w-text-faint font-normal">/mo</span></p>
+                <p className="w-display text-base w-text mb-2">+${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}<span className="text-[11px] w-text-faint font-normal">/mo</span></p>
+                <Link
+                  href="/support/contact"
+                  className="text-[11px] w-teal hover:underline font-medium"
+                >
+                  Request Media Moderation + →
+                </Link>
               </div>
               {isCurrent ? (
                 <span className="mt-auto text-xs w-teal flex items-center gap-1"><CheckCircle2 size={13} /> Current plan</span>

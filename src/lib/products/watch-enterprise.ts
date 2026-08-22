@@ -33,11 +33,13 @@
  */
 
 import {
-  moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities,
+  moderatorEnterpriseIncludedCommunities, managedEnterprisePriceAtSlots, ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE,
   ENTERPRISE_MANAGED_50_PRICE, ENTERPRISE_MANAGED_50_SLOTS, ENTERPRISE_MANAGED_50_AI_GENERATIONS,
   ENTERPRISE_BYO_50_PRICE, ENTERPRISE_BYO_UNLIMITED_PRICE, ENTERPRISE_MEDIA_ADDON,
   type EnterpriseMediaAddonPricing,
 } from "@/src/lib/money";
+
+export { ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE };
 
 export type EnterpriseMode = "managed" | "byo";
 
@@ -82,34 +84,48 @@ export const ENTERPRISE_MODES: Record<EnterpriseMode, EnterpriseModeMeta> = {
  *  the gap where the calculator's selection never reached the actual
  *  submitted inquiry (a real "configure something, submit something else"
  *  disconnect) -- the request now reflects exactly what was configured. */
-export function buildEnterpriseInquiryBody(mode: EnterpriseMode, baseUsageContext: string, managedSlots?: number): string {
-  if (mode !== "managed") return baseUsageContext;
+export function buildEnterpriseInquiryBody(
+  mode: EnterpriseMode,
+  baseUsageContext: string,
+  managedSlots?: number,
+  mediaAddonKey?: "managed50" | "byo50" | "byoUnlimited",
+): string {
+  const mediaLine = mediaAddonKey
+    ? `Requested add-on: Media Moderation + (+$${ENTERPRISE_MEDIA_ADDON[mediaAddonKey].price.toFixed(2)}/mo, ${ENTERPRISE_MEDIA_ADDON[mediaAddonKey].units.toLocaleString()} Media Moderation Units/mo).\n\n`
+    : "";
+  if (mode !== "managed") return `${mediaLine}${baseUsageContext}`;
   if (managedSlots && managedSlots > MANAGED_ENTERPRISE_50.slots) {
     const price = managedEnterprisePrice(managedSlots);
     const communities = managedEnterpriseCommunities(managedSlots);
-    const configuredLine = `Requested CUSTOM Managed Enterprise capacity: ${managedSlots} Watcher slots (~$${price.toFixed(2)}/mo, ${communities} Communities included) -- above the standard Managed Enterprise 50 package.`;
-    return `${configuredLine}\n\n${baseUsageContext}`;
+    const configuredLine = `Requested Managed Enterprise capacity: ${managedSlots} Watcher slots -- $${price.toFixed(2)}/mo (canonical price: $${MANAGED_ENTERPRISE_50.price.toFixed(2)} base + $${ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE}/slot above ${MANAGED_ENTERPRISE_50.slots}), ${communities} Communities included. Provisioning is completed with Innvil support.`;
+    return `${configuredLine}\n\n${mediaLine}${baseUsageContext}`;
   }
   const fixed = MANAGED_ENTERPRISE_50;
   const configuredLine = `Requested Managed Enterprise 50: ${fixed.slots} Watcher slots, $${fixed.price.toFixed(2)}/mo, ${fixed.communities} Communities included, ${fixed.aiGenerations.toLocaleString()} pooled AI Generations/mo.`;
-  return `${configuredLine}\n\n${baseUsageContext}`;
+  return `${configuredLine}\n\n${mediaLine}${baseUsageContext}`;
 }
 
-/** Managed Enterprise price at a given Watcher slot count -- used ONLY for
- *  a genuinely CUSTOM quote above the fixed 50-slot package's own slot
- *  count (see MANAGED_ENTERPRISE_50 below for the standard offering). A
- *  thin, Watch-flavored wrapper around the REAL canonical formula in
- *  money.ts (Platinum/Pro base + per-slot bands), never a duplicated
- *  calculation. */
+/** Managed Enterprise price at ANY Watcher slot count -- the ONE canonical
+ *  helper every Managed pricing surface (calculator, comparison, inquiry
+ *  summary) must call, never a duplicated `$8`/`$399` literal. Thin
+ *  passthrough to money.ts's `managedEnterprisePriceAtSlots` (the real,
+ *  deterministic $399 + $8/slot-above-50 rule, 2026-08-22 correction --
+ *  supersedes the old Platinum-based per-slot formula, which is no longer
+ *  used for Managed pricing at all). */
 export function managedEnterprisePrice(slots: number): number {
-  return moderatorEnterpriseSlotPrice(slots);
+  return managedEnterprisePriceAtSlots(slots);
 }
 
-/** Managed Enterprise's real, deterministic included-Community count at a
- *  given slot count (custom-quote path only) -- also a direct passthrough
- *  to money.ts, never invented. */
-export function managedEnterpriseCommunities(slots: number): number {
-  return moderatorEnterpriseIncludedCommunities(slots);
+/** Managed Enterprise's Community count at ANY slot count -- ALWAYS the
+ *  fixed Managed Enterprise 50 base count (8). Additional Watcher slots
+ *  above 50 do NOT automatically grant additional Community capacity --
+ *  that's governed entirely by the separate Community Expansion add-on
+ *  (queued, not yet built as a purchasable Enterprise entitlement), never
+ *  by slot count. Deliberately does NOT call the old
+ *  `moderatorEnterpriseIncludedCommunities` slot-scaling formula, which
+ *  incorrectly implied more slots meant more Communities. */
+export function managedEnterpriseCommunities(_slots: number): number {
+  return MANAGED_ENTERPRISE_50.communities;
 }
 
 /** The fixed, headline Managed Enterprise package (2026-08-22 repricing) --
@@ -177,10 +193,9 @@ export interface EnterpriseSavingsComparison {
 export function compareEnterpriseModesAtSlots(slots: number): EnterpriseSavingsComparison | null {
   const tier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.maxSlots === slots);
   if (!tier) return null;
-  // At exactly the fixed Managed Enterprise 50 package's own slot count,
-  // compare against its real FIXED price -- never the dynamic per-slot
-  // formula, which no longer prices the standard 50-slot offering.
-  const managedPrice = slots === MANAGED_ENTERPRISE_50.slots ? MANAGED_ENTERPRISE_50.price : managedEnterprisePrice(slots);
+  // managedEnterprisePrice already resolves the exact fixed $399 at 50
+  // slots (its own <=50 branch), so no special-casing is needed here.
+  const managedPrice = managedEnterprisePrice(slots);
   const byoPrice = tier.price;
   const savingsAmount = Math.round((managedPrice - byoPrice) * 100) / 100;
   const savingsPercent = Math.round((savingsAmount / managedPrice) * 1000) / 10;

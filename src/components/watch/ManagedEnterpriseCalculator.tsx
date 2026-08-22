@@ -1,31 +1,25 @@
 "use client";
 
 import React from "react";
-import { managedEnterprisePrice, managedEnterpriseCommunities, MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
+import { managedEnterprisePrice, managedEnterpriseCommunities, MANAGED_ENTERPRISE_50, ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE } from "@/src/lib/products/watch-enterprise";
 
-/** CUSTOM Managed Enterprise pricing calculator, for a slot count ABOVE the
- *  fixed, headline Managed Enterprise 50 package ($399/mo, 50 slots, 50,000
- *  pooled AI Generations/mo — shown as its own static card elsewhere). Every
- *  number here is computed live
- *  via the SAME canonical formula (`moderatorEnterpriseSlotPrice`/
- *  `moderatorEnterpriseIncludedCommunities` in money.ts) the Panel-side
- *  Enterprise sale already uses, never a second frontend-only pricing
- *  engine. Purely client-side math (no server round-trip needed — these are
- *  pure functions), so the price updates instantly as the slot count
- *  changes.
+/** Managed Enterprise pricing calculator for a slot count ABOVE the fixed,
+ *  headline Managed Enterprise 50 package ($399/mo, 50 slots, 50,000 pooled
+ *  AI Generations/mo — shown as its own static card elsewhere). The price
+ *  shown here is the REAL, deterministic canonical price (base $399 +
+ *  $8/slot above 50 -- managedEnterprisePrice in watch-enterprise.ts), the
+ *  same continuation formula used everywhere else Managed pricing is shown
+ *  -- never a fuzzy "custom quote" estimate. Only PROVISIONING (actually
+ *  activating the extra capacity) is manual/contact-based; the price itself
+ *  is not.
  *
  *  Controlled by the parent (`slots`/`onSlotsChange`) rather than owning
  *  its own state, so the SAME configured slot count that's shown here can
  *  also be threaded into the actual submitted Enterprise inquiry
- *  (EnterpriseModeCards) — previously this component's selection was local
- *  and never reached the request, a real "configure X, submit Y" gap.
+ *  (EnterpriseModeCards).
  *
- *  A plain numeric input, not a fixed dropdown of preset options — the
- *  canonical formula has no real step size and no maximum
- *  (moderatorEnterpriseSlotPrice accepts any integer >= MODERATOR_
- *  ENTERPRISE_MIN_SLOTS), so a preset list would either omit real values
- *  (the old list started at 25, skipping the true minimum 21-24) or invent
- *  a limit that doesn't exist. */
+ *  A plain numeric input, not a fixed dropdown of preset options -- the
+ *  canonical formula has no real step size or maximum above 50. */
 export function ManagedEnterpriseCalculator({ slots, onSlotsChange }: { slots: number; onSlotsChange: (slots: number) => void }) {
   const price = managedEnterprisePrice(slots);
   const communities = managedEnterpriseCommunities(slots);
@@ -58,10 +52,9 @@ export function ManagedEnterpriseCalculator({ slots, onSlotsChange }: { slots: n
         </div>
       </div>
       <p className="text-[11px] w-text-faint mt-3">
-        For a custom quote above the standard {MANAGED_ENTERPRISE_50.slots}-slot Managed Enterprise 50 package
-        (${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo). This estimate uses Innvil's existing per-slot Enterprise
-        pricing formula and is confirmed with support before billing — it isn't a simple continuation of the
-        flat {MANAGED_ENTERPRISE_50.slots}-slot price.
+        Managed Enterprise includes {MANAGED_ENTERPRISE_50.slots} Watcher slots for ${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo.
+        Additional Watcher capacity above {MANAGED_ENTERPRISE_50.slots} is ${ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE}/slot/month —
+        this is the real recurring Innvil fee, not an estimate. Provisioning the extra capacity is completed with Innvil support.
       </p>
     </div>
   );

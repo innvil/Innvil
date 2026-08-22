@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Fix: Managed Enterprise >50-slot pricing bug ($662→$407) + real add-on CTAs (v1.47.32)
+- **Root cause of the $662/51-slot bug**: `managedEnterprisePrice(slots)` (`watch-enterprise.ts`) still called the
+  OLD, superseded Platinum-based dynamic per-slot formula (`moderatorEnterpriseSlotPrice`) for any slot count
+  above 50 — that formula was only ever meant to price the standalone Panel-side Enterprise sale, never the new
+  fixed $399 Managed Enterprise 50 package's own continuation above 50 slots. At 51 slots it computed
+  `$199.00 base + 31×$15 = $664.00`, not the intended `$399 + $8 = $407`.
+- **New canonical formula** (`managedEnterprisePriceAtSlots` in `money.ts`, `ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE
+  = 8`): `slots <= 50` → the fixed $399; `slots > 50` → `$399 + $8 × (slots − 50)`, integer-cents exact. Worked
+  examples, all now correct: 50 = $399, 51 = $407, 60 = $479, 75 = $599, 100 = $799, 150 = $1,199.
+  `moderatorEnterpriseSlotPrice`/`moderatorEnterpriseIncludedCommunities` are no longer called anywhere in the
+  Managed Enterprise pricing path — they remain only for `resolveAccountEnterpriseEntitlement`'s Community-count
+  resolution on an existing manually-provisioned entitlement (a separate, narrower concern, pending the queued
+  Enterprise Community Expansion work).
+- **Community capacity decoupled from slot count above 50, per explicit product rule**: `managedEnterpriseCommunities()`
+  now ALWAYS returns the fixed base count (8), regardless of how many extra Watcher slots are priced in — extra
+  slots never implicitly grant extra Communities; that stays governed entirely by the separate (still-queued)
+  Community Expansion entitlement.
+- **Stale copy corrected**: `ManagedEnterpriseCalculator.tsx`'s "this estimate uses Innvil's existing per-slot
+  Enterprise pricing formula... isn't a simple continuation of the flat 50-slot price" was false as of this fix
+  — it now IS a real, simple, deterministic continuation. New copy distinguishes PRICING (deterministic, stated
+  as fact) from PROVISIONING (still manual/completed-with-support) rather than hedging the price itself as an
+  estimate.
+- **Enterprise Media Moderation + checkbox now actually reaches the submitted inquiry** — previously it only
+  changed the DISPLAYED total price; `buildEnterpriseInquiryBody` gained an optional `mediaAddonKey` parameter
+  that appends a real "Requested add-on: Media Moderation +..." line, and `EnterpriseModeCards` threads the
+  currently-checked package through to it (remounting the form when the addon selection changes — a deliberate
+  exception to the existing "don't remount on every slot tweak" rule, since checking the box IS the explicit
+  "include this" action, unlike continuously dragging a slot count).
+- **Self-serve add-on CTAs added** (`BillingPlanPicker.tsx` plan cards) — Media Moderation + gained a real "Request
+  Media Moderation + →" link to the existing `/support/contact` inquiry route (no self-serve purchase flow
+  exists yet, so this points at the real, working channel rather than a fake "Buy" button — unchanged scope
+  boundary from v1.47.29). Community Expansion gained a "Manage from Usage" link to `/usage`, where the real,
+  already-working purchase card (`CommunityExpansionCard`) lives — honest, since Community Expansion can only
+  be purchased once already subscribed to Gold/Platinum, not from the Plans picker itself.
+- **Deliberately NOT built this pass**: the Enterprise Community Expansion capacity-package model (Managed
+  8→10→15→25, BYO 10→15→25→+10 blocks) described informally alongside this correction request — that's the
+  separate, larger, explicitly-queued future task (see the `innvil-enterprise-community-expansion-spec` memory
+  note), sequenced after the Media Moderation + purchase pipeline. Building fake selector CTAs for it now would
+  violate this same pass's own "never a CTA that leads nowhere" rule, since no backend for it exists yet.
+- New/updated tests: `watch-enterprise.test.ts` (+6 net — the exact 50/51/60/75/100/150 worked examples, an
+  explicit guard that the old formula's value is never produced again (incl. pinning "51 slots is never ~$662"
+  as a named regression), Community capacity fixed at 8 across a slot-count sweep, integer-cents exactness
+  across a 50–160 slot range, the inquiry body's new deterministic-price wording, the Media Moderation + inquiry
+  line). 1415 tests pass (up from 1412), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 6
+  files, all directly in scope — no Enterprise Community Expansion feature work, no unrelated pricing changes.
+- **Deployed to Preview this pass** (see the deploy note in this session's history for the live alias URL).
+
 ### 2026-08-22 — Correction: self-serve Gold/Platinum Community Expansion prices + prominent Media Moderation + (v1.47.31)
 - **Root cause found and fixed**: `COMMUNITY_EXPANSION_MONTHLY_PRICE` (`money.ts`) — the canonical, ONLY source
   for self-serve Gold/Platinum Community Expansion pricing — had held `premium: 12.99, pro: 19.99` since before

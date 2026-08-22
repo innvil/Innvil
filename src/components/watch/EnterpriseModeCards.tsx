@@ -26,6 +26,15 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
   const [managedMediaAddon, setManagedMediaAddon] = useState(false);
   const [byoMediaAddon, setByoMediaAddon] = useState<Record<string, boolean>>({});
   const comparison = compareEnterpriseModesAtSlots(MANAGED_ENTERPRISE_50.slots); // the one real, equivalent-capacity point (BYO 50's own tier)
+  // Which Media Moderation + package (if any) is currently checked, keyed to
+  // the SAME addon-key shape enterpriseMediaAddon/buildEnterpriseInquiryBody
+  // use -- feeds the actual submitted inquiry, closing the gap where
+  // checking the box only ever changed the DISPLAYED price, never the
+  // request itself.
+  const activeMediaAddonKey: "managed50" | "byo50" | "byoUnlimited" | undefined =
+    mode === "managed"
+      ? (managedMediaAddon ? "managed50" : undefined)
+      : (Object.entries(byoMediaAddon).find(([, on]) => on)?.[0] === "byo_50" ? "byo50" : byoMediaAddon.byo_unlimited ? "byoUnlimited" : undefined);
 
   return (
     <div>
@@ -127,9 +136,9 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
             the visible calculator numbers stay live regardless, and the message
             itself is always editable before sending. */}
         <SupportContactForm
-          key={mode}
+          key={`${mode}-${activeMediaAddonKey ?? "none"}`}
           defaultSubject={ENTERPRISE_MODES[mode].inquirySubject}
-          defaultBody={buildEnterpriseInquiryBody(mode, baseBody, mode === "managed" ? managedSlots : undefined)}
+          defaultBody={buildEnterpriseInquiryBody(mode, baseBody, mode === "managed" ? managedSlots : undefined, activeMediaAddonKey)}
         />
       </div>
     </div>

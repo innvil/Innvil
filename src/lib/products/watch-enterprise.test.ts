@@ -53,11 +53,21 @@ test("REQUIRED: buildEnterpriseInquiryBody defaults to the FIXED Managed Enterpr
   assert.match(body, /Current plan: Gold/, "still includes the base usage context, not a replacement");
 });
 
-test("REQUIRED: buildEnterpriseInquiryBody switches to a CUSTOM quote line only when the configured slots exceed the fixed 50-slot package", () => {
+test("REQUIRED: buildEnterpriseInquiryBody states the real deterministic >50-slot price, computed independently of the function under test", () => {
   const body = buildEnterpriseInquiryBody("managed", "Current plan: Gold\n", 75);
-  assert.match(body, /CUSTOM Managed Enterprise capacity: 75 Watcher slots/);
-  assert.match(body, new RegExp(`\\$${managedEnterprisePrice(75).toFixed(2)}`));
-  assert.match(body, new RegExp(`${managedEnterpriseCommunities(75)} Communities included`));
+  assert.match(body, /Requested Managed Enterprise capacity: 75 Watcher slots/);
+  assert.match(body, /\$599\.00/, "75 slots = 399 + 25*8 = 599, computed independently of managedEnterprisePrice itself");
+  assert.match(body, /8 Communities included/, "extra slots never change the fixed base Community count");
+  assert.doesNotMatch(body, /CUSTOM/, "this is a real deterministic price now, never labeled a custom quote");
+});
+
+test("REQUIRED: buildEnterpriseInquiryBody optionally states a requested Media Moderation + add-on", () => {
+  const withAddon = buildEnterpriseInquiryBody("managed", "Current plan: Gold\n", undefined, "managed50");
+  assert.match(withAddon, /Requested add-on: Media Moderation \+/);
+  assert.match(withAddon, /\$39\.99/);
+  assert.match(withAddon, /8,000 Media Moderation Units/);
+  const withoutAddon = buildEnterpriseInquiryBody("managed", "Current plan: Gold\n");
+  assert.doesNotMatch(withoutAddon, /Requested add-on/);
 });
 
 test("buildEnterpriseInquiryBody at exactly 50 slots still resolves to the FIXED package line, not the custom-quote line", () => {
@@ -89,15 +99,43 @@ test("REQUIRED: Managed Enterprise 50's Community count is still sourced from th
   assert.equal(MANAGED_ENTERPRISE_50.communities, 8);
 });
 
-test("managedEnterprisePrice (the dynamic formula) remains available for a CUSTOM quote above 50 slots", () => {
-  for (const slots of [51, 75, 100]) {
-    assert.equal(managedEnterprisePrice(slots), moderatorEnterpriseSlotPrice(slots));
+/* ------------------ 2026-08-22 correction: >50 pricing bug fix ------------------ */
+// Root cause of the reported bug: managedEnterprisePrice(51) was calling the OLD
+// Platinum-based dynamic formula (moderatorEnterpriseSlotPrice), pricing 51 slots
+// at ~$662/mo instead of the intended $407/mo. These tests pin the NEW canonical
+// $399 + $8/slot-above-50 rule and explicitly guard against the old formula ever
+// being used again for Managed pricing.
+
+test("REQUIRED: Managed Enterprise pricing at 50/51/60/75/100/150 slots matches the exact canonical $8/slot-above-50 rule", () => {
+  assert.equal(managedEnterprisePrice(50), 399);
+  assert.equal(managedEnterprisePrice(51), 407);
+  assert.equal(managedEnterprisePrice(60), 479);
+  assert.equal(managedEnterprisePrice(75), 599);
+  assert.equal(managedEnterprisePrice(100), 799);
+  assert.equal(managedEnterprisePrice(150), 1199);
+});
+
+test("REQUIRED: Managed Enterprise pricing above 50 slots no longer uses the old Platinum-based dynamic formula", () => {
+  for (const slots of [51, 60, 75, 100, 150]) {
+    assert.notEqual(
+      managedEnterprisePrice(slots), moderatorEnterpriseSlotPrice(slots),
+      `${slots} slots must not resolve to the superseded formula's value`
+    );
+  }
+  // The specific reported bug: 51 slots must never be ~$662 again.
+  assert.notEqual(Math.round(managedEnterprisePrice(51)), 662);
+});
+
+test("REQUIRED: Managed Enterprise Community capacity stays fixed at 8 regardless of extra Watcher slots purchased above 50", () => {
+  for (const slots of [50, 51, 75, 100, 150]) {
+    assert.equal(managedEnterpriseCommunities(slots), 8, `${slots} slots must not imply extra Community capacity`);
   }
 });
 
-test("managedEnterpriseCommunities remains the same canonical formula for a custom quote", () => {
-  for (const slots of [51, 75, 100]) {
-    assert.equal(managedEnterpriseCommunities(slots), moderatorEnterpriseIncludedCommunities(slots));
+test("Managed Enterprise pricing is integer-cents exact -- no floating-point drift across every slot count in a real range", () => {
+  for (let slots = 50; slots <= 160; slots++) {
+    const price = managedEnterprisePrice(slots);
+    assert.equal(Math.round(price * 100), price * 100, `${slots} slots must resolve to a whole-cent amount`);
   }
 });
 

@@ -116,23 +116,57 @@ export function moderatorEnterpriseIncludedCommunities(totalSlots: number): numb
  * Fixed Enterprise packages (2026-08-22 repricing) -- Enterprise is now
  * substantially more accessible via three flat, non-formula packages,
  * rather than requiring the per-slot custom calculation above for the
- * common case. `moderatorEnterpriseSlotPrice`/`moderatorEnterpriseIncluded
- * Communities` above remain available for a genuinely CUSTOM Managed quote
- * ABOVE 50 slots -- these fixed packages are now the headline, default
- * Enterprise offering (see watch-enterprise.ts). "Unlimited" (BYO) means
- * unlimited LICENSED Watcher deployments only -- never unlimited compute/
- * storage/bandwidth/queues/concurrency/media processing/provider spend;
- * existing fair-use/infrastructure safeguards are unaffected by this pricing
- * change.
+ * common case. "Unlimited" (BYO) means unlimited LICENSED Watcher
+ * deployments only -- never unlimited compute/storage/bandwidth/queues/
+ * concurrency/media processing/provider spend; existing fair-use/
+ * infrastructure safeguards are unaffected by this pricing change.
  */
 export const ENTERPRISE_MANAGED_50_PRICE = 399;
 export const ENTERPRISE_MANAGED_50_SLOTS = 50;
 /** Innvil-funded, account-pooled (never per-Watcher) monthly AI Generation
- *  allowance for the fixed Managed Enterprise 50 package. */
+ *  allowance for the fixed Managed Enterprise 50 package. There is no
+ *  approved rule for scaling this allowance above 50 slots -- additional
+ *  Watcher capacity above 50 (see ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE below)
+ *  does NOT proportionally increase it; the pool stays 50,000 regardless of
+ *  extra slots purchased, since no canonical scaling rule has been approved. */
 export const ENTERPRISE_MANAGED_50_AI_GENERATIONS = 50000;
 export const ENTERPRISE_BYO_50_PRICE = 299;
 export const ENTERPRISE_BYO_50_SLOTS = 50;
 export const ENTERPRISE_BYO_UNLIMITED_PRICE = 499;
+
+/**
+ * Managed Enterprise pricing ABOVE the fixed 50-slot package (2026-08-22
+ * correction) -- supersedes the OLD dynamic Platinum-based per-slot formula
+ * (`moderatorEnterpriseSlotPrice`, below), which was still being called for
+ * >50 slots and produced a real, reported pricing bug (51 slots priced at
+ * ~$662/mo instead of the intended $407/mo). The canonical rule is now a
+ * flat, simple continuation of the $399 base: +$8/month for every Watcher
+ * slot above 50. Deterministic and integer-cents-exact (both operands are
+ * already whole-cent amounts, so no rounding step is needed).
+ * Worked examples: 50 slots = $399; 51 = $407; 60 = $479; 75 = $599;
+ * 100 = $799; 150 = $1,199.
+ *
+ * `moderatorEnterpriseSlotPrice`/`moderatorEnterpriseIncludedCommunities`
+ * (below) are NOT used by this formula and are no longer called anywhere in
+ * the Managed Enterprise pricing path -- they remain only for
+ * `resolveAccountEnterpriseEntitlement`'s COMMUNITY count on an existing,
+ * manually-provisioned Enterprise entitlement (a separate, narrower
+ * capacity concern, not a price), pending the queued Enterprise Community
+ * Expansion work.
+ *
+ * Additional Watcher slots above 50 do NOT change Community capacity or
+ * the AI Generation pool -- both stay separate, unaffected axes.
+ */
+export const ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE = 8;
+export function managedEnterprisePriceAtSlots(slots: number): number {
+  const wholeSlots = Math.max(ENTERPRISE_MANAGED_50_SLOTS, Math.round(slots));
+  if (wholeSlots <= ENTERPRISE_MANAGED_50_SLOTS) return ENTERPRISE_MANAGED_50_PRICE;
+  const extraSlots = wholeSlots - ENTERPRISE_MANAGED_50_SLOTS;
+  // Integer-cents arithmetic -- both the base and the per-slot rate are
+  // already whole dollars, so this is exact with no floating-point drift.
+  const totalCents = ENTERPRISE_MANAGED_50_PRICE * 100 + extraSlots * ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE * 100;
+  return totalCents / 100;
+}
 
 /** Optional Media Moderation + add-on for Enterprise -- layered on top of
  *  any of the three fixed packages above (never bundled into the base
