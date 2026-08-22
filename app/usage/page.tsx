@@ -211,6 +211,21 @@ export default async function UsagePage() {
           />
         )}
 
+        {/* Read-only for now -- there is no purchase/removal action for this
+            add-on yet (see the dated CLAUDE.md entry), so this only ever
+            renders once an active row genuinely exists. No purchase CTA is
+            shown here, since one doesn't work yet -- showing a non-functional
+            button would be exactly the "UI implies a backend that doesn't
+            exist" anti-pattern this codebase avoids elsewhere. */}
+        {capacity?.mediaModerationAddonActive && capacity.mediaModerationUnitAllowance != null && (
+          <div className="w-card p-5">
+            <SectionHeader icon={ShieldCheck} title="Media Moderation +" />
+            <p className="text-sm w-text-dim">
+              Active — {capacity.mediaModerationUnitAllowance.toLocaleString()} Media Moderation Units included this period.
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <div className="w-card p-5">
             <SectionHeader icon={Bot} title="Slots by Watcher" />

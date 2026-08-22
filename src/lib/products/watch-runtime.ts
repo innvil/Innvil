@@ -5,6 +5,7 @@ import type { ModeratorPlanTier } from "@/src/lib/money";
 import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier, moderatorEnterpriseIncludedCommunities } from "@/src/lib/money";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
 import { hasActiveCommunityExpansion } from "./watch-community-expansion";
+import { getMediaModerationAddonState } from "./watch-media-moderation-addon";
 import { normalizeModeratorPersona, DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "@/src/lib/moderator/domain";
 import { projectBelongsToAccount, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
@@ -717,6 +718,15 @@ export interface AccountCapacity {
    *  all (Gold/Platinum only) -- lets UI show/hide the purchase CTA
    *  without re-deriving eligibility itself. */
   communityExpansionEligible: boolean;
+  /** True when the account has an active self-serve Media Moderation + add-on
+   *  (all 4 self-serve tiers are eligible -- unlike Community Expansion,
+   *  there's no eligibility restriction to also expose here). Null/false for
+   *  trial and enterprise -- neither has a representable self-serve add-on
+   *  row (see watch-media-moderation-addon.ts's own scope note). */
+  mediaModerationAddonActive: boolean;
+  /** The real unit allowance while the add-on is active, else null -- never
+   *  a fabricated number for an inactive/ineligible account. */
+  mediaModerationUnitAllowance: number | null;
 }
 
 /** Real capacity/usage against the account's actual entitlement -- paid tier
@@ -729,7 +739,7 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
   const ctx = await requireAccountWatchContext(admin, accountId);
   if (!ctx.ok) return null;
   const isSelfServeTier = ctx.tier !== "trial" && ctx.tier !== "enterprise";
-  const [watchers, communities, trial, paidPlan, enterprise] = await Promise.all([
+  const [watchers, communities, trial, paidPlan, enterprise, mediaAddon] = await Promise.all([
     listAccountWatchers(admin, accountId),
     listAccountCommunities(admin, accountId),
     ctx.tier === "trial" ? getWatchTrialState(admin, accountId) : Promise.resolve(null),
@@ -739,6 +749,12 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     // know it's "enterprise", but not the real period/billing-interval
     // detail, which only this richer resolver carries.
     ctx.tier === "enterprise" ? resolveAccountEnterpriseEntitlement(admin, accountId) : Promise.resolve(null),
+    // All 4 self-serve tiers are Media Moderation + eligible (no tier
+    // restriction, unlike Community Expansion) -- never queried for
+    // trial/enterprise, neither of which has a representable self-serve
+    // add-on row for this addon_type. (Inline narrow, not `isSelfServeTier`
+    // -- TS can't narrow ctx.tier through a separately-stored boolean.)
+    ctx.tier !== "trial" && ctx.tier !== "enterprise" ? getMediaModerationAddonState(admin, accountId, ctx.tier) : Promise.resolve(null),
   ]);
   // Community Expansion is a self-serve Gold/Platinum add-on ONLY --
   // structurally excluded for both trial and enterprise (isCommunity
@@ -766,6 +782,8 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     communitiesTotal: ctx.maxCommunities,
     communityExpansionActive,
     communityExpansionEligible: eligible,
+    mediaModerationAddonActive: mediaAddon != null,
+    mediaModerationUnitAllowance: mediaAddon?.units ?? null,
   };
 }
 

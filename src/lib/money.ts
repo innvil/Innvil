@@ -234,6 +234,35 @@ export const MODERATOR_AI_GENERATION_POOL: Record<ModeratorPlanTier, number> = {
   pro: 20000,
 };
 
+/** Self-serve "Media Moderation +" add-on (2026-08-22) -- an OPTIONAL layer
+ *  on top of any of the 4 self-serve tiers (never bundled into the base
+ *  price, available to all four, unlike Community Expansion's Gold/Platinum-
+ *  only restriction). Real, provisioned via the SAME `watch_subscription_
+ *  addons` table Community Expansion already uses (migration 0087,
+ *  addon_type='media_moderation') -- never a duplicated add-on architecture
+ *  or a separate "Bronze+/Silver+/Gold+/Platinum+" plan identity. Units are
+ *  the same provider-neutral "Media Moderation Unit" concept used by
+ *  Enterprise's own media add-on (ENTERPRISE_MEDIA_ADDON) -- 1 classified
+ *  photo or 1 sampled video frame = 1 unit; never Sightengine-specific
+ *  terminology/economics exposed to the customer. Worked totals (base +
+ *  add-on): Bronze+ $29.99+$9.99=$39.98, Silver+ $59.99+$14.99=$74.98,
+ *  Gold+ $99.99+$19.99=$119.98, Platinum+ $199.00+$24.99=$223.99. */
+export interface MediaModerationAddonPricing { price: number; units: number; }
+export const MODERATOR_MEDIA_ADDON: Record<ModeratorPlanTier, MediaModerationAddonPricing> = {
+  basic: { price: 9.99, units: 1000 },
+  standard: { price: 14.99, units: 2000 },
+  premium: { price: 19.99, units: 3000 },
+  pro: { price: 24.99, units: 4000 },
+};
+
+/** Total monthly price for a tier with Media Moderation + enabled -- plain
+ *  addition, rounded to 2dp to avoid float display drift, matching the
+ *  exact same pattern as `enterprisePackageTotalWithMedia` in
+ *  watch-enterprise.ts. */
+export function moderatorPlanTotalWithMediaAddon(tier: ModeratorPlanTier): number {
+  return Math.round((moderatorPlanPrice(tier) + MODERATOR_MEDIA_ADDON[tier].price) * 100) / 100;
+}
+
 /** Suggested default for the customer-facing automator subscription. Owners can override
  *  the price + run a promo (see automation/pricing.ts — the Business+ default is $9.99).
  *  The full amount is the OWNER's revenue; Innvil earns only via the owner's tier fee. */

@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Self-serve "Media Moderation +" add-on — entitlement/pricing layer only (v1.47.29)
+- **Phase 3 of the pricing overhaul (Phase 1 = self-serve price cut v1.47.27, Phase 2 = AI Generations rename/
+  semantics v1.47.28).** Scoped deliberately: this pass builds the REAL entitlement/pricing representation for
+  a new optional add-on, available to ALL FOUR self-serve tiers (Bronze through Platinum — no eligibility
+  restriction, unlike Community Expansion's Gold/Platinum-only rule). It does **not** build the purchase/
+  checkout/renewal/removal pipeline — see "not built" below.
+- **New pricing constants** (`money.ts`): `MODERATOR_MEDIA_ADDON` — Bronze +$9.99/1,000 units, Silver +$14.99/
+  2,000, Gold +$19.99/3,000, Platinum +$24.99/4,000 units per billing period. `moderatorPlanTotalWithMediaAddon()`
+  gives the exact worked totals: Bronze+ $39.98, Silver+ $74.98, Gold+ $119.98, Platinum+ $223.99 (base + add-on,
+  matching the repriced Phase 1 base prices exactly). Same provider-neutral "Media Moderation Unit" concept as
+  Enterprise's own media add-on (`ENTERPRISE_MEDIA_ADDON`, v1.47.26) — 1 classified photo or 1 sampled video
+  frame = 1 unit — never Sightengine-specific terminology.
+- **Real, not duplicated, entitlement architecture.** Reuses the SAME `watch_subscription_addons` table
+  Community Expansion already uses (migration `0087_watch_media_moderation_addon.sql` widens the
+  `addon_type` CHECK to also allow `'media_moderation'`) — never a second/parallel add-on table. The existing
+  partial unique index is scoped per `(account_id, addon_type)`, so an account can hold an active Community
+  Expansion row AND an active Media Moderation + row at the same time (two independent purchases), proven by a
+  dedicated test. **Run migration `0087`.**
+- New `src/lib/products/watch-media-moderation-addon.ts` — `getMediaModerationAddonState()`/
+  `hasActiveMediaModerationAddon()`, mirroring `watch-community-expansion.ts`'s exact read-only shape and
+  scoping (the ONLY module that reads `watch_subscription_addons` for this `addon_type` directly). Wired into
+  `getAccountCapacity()` (`watch-runtime.ts`) — `AccountCapacity` gained `mediaModerationAddonActive`/
+  `mediaModerationUnitAllowance`, resolved for all 4 self-serve tiers, always `false`/`null` for trial and
+  Enterprise (neither has a representable self-serve add-on row for this `addon_type`).
+- **Usage page**: a read-only "Media Moderation +" card, shown ONLY when an active row genuinely exists — no
+  purchase CTA anywhere yet, since one doesn't work yet (a non-functional button would be exactly the "UI
+  implies a backend that doesn't exist" anti-pattern this codebase avoids elsewhere). In practice this can never
+  render for a real customer today, since nothing writes a `'media_moderation'` row yet — structurally ready,
+  not yet reachable.
+- New tests: `watch-media-moderation-addon.test.ts` (+9, new file — pricing/worked-totals, no-row/active/
+  removed/scheduled-for-removal/cross-account-isolation states, Community-Expansion-rows-never-counting,
+  per-caller-tier unit resolution), `watch-runtime.test.ts` (+6 — no-fabricated-allowance, real per-tier
+  allowance incl. the Bronze-eligibility case Community Expansion structurally can't have, independence from
+  Community Expansion, BOTH add-ons simultaneously active, trial/enterprise exclusion). 1407 tests pass (up
+  from 1392), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately NOT built this pass, honestly flagged** (a genuinely separate, larger body of work — closer in
+  size to the Community Expansion feature itself than to this phase's scope): the purchase/checkout pipeline
+  (Innvil Credit purchase action, direct-crypto checkout path, webhook wiring, renewal folding, scheduled-
+  removal/finalization logic — Community Expansion's `finalizeAddonsOnRenewal`/`finalizeAddonsOnTierChange` are
+  still scoped to `addon_type: "community_expansion"` only and do NOT yet finalize a `'media_moderation'` row,
+  since nothing can create one yet); any UI purchase/manage card (mirroring `CommunityExpansionCard.tsx`); and
+  REAL per-request Media Moderation Unit CONSUMPTION metering against the live moderation runtime (`media-
+  moderation.ts`'s Sightengine calls remain completely unmetered today, gated only by
+  `MEDIA_MODERATION_ENABLED`/`virtualModModeration`, exactly as before this pass — this add-on currently changes
+  nothing about what actually happens when a photo/video is classified).
+
 ### 2026-08-22 — "AI Generations": new pooled allowances + a real counting-semantics change (v1.47.28)
 - **Phase 2 of the pricing overhaul (self-serve base price cut was Phase 1, v1.47.27).** Renamed the pooled
   monthly self-serve usage unit from "AI response(s)" to **"AI Generations"** throughout, and changed BOTH the

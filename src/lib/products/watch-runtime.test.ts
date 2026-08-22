@@ -1430,6 +1430,61 @@ test("trial never reports Community-Expansion eligibility, even with a stray act
   assert.equal(capacity?.communityExpansionActive, false);
 });
 
+/* ------------------------------------------- media moderation + (2026-08-22) ---- */
+// getAccountCapacity resolves the self-serve Media Moderation + add-on the
+// SAME way it resolves Community Expansion -- through the one canonical
+// requireAccountWatchContext-fed function, never a second capacity model.
+
+const ACTIVE_MEDIA_ADDON = { id: "addon-media-1", account_id: "acct-1", addon_type: "media_moderation", status: "active", cancel_at_period_end: false };
+
+test("REQUIRED: no add-on row -> inactive, no fabricated allowance", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.mediaModerationAddonActive, false);
+  assert.equal(capacity?.mediaModerationUnitAllowance, null);
+});
+
+test("REQUIRED: an active add-on resolves the real unit allowance for the account's CURRENT tier", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], watch_subscription_addons: [ACTIVE_MEDIA_ADDON] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.mediaModerationAddonActive, true);
+  assert.equal(capacity?.mediaModerationUnitAllowance, 3000, "Gold's real Media Moderation + unit allowance");
+});
+
+test("REQUIRED: eligible on EVERY self-serve tier, unlike Community Expansion's Gold/Platinum-only restriction", async () => {
+  const bronze = { id: "e-bronze2", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "basic:dep-1" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [bronze], watch_subscription_addons: [ACTIVE_MEDIA_ADDON] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.mediaModerationAddonActive, true);
+  assert.equal(capacity?.mediaModerationUnitAllowance, 1000, "Bronze's own unit allowance -- Media Moderation + has no tier restriction");
+});
+
+test("REQUIRED: a Community Expansion add-on row alone never activates Media Moderation + for the same account", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], watch_subscription_addons: [ACTIVE_EXPANSION] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, true);
+  assert.equal(capacity?.mediaModerationAddonActive, false, "the two add-on types are structurally independent");
+});
+
+test("REQUIRED: both add-ons can be active on the SAME account simultaneously", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [GOLD_ENTITLEMENT], watch_subscription_addons: [ACTIVE_EXPANSION, ACTIVE_MEDIA_ADDON] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, true);
+  assert.equal(capacity?.mediaModerationAddonActive, true);
+  assert.equal(capacity?.mediaModerationUnitAllowance, 3000);
+});
+
+test("trial and enterprise never report an active Media Moderation + add-on, even with a stray active row", async () => {
+  const trialAdmin = fakeAdmin({
+    watch_trial_claims: [{ account_id: "acct-1", started_at: new Date().toISOString(), ends_at: new Date(Date.now() + 86_400_000).toISOString() }],
+    watch_subscription_addons: [ACTIVE_MEDIA_ADDON],
+  });
+  const trialCapacity = await getAccountCapacity(trialAdmin, "acct-1");
+  assert.equal(trialCapacity?.tier, "trial");
+  assert.equal(trialCapacity?.mediaModerationAddonActive, false);
+  assert.equal(trialCapacity?.mediaModerationUnitAllowance, null);
+});
+
 /* ---------------------------------- fresh zero-Panel account -- shell fixture ---- */
 // REQUIRED (standalone-Watch-access fix): "Account A" from the report --
 // authenticated, zero Panels, zero Projects, zero Communities, zero
