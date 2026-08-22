@@ -4,7 +4,35 @@ import {
   creditPriceUsd, creditSavingsUsd, INNVIL_CREDIT_DISCOUNT, toCents,
   annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_ELIGIBLE_TIERS,
 } from "./innvil-credit-pricing";
-import { COMMUNITY_EXPANSION_MONTHLY_PRICE } from "@/src/lib/money";
+import {
+  COMMUNITY_EXPANSION_MONTHLY_PRICE,
+  MODERATOR_BASIC_PRICE, MODERATOR_STANDARD_PRICE, MODERATOR_PREMIUM_PRICE, MODERATOR_PRO_PRICE,
+} from "@/src/lib/money";
+
+/* ---------------------------- 2026-08-22 repriced self-serve tiers ---- */
+// The discount MATH itself (below) is input-agnostic and was already fully
+// tested against arbitrary literal prices before this repricing -- these
+// tests specifically prove the REAL, CURRENT canonical prices (money.ts)
+// flow through it correctly, so a future price change is caught here too.
+
+test("REQUIRED: repriced Bronze $29.99 -> $29.99 with Innvil Credit (0% discount, unchanged)", () => {
+  assert.equal(creditPriceUsd(MODERATOR_BASIC_PRICE, "basic"), 29.99);
+});
+test("REQUIRED: repriced Silver $59.99 -> $56.99 with Innvil Credit (5% discount)", () => {
+  assert.equal(creditPriceUsd(MODERATOR_STANDARD_PRICE, "standard"), 56.99);
+});
+test("REQUIRED: repriced Gold $99.99 -> $94.99 with Innvil Credit (5% discount)", () => {
+  assert.equal(creditPriceUsd(MODERATOR_PREMIUM_PRICE, "premium"), 94.99);
+});
+test("REQUIRED: repriced Platinum $199.00 -> $189.05 with Innvil Credit (5% discount)", () => {
+  assert.equal(creditPriceUsd(MODERATOR_PRO_PRICE, "pro"), 189.05);
+});
+test("REQUIRED: repriced annual prices -- 10% off 12x the new monthly regular price, never stacked with the monthly discount", () => {
+  assert.equal(annualCreditPriceUsd(MODERATOR_BASIC_PRICE), 323.89);
+  assert.equal(annualCreditPriceUsd(MODERATOR_STANDARD_PRICE), 647.89);
+  assert.equal(annualCreditPriceUsd(MODERATOR_PREMIUM_PRICE), 1079.89);
+  assert.equal(annualCreditPriceUsd(MODERATOR_PRO_PRICE), 2149.2);
+});
 
 /* --------------------------------------------------------------- discount ---- */
 

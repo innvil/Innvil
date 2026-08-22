@@ -35,14 +35,19 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
  *  This is a storefront product: the panel's CUSTOMER pays this from their own
  *  panel wallet (customer_accounts.balance), not the owner's Innvil balance —
  *  see src/lib/moderator/customer-entitlement.ts and actions/customer-moderator.ts.
- *  Reference point: ~$50/month for ONE human moderator; these tiers replace that
- *  with continuous, multi-slot AI coverage. Slot counts mirror the existing
- *  ModeratorCapacity table in moderator/plan.ts (CAPACITY) exactly — same tier
- *  names, same numbers, reused rather than duplicated. */
-export const MODERATOR_BASIC_PRICE = 49.99;
-export const MODERATOR_STANDARD_PRICE = 129.99;
-export const MODERATOR_PREMIUM_PRICE = 219.99;
-export const MODERATOR_PRO_PRICE = 379.99;
+ *  Slot counts mirror the existing ModeratorCapacity table in moderator/plan.ts
+ *  (CAPACITY) exactly — same tier names, same numbers, reused rather than
+ *  duplicated. Repriced 2026-08-22 (Basic/Bronze $49.99->$29.99, Standard/Silver
+ *  $129.99->$59.99, Premium/Gold $219.99->$99.99, Pro/Platinum $379.99->$199.00)
+ *  as part of the same repricing that introduced the fixed Enterprise packages
+ *  above -- Enterprise's fixed $399/$299/$499 packages are flat constants and
+ *  are NOT derived from MODERATOR_PRO_PRICE, so this change doesn't move them;
+ *  only a CUSTOM Managed quote above 50 slots (moderatorEnterpriseSlotPrice)
+ *  still derives its base from MODERATOR_PRO_PRICE and moves with it. */
+export const MODERATOR_BASIC_PRICE = 29.99;
+export const MODERATOR_STANDARD_PRICE = 59.99;
+export const MODERATOR_PREMIUM_PRICE = 99.99;
+export const MODERATOR_PRO_PRICE = 199.0;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
 
 /** Direct/resell mode ONLY (see ModeratorCommercialMode in moderator/plan.ts):
@@ -77,11 +82,15 @@ export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
   return MODERATOR_BASIC_PRICE;
 }
 
-/** Enterprise (21+ Active Moderator Slots) monthly price. Direct-contact/
- *  direct-Innvil sale only -- Enterprise revenue is 100% Innvil's, no
- *  panel-owner commission/rental split ever applies to it.
- *  Worked examples: 50 slots -> 379.99 + 30*15 = 829.99;
- *  75 slots -> 379.99 + 30*15 + 25*13 = 1154.99. */
+/** Enterprise (21+ Active Moderator Slots) CUSTOM-quote monthly price --
+ *  since the 2026-08-22 repricing, used ONLY for a Managed quote above the
+ *  fixed 50-slot Managed Enterprise 50 package (see ENTERPRISE_MANAGED_50_*
+ *  above / watch-enterprise.ts's MANAGED_ENTERPRISE_50, a flat $399/mo
+ *  constant NOT derived from this formula). Direct-contact/direct-Innvil
+ *  sale only -- Enterprise revenue is 100% Innvil's, no panel-owner
+ *  commission/rental split ever applies to it.
+ *  Worked examples (at the current MODERATOR_PRO_PRICE = $199.00): 50 slots
+ *  -> 199.00 + 30*15 = 649.00; 75 slots -> 199.00 + 30*15 + 25*13 = 974.00. */
 export function moderatorEnterpriseSlotPrice(totalSlots: number): number {
   const slots = Math.max(MODERATOR_ENTERPRISE_MIN_SLOTS, Math.round(totalSlots));
   const extra = slots - MODERATOR_ENTERPRISE_BASE_SLOTS;

@@ -8,11 +8,10 @@
  * tier to what a customer sees.
  *
  * PRICING: prices are read directly from `money.ts` (the authoritative
- * source), never duplicated here — Basic/Bronze $49.99, Standard/Silver
- * $129.99, Premium/Gold $219.99, Pro/Platinum $379.99. This matches the
- * previously-documented "Phase 4.S — future plan" pricing, applied as an
- * explicit, separate billing decision (not a side effect of the display-
- * name rename) — see the dated changelog entry for when this was approved.
+ * source), never duplicated here — as of the 2026-08-22 repricing:
+ * Basic/Bronze $29.99, Standard/Silver $59.99, Premium/Gold $99.99,
+ * Pro/Platinum $199.00. An explicit, separate billing decision — see the
+ * dated changelog entry for when this was approved.
  */
 
 import {

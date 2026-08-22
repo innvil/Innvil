@@ -202,7 +202,7 @@ test("REQUIRED: sufficient credit purchases Silver, debits the exact discounted 
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 20000 - 12349);
+  assert.equal(result.balanceCents, 20000 - 5699); // Silver $59.99 -> $56.99 with Innvil Credit (5%)
   assert.ok(result.paidThrough);
   const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
   assert.equal(entitlement?.status, "active");
@@ -247,7 +247,7 @@ test("REQUIRED (test 1): sufficient credit buys an annual Silver subscription, d
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 200000 - 140389); // $1,403.89
+  assert.equal(result.balanceCents, 200000 - 64789); // Silver $59.99 annual -> $647.89
   const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
   assert.equal(entitlement?.billing_interval, "annual");
   assert.equal(entitlement?.renewal_mode, "innvil_credit", "annual must force Innvil-Credit-only renewal");
@@ -279,7 +279,7 @@ test("REQUIRED (test 8): a zero-Panel account can buy annual -- no Panel table t
 });
 
 test("REQUIRED: race safety -- two concurrent annual purchase attempts against a balance that can fund only one succeed exactly once", async () => {
-  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 150000 }] }); // enough for one $1,403.89 purchase, not two
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 70000 }] }); // enough for one $647.89 (Silver annual) purchase, not two
   const [a, b] = await Promise.all([
     purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual"),
     purchaseWatchWithCredit(admin, "acct-1", "Silver", "annual"),
@@ -437,8 +437,8 @@ test("REQUIRED (renewal): a renewal of the SAME tier with an active add-on folds
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  // Gold base credit price ($208.99) + Gold expansion credit price ($12.34) = $221.33, ONE debit.
-  assert.equal(result.balanceCents, 100000 - (20899 + 1234));
+  // Gold base credit price ($94.99) + Gold expansion credit price ($12.34) = $107.33, ONE debit.
+  assert.equal(result.balanceCents, 100000 - (9499 + 1234));
   assert.notEqual(result.paidThrough, before, "the period must have been extended");
   const txs = admin.__store.innvil_credit_transactions.filter((t: Row) => t.type === "subscription_renewal");
   assert.equal(txs.length, 1, "must be exactly ONE combined debit, never two separate charges");
@@ -456,7 +456,7 @@ test("a renewal of a DIFFERENT tier (plan change) does not fold in the add-on pr
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 36099, "only Platinum's own credit price -- no addon fold on a tier change");
+  assert.equal(result.balanceCents, 100000 - 18905, "only Platinum's own credit price -- no addon fold on a tier change");
 });
 
 test("REQUIRED (renewal): a removal-pending add-on is NOT charged on the next renewal, and is finalized (removed) by it", async () => {
@@ -471,7 +471,7 @@ test("REQUIRED (renewal): a removal-pending add-on is NOT charged on the next re
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 20899, "base Gold price only -- the removal-pending addon must never be charged for one more period");
+  assert.equal(result.balanceCents, 100000 - 9499, "base Gold price only -- the removal-pending addon must never be charged for one more period");
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communityExpansionActive, false, "the addon must be finalized to 'removed' by this renewal");
   assert.equal(capacity?.communitiesTotal, 3, "capacity reverts to Gold's included cap once the addon is finalized as removed");
@@ -542,7 +542,7 @@ test("REQUIRED (plan change): Gold+expansion -> Platinum finalizes (removes) the
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 36099, "only Platinum's own base price -- the Gold-priced add-on is never carried over/re-charged");
+  assert.equal(result.balanceCents, 100000 - 18905, "only Platinum's own base price -- the Gold-priced add-on is never carried over/re-charged");
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communityExpansionActive, false, "the add-on must be finalized (removed) on the tier change");
   assert.equal(capacity?.communitiesTotal, 5, "Platinum's own included cap -- no expansion carried over");
@@ -588,7 +588,7 @@ test("REQUIRED (plan change / downgrade safety): the SAME Platinum+expansion -> 
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 20899, "Gold's own base price only");
+  assert.equal(result.balanceCents, 100000 - 9499, "Gold's own base price only");
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communityExpansionActive, false, "the Platinum-priced add-on must be finalized, not silently kept active under Gold");
   assert.equal(capacity?.communitiesTotal, 3, "Gold's plain included cap");
@@ -605,7 +605,7 @@ test("a plan change with NO active add-on at all is completely unaffected by any
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 36099);
+  assert.equal(result.balanceCents, 100000 - 18905);
 });
 
 test("REQUIRED: un-cancelling a removal-pending add-on via a fresh purchase call never re-charges the customer", async () => {

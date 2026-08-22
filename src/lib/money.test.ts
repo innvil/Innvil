@@ -18,19 +18,19 @@ import { CAPACITY, TRIAL_CAPACITY } from "./moderator/plan";
 // files" the update was explicit about avoiding -- everything should read
 // through these constants, never redeclare the numbers.
 
-test("REQUIRED: canonical AI Moderator prices match the approved pricing table", () => {
-  assert.equal(MODERATOR_BASIC_PRICE, 49.99);
-  assert.equal(MODERATOR_STANDARD_PRICE, 129.99);
-  assert.equal(MODERATOR_PREMIUM_PRICE, 219.99);
-  assert.equal(MODERATOR_PRO_PRICE, 379.99);
+test("REQUIRED: canonical AI Moderator prices match the 2026-08-22 repriced table", () => {
+  assert.equal(MODERATOR_BASIC_PRICE, 29.99);
+  assert.equal(MODERATOR_STANDARD_PRICE, 59.99);
+  assert.equal(MODERATOR_PREMIUM_PRICE, 99.99);
+  assert.equal(MODERATOR_PRO_PRICE, 199.0);
 });
 
 test("moderatorPlanPrice resolves each tier to its canonical price", () => {
   const cases: Array<[ModeratorPlanTier, number]> = [
-    ["basic", 49.99],
-    ["standard", 129.99],
-    ["premium", 219.99],
-    ["pro", 379.99],
+    ["basic", 29.99],
+    ["standard", 59.99],
+    ["premium", 99.99],
+    ["pro", 199.0],
   ];
   for (const [tier, price] of cases) assert.equal(moderatorPlanPrice(tier), price);
 });
@@ -57,12 +57,17 @@ test("REQUIRED: Enterprise's minimum slot count (21) is one $15 slot above the P
   assert.equal(moderatorEnterpriseSlotPrice(MODERATOR_ENTERPRISE_MIN_SLOTS), MODERATOR_PRO_PRICE + 15);
 });
 
-test("REQUIRED: Enterprise worked example -- 50 total slots = 379.99 + 30*15 = 829.99/mo", () => {
-  assert.equal(moderatorEnterpriseSlotPrice(50), 829.99);
+// This dynamic per-slot formula is now used ONLY for a CUSTOM Managed quote
+// above the fixed 50-slot Managed Enterprise 50 package ($399/mo, a flat
+// constant in watch-enterprise.ts, NOT derived from this formula) -- see
+// the 2026-08-22 CLAUDE.md entry. These worked examples now reflect the
+// repriced $199.00 Pro base, not the pre-repricing $379.99.
+test("REQUIRED: custom-quote worked example -- 50 total slots = 199.00 + 30*15 = 649.00/mo", () => {
+  assert.equal(moderatorEnterpriseSlotPrice(50), 649.0);
 });
 
-test("REQUIRED: Enterprise worked example -- 75 total slots = 379.99 + 30*15 + 25*13 = 1154.99/mo", () => {
-  assert.equal(moderatorEnterpriseSlotPrice(75), 1154.99);
+test("REQUIRED: custom-quote worked example -- 75 total slots = 199.00 + 30*15 + 25*13 = 974.00/mo", () => {
+  assert.equal(moderatorEnterpriseSlotPrice(75), 974.0);
 });
 
 test("Enterprise band boundary: 51st slot switches from $15/slot to $13/slot", () => {

@@ -127,6 +127,44 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Self-serve Innvil Watch plan prices cut (v1.47.27)
+- **Phase 1 of the broader pricing overhaul you asked to sequence next.** Bronze/Silver/Gold/Platinum monthly
+  prices cut in `money.ts` — `MODERATOR_BASIC_PRICE` $49.99→**$29.99**, `MODERATOR_STANDARD_PRICE` $129.99→
+  **$59.99**, `MODERATOR_PREMIUM_PRICE` $219.99→**$99.99**, `MODERATOR_PRO_PRICE` $379.99→**$199.00**. This is
+  the ONLY place these numbers are defined (`moderatorPlanPrice()`), confirmed via a repo-wide grep before
+  changing anything — no scattered duplicate literal existed anywhere in UI/actions/billing, so every consuming
+  surface (Plans, Billing, checkout, Innvil Credit discount pricing, annual pricing) flows through automatically.
+- **Enterprise's fixed packages are unaffected** — `MANAGED_ENTERPRISE_50`/`WATCH_ENTERPRISE_BYO_TIERS` (added
+  the same day, see v1.47.26) are flat constants, not derived from `MODERATOR_PRO_PRICE`. Only the CUSTOM
+  Managed-quote-above-50-slots formula (`moderatorEnterpriseSlotPrice`) still derives its base from
+  `MODERATOR_PRO_PRICE` and moved with it — new worked examples: 50 slots = 199.00+30×15 = $649.00; 75 slots =
+  $974.00 (doc comments + tests updated to match; this formula is no longer used to price the standard 50-slot
+  package, only a genuine custom quote beyond it, per v1.47.26).
+- **Innvil Credit / annual discount pricing verified to flow through correctly, not re-derived** —
+  `innvil-credit-pricing.ts`'s discount math takes price as a plain parameter and was already fully
+  input-agnostic; added new tests pinning the REAL current canonical prices through it end-to-end: Silver
+  $59.99→$56.99 (5% credit), Gold $99.99→$94.99, Platinum $199.00→$189.05, Bronze $29.99 unchanged (0%
+  discount); annual: Bronze $323.89, Silver $647.89, Gold $1,079.89, Platinum $2,149.20 (10% off 12× the new
+  regular monthly price, never stacked with the monthly 5%).
+- **Fixed 9 tests in `innvil-credit.test.ts`** that had the OLD discounted-credit-price cent amounts hand-
+  computed and hardcoded as magic numbers (e.g. `36099` = old Platinum credit price in cents) — these are
+  genuine purchase/renewal/plan-change flow tests (not pure pricing-math tests), so they needed real updated
+  expected values, not just constant changes. Also widened the race-safety concurrent-annual-purchase test's
+  seed balance (was sized for the old $1,403.89 annual Silver price; a stale `$1,500` balance would now
+  accidentally fund the new, much cheaper annual purchase TWICE, breaking the "only one of two concurrent
+  attempts succeeds" assertion) — reduced to exactly enough for one $647.89 purchase, not two.
+- Corrected two stale doc-comment worked examples (`money.ts`'s `moderatorEnterpriseSlotPrice`, `watch-
+  plans.ts`'s top-of-file pricing note) that still quoted the pre-repricing dollar figures.
+- New tests: `money.test.ts` (repriced canonical values, repriced custom-quote worked examples at 50/75 slots),
+  `innvil-credit-pricing.test.ts` (+5 — the real current self-serve prices through the discount/annual system,
+  see above). 1392 tests pass (up from 1387), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Still not built** (unchanged from the v1.47.26 note, this pass was scoped to price constants only): the new
+  "AI Generations" pooled allowance model + its counting-semantics change (count on successful generation vs.
+  today's count-on-confirmed-Telegram-send), a self-serve Media Moderation + add-on, the Plans-page FAQ
+  removal/relocation and Watcher-slot-education relocation, and the "AI response" → "AI Generations" terminology
+  sweep beyond the one Usage-page card title already renamed in v1.47.26.
+
 ### 2026-08-22 — Innvil Watch Enterprise repriced to three fixed, accessible packages (v1.47.26)
 - **Explicit business decision: Enterprise moves from an open-ended per-slot calculation to three flat,
   headline packages** — Managed Enterprise 50 ($399/mo), BYO Enterprise 50 ($299/mo), BYO Enterprise Unlimited
