@@ -188,8 +188,8 @@ export const COMMUNITY_EXPANSION_ELIGIBLE_TIERS = ["premium", "pro"] as const;
 export type CommunityExpansionEligibleTier = (typeof COMMUNITY_EXPANSION_ELIGIBLE_TIERS)[number];
 
 export const COMMUNITY_EXPANSION_MONTHLY_PRICE: Record<CommunityExpansionEligibleTier, number> = {
-  premium: 12.99, // Gold
-  pro: 19.99,     // Platinum
+  premium: 9.99,  // Gold -- 3 included -> 5 total (a fixed capacity package, never per-Community)
+  pro: 14.99,     // Platinum -- 5 included -> 10 total
 };
 
 export function isCommunityExpansionEligibleTier(tier: ModeratorPlanTier): tier is CommunityExpansionEligibleTier {

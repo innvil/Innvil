@@ -356,26 +356,26 @@ test("REQUIRED (eligibility): Platinum can purchase Community Expansion", async 
   assert.equal(result.ok, true);
 });
 
-test("REQUIRED (pricing): Gold Community Expansion debits the exact discounted price ($12.34 -- the existing 5% monthly credit rule) once, and grants real capacity", async () => {
+test("REQUIRED (pricing): Gold Community Expansion debits the exact discounted price ($9.49 -- the existing 5% monthly credit rule) once, and grants real capacity", async () => {
   const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
   const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 1234);
+  assert.equal(result.balanceCents, 100000 - 949);
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communitiesTotal, 5, "Gold's expanded max");
   assert.equal(capacity?.communityExpansionActive, true);
 });
 
-test("REQUIRED (pricing): Platinum Community Expansion debits the exact discounted price ($18.99)", async () => {
+test("REQUIRED (pricing): Platinum Community Expansion debits the exact discounted price ($14.24 -- the existing 5% monthly credit rule)", async () => {
   const admin = fakeAdmin({ product_entitlements: [PLATINUM_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
   const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 1899);
+  assert.equal(result.balanceCents, 100000 - 1424);
 });
 
-test("REQUIRED (pricing): an annual Gold subscriber pays the annual Community Expansion price ($140.29), not the monthly one", async () => {
+test("REQUIRED (pricing): an annual Gold subscriber pays the annual Community Expansion price ($107.89), not the monthly one", async () => {
   const admin = fakeAdmin({
     product_entitlements: [{ ...GOLD_ENTITLEMENT, billing_interval: "annual" }],
     innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
@@ -383,7 +383,7 @@ test("REQUIRED (pricing): an annual Gold subscriber pays the annual Community Ex
   const result = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 14029);
+  assert.equal(result.balanceCents, 100000 - 10789);
 });
 
 test("REQUIRED (payment): insufficient credit activates nothing and debits nothing", async () => {
@@ -420,7 +420,7 @@ test("REQUIRED (payment): race safety -- two concurrent purchase attempts (ample
   assert.equal(a.ok, true);
   assert.equal(b.ok, true, "the loser of the DB-level race gets refunded and reports the already-active state, never a hard failure");
   const balance = await getInnvilCreditBalance(admin, "acct-1");
-  assert.equal(balance.balanceCents, 100000 - 1234, "exactly ONE net charge survives -- the loser's debit was fully reversed");
+  assert.equal(balance.balanceCents, 100000 - 949, "exactly ONE net charge survives -- the loser's debit was fully reversed");
   assert.equal(admin.__store.watch_subscription_addons.filter((r: Row) => r.status === "active").length, 1, "exactly one active add-on, never a double-charge or double-activation");
 });
 
@@ -437,8 +437,8 @@ test("REQUIRED (renewal): a renewal of the SAME tier with an active add-on folds
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  // Gold base credit price ($94.99) + Gold expansion credit price ($12.34) = $107.33, ONE debit.
-  assert.equal(result.balanceCents, 100000 - (9499 + 1234));
+  // Gold base credit price ($94.99) + Gold expansion credit price ($9.49) = $104.48, ONE debit.
+  assert.equal(result.balanceCents, 100000 - (9499 + 949));
   assert.notEqual(result.paidThrough, before, "the period must have been extended");
   const txs = admin.__store.innvil_credit_transactions.filter((t: Row) => t.type === "subscription_renewal");
   assert.equal(txs.length, 1, "must be exactly ONE combined debit, never two separate charges");

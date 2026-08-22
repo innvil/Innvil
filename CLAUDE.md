@@ -127,6 +127,49 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Correction: self-serve Gold/Platinum Community Expansion prices + prominent Media Moderation + (v1.47.31)
+- **Root cause found and fixed**: `COMMUNITY_EXPANSION_MONTHLY_PRICE` (`money.ts`) — the canonical, ONLY source
+  for self-serve Gold/Platinum Community Expansion pricing — had held `premium: 12.99, pro: 19.99` since before
+  this session's pricing work began (not something this session's own commits introduced; confirmed via
+  inspection, not assumed). Those figures are the newer, separate Enterprise BYO Community-expansion model's
+  own values (queued, not yet implemented — see the Enterprise Community Expansion memory note), never a
+  self-serve price. Corrected to the real canonical self-serve model: **Gold 3→5 for +$9.99/mo, Platinum 5→10
+  for +$14.99/mo**. Every consuming surface (`BillingPlanPicker`, `CommunityExpansionCard`, `Billing`, the
+  `community-expansion` Help Center article) already read this ONE constant, so the fix propagates everywhere
+  with a single change — no duplicated literal existed in any component.
+- **Fixed the derived discounted/annual figures alongside it** (previously pinned in tests as $12.34/$18.99
+  monthly-credit and $140.29/$215.89 annual, all computed from the wrong base): now **Gold $9.49 credit /
+  $107.89 annual, Platinum $14.24 credit / $161.89 annual** — recomputed via the same existing
+  `creditPriceCents`/`annualCreditPriceCents` functions, never a new formula.
+- **Media Moderation + made visually prominent on plan cards** (`BillingPlanPicker.tsx`) — was a single
+  low-contrast helper-text line buried under the capacity rows; now a bordered, teal-accented mini-card with an
+  "Optional add-on" pill, a units line, and larger price typography — matches the existing Innvil visual
+  language (`w-teal-border`/`w-teal-soft-bg`/`w-pill`, all pre-existing utility classes). Still informational
+  only (no toggle/CTA), since there's still no self-serve purchase action for it — unchanged scope boundary
+  from v1.47.29.
+- **Plan cards gained 2 more real, verified capability lines** ("Casual Chat & Project Q&A" — universal, any
+  tier; "Proactive Mode & Community Memory" — Standard+ only, mirrors `moderator/plan.ts`'s real
+  `virtualModProactiveMode` gate exactly, Basic/Bronze correctly excluded) rather than every possible feature.
+  **Investigated and deliberately did NOT add**: Watcher Presence Scheduling (confirmed via repo-wide grep —
+  still doesn't exist anywhere in code, Phase 4.U remains NOTED/not built) and Watcher-to-Watcher acknowledgement
+  (`BOT_ACKNOWLEDGEMENT_ENABLED` is currently off/unverified in production) — neither is safe to advertise as a
+  live capability. "Link & spam moderation" stays worded **"Included"**, never "Unlimited" — verified first that
+  `runLinkModeration`'s classification path is structurally independent of the AI-Generation-pool gate, so
+  there's no real cap to claim uncapped, but no capability here is genuinely boundless in the sense "Unlimited"
+  implies either.
+- **Fixed a real, pre-existing test mislabeling found while correcting the numbers**: a test titled "Platinum
+  Community Expansion debits the exact discounted price ($18.99)" actually used `PLATINUM_ENTITLEMENT` — that
+  part was correct, just needed its dollar figure updated (was never actually about Gold, an earlier in-session
+  guess at the title was wrong and has been reverted/corrected here to match the real test body).
+- New/updated tests: `money.test.ts` (+3 — an explicit negative-assertion guard that self-serve Gold/Platinum
+  never equal the separate Enterprise BYO figures, full Media Moderation + pin, full AI Generations pin),
+  `innvil-credit-pricing.test.ts` (Community Expansion monthly/annual/discount block recomputed for the correct
+  base prices), `innvil-credit.test.ts` (4 purchase/renewal/race tests recomputed to the correct cent amounts).
+  1412 tests pass (up from 1409), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 6 files,
+  all directly in scope — no unrelated navigation/billing/Enterprise changes, no new duplicated price literals,
+  no Sightengine terminology anywhere customer-facing (re-verified via grep).
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-22 — Plans page cleanup: FAQ + Watcher-slot education relocated to the Help Center, value-first plan cards (v1.47.30)
 - **Phase 4 of the pricing overhaul** (Phase 1 = self-serve price cut v1.47.27, Phase 2 = AI Generations rename/
   semantics v1.47.28, Phase 3 = Media Moderation + entitlement v1.47.29). Scoped to the Plans page structure and

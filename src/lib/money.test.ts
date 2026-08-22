@@ -5,7 +5,7 @@ import {
   MODERATOR_ENTERPRISE_MIN_SLOTS, MODERATOR_COMMISSION_SHARE, MODERATOR_RENTAL_DISCOUNT,
   MODERATOR_COMMUNITY_CAPACITY, MODERATOR_ADDITIONAL_COMMUNITY_PRICE, MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE,
   MODERATOR_AUTOPOST_INCLUDED_PER_DAY, MODERATOR_AUTOPOST_MAX_PER_DAY, MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE,
-  MODERATOR_AI_GENERATION_POOL,
+  MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON,
   moderatorPlanPrice, moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, moderatorAutopostFrequencyAddonPrice,
   COMMUNITY_EXPANSION_ELIGIBLE_TIERS, COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier,
   type ModeratorPlanTier,
@@ -192,9 +192,28 @@ test("REQUIRED: isCommunityExpansionEligibleTier rejects Bronze/Silver and accep
   assert.equal(isCommunityExpansionEligibleTier("pro"), true);
 });
 
-test("REQUIRED: Gold Community Expansion is $12.99/month, Platinum is $19.99/month -- the exact fixed-package prices", () => {
-  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, 12.99);
-  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro, 19.99);
+test("REQUIRED: Gold Community Expansion is $9.99/month, Platinum is $14.99/month -- the exact fixed-package prices (self-serve only, never the separate Enterprise Community expansion model)", () => {
+  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, 9.99);
+  assert.equal(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro, 14.99);
+});
+
+test("REQUIRED: self-serve Gold/Platinum Community Expansion never uses the separate Enterprise BYO Community pricing ($12.99/$19.99 belongs to a different, later-queued model)", () => {
+  assert.notEqual(COMMUNITY_EXPANSION_MONTHLY_PRICE.premium, 12.99);
+  assert.notEqual(COMMUNITY_EXPANSION_MONTHLY_PRICE.pro, 19.99);
+});
+
+test("REQUIRED: self-serve Media Moderation + pricing/units per tier (Bronze +$9.99/1,000 .. Platinum +$24.99/4,000)", () => {
+  assert.deepEqual(MODERATOR_MEDIA_ADDON.basic, { price: 9.99, units: 1000 });
+  assert.deepEqual(MODERATOR_MEDIA_ADDON.standard, { price: 14.99, units: 2000 });
+  assert.deepEqual(MODERATOR_MEDIA_ADDON.premium, { price: 19.99, units: 3000 });
+  assert.deepEqual(MODERATOR_MEDIA_ADDON.pro, { price: 24.99, units: 4000 });
+});
+
+test("REQUIRED: canonical AI Generations allowances match the plan cards (Bronze 2K .. Platinum 20K)", () => {
+  assert.equal(MODERATOR_AI_GENERATION_POOL.basic, 2000);
+  assert.equal(MODERATOR_AI_GENERATION_POOL.standard, 5000);
+  assert.equal(MODERATOR_AI_GENERATION_POOL.premium, 10000);
+  assert.equal(MODERATOR_AI_GENERATION_POOL.pro, 20000);
 });
 
 test("REQUIRED: Community Expansion capacity ceilings are the SAME MODERATOR_COMMUNITY_CAPACITY.maxWithAddons already shown on Plans -- never a duplicated number", () => {

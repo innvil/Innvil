@@ -69,7 +69,7 @@ export async function finalizeAddonsOnRenewal(admin: SupabaseClient, accountId: 
  *  Community Expansion row, `cancel_at_period_end` or not. A plan change
  *  never carries the add-on across tiers: it was priced and sized for the
  *  OLD tier, and silently re-pricing/re-sizing it for the new one would be
- *  exactly the "Gold's $12.99 add-on becomes Platinum's $19.99 one for
+ *  exactly the "Gold's $9.99 add-on becomes Platinum's $14.99 one for
  *  free" (or the reverse) commercial mismatch this feature must avoid. No
  *  refund is issued (same "no refunds for unused add-on time" rule as an
  *  explicit removal) -- the customer simply re-purchases Community

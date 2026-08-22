@@ -120,7 +120,7 @@ export function BillingPlanPicker({
                   )}
                 </div>
               </div>
-              <div className="mb-4 border-t w-line-soft pt-3">
+              <div className="mb-3 border-t w-line-soft pt-3">
                 <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">AI & moderation</p>
                 <div className="space-y-1.5 text-xs">
                   <div className="flex items-center justify-between">
@@ -131,10 +131,33 @@ export function BillingPlanPicker({
                     <span className="w-text-dim">Link & spam moderation</span>
                     <span className="w-text font-semibold">Included</span>
                   </div>
-                  <p className="text-[11px] w-text-faint">
-                    Media Moderation +: +${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}/mo for {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} units
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <span className="w-text-dim">Casual Chat & Project Q&A</span>
+                    <span className="w-text font-semibold">Included</span>
+                  </div>
+                  {/* Real tier gate, mirrored from moderator/plan.ts's virtualModProactiveMode
+                      (Standard+/trial only) -- never shown for Basic/Bronze, which genuinely
+                      doesn't have Proactive Mode/Community Memory. */}
+                  {o.tier !== "basic" && (
+                    <div className="flex items-center justify-between">
+                      <span className="w-text-dim">Proactive Mode & Community Memory</span>
+                      <span className="w-text font-semibold">Included</span>
+                    </div>
+                  )}
                 </div>
+              </div>
+
+              {/* Media Moderation + -- deliberately visually prominent (an intentional
+                  upsell), but clearly marked optional. Informational only for now (no
+                  toggle/CTA) -- there is still no self-serve purchase action for this
+                  add-on, so a working control would be dishonest. */}
+              <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="w-display text-xs w-teal">Media Moderation +</p>
+                  <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Optional add-on</span>
+                </div>
+                <p className="text-[11px] w-text-faint mb-2">Photo & video media safety — {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} Media Moderation Units/mo</p>
+                <p className="w-display text-base w-text">+${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}<span className="text-[11px] w-text-faint font-normal">/mo</span></p>
               </div>
               {isCurrent ? (
                 <span className="mt-auto text-xs w-teal flex items-center gap-1"><CheckCircle2 size={13} /> Current plan</span>
