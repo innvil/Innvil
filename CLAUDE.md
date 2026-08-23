@@ -127,6 +127,19 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — Fix: devops Enterprise grant form didn't pre-fill an account's real current state (v1.47.38)
+- **Follow-up correction to v1.47.37, caught before deploying** — searching an account that ALREADY holds an
+  Enterprise entitlement (e.g. 75 slots / 15 Communities) left the grant form showing the hardcoded defaults
+  (50 slots / base 8) and the tier dropdown on whatever it last was — an admin editing an existing account had
+  to manually re-read the numbers from the "Current entitlement" display above and re-type them, with no
+  actual "edit" path.
+- **Fix**: `search()` (`WatchDevOpsAdmin.tsx`) now seeds the tier dropdown and, for Enterprise, the slots/
+  Community-capacity inputs directly from the resolved `AccountDevOpsSubscriptionState` — editing an existing
+  account now starts from its real provisioned values, not defaults. Applies to every tier, not just
+  Enterprise (the dropdown now always reflects what the searched account currently holds).
+- 1449 tests pass (unchanged — UI-only fix), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-23 — Enterprise entitlements can now actually be granted — devops tool extended (v1.47.37)
 - **Closes the prerequisite gap flagged repeatedly across v1.47.24 through v1.47.34**: until this pass, there
   was NO way anywhere in this codebase to actually grant an Enterprise entitlement to a real account — the

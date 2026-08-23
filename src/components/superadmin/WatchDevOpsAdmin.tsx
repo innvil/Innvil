@@ -58,7 +58,20 @@ export function WatchDevOpsAdmin() {
     setAccount(res.data);
     const sub = await getAccountDevOpsSubscription(res.data.accountId);
     setSearching(false);
-    if (sub.ok) setState(sub.data);
+    if (sub.ok) {
+      setState(sub.data);
+      // Pre-fill the grant form from the account's REAL current state, so
+      // editing an already-Enterprise account starts from its actual
+      // provisioned values instead of the hardcoded defaults -- an admin
+      // adjusting an existing 75-slot/15-Community account should never
+      // have to first discover, then hand-retype, numbers already shown
+      // right above in "Current entitlement".
+      if (sub.data.tier) setTier(sub.data.tier);
+      if (sub.data.tier === "enterprise") {
+        setEnterpriseSlots(String(sub.data.enterpriseSlots ?? MANAGED_ENTERPRISE_50.slots));
+        setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE));
+      }
+    }
   };
 
   const refreshState = async (accountId: string) => {
