@@ -127,6 +127,70 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — Media Moderation Unit metering — Media Moderation + now actually gates and meters real usage (v1.47.40)
+- **Product decision, confirmed before building anything**: investigated the runtime gate first (`virtualModMediaModeration`
+  in `plan.ts`) and found it never checked the paid add-on at all — `MEDIA_MODERATION_ENABLED &&
+  virtualModModeration(settings)`, i.e. ANY entitled Watch account already got full photo/video classification
+  and enforcement for free, completely independent of whether they'd purchased "Media Moderation +". The
+  add-on's purchase had zero effect on the live runtime, only on Billing/Usage display. Confirmed with the user
+  that the intended model is real gating (self-serve accounts must hold an active add-on to get media
+  moderation at all, with a real unit allowance) — not a permanently-free baseline capability.
+- **Gate scoped to self-serve tiers only, by design.** `runMediaModeration` (`community-runtime.ts`) gained
+  `accountId`/`paidTier` parameters (threaded from `handleHumanMessage`, already resolved there for the AI
+  Generation pool gate — no second lookup). The gate only runs `if (accountId && paidTier)` — `paidTier` is
+  `null` for trial (can't purchase an add-on at all) AND for Enterprise (its own Media Moderation + is
+  inquiry/manual-provisioning with no persisted entitlement row to check, per `ENTERPRISE_MEDIA_ADDON`'s own doc
+  comment) AND for legacy Panel-distributed accounts. All three keep running media moderation exactly as before
+  this pass — unmetered, ungated — a deliberate, explicit non-regression, not an oversight.
+- **A self-serve account with no active add-on, or one that's exhausted its real monthly allowance, gets a
+  silent skip** — never a fabricated verdict, never a deleted message, matching every other "can't classify"
+  case already in this function (`too_large`/`duration_exceeded`/`download_failed`). New SKIPPED reasons
+  `media_addon_required`/`media_allowance_exhausted`. Deliberately NOT run through the existing
+  `recordMediaDedup` cache (unlike the size/duration checks, which are permanent file properties) — addon/
+  allowance state is temporal, so caching it would permanently blacklist a file from ever being reclassified
+  once the add-on is purchased or the period renews.
+- **New migration `0091_watch_media_moderation_usage.sql`** — `watch_media_moderation_usage`, mirrors migration
+  `0084`'s `watch_ai_response_usage` exactly (keyed by `(account_id, period_start)`, one row per real
+  subscription period, a renewal naturally starts fresh at 0). One real difference: `increment_watch_media_
+  moderation_usage`'s RPC increments by a variable `p_units`, not always 1 — a video's units are its real
+  classified-frame count in ONE round trip, not N separate calls. **Run migration `0091`.**
+- **New `src/lib/products/watch-media-moderation-usage.ts`** — `getWatchMediaModerationUsage`/
+  `incrementWatchMediaModerationUsage`/`hasMediaModerationUnitsRemaining`, mirrors `watch-ai-usage.ts`'s exact
+  shape and reuses its `resolveAccountBillingPeriod`/`WatchBillingPeriod` directly (Media Moderation + renews on
+  the same cadence as the base subscription — never a second period resolver).
+- **A "unit" is exactly what the money.ts doc comment already promised**: 1 classified photo, or 1 sampled video
+  frame that received a REAL (`ok:true`) classification — never an attempted-but-failed provider call (same
+  counting philosophy already established for the AI Generation pool: a provider timeout/auth failure never
+  costs the customer a unit). `classifySampledFrames` (`media-moderation.ts`) widened from returning a bare
+  `MediaClassificationResult` to `{result, framesClassified}` — `framesClassified` counts only the real
+  successful classifications within the bounded, early-exit-respecting sample, never the raw call count. The
+  existing bounded-sampling architecture (`computeSamplePositions`/`MAX_VIDEO_SAMPLE_FRAMES`) is completely
+  unchanged — the entitlement never determines how many frames get sampled, only whether classification happens
+  at all.
+- **Usage consumed even when the result is ALLOWed** — a unit means "was this actually classified," never "was
+  it flagged." Incremented once, right after classification, independent of the downstream enforcement outcome.
+- **Usage page updated to match** — the Media Moderation + card now shows a real `used / allowance` count with
+  a progress bar (was a static allowance-only display with an "isn't metered yet" disclaimer, now stale and
+  removed). Also fixed an adjacent stale comment claiming "no purchase/removal action exists yet" for this
+  add-on — that shipped in v1.47.33.
+- New tests: `media-moderation.test.ts` (4 existing tests updated for the new `{result, framesClassified}`
+  return shape, including a dedicated proof that a failed frame is never counted as a classified unit),
+  `watch-media-moderation-usage.test.ts` (+7, new file — variable-increment behavior incl. a real video-frame-
+  count worked example, zero-unit no-op guard, per-account isolation, fresh-period-starts-at-zero, headroom
+  boundary). 1469 tests pass (up from 1462), `tsc --noEmit` clean, production build clean. Diff reviewed: 7
+  files (3 new + 4 changed), all directly in scope.
+- **`runMediaModeration` itself has no new dedicated DB-mocked integration test** — consistent with this exact
+  function's own pre-existing, already-documented convention (verified via typecheck + build + careful code
+  review instead, same as every other pass that's touched this function); every new PURE/IO piece it now calls
+  (`getMediaModerationAddonState`, `hasMediaModerationUnitsRemaining`, `getWatchMediaModerationUsage`/
+  `incrementWatchMediaModerationUsage`, `classifySampledFrames`'s new field) is independently fully tested.
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately not built this pass**: metering/gating for Enterprise's own Media Moderation + (no persisted
+  entitlement state exists to gate against — a real prerequisite gap, same category as Enterprise's still-
+  missing BYO grant path); real-time "N units remaining" warnings to the customer before they hit the ceiling
+  (the allowance/usage numbers are now real and visible on Usage, but no proactive low-balance notification
+  exists).
+
 ### 2026-08-23 — Critical fix: a standalone Enterprise Watcher did nothing on live Telegram (v1.47.39)
 - **Found while investigating Media Moderation Unit metering (the next queued task), reported and confirmed
   before fixing** — an entire tier's live runtime was dark, not just one capability, so it was fixed first per

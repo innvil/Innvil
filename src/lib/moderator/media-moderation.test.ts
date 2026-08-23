@@ -152,8 +152,9 @@ test("REQUIRED (case 18): early exit -- once a decisive explicit frame is found,
     return ok("safe", "high");
   };
   const frames = [Buffer.from("f0"), Buffer.from("f1"), Buffer.from("f2"), Buffer.from("f3"), Buffer.from("f4")];
-  const result = await classifySampledFrames(frames, classify);
+  const { result, framesClassified } = await classifySampledFrames(frames, classify);
   assert.equal(calls.length, 2); // stopped right after the decisive frame -- frames 2/3/4 never classified
+  assert.equal(framesClassified, 2, "exactly the 2 real classifications that happened before the early exit");
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.verdict, "explicit");
 });
@@ -162,22 +163,24 @@ test("REQUIRED (case 19): with no early exit, the classifier is called at most o
   let calls = 0;
   const classify = async () => { calls++; return ok("safe", "high"); };
   const frames = Array.from({ length: MAX_VIDEO_SAMPLE_FRAMES }, (_, n) => Buffer.from(`f${n}`));
-  const result = await classifySampledFrames(frames, classify);
+  const { result, framesClassified } = await classifySampledFrames(frames, classify);
   assert.equal(calls, MAX_VIDEO_SAMPLE_FRAMES);
+  assert.equal(framesClassified, MAX_VIDEO_SAMPLE_FRAMES);
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.verdict, "safe");
 });
 
-test("a provider failure on one frame does not fabricate an explicit result -- remaining frames still contribute", async () => {
+test("a provider failure on one frame does not fabricate an explicit result -- remaining frames still contribute, and the failed frame never counts as a classified unit", async () => {
   let i = 0;
   const classify = async () => {
     const idx = i++;
     if (idx === 0) return fail("provider_error");
     return ok("safe", "high");
   };
-  const result = await classifySampledFrames([Buffer.from("f0"), Buffer.from("f1")], classify);
+  const { result, framesClassified } = await classifySampledFrames([Buffer.from("f0"), Buffer.from("f1")], classify);
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.verdict, "safe");
+  assert.equal(framesClassified, 1, "the failed frame (idx 0) must never be counted -- only the real successful classification");
 });
 
 test("safe + uncertain(low) + safe frames -> aggregate stays non-explicit, and decideMediaEnforcement never issues a destructive action for it", async () => {
@@ -186,8 +189,9 @@ test("safe + uncertain(low) + safe frames -> aggregate stays non-explicit, and d
     if (s === "f1") return ok("uncertain", "low");
     return ok("safe", "high");
   };
-  const result = await classifySampledFrames([Buffer.from("f0"), Buffer.from("f1"), Buffer.from("f2")], classify);
+  const { result, framesClassified } = await classifySampledFrames([Buffer.from("f0"), Buffer.from("f1"), Buffer.from("f2")], classify);
   assert.equal(result.ok, true);
+  assert.equal(framesClassified, 3);
   const enforcement = decideMediaEnforcement({ result, priorWarningCount: 0 });
   assert.equal(enforcement.kind, "ALLOW");
 });

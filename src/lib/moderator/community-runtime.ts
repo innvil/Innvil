@@ -43,6 +43,10 @@ import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
 import { resolveStandaloneModeratorSettings, resolveWatcherAccountId } from "@/src/lib/products/watch-runtime";
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
+import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
+import {
+  getWatchMediaModerationUsage, incrementWatchMediaModerationUsage, hasMediaModerationUnitsRemaining,
+} from "@/src/lib/products/watch-media-moderation-usage";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 /**
@@ -1842,7 +1846,9 @@ async function runMediaModeration(
   event: CommunityEvent,
   deployments: ChatterDeployment[],
   settings: unknown,
-  now: Date
+  now: Date,
+  accountId: string | null = null,
+  paidTier: ModeratorPlanTier | null = null
 ): Promise<{ handled: boolean }> {
   if (!virtualModMediaModeration(settings) || !deployments.length) return { handled: false };
 
@@ -1874,6 +1880,37 @@ async function runMediaModeration(
     }
   }
 
+  // Media Moderation + gate -- self-serve accounts ONLY (paidTier is null
+  // for trial/enterprise/legacy Panel-distributed accounts, which all keep
+  // running media moderation unmetered exactly as before this gate existed
+  // -- trial can't purchase an add-on at all, and Enterprise's own Media
+  // Moderation + is inquiry/manual-provisioning with no persisted
+  // entitlement state to check against, see money.ts's ENTERPRISE_MEDIA_ADDON
+  // doc comment). A self-serve account with NO active add-on, or one that's
+  // exhausted its real monthly allowance, gets a silent skip -- never a
+  // fabricated explicit result, never a deleted message, matching every
+  // other "can't classify" case in this function. Deliberately NOT run
+  // through recordMediaDedup's cache: unlike too_large/duration_exceeded
+  // (permanent properties of the file), addon/allowance state is temporal
+  // -- caching it would incorrectly blacklist a file from ever being
+  // reclassified once the add-on is purchased or the period rolls over.
+  let mediaUsagePeriod: Awaited<ReturnType<typeof resolveAccountBillingPeriod>> = null;
+  if (accountId && paidTier) {
+    const addon = await getMediaModerationAddonState(admin, accountId, paidTier);
+    if (!addon || !addon.active) {
+      await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_addon_required", { mediaKind: media.kind });
+      return { handled: false };
+    }
+    mediaUsagePeriod = await resolveAccountBillingPeriod(admin, accountId);
+    if (mediaUsagePeriod) {
+      const used = await getWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod.start);
+      if (!hasMediaModerationUnitsRemaining(used, addon.units)) {
+        await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_allowance_exhausted", { mediaKind: media.kind });
+        return { handled: false };
+      }
+    }
+  }
+
   const enforcer = deployments[0];
   const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
   if (!token) return { handled: false };
@@ -1889,15 +1926,34 @@ async function runMediaModeration(
     return { handled: false };
   }
 
-  const result: MediaClassificationResult =
-    media.kind === "photo"
-      ? await classifyImageBytes(download.buffer, media.mimeType ?? "image/jpeg")
-      : await (async () => {
-          const positions = computeSamplePositions((media.durationS ?? 30) * 1000);
-          const extraction = await extractVideoFrames(download.buffer, positions);
-          if (!extraction.ok) return { ok: false, failure: "decode_failed" } as MediaClassificationResult;
-          return classifySampledFrames(extraction.frames, classifyImageBytes);
-        })();
+  let result: MediaClassificationResult;
+  let unitsConsumed: number;
+  if (media.kind === "photo") {
+    result = await classifyImageBytes(download.buffer, media.mimeType ?? "image/jpeg");
+    unitsConsumed = result.ok ? 1 : 0;
+  } else {
+    const positions = computeSamplePositions((media.durationS ?? 30) * 1000);
+    const extraction = await extractVideoFrames(download.buffer, positions);
+    if (!extraction.ok) {
+      result = { ok: false, failure: "decode_failed" };
+      unitsConsumed = 0;
+    } else {
+      const sampled = await classifySampledFrames(extraction.frames, classifyImageBytes);
+      result = sampled.result;
+      unitsConsumed = sampled.framesClassified;
+    }
+  }
+
+  // Real Media Moderation Unit metering -- ONLY for a gated self-serve
+  // account (mediaUsagePeriod is only ever set inside the gate above, which
+  // itself only runs for accountId+paidTier). A REAL, ok:true classification
+  // consumes units even if the message is ultimately ALLOWed -- a unit is
+  // "was this actually classified", never "was it flagged" (same principle
+  // as the AI Generation pool counting on a successful provider call, not on
+  // the downstream outcome).
+  if (accountId && mediaUsagePeriod && unitsConsumed > 0) {
+    await incrementWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod, unitsConsumed);
+  }
 
   // Unified content-policy strike counter -- reuses the SAME per-(community,
   // user) warning state link moderation already maintains, rather than a
@@ -1966,7 +2022,7 @@ async function handleHumanMessage(
   // links/task-route/chat about either. Never routed through DeepSeek/Claude
   // conversational paths -- only the specialized visual-safety classifier.
   const chatId = String(message.chat.id);
-  const mediaModeration = await runMediaModeration(admin, panelId, community, chatId, message, event, deployments, settings, new Date());
+  const mediaModeration = await runMediaModeration(admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier);
   timer.mark("media_moderation_check", { handled: mediaModeration.handled });
   if (mediaModeration.handled) return;
 

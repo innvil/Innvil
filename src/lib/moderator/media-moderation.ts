@@ -111,6 +111,15 @@ export function isEarlyExitResult(result: FrameResult): boolean {
   return result.ok && result.verdict === "explicit" && result.confidence === "high";
 }
 
+export interface SampledFramesResult {
+  result: MediaClassificationResult;
+  /** How many sampled frames received a REAL (ok:true) classification --
+   *  this, not the raw call count, is what consumes Media Moderation Units
+   *  (a provider failure on a frame never costs the customer a unit, same
+   *  counting philosophy as the AI Generation pool). */
+  framesClassified: number;
+}
+
 /** Classifies each sampled video frame IN ORDER via the given classifier,
  *  stopping EARLY the instant a high-confidence explicit frame is found —
  *  never spends classification calls on the remaining frames once the
@@ -118,19 +127,18 @@ export function isEarlyExitResult(result: FrameResult): boolean {
  *  classification requests unnecessarily after a decisive explicit
  *  result"). The classifier is a PARAMETER rather than an import so this
  *  stays pure/directly testable (a fake classifier can prove the early-exit
- *  call count) independent of which vendor adapter is actually wired up.
- *  Returns the aggregated media-level result via aggregateFrameResults. */
+ *  call count) independent of which vendor adapter is actually wired up. */
 export async function classifySampledFrames(
   frames: Buffer[],
   classify: (frame: Buffer, mimeType: string) => Promise<MediaClassificationResult>
-): Promise<MediaClassificationResult> {
+): Promise<SampledFramesResult> {
   const frameResults: FrameResult[] = [];
   for (const frame of frames) {
     const r = await classify(frame, "image/jpeg");
     frameResults.push(r);
     if (isEarlyExitResult(r)) break;
   }
-  return aggregateFrameResults(frameResults);
+  return { result: aggregateFrameResults(frameResults), framesClassified: frameResults.filter((r) => r.ok).length };
 }
 
 /** The deterministic policy layer (mirrors link-moderation.ts's

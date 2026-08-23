@@ -8,6 +8,7 @@ import {
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
+import { getWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
 import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
 import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
 import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
@@ -56,6 +57,15 @@ export default async function UsagePage() {
   const isEnterprise = capacity?.tier === "enterprise";
   const aiUsageLimit = paidTier ? aiGenerationPoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
   const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiGenerationUsage(admin, accountId, aiPeriod.start) : null;
+
+  // Real per-request Media Moderation Unit consumption (2026-08-23) --
+  // reuses the SAME real billing period aiPeriod already resolved above
+  // (Media Moderation + renews on the same cadence as the base
+  // subscription, never a second period concept). Only meaningful when the
+  // add-on is genuinely active AND a real period exists to count against --
+  // mirrors aiUsageCount's own null-safety exactly.
+  const mediaUsageCount =
+    capacity?.mediaModerationAddonActive && aiPeriod ? await getWatchMediaModerationUsage(admin, accountId, aiPeriod.start) : null;
 
   // Trial's own real, measurable current-period consumption: the 20/day
   // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
@@ -211,21 +221,27 @@ export default async function UsagePage() {
           />
         )}
 
-        {/* Read-only for now -- there is no purchase/removal action for this
-            add-on yet (see the dated CLAUDE.md entry), so this only ever
-            renders once an active row genuinely exists. No purchase CTA is
-            shown here, since one doesn't work yet -- showing a non-functional
-            button would be exactly the "UI implies a backend that doesn't
-            exist" anti-pattern this codebase avoids elsewhere. */}
+        {/* Read-only here -- purchase/removal for this add-on lives on
+            /plans (self-serve, Innvil Credit, shipped 2026-08-22). Real
+            per-request consumption is metered as of 2026-08-23 (photo = 1
+            unit, video = 1 unit per actually-classified sampled frame) --
+            mediaUsageCount is a genuine "used" count, not a fabricated one;
+            it stays null (rendered as "0 used" below) only when the add-on
+            is active but the account has no trackable billing period yet
+            (a legacy pre-migration-0080 row), mirroring aiUsageCount's own
+            same-shaped fallback exactly. */}
         {capacity?.mediaModerationAddonActive && capacity.mediaModerationUnitAllowance != null && (
           <div className="w-card p-5">
             <SectionHeader icon={ShieldCheck} title="Media Moderation +" />
             <p className="text-sm w-text-dim mb-1">
-              Active — {capacity.mediaModerationUnitAllowance.toLocaleString()} Media Moderation Units included this period.
+              {(mediaUsageCount ?? 0).toLocaleString()} / {capacity.mediaModerationUnitAllowance.toLocaleString()} Media Moderation Units used this period.
             </p>
-            <p className="text-xs w-text-faint mb-2">
-              Per-request unit usage isn't metered yet — this shows your active allowance, not a live "used" count.
-            </p>
+            <div className="w-full h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
+              <div
+                className="h-full w-teal-bg"
+                style={{ width: `${Math.min(100, ((mediaUsageCount ?? 0) / capacity.mediaModerationUnitAllowance) * 100)}%` }}
+              />
+            </div>
             <Link href="/plans#paid-plans" className="w-teal hover:underline text-xs font-medium">Manage from Plans →</Link>
           </div>
         )}
