@@ -31,6 +31,16 @@
  * always visually distinguishable from a real paid subscription anywhere
  * subscription_ref is displayed, and so clearAccountDevOpsSubscription can
  * refuse to ever touch a real paid row.
+ *
+ * BYO CREDENTIAL BOUNDARY: this file can flip an Enterprise account's
+ * `apiSourceMode` to "byo" (metadata) and can REVOKE a stored credential
+ * (clearAccountDevOpsByoCredential -- possesses nothing secret to do so),
+ * but it deliberately has NO action that lets an admin ENTER a customer's
+ * API key. That's a customer secret; an Innvil operator must never see,
+ * type, or relay it. The only place a BYO credential is ever stored is the
+ * customer's own self-serve flow (watch-byo-settings.ts / the account's own
+ * "AI Provider" Settings tab), authenticated as the customer. See the doc
+ * comment on clearAccountDevOpsByoCredential below for the fuller rationale.
  */
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
@@ -39,7 +49,7 @@ import { isPreviewEnvironment } from "@/src/lib/config";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import { validateEnterpriseCommunityCapacity } from "@/src/lib/products/watch-enterprise-community";
-import { hasByoCredential, setAccountByoCredential, clearAccountByoCredential, type WatchByoProvider } from "@/src/lib/products/watch-byo";
+import { hasByoCredential, clearAccountByoCredential } from "@/src/lib/products/watch-byo";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 type Result<T = null> = { ok: true; data: T } | { ok: false; error: string };
@@ -185,13 +195,13 @@ export async function setAccountDevOpsSubscription(accountId: string, tier: Mode
  *  write-time guard, since this is a direct admin action that deserves
  *  real feedback rather than a silent no-op).
  *
- *  `apiSourceMode` (default "managed") is purely descriptive/routing
- *  metadata as of this parameter's introduction -- setting it to "byo"
- *  does NOT by itself change which credential the live AI runtime uses
- *  (see watch-byo.ts's own doc comment). It's real, persisted state, just
- *  not yet consumed by anything beyond display -- storing/rotating the
- *  actual credential is the separate setAccountDevOpsByoCredential action
- *  below, and neither is required to grant the entitlement itself. */
+ *  `apiSourceMode` (default "managed") flags which routing mode the live
+ *  AI runtime resolves for this account (see resolveAccountAiRouting in
+ *  watch-runtime.ts). Setting it to "byo" does NOT itself store a
+ *  credential -- the customer must still store their own key via their own
+ *  Settings -> AI Provider tab (watch-byo-settings.ts) before any BYO call
+ *  can actually succeed; neither step is required to grant the entitlement
+ *  itself. This action never touches the credential in any way. */
 export async function setAccountDevOpsEnterprise(
   accountId: string, slots: number, communityCapacity?: number, apiSourceMode?: "managed" | "byo"
 ): Promise<Result> {
@@ -216,37 +226,27 @@ export async function setAccountDevOpsEnterprise(
   return { ok: true, data: null };
 }
 
-/** Stores (or replaces) a BYO account's own AI provider credential --
+/** Revokes (clears) a BYO account's stored AI provider credential --
  *  Preview-only, same gate as every other mutating action in this file.
- *  Reuses the SAME pgcrypto-encrypted storage every other credential in
- *  this codebase uses (watch-byo.ts, migration 0092) -- never a new/weaker
- *  mechanism. Does NOT require apiSourceMode to already be "byo" on the
- *  entitlement (an admin may store the credential before flipping the
- *  mode, or after) -- the two are independently settable, matching the
- *  plan's explicit "provider configuration vs BYO usage policy are two
- *  distinct concepts" framing. STORING A CREDENTIAL HERE DOES NOT YET
- *  CHANGE ANY LIVE AI CALL (see watch-byo.ts). */
-export async function setAccountDevOpsByoCredential(
-  accountId: string, provider: WatchByoProvider, apiKey: string, baseUrl?: string, model?: string
-): Promise<Result> {
-  const auth = await requireSuperAdmin();
-  if (!auth.ok) return { ok: false, error: "Super admin only." };
-  if (!isPreviewEnvironment()) return { ok: false, error: "DevOps subscription overrides are only available in the Preview environment." };
-  if (!apiKey.trim()) return { ok: false, error: "Enter an API key." };
-
-  const admin = createAdminClient();
-  await setAccountByoCredential(admin, accountId, { provider, apiKey: apiKey.trim(), baseUrl: baseUrl?.trim() || null, model: model?.trim() || null });
-
-  // Meta deliberately excludes apiKey -- audit logs never carry a secret.
-  await admin.from("audit_logs").insert({
-    panel_id: null,
-    actor_id: auth.userId,
-    action: "superadmin.watch_devops_byo_credential_set",
-    meta: { accountId, provider, devops: true },
-  });
-  return { ok: true, data: null };
-}
-
+ *
+ *  DELIBERATE SECURITY BOUNDARY: there is NO corresponding "set" action in
+ *  this file. A superadmin can flag an account BYO and can REVOKE a
+ *  credential (both are metadata-only / possess-nothing-secret operations),
+ *  but can never ENTER one -- a customer's own API key is their sensitive
+ *  credential, and Innvil operations staff must never see, type, receive,
+ *  or otherwise come into possession of it. The self-serve path
+ *  (watch-byo-settings.ts / the "AI Provider" Settings tab) is the ONLY
+ *  place a BYO credential is ever stored -- the customer enters their own
+ *  key directly, authenticated as themselves, never relayed through
+ *  support/devops. This was corrected after an explicit review: an earlier
+ *  version of this file had a `setAccountDevOpsByoCredential` action (and a
+ *  matching admin-facing "paste an API key here" form) that let an admin
+ *  type a customer's credential in on their behalf -- removed outright,
+ *  not just hidden, since the whole point is that this codepath must not
+ *  exist for an admin to reach for under pressure (e.g. "just do it for me
+ *  over a support ticket"). If a customer can't reach their own Settings
+ *  page, the fix is to help them get there, never to accept their key
+ *  through any other channel. */
 export async function clearAccountDevOpsByoCredential(accountId: string): Promise<Result> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };

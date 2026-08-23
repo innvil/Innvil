@@ -127,6 +127,35 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Security fix: removed the superadmin's ability to enter a customer's BYO API key (v1.47.46)
+- **Live report from the user, correctly flagged as a real security problem**: the Watch devops tool
+  (`/superadmin` → Watch devops, and the owner-app sidebar mirror) had a form letting a superadmin TYPE a
+  customer's BYO AI-provider API key directly and store it on their behalf. That's wrong — a customer's API
+  key is their own sensitive credential; Innvil operations staff should never see, type, receive, or otherwise
+  come into possession of it, regardless of how convenient it is for provisioning.
+- **`setAccountDevOpsByoCredential` removed outright** from `src/lib/actions/superadmin-watch-devops.ts` — not
+  hidden, not gated further, deleted. There is now no code path anywhere in this codebase through which an
+  admin can submit a customer's raw API key. **`clearAccountDevOpsByoCredential` (revoke) is kept** — clearing
+  a credential requires possessing nothing secret (it's a delete, not a set), so it stays available for
+  legitimate incident response (e.g. the customer reports their key compromised and asks it be revoked
+  immediately). Also kept: flipping `apiSourceMode` to `"byo"` (pure metadata, no credential involved).
+- **The correct path was already built and unaffected**: `watch-byo-settings.ts` / the account's own "AI
+  Provider" Settings tab (Phase 2, v1.47.43) is the ONLY place a BYO credential is ever stored — the customer
+  enters their own key themselves, authenticated as themselves, never relayed through support or devops. This
+  fix removes a redundant, insecure duplicate path; it does not add anything new.
+- **UI** (`WatchDevOpsAdmin.tsx`): the "BYO provider credential" section is now status-only — shows whether a
+  credential is currently stored, with a single "Revoke credential" action. The API key / base URL / model
+  input fields and "Save credential" button are gone entirely. Copy explicitly tells the admin the customer
+  provisions their own key from their own Settings page.
+- **Doc comments corrected** in `superadmin-watch-devops.ts` — the file's own top comment and the
+  `setAccountDevOpsEnterprise` doc comment both used to reference the now-deleted action; both rewritten to
+  state the boundary explicitly (an admin can flag BYO and revoke, never set) and explain why.
+- No migration (no schema change — this only removes an application-layer code path and a UI form). 1603 tests
+  pass (unchanged — no dedicated test file existed for this action file, consistent with its established
+  convention), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction** — this session had already deployed to Preview
+  right before this fix; redeploy when ready to pick it up there.
+
 ### 2026-08-25 — BYO Enterprise usage POLICY — customer-configurable spend ceilings (Phase 4.V, v1.47.45)
 - **Finishes the last real, unbuilt piece of Phase 4.V** — BYO credential storage, live runtime wiring, usage
   telemetry, self-serve credential UI, and landing positioning all already shipped (Phase 1/2, v1.47.42/43).

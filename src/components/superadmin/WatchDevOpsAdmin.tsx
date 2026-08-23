@@ -5,13 +5,12 @@ import { Search, ShieldCheck, AlertTriangle, XCircle } from "lucide-react";
 import { Card } from "@/src/components/ui";
 import {
   findAccountByEmail, getAccountDevOpsSubscription, setAccountDevOpsSubscription, setAccountDevOpsEnterprise,
-  clearAccountDevOpsSubscription, setAccountDevOpsByoCredential, clearAccountDevOpsByoCredential,
+  clearAccountDevOpsSubscription, clearAccountDevOpsByoCredential,
   type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
 } from "@/src/lib/actions/superadmin-watch-devops";
 import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
 import { getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions } from "@/src/lib/products/watch-enterprise-community";
 import type { ModeratorPlanTier } from "@/src/lib/money";
-import type { WatchByoProvider } from "@/src/lib/products/watch-byo";
 
 const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
   { value: "basic", label: "Bronze (Basic)" },
@@ -45,14 +44,12 @@ export function WatchDevOpsAdmin() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
 
-  // BYO credential form -- deliberately separate from the grant/clear busy
-  // state above (storing a credential is an independent action from
-  // granting the entitlement itself, per the plan's "provider configuration
-  // vs BYO usage policy are two distinct concepts" framing).
-  const [byoProvider, setByoProvider] = useState<WatchByoProvider>("anthropic");
-  const [byoApiKey, setByoApiKey] = useState("");
-  const [byoBaseUrl, setByoBaseUrl] = useState("");
-  const [byoModel, setByoModel] = useState("");
+  // BYO credential -- status + revoke ONLY. There is deliberately no
+  // "enter a credential" control here: a customer's API key is their own
+  // sensitive secret, and an Innvil admin must never type/receive/relay it.
+  // The customer stores it themselves via their own Settings -> AI Provider
+  // tab. This tool can flip apiSourceMode and can revoke a stored
+  // credential (an admin possesses nothing secret to do either), never set one.
   const [byoBusy, setByoBusy] = useState(false);
   const [byoError, setByoError] = useState<string | null>(null);
   const [byoOk, setByoOk] = useState<string | null>(null);
@@ -87,7 +84,6 @@ export function WatchDevOpsAdmin() {
         setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE));
         setApiSourceMode(sub.data.apiSourceMode);
       }
-      setByoApiKey("");
       setByoError(null);
       setByoOk(null);
     }
@@ -131,21 +127,6 @@ export function WatchDevOpsAdmin() {
     setBusy(false);
     if (!res.ok) { setActionError(res.error); return; }
     setActionOk("Devops subscription cleared.");
-    await refreshState(account.accountId);
-  };
-
-  const saveByoCredential = async () => {
-    if (!account) return;
-    setByoBusy(true);
-    setByoError(null);
-    setByoOk(null);
-    const res = await setAccountDevOpsByoCredential(
-      account.accountId, byoProvider, byoApiKey, byoBaseUrl.trim() || undefined, byoModel.trim() || undefined
-    );
-    setByoBusy(false);
-    if (!res.ok) { setByoError(res.error); return; }
-    setByoApiKey("");
-    setByoOk("BYO credential stored.");
     await refreshState(account.accountId);
   };
 
@@ -275,50 +256,21 @@ export function WatchDevOpsAdmin() {
             <div className="border-t fp-line-soft pt-4 space-y-2">
               <p className="text-[11px] uppercase tracking-wide fp-text-faint font-semibold">BYO provider credential</p>
               <p className="fp-text-dim text-xs">
-                Stored encrypted, provisioned manually alongside the entitlement above — never displayed once saved.
+                The customer enters their own API key themselves, from their own Settings → AI Provider tab — an Innvil
+                admin never sees, types, or handles it. This tool can only show whether a credential is currently stored
+                and revoke it (e.g. if the customer reports it compromised).
               </p>
               <div className="flex items-center gap-2 flex-wrap">
-                <select
-                  value={byoProvider}
-                  onChange={(e) => setByoProvider(e.target.value as WatchByoProvider)}
-                  className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                >
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI-compatible</option>
-                </select>
-                <input
-                  value={byoApiKey}
-                  onChange={(e) => setByoApiKey(e.target.value)}
-                  placeholder="API key"
-                  type="password"
-                  className="w-56 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                />
-                <input
-                  value={byoBaseUrl}
-                  onChange={(e) => setByoBaseUrl(e.target.value)}
-                  placeholder="Base URL (optional)"
-                  className="w-48 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                />
-                <input
-                  value={byoModel}
-                  onChange={(e) => setByoModel(e.target.value)}
-                  placeholder="Model override (optional)"
-                  className="w-48 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                />
-                <button
-                  onClick={() => void saveByoCredential()}
-                  disabled={byoBusy || !byoApiKey.trim()}
-                  className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50"
-                >
-                  {byoBusy ? "Working…" : "Save credential"}
-                </button>
+                <span className={`text-xs px-2.5 py-1.5 rounded-lg fp-panel border fp-line-soft ${state.hasByoCredential ? "text-emerald-400" : "text-amber-400"}`}>
+                  {state.hasByoCredential ? "Credential stored" : "No credential stored"}
+                </span>
                 {state.hasByoCredential && (
                   <button
                     onClick={() => void clearByoCredential()}
                     disabled={byoBusy}
                     className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50"
                   >
-                    <XCircle size={14} /> Clear credential
+                    <XCircle size={14} /> {byoBusy ? "Working…" : "Revoke credential"}
                   </button>
                 )}
               </div>
