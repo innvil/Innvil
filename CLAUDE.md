@@ -9966,9 +9966,25 @@ Architecture direction for future implementation:
   policy enforcement (once built) — this Phase 4.U note does not itself define that
   enforcement, Phase 4.V does.
 
-### Phase 4.V: Innvil Watch BYO Enterprise refinement (NOTED, not built — sequenced after current testing)
+### Phase 4.V: Innvil Watch BYO Enterprise refinement (PARTIALLY BUILT — operational subset live, see Phase 4.V.1 for what's still deferred)
 
-> **FUTURE PLAN — DO NOT IMPLEMENT YET.** Full verbatim spec (source of truth):
+> **Status corrected 2026-08-25, per direct user question ("is it operational and
+> can go live? did you make the specs for future refinement?").** The honest answer:
+> what shipped (v1.47.42/43/45/47/48, listed below) is real, safely gated, and CAN go
+> live today — credential storage, live routing with a hard no-Innvil-fallback
+> invariant, account+Community usage-policy ceilings, real telemetry, BYO Unlimited,
+> BYO-aware customer labeling, and a real Enterprise Media Moderation + grant/gate/
+> meter. But it is a materially SMALLER slice of this file's full spec than the
+> earlier per-pass changelog entries implied — several passes were closed out as
+> "done" without formally flagging what was left over from THIS spec specifically.
+> That's fixed now: see **Phase 4.V.1** immediately below for the itemized remainder
+> (per-Watcher controls, token/proactive-vs-reactive ceilings, provider/model policy,
+> full 3-level inheritance, provider health/failure observability, richer per-
+> Watcher telemetry, the full landing-page primary-offer treatment, and the spec's
+> own structured test/report checklist) — that section is the actual "NOTED, not
+> built, for future refinement" marker this spec always needed.
+
+> Full verbatim spec (source of truth):
 > `docs/moderator/byo-enterprise-refinement-spec.md`. Sent in full during the
 > 2026-08-19 session, in TWO drafts — the doc file preserves the LATER, superseding
 > one (explicit "BYO IS A MAJOR WATCH OFFERING" positioning). Same sequencing
@@ -10032,6 +10048,86 @@ Architecture direction for future implementation:
 - **Zero-Panel/account-native ownership preserved** — Community → Project →
   account_id / Deployment → Community → Project → account_id, no synthetic Panel,
   consistent with every other Watch table added this session.
+
+### Phase 4.V.1: BYO Enterprise — remaining refinement (NOTED, not built — the honest deferred list)
+
+> **What actually shipped from Phase 4.V (real, live, tested):** credential storage
+> (`watch-byo.ts`, encrypted, self-serve entry via the customer's own Settings → AI
+> Provider tab — never admin-entered, see the v1.47.46 security fix); live routing
+> through `resolveAccountAiRouting()` with a hard, tested no-fallback-to-Innvil
+> invariant across every generation call site; account+Community-scoped request-per-
+> period usage-policy ceilings (`watch-byo-usage-policy.ts`) with a real self-serve
+> "BYO usage controls" card on Usage; real call/success/failure telemetry
+> (`watch-byo-usage.ts`); BYO Unlimited (`enterprise_slots = null`, `Infinity` slot
+> ceiling) fully wired end to end; a real customer-facing "BYO 50"/"BYO Unlimited"/
+> "Managed Enterprise" label (was previously always "Managed Enterprise" — a real bug,
+> fixed); a real Enterprise Media Moderation + grant/gate/meter with Usage-page
+> visibility; a devops grant tool that works in every environment (Enterprise has no
+> self-serve checkout, so this is the actual onboarding path).
+>
+> **What's still missing from the full spec** (`docs/moderator/byo-enterprise-refinement-spec.md`),
+> itemized directly against the spec's own sections rather than summarized away:
+> - **Per-Watcher/deployment-level usage-policy controls** — the hierarchy stops at
+>   account → Community. The spec's own stated minimum ("if only account + Watcher is
+>   justified initially, implement only that") was not met either way — what shipped
+>   is account + Community, not account + Watcher. Extending to a real 3-level
+>   hierarchy (account → Community → Watcher, tightest ceiling wins, inherited vs.
+>   overridden values clearly distinguished) is real, scoped work — a new `deployment_id`
+>   dimension on `watch_byo_usage_policies`/`watch_byo_usage_counters`, plus a 3-way
+>   resolution in `checkByoUsageAllowed`/`recordByoPolicyUsage`.
+> - **Distinct reactive-message vs. proactive-message ceilings** — only ONE generic
+>   "requests per period" counter exists. The spec explicitly wanted "maximum AI
+>   responses/messages per hour/day/month" as a category separate from "maximum
+>   proactive messages per hour/day." Today a customer can't cap proactive activity
+>   (Presence Scheduling transitions, future Auto-Posting) independently of reactive
+>   chatter — they're currently the same counter's the same limit.
+> - **Token-based ceilings** — deliberately still not built; `aiComplete()`'s return
+>   shape doesn't reliably expose a token count to every caller across providers, and
+>   fabricating one would violate this spec's own explicit "do not fabricate token
+>   counts" rule. Would need widening `aiComplete`'s return contract first — a
+>   separate, larger change touching every existing caller.
+> - **Provider/model POLICY** (as opposed to provider/model CONFIGURATION) — a
+>   customer can store exactly one credential+model; there's no separate "which
+>   providers/models am I authorizing Innvil to use" restriction layered on top, and
+>   no account-default/Community-override/Watcher-override provider ASSIGNMENT (the
+>   spec's "Provider/Model Assignment" section) — routing is single-credential,
+>   account-wide only, unchanged from Phase 1.
+> - **Provider health/observability** — no "Configured / Not configured / last
+>   successful request / last provider error / recent request volume" status view
+>   exists anywhere. The Usage page's BYO telemetry card shows aggregate counts only,
+>   never a health/freshness signal. Would reuse `watch_byo_ai_usage_events`'s already-
+>   recorded `ok`/`error`/`created_at` columns (the data exists — a `MAX(created_at)
+>   WHERE ok`/`MAX(created_at) WHERE NOT ok` query away), just never surfaced.
+> - **Richer telemetry dimensions** — no Watcher/deployment-level attribution, no
+>   latency, no per-Community breakdown beyond what's already recorded (the schema has
+>   `community_id` but nothing currently groups/displays by it). Input/output tokens
+>   remain correctly unrecorded (not reliably available), per the spec's own rule.
+> - **Full landing-page "primary offer" treatment** — what shipped (v1.47.43) upgraded
+>   the existing Enterprise pricing card with real numbers and a link to
+>   `/plans#enterprise`. The spec wanted a dedicated first-class section framing "two
+>   broad ways to use Watch" (Managed vs. BYO) plus a smaller secondary CTA earlier on
+>   the page ("Running your own AI stack? Explore BYO Enterprise →"). That fuller
+>   treatment was never built.
+> - **The spec's own structured test/report checklist** — landing-page tests (BYO
+>   discoverability, CTA routing, no-duplicate-sections, mobile layout), the full BYO
+>   eligibility/secret/provider-config/policy/runtime-separation test categories, and
+>   the 29-point Final Report format were never run/produced as a discrete deliverable
+>   — coverage exists (BYO routing, credential storage, usage-policy gate/CAS
+>   idempotency, label correctness, media-addon key resolution are all tested), but
+>   not organized against this exact checklist, and several categories (landing tests,
+>   provider-config accept/reject tests, secret-non-exposure tests as their own
+>   explicit suite) have no dedicated test file at all.
+> - **Clear commercial-vs-BYO limit UX** — partially done; the Usage page shows both
+>   Innvil's own entitlement numbers and BYO's configured ceilings, but there was never
+>   a pass specifically making the distinction explicit in copy the way the spec asks
+>   ("Innvil commercial/contract entitlement vs. Customer-configured BYO operational
+>   ceiling — do not blur those concepts"). Largely moot in practice since Enterprise
+>   doesn't consume the self-serve AI Generation pool at all, but the copy was never
+>   revisited with this framing in mind.
+>
+> **Not a safety concern** — every gap above is an INCOMPLETENESS gap (a control that
+> doesn't exist yet), never a CORRECTNESS gap (nothing that exists is broken, fake, or
+> unsafely gated). Prioritize from this list on request; do not build speculatively.
 
 ### Phase 5: Platform Features
 - [ ] Payment gateway integration (Cryptomus, Stripe, PayPal) — wires into Phase 4 §7
