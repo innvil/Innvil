@@ -127,6 +127,44 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — Admin tooling: real `profiles.email` column — delete a test account in one place (v1.47.36)
+- **Follow-up correction to v1.47.35, per explicit request** — the view-based lookup wasn't what was actually
+  needed: deleting a row from `product_entitlements_with_email`/`profiles_with_email` (both views) does
+  nothing, and deleting the underlying `profiles` row directly didn't fully remove the account either (see
+  below) — the real ask was "delete directly from the accounts table" using a visible email column.
+- **Migration `0090_profiles_email_column.sql`** — `profiles.email` is now a REAL, unique, indexed column (not
+  a duplicated snapshot that can drift on its own): one-time backfill from `auth.users.email` for every
+  existing row, then kept current going forward by (1) `handle_new_user()` now copies email in at signup
+  alongside `display_name`, and (2) a new `sync_profile_email()` trigger on `auth.users` (`AFTER UPDATE OF
+  email`) propagates any later change — every email-change action in this codebase (`customerUpdateEmail`,
+  account settings) only ever writes `auth.users`, so this is the single sync point, never a second place the
+  app itself needs to remember to update.
+- **Root cause of "deleting from profiles doesn't actually remove the account"**: `profiles.id references
+  auth.users(id) on delete cascade` only cascades ONE direction (auth.users → profiles) — deleting `profiles`
+  directly left the `auth.users` row orphaned (no profile, but still a real login), and worse, re-signing up
+  with the same email would fail ("already registered") since Supabase Auth still had it. Every OTHER app
+  table already correctly cascades off `profiles.id` (spot-checked across every `account_id`/`owner_id`
+  foreign key in the schema) — the ONE missing direction was profiles → auth.users.
+- **New `delete_auth_user_on_profile_delete()` trigger (`AFTER DELETE ON profiles`)** closes that gap — deleting
+  a `profiles` row (via Table Editor, or `DELETE FROM profiles WHERE id = ...`) now also deletes the matching
+  `auth.users` row, making it a real, complete, one-step account removal; deleting via Studio's
+  Authentication > Users (or the admin API) still works exactly as before, unaffected.
+- **Supersedes `profiles_with_email` from v1.47.35** (dropped — redundant now that `profiles` itself carries
+  email); `product_entitlements_with_email` is untouched, still useful for identifying which entitlement
+  belongs to which account before deleting it.
+- `src/types/db.ts`'s `ProfileRow` gained `email: string | null`, documented as sync-only/never-write-directly.
+- No app code otherwise changed — this is DB tooling, not a product feature. 1449 tests pass (unaffected —
+  purely additive schema/type change), `tsc --noEmit` clean, production build clean.
+- **Run migration `0090`** (0089 should still be run first if it wasn't already — this migration drops one of
+  its two views but assumes the base schema state 0089 didn't otherwise touch).
+- **Caveat, stated honestly**: both the email-sync trigger AND the delete-cascade trigger touch `auth.users`
+  and may fail with `insufficient_privilege` depending on the exact role migrations run as in this Supabase
+  project — same known limitation the original `handle_new_user()` trigger (migration 0001) already documents
+  and tolerates (guarded, never aborts the migration). If the delete-cascade trigger can't be created or its
+  body can't execute, deleting from `profiles` will still clean up every other app table (that direction was
+  always fine) but leave the `auth.users` row behind — fall back to deleting that user via Studio's
+  Authentication > Users page in that case.
+
 ### 2026-08-23 — Admin tooling: email-lookup views for Supabase browsing (v1.47.35)
 - **No app code changed** — pure DB tooling, added because test accounts were indistinguishable by UUID alone
   when browsing tables directly in Supabase to clean one up.

@@ -31,6 +31,9 @@ export interface ProfileRow {
   id: string;
   role: UserRole;
   display_name: string | null;
+  /** Kept in sync with auth.users.email via migration 0090's triggers --
+   *  never write this directly; it exists for admin browsing/lookup only. */
+  email: string | null;
   created_at: string;
   updated_at: string;
 }
