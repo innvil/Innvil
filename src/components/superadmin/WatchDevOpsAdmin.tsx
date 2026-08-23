@@ -5,11 +5,13 @@ import { Search, ShieldCheck, AlertTriangle, XCircle } from "lucide-react";
 import { Card } from "@/src/components/ui";
 import {
   findAccountByEmail, getAccountDevOpsSubscription, setAccountDevOpsSubscription, setAccountDevOpsEnterprise,
-  clearAccountDevOpsSubscription, type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
+  clearAccountDevOpsSubscription, setAccountDevOpsByoCredential, clearAccountDevOpsByoCredential,
+  type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
 } from "@/src/lib/actions/superadmin-watch-devops";
 import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
 import { getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions } from "@/src/lib/products/watch-enterprise-community";
 import type { ModeratorPlanTier } from "@/src/lib/money";
+import type { WatchByoProvider } from "@/src/lib/products/watch-byo";
 
 const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
   { value: "basic", label: "Bronze (Basic)" },
@@ -38,9 +40,22 @@ export function WatchDevOpsAdmin() {
   const [tier, setTier] = useState<DevOpsGrantableTier>("standard");
   const [enterpriseSlots, setEnterpriseSlots] = useState(String(MANAGED_ENTERPRISE_50.slots));
   const [enterpriseCapacity, setEnterpriseCapacity] = useState(String(ENTERPRISE_COMMUNITY_BASE));
+  const [apiSourceMode, setApiSourceMode] = useState<"managed" | "byo">("managed");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
+
+  // BYO credential form -- deliberately separate from the grant/clear busy
+  // state above (storing a credential is an independent action from
+  // granting the entitlement itself, per the plan's "provider configuration
+  // vs BYO usage policy are two distinct concepts" framing).
+  const [byoProvider, setByoProvider] = useState<WatchByoProvider>("anthropic");
+  const [byoApiKey, setByoApiKey] = useState("");
+  const [byoBaseUrl, setByoBaseUrl] = useState("");
+  const [byoModel, setByoModel] = useState("");
+  const [byoBusy, setByoBusy] = useState(false);
+  const [byoError, setByoError] = useState<string | null>(null);
+  const [byoOk, setByoOk] = useState<string | null>(null);
 
   const search = async () => {
     setSearching(true);
@@ -70,7 +85,11 @@ export function WatchDevOpsAdmin() {
       if (sub.data.tier === "enterprise") {
         setEnterpriseSlots(String(sub.data.enterpriseSlots ?? MANAGED_ENTERPRISE_50.slots));
         setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE));
+        setApiSourceMode(sub.data.apiSourceMode);
       }
+      setByoApiKey("");
+      setByoError(null);
+      setByoOk(null);
     }
   };
 
@@ -89,12 +108,17 @@ export function WatchDevOpsAdmin() {
         ? await setAccountDevOpsEnterprise(
             account.accountId,
             Number(enterpriseSlots),
-            enterpriseCapacity.trim() ? Number(enterpriseCapacity) : undefined
+            enterpriseCapacity.trim() ? Number(enterpriseCapacity) : undefined,
+            apiSourceMode
           )
         : await setAccountDevOpsSubscription(account.accountId, tier as ModeratorPlanTier);
     setBusy(false);
     if (!res.ok) { setActionError(res.error); return; }
-    setActionOk(tier === "enterprise" ? `Devops Enterprise entitlement set (${enterpriseSlots} slots).` : `Devops ${tier} subscription set.`);
+    setActionOk(
+      tier === "enterprise"
+        ? `Devops Enterprise entitlement set (${enterpriseSlots} slots, ${apiSourceMode === "byo" ? "BYO" : "Managed"}).`
+        : `Devops ${tier} subscription set.`
+    );
     await refreshState(account.accountId);
   };
 
@@ -107,6 +131,33 @@ export function WatchDevOpsAdmin() {
     setBusy(false);
     if (!res.ok) { setActionError(res.error); return; }
     setActionOk("Devops subscription cleared.");
+    await refreshState(account.accountId);
+  };
+
+  const saveByoCredential = async () => {
+    if (!account) return;
+    setByoBusy(true);
+    setByoError(null);
+    setByoOk(null);
+    const res = await setAccountDevOpsByoCredential(
+      account.accountId, byoProvider, byoApiKey, byoBaseUrl.trim() || undefined, byoModel.trim() || undefined
+    );
+    setByoBusy(false);
+    if (!res.ok) { setByoError(res.error); return; }
+    setByoApiKey("");
+    setByoOk("BYO credential stored.");
+    await refreshState(account.accountId);
+  };
+
+  const clearByoCredential = async () => {
+    if (!account) return;
+    setByoBusy(true);
+    setByoError(null);
+    setByoOk(null);
+    const res = await clearAccountDevOpsByoCredential(account.accountId);
+    setByoBusy(false);
+    if (!res.ok) { setByoError(res.error); return; }
+    setByoOk("BYO credential cleared.");
     await refreshState(account.accountId);
   };
 
@@ -154,7 +205,13 @@ export function WatchDevOpsAdmin() {
               </p>
               {state.tier === "enterprise" && (
                 <p className="text-[11px] fp-text-faint">
-                  {state.enterpriseSlots ?? "?"} slots · {state.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE} Communities
+                  {state.enterpriseSlots ?? "?"} slots · {state.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE} Communities ·{" "}
+                  {state.apiSourceMode === "byo" ? "BYO" : "Managed"}
+                  {state.apiSourceMode === "byo" && (
+                    <span className={state.hasByoCredential ? "text-emerald-400" : "text-amber-400"}>
+                      {" "}({state.hasByoCredential ? "credential stored" : "no credential stored"})
+                    </span>
+                  )}
                 </p>
               )}
               {state.status && <p className="text-[11px] fp-text-faint">{state.status}</p>}
@@ -189,6 +246,16 @@ export function WatchDevOpsAdmin() {
                     <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
                   ))}
                 </select>
+                <div className="flex items-center gap-3 text-sm fp-text">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="apiSourceMode" checked={apiSourceMode === "managed"} onChange={() => setApiSourceMode("managed")} />
+                    Managed
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="apiSourceMode" checked={apiSourceMode === "byo"} onChange={() => setApiSourceMode("byo")} />
+                    BYO
+                  </label>
+                </div>
               </>
             )}
             <button onClick={() => void grant()} disabled={busy} className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50">
@@ -203,6 +270,62 @@ export function WatchDevOpsAdmin() {
 
           {actionError && <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {actionError}</p>}
           {actionOk && <p className="text-xs text-emerald-400">{actionOk}</p>}
+
+          {tier === "enterprise" && apiSourceMode === "byo" && (
+            <div className="border-t fp-line-soft pt-4 space-y-2">
+              <p className="text-[11px] uppercase tracking-wide fp-text-faint font-semibold">BYO provider credential</p>
+              <p className="fp-text-dim text-xs">
+                Stored encrypted, provisioned manually alongside the entitlement above — never displayed once saved.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={byoProvider}
+                  onChange={(e) => setByoProvider(e.target.value as WatchByoProvider)}
+                  className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                >
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI-compatible</option>
+                </select>
+                <input
+                  value={byoApiKey}
+                  onChange={(e) => setByoApiKey(e.target.value)}
+                  placeholder="API key"
+                  type="password"
+                  className="w-56 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                />
+                <input
+                  value={byoBaseUrl}
+                  onChange={(e) => setByoBaseUrl(e.target.value)}
+                  placeholder="Base URL (optional)"
+                  className="w-48 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                />
+                <input
+                  value={byoModel}
+                  onChange={(e) => setByoModel(e.target.value)}
+                  placeholder="Model override (optional)"
+                  className="w-48 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                />
+                <button
+                  onClick={() => void saveByoCredential()}
+                  disabled={byoBusy || !byoApiKey.trim()}
+                  className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50"
+                >
+                  {byoBusy ? "Working…" : "Save credential"}
+                </button>
+                {state.hasByoCredential && (
+                  <button
+                    onClick={() => void clearByoCredential()}
+                    disabled={byoBusy}
+                    className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <XCircle size={14} /> Clear credential
+                  </button>
+                )}
+              </div>
+              {byoError && <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertTriangle size={12} /> {byoError}</p>}
+              {byoOk && <p className="text-xs text-emerald-400">{byoOk}</p>}
+            </div>
+          )}
         </div>
       )}
     </Card>

@@ -103,6 +103,15 @@ export interface AccountEnterpriseEntitlement {
    *  to the Managed Enterprise 50 base (8) when unset (a pre-0088 or
    *  never-expanded entitlement). */
   communityCapacity: number;
+  /** "managed" (default -- Innvil covers the AI provider spend) or "byo"
+   *  (the account supplies their own provider credential, migration 0092).
+   *  PURELY DESCRIPTIVE/ROUTING METADATA as of this field's introduction --
+   *  it does not yet change any capacity/capability resolution below, and
+   *  does not yet change which credential the live AI runtime actually
+   *  uses (see watch-byo.ts's own doc comment for that deliberate scope
+   *  boundary). Defaults to "managed" for any null/invalid stored value --
+   *  never fabricates "byo". */
+  apiSourceMode: "managed" | "byo";
 }
 
 /** The account's active Managed Enterprise entitlement, if any -- a
@@ -115,12 +124,12 @@ export interface AccountEnterpriseEntitlement {
  *  change. Same expiry discipline as resolveAccountWatchTier (a NULL
  *  `current_period_end` is grandfathered as never-expiring; a real expired
  *  period returns null, never a stale entitlement). */
-async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient, accountId: string): Promise<AccountEnterpriseEntitlement | null> {
+export async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient, accountId: string): Promise<AccountEnterpriseEntitlement | null> {
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
   if (!product) return null;
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("status, subscription_ref, current_period_end, enterprise_slots, enterprise_community_capacity, billing_interval")
+    .select("status, subscription_ref, current_period_end, enterprise_slots, enterprise_community_capacity, billing_interval, api_source_mode")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -138,7 +147,10 @@ async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient, accoun
   const rawCapacity = entitlement.enterprise_community_capacity as number | null;
   const communityCapacity =
     rawCapacity && validateEnterpriseCommunityCapacity("managed", rawCapacity) ? rawCapacity : getEnterpriseIncludedCommunities("managed");
-  return { slots, currentPeriodEnd, billingInterval, communityCapacity };
+  // Defensive: falls back to "managed" for anything other than the exact
+  // stored string "byo" -- never fabricates BYO from a null/unexpected value.
+  const apiSourceMode: "managed" | "byo" = entitlement.api_source_mode === "byo" ? "byo" : "managed";
+  return { slots, currentPeriodEnd, billingInterval, communityCapacity, apiSourceMode };
 }
 
 export interface AccountPaidPlan {

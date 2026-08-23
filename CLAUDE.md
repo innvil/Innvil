@@ -127,6 +127,78 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — BYO Enterprise, Phase 1: real entitlement mode + encrypted credential storage + devops grant (v1.47.42)
+- **Closes the gap flagged repeatedly since the Enterprise-repricing pass (v1.47.26)**: "Bring Your Own [AI
+  provider credential]" Enterprise has been a real, priced commercial mode on the Plans page (BYO 50 $299/mo,
+  BYO Unlimited $499/mo) with **zero backing schema, credential storage, or grant path** — `product_entitlements`
+  had no `api_source_mode`/BYO-shaped column at all, and the devops grant tool (`setAccountDevOpsEnterprise`,
+  v1.47.37) could only create Managed entitlements. This pass builds the real entitlement/storage foundation;
+  wiring the live AI runtime to actually USE a BYO account's credential is **explicitly deferred** — see below.
+- **New migration `0092_watch_byo_credential.sql`** — `product_entitlements.api_source_mode` (nullable text,
+  `check (... is null or in ('managed','byo'))`, only meaningful for `tier==='enterprise'` rows; `NULL` = Managed,
+  matching the already-documented "every Enterprise account today IS de facto Managed" honest state, additive,
+  no backfill needed). New `watch_byo_provider_credentials` table (`account_id` PK, `provider` anthropic|openai,
+  `credential_enc` bytea, `base_url`, `model`) — a SEPARATE table from `product_entitlements`, mirroring
+  `telegram_bot_integrations`' own separate-table-per-credential-concept pattern. Encrypted the SAME way every
+  other external credential in this schema already is — `pgp_sym_encrypt`/`pgp_sym_decrypt` via the SAME
+  `PROVIDER_KEY_SECRET` env var, `set_watch_byo_credential`/`get_watch_byo_credential` `security definer` RPCs
+  restricted to `service_role`, byte-for-byte the same shape as `set_provider_key`/`get_provider_key` — this is
+  the 5th time this exact pattern has been used (SMM providers, panel payment gateways, platform payment
+  gateways, Telegram bot tokens, now BYO AI credentials), never a new/weaker mechanism. **Run migration `0092`.**
+- **New `src/lib/products/watch-byo.ts`** — `hasByoCredential` (cheap existence check, never decrypts),
+  `getAccountByoCredential`/`setAccountByoCredential`/`clearAccountByoCredential`. The file's own doc comment
+  states the scope boundary explicitly: storing/retrieving a credential here does **not** yet change any live
+  AI call anywhere — every moderation/chatter/media-classification call site still uses Innvil's own credential
+  today, regardless of what's stored here. Names every call site that must NOT import this module yet
+  (`chatter-generate.ts`, `media-safety-provider.ts`, `autopost-generate.ts`, `bot-manager-classify.ts`,
+  `link-classify.ts`, `media-warning.ts`) — confirmed via a repo-wide grep after implementation that this module
+  is imported from exactly 3 files: the devops action, its UI (type-only), and its own test file. Zero AI-call
+  sites touch it.
+- **`watch-runtime.ts`'s `AccountEnterpriseEntitlement` gained `apiSourceMode: "managed" | "byo"`** —
+  `resolveAccountEnterpriseEntitlement` (now exported, was private, for direct testability) resolves it
+  defensively (only the exact stored string `"byo"` ever resolves to `"byo"`; anything else, including a
+  corrupted value, falls back to `"managed"`, never fabricated). **Purely descriptive/routing metadata as of
+  this field's introduction** — proven by a dedicated test that capacity/slot/Community-expansion resolution is
+  byte-identical for a Managed vs. a BYO-flagged entitlement with otherwise-identical data.
+- **`activateWatchEntitlement`** (`ownership.ts`) gained an 8th optional parameter, `apiSourceMode?: "managed" |
+  "byo"` — same never-clobber-a-stray-value discipline as `enterpriseSlots`/`enterpriseCommunityCapacity`: left
+  OUT of the upsert entirely when omitted (a renewal never resets an already-provisioned mode), only ever a
+  real, type-restricted value when given.
+- **`setAccountDevOpsEnterprise`** (`superadmin-watch-devops.ts`) gained the same optional `apiSourceMode`
+  parameter, threaded straight into `activateWatchEntitlement`. **New `setAccountDevOpsByoCredential`/
+  `clearAccountDevOpsByoCredential`** — same two safety gates as every other mutating action in this file
+  (super-admin role + Preview-only) — let an admin store/rotate/clear a BYO account's credential as part of
+  manually provisioning them (Enterprise stays entirely manual/devops-provisioned, matching how Managed
+  Enterprise already works — no new self-serve surface). Audit-log `meta` deliberately excludes the API key on
+  every write. `getAccountDevOpsSubscription`'s response gained `apiSourceMode`/`hasByoCredential` — **never**
+  the decrypted key itself, mirroring how this action has never returned a stored secret for any other
+  credential either.
+- **UI** (`WatchDevOpsAdmin.tsx`) — the Enterprise grant form gained a Managed/BYO radio; selecting BYO reveals
+  a credential form (provider select, API key input as `type="password"`, optional base URL/model overrides).
+  Current-entitlement display now shows "Managed"/"BYO" + whether a credential is currently stored (never the
+  key). The credential form is its own independent action from granting the entitlement (separate busy/error
+  state) — matches the plan's explicit "provider configuration vs. BYO usage policy are two distinct concepts"
+  framing.
+- New tests: `watch-byo.test.ts` (+14, new file — existence check, set/get round-trip incl. optional-field
+  defaults, upsert-not-duplicate, absence returns null never throws, RPC-error handling, clear + no-op clear,
+  cross-account isolation both directions, and 3 REQUIRED guards proving the decrypted key never leaks beyond
+  its one intended return path), `watch-runtime.test.ts` (+4 — apiSourceMode defaults to managed/resolves
+  byo/falls back to managed for an invalid value/never affects capacity resolution), `ownership.test.ts` (+3 —
+  a valid value persists, omitting it on renewal never clobbers a previously-provisioned value, explicitly
+  re-persisting `"managed"` works for switching a BYO account back). 1502 tests pass (up from 1481), `tsc
+  --noEmit` clean, production build clean. Diff reviewed: every changed file maps directly to this scope (2
+  action/UI files, 2 runtime/ownership files + their tests, 1 new lib file + test, 1 migration).
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately NOT built this pass** (documented, not silently skipped, per the approved plan's own explicit
+  scope boundary): rewiring any actual AI call site to use a BYO account's stored credential instead of
+  Innvil's own — this is the safety-critical part (real customer money, the "BYO must never silently fall back
+  to an Innvil-owned credential" invariant) and deserves its own dedicated, carefully-tested pass, not rushed
+  alongside schema work; BYO usage-policy/telemetry (a separate concept per the existing Phase 4.V note); a
+  self-serve customer-facing credential-entry UI (Enterprise stays entirely manual/devops-provisioned, same as
+  Managed); landing-page BYO positioning refresh. **After this pass, a BYO account's credential is stored and
+  retrievable, but the live Telegram/moderation/chatter/media-classification runtime still uses Innvil's own
+  credential for every AI call — zero functional behavior change yet, by design.**
+
 ### 2026-08-23 — AI-generated content (bot manager + blog) now knows Innvil Watch exists (v1.47.41)
 - **Both `innvil_bot_manager`'s knowledge base and the AI blog writer were entirely Forge-only** — zero mention
   of Innvil Watch as a standalone product anywhere. The bot manager's one Watch-adjacent entry still described

@@ -285,6 +285,39 @@ test("a renewal that omits enterpriseCommunityCapacity never clobbers a previous
   assert.equal(row?.enterprise_community_capacity, 25, "omitting the parameter on renewal must never reset an already-provisioned Community package");
 });
 
+/* --------------------------------------- BYO Enterprise apiSourceMode (0092) ---- */
+
+test("REQUIRED: activateWatchEntitlement persists a real apiSourceMode value", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", 50, undefined, "byo");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.api_source_mode, "byo");
+});
+
+test("omitting apiSourceMode never clobbers a previously-persisted value on renewal", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: 50, api_source_mode: "byo" },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.api_source_mode, "byo", "omitting the parameter on renewal must never reset an already-provisioned mode");
+});
+
+test("apiSourceMode='managed' can be explicitly (re)persisted, e.g. switching a BYO account back to Managed", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: 50, api_source_mode: "byo" },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2", "monthly", undefined, undefined, "managed");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.api_source_mode, "managed");
+});
+
 /* -------------------------------------------------------- account projects ---- */
 
 test("listAccountProjects returns only this account's projects, standalone and Panel-backed alike", async () => {

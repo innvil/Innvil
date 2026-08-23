@@ -7,6 +7,7 @@ import {
   getAccountProjectDetail, getAccountCommunityDetail, getAccountWatcherDetail, listAccountAttentionItems,
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
+  resolveAccountEnterpriseEntitlement,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration } from "@/src/lib/moderator/plan";
@@ -1607,6 +1608,43 @@ test("a self-serve Platinum entitlement is never accidentally resolved as enterp
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.tier, "pro");
   assert.equal(capacity?.slotsTotal, 20, "Platinum's own fixed CAPACITY table value, never confused with a variable Enterprise slot count");
+});
+
+/* ------------------------------- BYO Enterprise apiSourceMode (0092) ---- */
+// Purely descriptive/routing metadata as of this field's introduction --
+// resolved defensively (never fabricates "byo"), and must not change ANY
+// capacity/slot resolution -- proving this pass introduces zero runtime
+// behavior change beyond the new field itself.
+
+test("REQUIRED: apiSourceMode defaults to managed when the column is null/absent", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const entitlement = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(entitlement?.apiSourceMode, "managed");
+});
+
+test("REQUIRED: apiSourceMode resolves byo when the account is explicitly provisioned that way", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo] });
+  const entitlement = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(entitlement?.apiSourceMode, "byo");
+});
+
+test("an invalid/stray api_source_mode value never fabricates byo -- falls back to managed", async () => {
+  const corrupted = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "self-hosted" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [corrupted] });
+  const entitlement = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(entitlement?.apiSourceMode, "managed", "only the exact stored string 'byo' ever resolves to byo");
+});
+
+test("REQUIRED: apiSourceMode never affects capacity/slot resolution -- byte-identical for managed vs byo", async () => {
+  const managed = ENTITLED_ENTERPRISE_50;
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const managedCapacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [managed] }), "acct-1");
+  const byoCapacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo] }), "acct-1");
+  assert.equal(managedCapacity?.tier, byoCapacity?.tier);
+  assert.equal(managedCapacity?.slotsTotal, byoCapacity?.slotsTotal);
+  assert.equal(managedCapacity?.communitiesTotal, byoCapacity?.communitiesTotal);
+  assert.equal(managedCapacity?.communityExpansionEligible, byoCapacity?.communityExpansionEligible);
 });
 
 test("REQUIRED: Managed Enterprise entitlement never leaks across accounts", async () => {

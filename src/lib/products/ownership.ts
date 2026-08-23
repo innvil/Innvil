@@ -96,7 +96,8 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
  */
 export async function activateWatchEntitlement(
   admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string,
-  billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number, enterpriseCommunityCapacity?: number
+  billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number, enterpriseCommunityCapacity?: number,
+  apiSourceMode?: "managed" | "byo"
 ): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
@@ -139,6 +140,13 @@ export async function activateWatchEntitlement(
       ...(enterpriseCommunityCapacity != null && validateEnterpriseCommunityCapacity("managed", enterpriseCommunityCapacity)
         ? { enterprise_community_capacity: enterpriseCommunityCapacity }
         : {}),
+      // "managed" | "byo" (migration 0092) -- same never-clobber-a-stray-
+      // value discipline as the two fields above: left OUT of the upsert
+      // entirely when not given (a renewal that omits it keeps whatever
+      // mode was already provisioned), and only ever a real, valid value
+      // (the type system already restricts this to exactly the two
+      // allowed strings, so no further runtime validation is needed here).
+      ...(apiSourceMode != null ? { api_source_mode: apiSourceMode } : {}),
       // Annual is Innvil-Credit-only by product rule -- force it here so
       // Billing never has to re-derive it. Monthly is deliberately left
       // OUT of this object (not overwritten) since it can legitimately be
