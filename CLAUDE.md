@@ -127,6 +127,17 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — Admin tooling: email-lookup views for Supabase browsing (v1.47.35)
+- **No app code changed** — pure DB tooling, added because test accounts were indistinguishable by UUID alone
+  when browsing tables directly in Supabase to clean one up.
+- **New migration `0089_account_email_lookup.sql`** — two read-only VIEWS, `profiles_with_email` and
+  `product_entitlements_with_email`, joining live to `auth.users.email` (never a duplicated/copied `email`
+  column on `profiles`/`product_entitlements` — every email-change action in this codebase, e.g.
+  `customerUpdateEmail`/account settings, only ever writes `auth.users`, so a copied column would silently
+  drift). Not exposed to the client API (no `anon`/`authenticated` grant) — Supabase SQL Editor / Table
+  Editor only, same "service-role only" convention already used throughout this schema.
+- **Run migration `0089`.**
+
 ### 2026-08-22 — Enterprise Community Expansion: real, purchasable-shaped capacity packages per mode (v1.47.34)
 - **First implementation slice of the queued Enterprise Community Expansion spec** (see the
   `innvil-enterprise-community-expansion-spec` memory note) — a genuinely SEPARATE commercial resource from
