@@ -10,6 +10,8 @@ import { Breadcrumbs, EmptyRow, SectionHeader, relTime, OperationalStatusBadge }
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { DeploymentToggle } from "@/src/components/watch/DeploymentToggle";
 import { CommunityModerationFilters } from "@/src/components/watch/CommunityModerationFilters";
+import { PresenceScheduleCard } from "@/src/components/watch/PresenceScheduleCard";
+import { getCommunityPresenceSchedule } from "@/src/lib/actions/watch-presence";
 
 export const metadata: Metadata = { title: "Community — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -36,6 +38,7 @@ export default async function CommunityDetailPage({
 
   const status = communityOperationalStatus(community);
   const watchersForFilter = community.watchers.map((w) => ({ id: w.watcherId, name: w.watcherName }));
+  const presenceResult = await getCommunityPresenceSchedule(id);
 
   const watchersTab = (
     <div className="w-card p-5">
@@ -110,6 +113,9 @@ export default async function CommunityDetailPage({
       ),
     },
     { id: "watchers", label: "Watchers", content: watchersTab },
+    ...(presenceResult.ok
+      ? [{ id: "presence", label: "Presence", content: <PresenceScheduleCard communityId={id} initial={presenceResult.data} /> } as WatchTab]
+      : []),
     {
       id: "moderation",
       label: "Moderation",

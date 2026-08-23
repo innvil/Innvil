@@ -99,3 +99,12 @@ export function watchPlanOptions(): WatchPlanOption[] {
 }
 
 export { moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, MODERATOR_ENTERPRISE_MIN_SLOTS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY };
+
+/** Watcher Presence Scheduling (Phase 4.U) eligibility -- Silver/Gold/
+ *  Platinum + Enterprise, per the feature's own spec table. Bronze and the
+ *  Free Trial are excluded. A SINGLE pure function, reused for BOTH the UI
+ *  gate (show the tab / show an upsell note) and the cron sweep's own
+ *  server-side re-check -- the two can never disagree about eligibility. */
+export function presenceSchedulingEligible(tier: ModeratorPlanTier | "trial" | "enterprise" | null): boolean {
+  return tier === "standard" || tier === "premium" || tier === "pro" || tier === "enterprise";
+}

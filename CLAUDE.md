@@ -127,6 +127,107 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Watcher Presence Scheduling — Phase 4.U implemented (v1.47.44)
+- **Deployed Watchers now auto-stagger being "conversationally present"** — sending a persona-voiced, scheduled
+  arrival/departure message (`presence_started`/`presence_resumed`/`presence_ending`), so 2+ Watchers in one
+  Community don't all go active/silent in lockstep. Full verbatim spec:
+  `docs/moderator/watcher-presence-scheduling-spec.md` (Phase 4.U). Explicitly gated on current Telegram/
+  moderation testing being stable (per the standing instruction it was queued under) — that condition was met,
+  and the user picked this as the next task after BYO Enterprise Phase 2.
+- **Explicit, user-confirmed scope decision (via AskUserQuestion): announcements only.** Presence controls
+  ONLY the scheduled arrival/departure messages — it has ZERO effect on core safety/scam/phishing moderation
+  (`runLinkModeration`/`runMediaModeration`, both untouched — confirmed via `git diff`) or on Natural Chatter's
+  reactive candidate selection (`findChatterDeployments`, also untouched) — a Watcher still answers questions
+  normally even while "away." Standalone (direct-Watch, Panel-less) accounts only, matching every other Watch
+  feature this session — `resolveDeploymentTenant()` already returns `null` for Panel-owned deployments, so a
+  legacy Panel-distributed community structurally can't reach this feature at all.
+- **New pure, directly-tested scheduling algorithm** `src/lib/moderator/presence-schedule.ts` — a continuous,
+  anchor-based rotation (no daily reset, DST-safe: each deployment resolves to a fixed
+  `{anchorUtc, activeMinutes, cycleMinutes}`, and `presenceAt(config, now)` is plain elapsed-time-since-anchor
+  arithmetic from there — never a live re-localization). `intervalKey` (the current interval's own UTC start
+  instant) is the persisted idempotency identity. **Recommended formula** (deterministic, no randomness — owners
+  need predictable schedules): `cycleMinutes = staggerMinutes * N`, `activeMinutes = min(staggerMinutes * 1.5,
+  cycleMinutes)`, `anchorUtc = referenceUtc + orderIndex * staggerMinutes` — verified exactly against the spec's
+  own N=2 worked example (Kwan 08:00–11:00 / away / 12:00–15:00, Test 10:00–13:00, real overlap at both
+  10:00–11:00 and 12:00–13:00). N=1 naturally clamps to always-present. `applyCoverageWindow()` optionally
+  forces `present:false` outside a community-wide local-time window (incl. overnight-wrap support).
+- **Migration `0094_watch_presence_scheduling.sql`** — three tables, `enabled default false` everywhere (no
+  existing deployment starts sending scheduled messages merely because the migration ran): `community_presence_settings`
+  (mode/stagger/`reference_utc`/coverage window/announce-flag toggles, one row per Community, lazily created),
+  `deployment_presence_config` (per-deployment resolved `{anchor_utc, active_minutes, cycle_minutes}` — the
+  runtime always reads these three columns directly regardless of whether Recommended or Custom populated
+  them), `deployment_presence_state` (the persisted runtime state + idempotency identity). RLS on, no policies
+  (service-role only). **Migration `0095_supabase_watch_presence_cron.sql`** schedules
+  `innvil-watch-presence-every-5-min` (mirrors `0056`'s exact vault-secret/`net.http_get` pattern). **Run
+  migrations `0094` and `0095`** (+ schedule the pg_cron job) before this does anything live.
+- **Runtime sweep** `src/lib/moderator/presence-runtime.ts` (`sweepPresenceSchedules`, cron route
+  `app/api/cron/watch-presence`, mirrors `autopost`'s route exactly) — for every enabled deployment: resolves
+  ownership via `resolveDeploymentTenant` (Panel-owned → skip), re-checks entitlement server-side via
+  `getAccountCapacity`/new `presenceSchedulingEligible()` (Silver/Gold/Platinum/Enterprise only, Bronze/trial
+  excluded — the SAME pure function gates both the UI tab and this runtime check, so they can never disagree),
+  computes `{present, intervalKey}`, and compares against the PERSISTED state (never re-derived from
+  `intervalKey` alone) — a genuine active↔away flip is claimed via `claimPresenceTransition()`, a real
+  compare-and-swap (conditional `UPDATE ... WHERE state = priorState`, or a plain `INSERT` when no row exists
+  yet — a real PK conflict on that insert is the race-loser's own signal) so two concurrent sweep invocations
+  can never both announce the same transition. A delayed/missed sweep reconciles straight to the CURRENT
+  computed state (`presenceAt` is a pure function of `now`, not of historical progression) — never replays
+  every intermediate transition it missed. State is written (and `moderator_activity_log` gets an entry,
+  `event_type: "presence"`) regardless of whether the community's matching `announce_*` flag is on — an
+  announce-off transition still updates state, it just never generates/sends text.
+- **Found and fixed a real bug during testing**: `transitionKindFor(priorState, nextState)` initially returned
+  `"presence_ending"` for a brand-new deployment (no persisted row) that happens to compute `away` on its first
+  sweep — wrong, since a deployment that's never been active has nothing to "end." Fixed: no-row + `away` is
+  now correctly a no-op (matches the doc comment's own stated convention — a state row is only ever lazily
+  created on the FIRST genuine transition to `active`). Caught by `presence-runtime.test.ts`, not live.
+- **New sibling generation module** `src/lib/moderator/presence-generate.ts` (`generatePresenceMessage`) —
+  mirrors `media-warning.ts`/`link-classify.ts`'s exact shape (small dedicated file, BYO-first, deterministic
+  fallback pool) rather than force-fitting into `chatter-generate.ts` (whose whole prompt assumes a real
+  triggering human message). Routed through the SAME cheap `deepseekChatterProvider()` tier CASUAL_CHAT already
+  uses (low-stakes ambient text, never Sonnet 5's `getInnvilModelConfig()`). **BYO Enterprise wired in from day
+  one**, reusing yesterday's `AccountAiRouting`/`byoProviderOverride` — `aiRouting?.required` checked first,
+  falling straight to the per-kind deterministic template pool (never Innvil's own `DEEPSEEK_API_KEY`) on any
+  BYO failure. Prompt explicitly bans mentioning scheduling/rotation/presence-window mechanics — a transition
+  message must read as a natural, unprompted social message, never leak internal system behavior (same
+  no-hidden-mechanics principle already established for Natural Chatter, v1.9.14).
+- **Owner-facing CRUD** `src/lib/actions/watch-presence.ts` — `getCommunityPresenceSchedule`/
+  `resetToRecommendedSchedule`/`setDeploymentPresenceEnabled`/`setDeploymentPresenceConfig`/
+  `setCommunityPresenceSettings`, ownership resolved via `listAccountCommunities` (the SAME canonical,
+  cross-account-isolated Community list every other Watch action reuses). **These actions NEVER write
+  `deployment_presence_state` or send a Telegram message themselves** — only the cron sweep does that, on its
+  own next tick, reading whatever config now says; editing schedule config can never itself trigger an
+  announcement (verified via `git diff`/grep — zero writes to that table anywhere in this file). Enabling a
+  deployment immediately gives it a real starting schedule (recomputed alongside every other already-enabled
+  deployment via the Recommended formula, reusing the community's existing `reference_utc` when one exists);
+  disabling only flips the flag, preserving every other stored value so re-enabling later doesn't lose a custom
+  configuration. `reference_utc` is recomputed ONLY by an explicit Reset-to-Recommended/first-enable action —
+  never implicitly on an unrelated settings save.
+- **New "Presence" tab** on the Community detail page (`app/communities/[id]/page.tsx`), between Watchers and
+  Moderation — `PresenceScheduleCard.tsx` (mode badge, stagger-minutes + Reset-to-Recommended, coverage-window
+  time inputs, 3 announce checkboxes, and a per-deployment row: enable toggle + a live-computed Present/Away
+  status via the pure `presenceAt()` reused client-side + a "Customize" inline editor for direct active/cycle
+  minute overrides). An ineligible account sees a plain upsell note instead of a broken/empty control (the
+  component's own built-in eligibility gate, reused for both the UI and the runtime).
+- New tests: `presence-schedule.test.ts` (16 — the N=1..5 formula, the exact spec worked example, `intervalKey`
+  stability/advancement, coverage-window incl. overnight-wrap, the anchor-before-`now` edge case),
+  `presence-generate.test.ts` (12 — DeepSeek routing incl. the full BYO-required/usable/missing matrix, varied
+  template-pool fallback per transition kind, persona isolation, the no-hidden-mechanics prompt assertion),
+  `presence-runtime.test.ts` (13 — `transitionKindFor`'s full state-machine incl. the regression above,
+  `localMinutesOfDay` incl. an invalid-timezone safe fallback, and `claimPresenceTransition`'s full
+  compare-and-swap contract: fresh insert, duplicate-insert-loses, valid CAS succeeds, stale CAS loses,
+  exactly-one-of-two-concurrent-claims-wins). 1580 tests pass (up from 1543), `tsc --noEmit` clean, production
+  build clean (confirmed `/api/cron/watch-presence` in the build output). **`sweepPresenceSchedules` itself has
+  no full DB-mocked orchestrator test** — consistent with this codebase's own established convention for
+  comparably complex orchestrators (`runAutoPostSweep`/`handleCommunityUpdate`, neither of which has one
+  either) — verified via typecheck + build + code review instead; every exported pure/near-pure piece it calls
+  is independently, thoroughly tested.
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately not built this pass**: presence-inactive as a chatter-eligibility gate (explicitly rejected —
+  see the scope decision above); a mode toggle exposed directly as Recommended/Custom radio buttons (mode is
+  currently an implicit consequence of which action was last called — Reset-to-Recommended sets it to
+  `recommended`, a direct Custom edit sets it to `custom` — rather than a separately click-through-able
+  control); drag-to-reorder for `order_index` (deployments currently order by their position in the Community's
+  own Watcher list); a richer visual rotation timeline beyond the current-moment Present/Away line.
+
 ### 2026-08-24 — BYO Enterprise, Phase 2: live runtime wiring + usage telemetry + self-serve credential UI + landing positioning (v1.47.43)
 - **Completes the four items deliberately deferred from Phase 1 (v1.47.42)** — BYO Enterprise now actually
   DOES something: an account flagged `api_source_mode='byo'` with a stored credential now has its real
