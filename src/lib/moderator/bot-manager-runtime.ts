@@ -116,6 +116,27 @@ async function handleAccountVerificationStart(admin: SupabaseClient, message: Te
   return true;
 }
 
+/** A BARE `/start` (no token) in a PRIVATE chat -- e.g. a guest who found this
+ *  bot and tapped Telegram's own "Start" button, with no prior deep link.
+ *  Deterministic, zero-AI-cost welcome, matching the same "structural event
+ *  gets a template reply, not a classifier round trip" pattern already used
+ *  for every other first-class Telegram event in this codebase. Checked
+ *  AFTER handleAccountVerificationStart -- a `/start <token>` is ALWAYS
+ *  handled there (success or failure) and never reaches this function, so
+ *  this only ever fires for the genuine no-token case. */
+export function isBareStartInPrivateChat(message: TelegramMessage): boolean {
+  if (message.chat.type !== "private") return false;
+  const match = START_COMMAND_RE.exec((message.text ?? "").trim());
+  return !!match && !match[1];
+}
+
+const WELCOME_TEXT =
+  "Hi! I'm Innvil's official bot — I can answer questions about Innvil itself.\n\n" +
+  "Innvil has two products, both under one account:\n" +
+  "• Innvil Forge (innvil.cloud) — build your own white-label SMM panel.\n" +
+  "• Innvil Watch (watch.innvil.cloud) — deploy an AI Telegram community moderator.\n\n" +
+  "Ask me anything about pricing, getting started, or how either product works.";
+
 export async function handleBotManagerUpdate(update: TelegramUpdate): Promise<void> {
   const admin = createAdminClient();
   dlog("received", { updateId: update.update_id, keys: Object.keys(update) });
@@ -127,6 +148,12 @@ export async function handleBotManagerUpdate(update: TelegramUpdate): Promise<vo
   if (message.from.is_bot) { dlog("stop:sender_is_bot"); return; } // never engage another bot, incl. accidental self-loops
 
   if (await handleAccountVerificationStart(admin, message, botManagerToken())) { dlog("stop:handled_as_account_verification"); return; }
+
+  if (isBareStartInPrivateChat(message)) {
+    await telegramApiCall(botManagerToken(), "sendMessage", { chat_id: message.chat.id, text: WELCOME_TEXT });
+    dlog("stop:handled_as_bare_start_welcome");
+    return;
+  }
 
   await recordKnownChat(admin, message);
 

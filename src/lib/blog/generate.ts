@@ -13,7 +13,9 @@ import { sendEmail, simpleEmail } from "@/src/lib/email/resend";
    ========================================================= */
 
 /** Evergreen fallback topics used when the curated queue is empty, so the daily
-    job still produces something. The super admin's own queue always takes priority. */
+    job still produces something. The super admin's own queue always takes priority.
+    Covers BOTH Innvil products (Forge = SMM panel builder, Watch = standalone
+    AI Telegram moderator) so the blog isn't permanently Forge-only. */
 const FALLBACK_TOPICS: Array<{ topic: string; keywords: string[] }> = [
   { topic: "How to price services on your SMM panel for healthy margins", keywords: ["smm panel pricing", "smm panel markup"] },
   { topic: "How to choose an SMM provider to resell (a checklist)", keywords: ["smm provider", "best smm provider", "smm reseller"] },
@@ -22,6 +24,11 @@ const FALLBACK_TOPICS: Array<{ topic: string; keywords: string[] }> = [
   { topic: "White-label SMM panel branding: domain, logo and storefront tips", keywords: ["white label smm panel", "smm panel branding"] },
   { topic: "How order fulfilment and status syncing works on an SMM panel", keywords: ["smm panel orders", "smm order status"] },
   { topic: "Common mistakes new SMM panel owners make (and how to avoid them)", keywords: ["smm panel mistakes", "start smm panel"] },
+  { topic: "How to keep a Telegram community free of spam and scam links", keywords: ["telegram spam moderation", "telegram scam links", "telegram community moderation"] },
+  { topic: "What an AI Telegram moderator actually does (and doesn't do)", keywords: ["ai telegram moderator", "ai community moderator", "telegram bot moderation"] },
+  { topic: "Watcher slots explained: how AI moderator capacity actually works", keywords: ["telegram moderator capacity", "ai moderator pricing"] },
+  { topic: "Signs your Telegram community needs a moderator (and when a human isn't enough)", keywords: ["telegram community management", "telegram group moderation"] },
+  { topic: "How to set up an AI moderator for a Telegram group in under 10 minutes", keywords: ["telegram ai bot setup", "add ai moderator telegram"] },
 ];
 
 export type GenerationOutcome =

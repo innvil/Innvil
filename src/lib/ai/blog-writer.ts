@@ -4,10 +4,12 @@ import { aiComplete, aiprimetechProvider } from "@/src/lib/ai/client";
 
 /* =========================================================
    AI blog writer.
-   Server-only. Prompts Claude to write a full SMM-panel guide as strict JSON
-   matching our block model, then validates it hard before it can become a draft.
-   The model is constrained to VERIFIED product facts so it can't invent features
-   or fabricate stats. Never publishes — output is always a draft for human review.
+   Server-only. Prompts Claude to write a full guide (about either Innvil
+   product -- Forge, the SMM panel builder, or Watch, the standalone AI
+   Telegram moderator) as strict JSON matching our block model, then
+   validates it hard before it can become a draft. The model is constrained
+   to VERIFIED product facts so it can't invent features or fabricate stats.
+   Never publishes — output is always a draft for human review.
 
    Env:
      ANTHROPIC_API_KEY  (required for generation)
@@ -16,21 +18,34 @@ import { aiComplete, aiprimetechProvider } from "@/src/lib/ai/client";
 
 const BLOG_MODEL = process.env.BLOG_AI_MODEL || process.env.AI_MODEL || "claude-sonnet-5";
 
-/** Verified facts the writer may rely on. Keep in sync with the product + landing. */
+/** Verified facts the writer may rely on. Keep in sync with the product + landing.
+ *  Innvil is a MULTI-PRODUCT platform (Forge + Watch, both reachable from one
+ *  Innvil account) -- these facts cover BOTH, so a topic about either product
+ *  can be written accurately. A topic should stick to ONE product's facts;
+ *  never blend Forge's commission model into a Watch article or vice versa. */
 const PRODUCT_FACTS = `
-Innvil is a no-code, white-label SMM (social media marketing) panel builder.
+Innvil has two real products today, both under one account:
+
+INNVIL FORGE (innvil.cloud) -- a no-code, white-label SMM (social media marketing) panel builder.
 - Owners create unlimited white-label panels, each with its own subdomain, storefront, customer dashboard and wallet. Custom domains with automatic SSL are supported and reversible (disconnect falls back to the subdomain).
 - Bring-your-own-provider: owners connect their own SMM provider's API; Innvil imports the catalog, applies the owner's markup, forwards orders and syncs statuses. Innvil never sells SMM services itself. Owners keep 95% of every order.
 - Pricing: NO monthly rent and NO setup fee. Innvil charges 5% commission on COMPLETED orders only (0% on canceled/refunded). That rate drops toward 1% as a panel scales (roughly 4% at 1,000 completed orders/day, 3% at 2,500, 2% at 5,000, 1% at 10,000+), and Innvil never takes more than $100 from one panel per day. First owner top-up is $10, then $5 minimum.
 - Owners can build and preview a live storefront for free; they only fund a panel when ready to take orders.
 - Payments (customer deposits): crypto via Cryptomus and NOWPayments (300+ coins) today, more coming; funds credit the wallet automatically on confirmation.
 - Customer privacy boundary: owners CANNOT log into customer accounts or reset customer passwords — only adjust balances.
-- Do NOT invent usage statistics, user counts, testimonials, or features not listed here. Innvil is pre/early-launch.
+
+INNVIL WATCH (watch.innvil.cloud) -- a STANDALONE AI Telegram community moderator product, unrelated to running an SMM panel. Does NOT use Forge's commission model at all.
+- A customer creates "Watchers" (AI-powered Telegram bot identities) and deploys them into their own Telegram Communities, where they chat naturally, answer questions, and moderate (spam/scam link detection, unsafe photo/video content). One active Watcher-to-Community deployment = one "Watcher slot".
+- Self-serve monthly plans: Bronze $29.99 (2 slots, 1 Community), Silver $59.99 (5 slots, 2 Communities), Gold $99.99 (10 slots, 3 Communities, expandable to 5), Platinum $199.00 (20 slots, 5 Communities, expandable to 10).
+- Enterprise (manually provisioned, contact-based, not self-serve checkout): Managed Enterprise 50 = $399/mo (50 slots); BYO Enterprise 50 = $299/mo (up to 50 licensed deployments, customer's own AI provider); BYO Enterprise Unlimited = $499/mo (unlimited licensed deployments).
+- A one-time 7-day Free Trial exists: 1 slot, 1 Community, no payment required, but requires verifying a real Telegram account first (anti-abuse — one trial per verified Telegram identity, ever).
+
+Do NOT invent usage statistics, user counts, testimonials, or features not listed here for EITHER product. Innvil is pre/early-launch.
 `.trim();
 
 const STYLE_RULES = `
 Write like a knowledgeable, honest operator — practical, specific, no hype, no emojis.
-Audience: people who want to start or grow an SMM panel / reseller business.
+Audience: depends on the topic. A topic about running/growing an SMM panel is for people who want to start or grow an SMM panel / reseller business (Innvil Forge). A topic about Telegram community moderation, AI moderators, or community management is for Telegram group/channel owners and community managers (Innvil Watch). Write for whichever audience the topic actually concerns — do not force an SMM-panel framing onto a Watch topic or vice versa.
 The article must be genuinely useful on its own (helpful content), not a thinly veiled ad.
 Mention Innvil naturally where relevant, but lead with real information.
 Use inline **bold** (double asterisks) sparingly for key terms.

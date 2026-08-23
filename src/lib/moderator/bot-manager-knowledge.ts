@@ -28,19 +28,19 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     kind: "overview",
     title: "What is Innvil",
     content:
-      "Innvil is a no-code white-label SMM (social media marketing) panel builder. Anyone can create their own independent SMM panel with its own subdomain, storefront, customer dashboard, and wallet — without writing code. The panel owner brings their own SMM provider (bring-your-own-provider); Innvil never resells services directly.",
+      "Innvil is a multi-product platform with TWO real products today, both reachable from one Innvil account: Innvil Forge (innvil.cloud) — a no-code, white-label SMM (social media marketing) panel builder, where anyone can create their own independent SMM panel with its own subdomain, storefront, customer dashboard, and wallet, bringing their own SMM provider; and Innvil Watch (watch.innvil.cloud) — a standalone AI-powered Telegram community moderator product, unrelated to running an SMM panel. A person can sign up once and use either or both.",
     active: true,
   },
   {
-    id: "innvil-pricing-model",
+    id: "innvil-forge-pricing-model",
     panelId: "innvil",
     scopeType: "ORGANIZATION",
     projectId: null,
     communityId: null,
     kind: "fact",
-    title: "Innvil pricing / commission model",
+    title: "Innvil Forge pricing / commission model",
     content:
-      "Innvil charges a 5% commission ONLY on completed customer orders — there is no monthly rent and no setup fee to create a panel. The commission rate can drop as low as 1% for high-volume panels (volume discount brackets), with a $100/panel/day cap on what Innvil ever takes. Optional paid add-ons exist on top of the free base panel (e.g. AI Virtual Moderator, Campaign Automation, Design Shop templates) — those are separate, clearly priced features, never bundled silently into the base 5%.",
+      "Innvil Forge (the SMM panel builder) charges a 5% commission ONLY on completed customer orders — there is no monthly rent and no setup fee to create a panel. The commission rate can drop as low as 1% for high-volume panels (volume discount brackets), with a $100/panel/day cap on what Innvil ever takes. This pricing model is specific to Forge — Innvil Watch (the separate Telegram AI moderator product) is NOT priced this way, it has its own fixed monthly plans (see 'Innvil Watch pricing').",
     active: true,
   },
   {
@@ -50,7 +50,7 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     projectId: null,
     communityId: null,
     kind: "faq",
-    title: "How do I create a panel / get started",
+    title: "How do I create a panel / get started with Forge",
     content:
       "Sign up at innvil.cloud, create a panel (choose a subdomain), then connect your own SMM provider's API in the panel's Providers tab and import services. A panel starts in Draft status (not visible to customers) and can be set to Live once it's ready. Going Live requires the panel to have a positive Innvil balance — funding a panel is how the owner 'activates' it.",
     active: true,
@@ -62,21 +62,57 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     projectId: null,
     communityId: null,
     kind: "fact",
-    title: "Custom domains",
+    title: "Custom domains (Forge panels)",
     content:
-      "Every panel gets a free subdomain (yourname.innvil.cloud) by default. Owners can also connect their own custom domain from the panel's Domain tab. Disconnecting a custom domain automatically falls back to the included subdomain — there's no lock-in.",
+      "Every Forge panel gets a free subdomain (yourname.innvil.cloud) by default. Owners can also connect their own custom domain from the panel's Domain tab. Disconnecting a custom domain automatically falls back to the included subdomain — there's no lock-in.",
     active: true,
   },
   {
-    id: "innvil-virtual-moderator",
+    id: "innvil-watch-overview",
     panelId: "innvil",
     scopeType: "ORGANIZATION",
     projectId: null,
     communityId: null,
     kind: "overview",
-    title: "AI Virtual Moderator add-on",
+    title: "What is Innvil Watch",
     content:
-      "The Virtual Moderator is Innvil's Telegram AI community moderator add-on. A panel owner (or, on some plans, a panel's own customer) can deploy an AI-powered Telegram bot into their community that answers questions, chats naturally, moderates spam/scam links and unsafe media, and can auto-post scheduled content. A 7-day free trial is available for eligible accounts; paid tiers scale by how many communities and simultaneously active moderator deployments are included.",
+      "Innvil Watch (watch.innvil.cloud) is a standalone product, separate from the Forge SMM panel builder — it does not require owning or creating an SMM panel. A Watch customer creates one or more 'Watchers' (AI-powered Telegram bot identities) and deploys them into their own Telegram Communities, where they chat naturally with members, answer questions, and moderate the community (spam/scam link detection, unsafe photo and video content). Each active Watcher-to-Community connection uses one 'Watcher slot', and a plan's slot count is separate from how many Communities it includes.",
+    active: true,
+  },
+  {
+    id: "innvil-watch-pricing",
+    panelId: "innvil",
+    scopeType: "ORGANIZATION",
+    projectId: null,
+    communityId: null,
+    kind: "fact",
+    title: "Innvil Watch pricing",
+    content:
+      "Innvil Watch has four fixed self-serve monthly plans: Bronze $29.99/mo (2 Watcher slots, 1 Community), Silver $59.99/mo (5 Watcher slots, 2 Communities), Gold $99.99/mo (10 Watcher slots, 3 Communities included, expandable to 5), and Platinum $199.00/mo (20 Watcher slots, 5 Communities included, expandable to 10). Enterprise is separate and manually provisioned (contact/inquiry-based, not self-serve checkout): Managed Enterprise 50 is $399/mo for 50 Watcher slots; Bring-Your-Own (BYO) Enterprise 50 is $299/mo (up to 50 licensed Watcher deployments, customer supplies their own AI provider credential); BYO Enterprise Unlimited is $499/mo (unlimited licensed Watcher deployments). This pricing model is completely separate from Innvil Forge's 5% order commission — Watch does not charge a commission on anything.",
+    active: true,
+  },
+  {
+    id: "innvil-watch-free-trial",
+    panelId: "innvil",
+    scopeType: "ORGANIZATION",
+    projectId: null,
+    communityId: null,
+    kind: "faq",
+    title: "Innvil Watch Free Trial",
+    content:
+      "Innvil Watch offers a one-time, 7-day Free Trial: 1 Watcher slot, 1 Community, no payment required. Starting it requires connecting and verifying a real Telegram account first (a genuine anti-abuse identity check, not optional). Each verified Telegram identity may only claim the trial once, even across different Innvil accounts. After the trial ends, existing Projects/Communities/Watchers are preserved (nothing is deleted) but stop being active until a paid plan is chosen.",
+    active: true,
+  },
+  {
+    id: "innvil-watch-getting-started",
+    panelId: "innvil",
+    scopeType: "ORGANIZATION",
+    projectId: null,
+    communityId: null,
+    kind: "faq",
+    title: "How do I get started with Innvil Watch",
+    content:
+      "Go to watch.innvil.cloud and sign up (or sign in with an existing Innvil account — one account works for both Forge and Watch). Connect and verify a Telegram account, then either start the 7-day Free Trial or choose a paid plan. From there, create a Project, create a Watcher (give it a name/persona), connect it to a real Telegram group/supergroup/channel you have admin rights in, and deploy it — that deployment is what actually starts the Watcher chatting and moderating in that Community.",
     active: true,
   },
   {
@@ -88,7 +124,7 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     kind: "faq",
     title: "How do I contact Innvil support",
     content:
-      "A panel owner can reach Innvil support from their dashboard sidebar ('Contact support'). This chat is a general product-question assistant, not a substitute for that support channel — for account-specific issues (billing disputes, a stuck payment, access problems), the owner dashboard's Contact support form is the right place, since it reaches a human and can look at account-specific data this bot cannot see.",
+      "A Forge panel owner can reach Innvil support from their dashboard sidebar ('Contact support'). A Watch customer can do the same from watch.innvil.cloud's Support section. This chat is a general product-question assistant, not a substitute for those support channels — for account-specific issues (billing disputes, a stuck payment, access problems), the real dashboard's Contact support form is the right place, since it reaches a human and can look at account-specific data this bot cannot see.",
     active: true,
   },
   {
@@ -98,9 +134,9 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     projectId: null,
     communityId: null,
     kind: "fact",
-    title: "Customer privacy boundary",
+    title: "Customer privacy boundary (Forge)",
     content:
-      "Panel owners cannot log into their customers' accounts and cannot reset a customer's password. Owners can only adjust a customer's wallet balance (credit/debit) for support/moderation purposes. This is a structural product guarantee, not a configurable setting.",
+      "On Innvil Forge, panel owners cannot log into their customers' accounts and cannot reset a customer's password. Owners can only adjust a customer's wallet balance (credit/debit) for support/moderation purposes. This is a structural product guarantee, not a configurable setting.",
     active: true,
   },
 ];

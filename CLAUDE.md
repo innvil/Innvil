@@ -127,6 +127,48 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — AI-generated content (bot manager + blog) now knows Innvil Watch exists (v1.47.41)
+- **Both `innvil_bot_manager`'s knowledge base and the AI blog writer were entirely Forge-only** — zero mention
+  of Innvil Watch as a standalone product anywhere. The bot manager's one Watch-adjacent entry still described
+  it as "the AI Virtual Moderator add-on" (the pre-standalone, pre-Phase-4.T model — an add-on bundled into a
+  Forge panel), and the blog writer's `PRODUCT_FACTS`/topic pool had no Watch material at all, so a "generate
+  blog" run could never accidentally produce a Watch article even if asked to.
+- **`bot-manager-knowledge.ts` rewritten**: `innvil-what-is-it` now states both products up front (Forge +
+  Watch, one account). The stale `innvil-virtual-moderator` entry is replaced with three real, accurate
+  entries — `innvil-watch-overview` (Watchers/slots/Communities, standalone, no Panel required),
+  `innvil-watch-pricing` (real Bronze $29.99/Silver $59.99/Gold $99.99/Platinum $199.00, real Enterprise
+  Managed $399/BYO 50 $299/BYO Unlimited $499), `innvil-watch-free-trial` (real 7-day/1-slot/1-Community/
+  Telegram-verification-required trial). `innvil-pricing-model` renamed `innvil-forge-pricing-model` and now
+  explicitly states Watch does NOT use the 5% commission model, to prevent the two from ever being conflated.
+  Added `innvil-watch-getting-started`.
+- **New `/start` welcome for `innvil_bot_manager`** — a guest tapping Telegram's own "Start" button (a BARE
+  `/start`, no deep-link token) previously fell through silently to the reactive-support classifier, which
+  correctly never treats "/start" as a confident product question — so guests got nothing. New
+  `isBareStartInPrivateChat()` (pure, exported, directly tested) short-circuits BEFORE the classifier with a
+  deterministic, zero-AI-cost welcome pointing to both `innvil.cloud` and `watch.innvil.cloud`. Checked strictly
+  AFTER `handleAccountVerificationStart` (which already fully owns the WITH-token case, success or failure) —
+  never fires for that shape, and never fires outside a private chat (Telegram's Start button is private-chat-
+  only by design, so a group/supergroup/channel `/start` is untouched).
+- **`blog-writer.ts`'s `PRODUCT_FACTS` widened to cover both products** — real Watch facts added (same numbers
+  as above), with an explicit instruction never to blend Forge's commission model into a Watch article or vice
+  versa. `STYLE_RULES`'s audience framing broadened from "SMM panel / reseller business" only to also cover
+  Telegram community owners/managers when a topic is actually about Watch — write for whichever audience the
+  topic concerns, not a forced SMM framing on every article.
+- **`blog/generate.ts`'s `FALLBACK_TOPICS` gained 5 real Watch-relevant topics** (Telegram spam/scam moderation,
+  what an AI Telegram moderator does, Watcher-slot capacity explained, community moderation signals, a Watcher
+  setup walkthrough) — the daily fallback pool was previously 100% Forge, meaning Watch could never be written
+  about even by accident.
+- New tests: `bot-manager-knowledge.test.ts` (+5 — real retrieval for Watch overview/pricing/trial questions,
+  the real pinned dollar figures, a guard that Watch pricing is never conflated with Forge's 5% commission, a
+  repo-wide guard that no entry still calls Watch an "add-on"), `bot-manager-runtime.test.ts` (+7, new file —
+  every shape of `isBareStartInPrivateChat`: bare start, with `@botname`, WITH a token correctly excluded,
+  every non-private chat type correctly excluded, ordinary messages, no-text messages). 1481 tests pass (up
+  from 1469), `tsc --noEmit` clean, production build clean. No dedicated test added for `blog-writer.ts`/
+  `blog/generate.ts` — consistent with this codebase's pre-existing convention for these two files (both
+  orchestrate real AI provider calls, verified via typecheck + build + code review, same as every other pass
+  that's touched them).
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-23 — Media Moderation Unit metering — Media Moderation + now actually gates and meters real usage (v1.47.40)
 - **Product decision, confirmed before building anything**: investigated the runtime gate first (`virtualModMediaModeration`
   in `plan.ts`) and found it never checked the paid add-on at all — `MEDIA_MODERATION_ENABLED &&
