@@ -37,6 +37,7 @@ function fakeAdmin(seed: {
   moderator_activity_log?: Row[]; watch_moderation_defaults?: Row[];
   watch_trial_claims?: Row[]; watch_subscription_addons?: Row[];
   watch_byo_provider_credentials?: Row[];
+  watch_byo_usage_policies?: Row[]; watch_byo_usage_counters?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     products: seed.products ?? [],
@@ -51,6 +52,8 @@ function fakeAdmin(seed: {
     watch_subscription_addons: seed.watch_subscription_addons ?? [],
     watch_telegram_links: [],
     watch_byo_provider_credentials: seed.watch_byo_provider_credentials ?? [],
+    watch_byo_usage_policies: seed.watch_byo_usage_policies ?? [],
+    watch_byo_usage_counters: seed.watch_byo_usage_counters ?? [],
   };
   let idCounter = 0;
 
@@ -1726,6 +1729,61 @@ test("a different account's stored BYO credential is never resolved for this acc
   const routing = await resolveAccountAiRouting(admin, "acct-1", true);
   assert.equal(routing.required, true);
   assert.equal(routing.credential, null, "acct-1 never sees acct-2's stored credential");
+});
+
+/* -------------- resolveAccountAiRouting + BYO usage POLICY (Phase 4.V) ---- */
+// The usage-policy gate is threaded through resolveAccountAiRouting itself,
+// so a policy-exhausted account resolves to the EXACT SAME
+// {required:true, credential:null} "unusable" shape a missing credential
+// already produces -- every downstream consumer needs zero changes.
+
+test("REQUIRED: a real credential + no usage policy configured resolves usable, unaffected by this feature", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1");
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential?.apiKey, "sk-real-byo-key");
+});
+
+test("REQUIRED: a real credential + an EXHAUSTED account-wide usage policy resolves required:true, credential:null -- never the raw credential", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, period: "monthly", request_limit: 5 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", period_key: periodKey, request_count: 5 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1");
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential, null, "an exhausted usage policy must produce the SAME unusable shape as a missing credential");
+});
+
+test("a real credential + a Community-level policy that's exhausted for a DIFFERENT Community stays usable", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `daily:${now.toISOString().slice(0, 10)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: "community-1", period: "daily", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "community-1", period_key: periodKey, request_count: 1 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-2");
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential?.apiKey, "sk-real-byo-key", "community-1's exhausted policy must never block community-2");
+});
+
+test("resolveAccountAiRouting with no communityId given still respects an account-wide policy", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", period_key: periodKey, request_count: 1 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true);
+  assert.equal(routing.credential, null);
 });
 
 /* ---------------- AccountCapacity's new apiSourceMode/hasByoCredential fields (0092) ---- */

@@ -46,12 +46,14 @@ import {
   MANAGED_AI_ROUTING, type AccountAiRouting,
 } from "@/src/lib/products/watch-runtime";
 import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
+import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy";
 
-/** Fire-and-forget BYO usage telemetry -- only ever called when
- *  `aiRouting.required` is true (a Managed account has nothing BYO-specific
- *  to record). Never awaited by callers, and recordByoUsageEvent itself
- *  never throws (best-effort) -- a telemetry write must never add latency
- *  to, or break, the 30s-bounded webhook handler it's called from.
+/** Fire-and-forget BYO usage telemetry + usage-POLICY accounting -- only
+ *  ever called when `aiRouting.required` is true (a Managed account has
+ *  nothing BYO-specific to record). Never awaited by callers, and neither
+ *  recordByoUsageEvent nor recordByoPolicyUsage ever throws (best-effort)
+ *  -- a telemetry/policy write must never add latency to, or break, the
+ *  30s-bounded webhook handler it's called from.
  *
  *  Scoped to respondAsDeployment's own generateChatterReply outcome ONLY --
  *  the ONE call site with a genuine, unambiguous ok/error signal to record
@@ -61,7 +63,10 @@ import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
  *  on ANY failure by design (never throw, never expose a clean success/
  *  failure distinction in their return shape) -- recording them as "ok"
  *  regardless of whether the underlying call actually succeeded would be
- *  fabricated telemetry, so they are deliberately NOT instrumented here. */
+ *  fabricated telemetry, so they are deliberately NOT instrumented here.
+ *  Same reasoning for the usage-policy counter (Phase 4.V) -- only a real
+ *  successful generation ever counts toward a customer's configured spend
+ *  ceiling, never an attempted-but-failed one. */
 function recordByoCall(
   admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, automation: string, ok: boolean, error?: string
 ): void {
@@ -72,6 +77,7 @@ function recordByoCall(
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
   });
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId);
 }
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
@@ -2725,7 +2731,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // account (the overwhelming majority of traffic) never pays for the
     // extra Enterprise-entitlement lookup. Threaded through every real
     // AI-generation call site inside handleHumanMessage.
-    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise");
+    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id);
     await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting);
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;

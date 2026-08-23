@@ -127,6 +127,74 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — BYO Enterprise usage POLICY — customer-configurable spend ceilings (Phase 4.V, v1.47.45)
+- **Finishes the last real, unbuilt piece of Phase 4.V** — BYO credential storage, live runtime wiring, usage
+  telemetry, self-serve credential UI, and landing positioning all already shipped (Phase 1/2, v1.47.42/43).
+  The one thing genuinely missing was the customer-owned USAGE POLICY layer — configurable ceilings the
+  customer sets on their OWN BYO provider spend, distinct from telemetry (which only OBSERVES calls, never
+  blocks them).
+- **Hierarchy scoped to account + Community only, explicitly documented, not silently narrowed.** The full
+  Phase 4.V spec described account→Community→Watcher/deployment; this pass implements account-wide + per-
+  Community (the two most commonly wanted ceilings — an overall spend cap plus per-Community caps for a
+  multi-Community Enterprise account). Deployment/Watcher-level granularity is a reasonable future refinement,
+  not built this pass — mirrors the same kind of scope-down already made and documented for BYO telemetry.
+- **Unit counted: requests per period, never tokens** — `aiComplete()`'s return shape still doesn't expose a
+  real token count to every caller (same honest limitation already documented for `watch_byo_ai_usage_events`);
+  fabricating one would be dishonest. Period is a plain UTC calendar day/month boundary (`periodKey()`), the
+  same established pattern already used for the Free Trial's reactive quota.
+- **New migration `0096_watch_byo_usage_policy.sql`** — `watch_byo_usage_policies` (account-wide row has
+  `community_id: null`; partial unique indexes enforce at most one policy per scope) + `watch_byo_usage_counters`
+  (keyed by `(account_id, scope_key, period_key)`, `scope_key = '__account__'` for the account-wide row since
+  Postgres PK columns can't be nullable) + atomic `increment_watch_byo_usage` RPC (upsert-on-conflict-increment,
+  mirrors `increment_watch_ai_response_usage`'s exact single-statement pattern). RLS on, no policies
+  (service-role only). **Run migration `0096`.**
+- **New `src/lib/products/watch-byo-usage-policy.ts`** — `checkByoUsageAllowed()` evaluates EVERY policy
+  configured for an account (account-wide + the specific Community, when given) and blocks if EITHER is
+  exhausted for its own current period — the tightest configured ceiling always wins, regardless of which
+  scope it's set at. `recordByoPolicyUsage()` re-resolves which scopes have a configured policy AT INCREMENT
+  TIME (never assumed from the earlier gate check) — a policy added mid-period starts its counter fresh from
+  0, never inheriting usage that accrued before the limit existed. An account/Community with no configured
+  policy at all is never written to. Fire-and-forget, never throws (same "a usage write must never break
+  generation" discipline as `recordByoUsageEvent`).
+- **Wired at the single canonical routing resolver, not duplicated per call site.** `resolveAccountAiRouting()`
+  (`watch-runtime.ts`) gained an optional `communityId` parameter (both real call sites —
+  `community-runtime.ts`'s `handleCommunityUpdate`, `presence-runtime.ts`'s sweep — already had a `communityId`
+  in scope, so this was a one-line addition at each). A policy-exhausted account resolves to the EXACT SAME
+  `{required:true, credential:null}` "unusable" shape a missing/misconfigured credential already produces —
+  every downstream generation call site (chatter reply, link classify/warning, media warning, presence
+  messages) needed ZERO changes, since they already treat `credential:null` as "fail explicitly / fall back to
+  the safe deterministic pool," never a signal to use Innvil's own key.
+- **Counting scope, same documented judgment call as BYO telemetry.** `recordByoCall()`
+  (`community-runtime.ts`, previously telemetry-only) now also calls `recordByoPolicyUsage()` on a SUCCESSFUL
+  chatter-reply generation — the one BYO call site with a genuine, unambiguous success signal. Link-
+  classification and media-moderation-warning BYO calls are NOT individually counted against the policy (they
+  degrade silently by design, no real ok/error signal to key off) — but they're still BLOCKED once a
+  configured limit is reached, since the gate governs the shared BYO credential itself at the routing level,
+  not one specific call site.
+- **New self-serve UI**: `ByoUsagePolicyCard.tsx` on the Usage page, directly below the existing "BYO calls"
+  telemetry card — shown only for a BYO-flagged account (`capacity.apiSourceMode === "byo"`). Lists every
+  configured policy with its real current-period used/limit count, a form to add/replace a policy (scope
+  picker: whole account or a specific Community; daily/monthly; a positive request limit), and a Remove
+  action per policy. New `src/lib/actions/watch-byo-usage-settings.ts` — same gating discipline as
+  `watch-byo-settings.ts` (credential management): every export re-verifies the signed-in account's own real
+  `apiSourceMode === "byo"` entitlement server-side, never a client-supplied account id or a UI-only gate.
+- **Never touches Innvil's own commercial config** — confirmed via `git diff`: zero changes to `money.ts` or
+  `watch-enterprise.ts` (Innvil's plan/pricing definitions). This is purely a customer-owned operational
+  guardrail layered on top of an already-provisioned BYO credential, never a new Innvil-priced feature.
+- New tests: `watch-byo-usage-policy.test.ts` (+19, new file — period-key formatting, CRUD incl. replace-not-
+  duplicate and cross-account isolation, the gate's full allow/block/tightest-wins/cross-Community-isolation/
+  fresh-period-reset matrix, usage recording incl. the "only configured scopes get written" rule and the
+  atomic-increment-not-duplicate proof, the never-throws-on-failure guarantee, and the read-status shape),
+  `watch-runtime.test.ts` (+4 — `resolveAccountAiRouting`'s new usage-policy integration: unaffected when no
+  policy is configured, an exhausted account-wide policy correctly nulls the credential, a different
+  Community's exhausted policy never blocks this one, and the account-wide policy still applies when no
+  `communityId` is given at all). 1603 tests pass (up from 1580), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately not built this pass**: deployment/Watcher-level policy granularity (documented scope-down,
+  see above); token-based limits (no real per-call token count is available anywhere in this codebase to meter
+  against); counting link-classification/media-warning BYO calls individually toward the limit (no clean
+  success signal exists for either, same judgment call already made for telemetry).
+
 ### 2026-08-25 — Watcher Presence Scheduling — Phase 4.U implemented (v1.47.44)
 - **Deployed Watchers now auto-stagger being "conversationally present"** — sending a persona-voiced, scheduled
   arrival/departure message (`presence_started`/`presence_resumed`/`presence_ending`), so 2+ Watchers in one

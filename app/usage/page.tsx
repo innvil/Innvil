@@ -10,6 +10,8 @@ import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-check
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
 import { getWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
 import { getByoUsageSummary } from "@/src/lib/products/watch-byo-usage";
+import { getByoUsageStatus } from "@/src/lib/products/watch-byo-usage-policy";
+import { ByoUsagePolicyCard } from "@/src/components/watch/ByoUsagePolicyCard";
 import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
 import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
 import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
@@ -63,6 +65,11 @@ export default async function UsagePage() {
   // Only queried for a BYO-flagged account, so a Managed/self-serve/trial
   // account never pays for this extra query.
   const byoUsage = capacity?.apiSourceMode === "byo" ? await getByoUsageSummary(admin, accountId) : null;
+
+  // BYO usage-policy status (Phase 4.V) -- the customer's own configured
+  // spend ceilings + real current-period usage against them. Same BYO-only
+  // gating as the telemetry query above.
+  const byoPolicies = capacity?.apiSourceMode === "byo" ? await getByoUsageStatus(admin, accountId) : null;
 
   // Real per-request Media Moderation Unit consumption (2026-08-23) --
   // reuses the SAME real billing period aiPeriod already resolved above
@@ -296,6 +303,10 @@ export default async function UsagePage() {
               </p>
             )}
           </div>
+        )}
+
+        {capacity?.apiSourceMode === "byo" && byoPolicies && (
+          <ByoUsagePolicyCard initial={byoPolicies} communities={communities.map((c) => ({ id: c.id, title: c.title ?? c.chatId }))} />
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

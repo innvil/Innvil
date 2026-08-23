@@ -231,7 +231,7 @@ export async function sweepPresenceSchedules(admin: SupabaseClient = createAdmin
       const bot = await loadModeratorBotToken(admin, row.deployment_id);
       if (bot) {
         const isEnterprise = capacity.tier === "enterprise";
-        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise);
+        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId);
         const text = await generatePresenceMessage(bot.moderatorName, bot.persona, kind, aiRouting);
         const sent = await telegramApiCall(bot.token, "sendMessage", { chat_id: bot.chatId, text });
         if (sent.ok) sentText = text;

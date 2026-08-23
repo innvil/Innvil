@@ -13,6 +13,7 @@ import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial, getWatchTrialState, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./watch-trial";
 import { periodHasExpired, type WatchBillingInterval } from "./watch-billing-period";
 import { getAccountByoCredential, hasByoCredential, type WatchByoCredential } from "./watch-byo";
+import { checkByoUsageAllowed } from "./watch-byo-usage-policy";
 
 /**
  * Neutral ownership/creation layer for Communities, Watchers
@@ -193,12 +194,25 @@ export const MANAGED_AI_ROUTING: AccountAiRouting = { required: false, credentia
  *  "enterprise"` check -- gates the extra Enterprise-entitlement lookup so
  *  a self-serve/trial account (the overwhelming majority of traffic) never
  *  pays for it. Returns MANAGED_AI_ROUTING for any non-BYO-flagged account,
- *  including a Managed Enterprise one. */
-export async function resolveAccountAiRouting(admin: SupabaseClient, accountId: string | null, isEnterprise: boolean): Promise<AccountAiRouting> {
+ *  including a Managed Enterprise one.
+ *
+ *  `communityId` (Phase 4.V, optional -- both existing callers pass it,
+ *  new callers may omit it) additionally gates on the customer's own
+ *  configured BYO usage POLICY (watch-byo-usage-policy.ts) -- a real,
+ *  customer-owned spend ceiling, distinct from BYO eligibility itself. A
+ *  policy-exhausted account resolves to `{required:true, credential:null}`
+ *  -- the EXACT same "unusable" shape a missing/misconfigured credential
+ *  already produces, so every downstream consumer's existing
+ *  required-but-unusable handling covers this with zero changes needed at
+ *  any generation call site. */
+export async function resolveAccountAiRouting(admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null): Promise<AccountAiRouting> {
   if (!accountId || !isEnterprise) return MANAGED_AI_ROUTING;
   const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
   if (!enterprise || enterprise.apiSourceMode !== "byo") return MANAGED_AI_ROUTING;
   const credential = await getAccountByoCredential(admin, accountId);
+  if (!credential) return { required: true, credential: null };
+  const usage = await checkByoUsageAllowed(admin, accountId, communityId);
+  if (!usage.allowed) return { required: true, credential: null };
   return { required: true, credential };
 }
 
