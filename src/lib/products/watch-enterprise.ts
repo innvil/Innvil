@@ -192,6 +192,22 @@ export function enterprisePackageTotalWithMedia(basePrice: number, addonKey: "ma
   return Math.round((basePrice + ENTERPRISE_MEDIA_ADDON[addonKey].price) * 100) / 100;
 }
 
+/** Resolves a LIVE (already-granted) Enterprise account's real Media
+ *  Moderation + package key from its actual provisioned `apiSourceMode`/
+ *  `slots` -- the ONE place this mapping lives, reused by both real
+ *  consumption metering (community-runtime.ts's runMediaModeration) and
+ *  the Usage page's display, so they can never disagree on which
+ *  allowance applies. Managed has exactly one package regardless of the
+ *  custom slot count above the fixed 50 base (no Managed media-addon
+ *  variant is priced per-slot). BYO Unlimited is `slots === null`; any
+ *  other BYO slot count (should only ever be exactly 50 once grants are
+ *  tier-picker-only, per the devops UI) falls back to the smaller "byo50"
+ *  allowance rather than assuming the larger Unlimited one. */
+export function resolveEnterpriseMediaAddonKey(apiSourceMode: "managed" | "byo", slots: number | null): "managed50" | "byo50" | "byoUnlimited" {
+  if (apiSourceMode === "managed") return "managed50";
+  return slots === null ? "byoUnlimited" : "byo50";
+}
+
 export interface EnterpriseSavingsComparison {
   slots: number;
   managedPrice: number;

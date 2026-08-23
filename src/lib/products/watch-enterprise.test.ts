@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   ENTERPRISE_MODES, buildEnterpriseInquiryBody, managedEnterprisePrice, managedEnterpriseCommunities,
   WATCH_ENTERPRISE_BYO_TIERS, compareEnterpriseModesAtSlots, MANAGED_ENTERPRISE_50,
-  enterpriseMediaAddon, enterprisePackageTotalWithMedia,
+  enterpriseMediaAddon, enterprisePackageTotalWithMedia, resolveEnterpriseMediaAddonKey,
 } from "./watch-enterprise";
 import { moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities } from "@/src/lib/money";
 
@@ -196,4 +196,27 @@ test("REQUIRED: no canonical BYO price/savings figure is fabricated -- every num
   const cmp = compareEnterpriseModesAtSlots(50)!;
   assert.equal(cmp.managedPrice, MANAGED_ENTERPRISE_50.price);
   assert.equal(cmp.byoPrice, byo50);
+});
+
+/* ------------------------------------------ resolveEnterpriseMediaAddonKey ---- */
+// The ONE resolver used by both real consumption enforcement
+// (community-runtime.ts's runMediaModeration) and the Usage page's
+// display -- must resolve identically regardless of caller.
+
+test("REQUIRED: Managed always resolves to 'managed50', regardless of the custom slot count", () => {
+  assert.equal(resolveEnterpriseMediaAddonKey("managed", 50), "managed50");
+  assert.equal(resolveEnterpriseMediaAddonKey("managed", 150), "managed50");
+  assert.equal(resolveEnterpriseMediaAddonKey("managed", 21), "managed50");
+});
+
+test("REQUIRED: BYO with exactly 50 slots resolves to 'byo50'", () => {
+  assert.equal(resolveEnterpriseMediaAddonKey("byo", 50), "byo50");
+});
+
+test("REQUIRED: BYO with null slots (Unlimited) resolves to 'byoUnlimited'", () => {
+  assert.equal(resolveEnterpriseMediaAddonKey("byo", null), "byoUnlimited");
+});
+
+test("a BYO off-menu slot count falls back to the SMALLER 'byo50' allowance, never assumes the larger Unlimited one", () => {
+  assert.equal(resolveEnterpriseMediaAddonKey("byo", 37), "byo50");
 });

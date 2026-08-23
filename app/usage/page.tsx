@@ -19,8 +19,8 @@ import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
 import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
-import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
-import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
+import { MANAGED_ENTERPRISE_50, resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
+import { MODERATOR_COMMUNITY_CAPACITY, ENTERPRISE_MEDIA_ADDON, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 
 export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -79,6 +79,23 @@ export default async function UsagePage() {
   // mirrors aiUsageCount's own null-safety exactly.
   const mediaUsageCount =
     capacity?.mediaModerationAddonActive && aiPeriod ? await getWatchMediaModerationUsage(admin, accountId, aiPeriod.start) : null;
+
+  // Enterprise's OWN Media Moderation + -- a real, superadmin-granted state
+  // (migration 0097), separate from the self-serve tiers' own add-on above.
+  // The allowance comes from the account's REAL provisioned package
+  // (resolveEnterpriseMediaAddonKey -- the SAME resolver runMediaModeration
+  // itself enforces against, so this display can never disagree with what's
+  // actually being counted/enforced at classification time). Usage is
+  // tracked in the SAME watch_media_moderation_usage table the self-serve
+  // tiers use -- it's account+period scoped, not tier-specific.
+  const enterpriseMediaAllowance =
+    capacity?.tier === "enterprise"
+      ? ENTERPRISE_MEDIA_ADDON[resolveEnterpriseMediaAddonKey(capacity.apiSourceMode ?? "managed", capacity.enterpriseSlots)].units
+      : null;
+  const enterpriseMediaUsageCount =
+    capacity?.tier === "enterprise" && capacity.enterpriseMediaAddonActive && aiPeriod
+      ? await getWatchMediaModerationUsage(admin, accountId, aiPeriod.start)
+      : null;
 
   // Trial's own real, measurable current-period consumption: the 20/day
   // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
@@ -256,6 +273,33 @@ export default async function UsagePage() {
               />
             </div>
             <Link href="/plans#paid-plans" className="w-teal hover:underline text-xs font-medium">Manage from Plans →</Link>
+          </div>
+        )}
+
+        {/* Enterprise's OWN Media Moderation + (migration 0097) -- a
+            devops-granted state, not self-serve purchasable, so always
+            shown (never conditionally hidden) once the account is
+            Enterprise -- either "Not added" (a real, honest state, never
+            silently omitted) or the real X/total consumption for the
+            account's actual provisioned package. */}
+        {capacity?.tier === "enterprise" && (
+          <div className="w-card p-5">
+            <SectionHeader icon={ShieldCheck} title="Media Moderation +" />
+            {capacity.enterpriseMediaAddonActive && enterpriseMediaAllowance != null ? (
+              <>
+                <p className="text-sm w-text-dim mb-1">
+                  {(enterpriseMediaUsageCount ?? 0).toLocaleString()} / {enterpriseMediaAllowance.toLocaleString()} Media Moderation Units used this period.
+                </p>
+                <div className="w-full h-1.5 rounded-full w-surface-raised overflow-hidden">
+                  <div
+                    className="h-full w-teal-bg"
+                    style={{ width: `${Math.min(100, ((enterpriseMediaUsageCount ?? 0) / enterpriseMediaAllowance) * 100)}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="text-sm w-text-faint">Not added — contact support to add Media Moderation + to your Enterprise plan.</p>
+            )}
           </div>
         )}
 

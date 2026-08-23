@@ -127,6 +127,44 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Enterprise Media Moderation + gets real per-request consumption metering + Usage-page visibility (v1.47.48)
+- **Follow-up to v1.47.47's grant/gate-only pass** — that pass made Media Moderation + a real superadmin-
+  grantable boolean but explicitly deferred per-unit consumption metering, and had no Usage-page visibility at
+  all for Enterprise. Both closed this pass, per direct request: "media moderation... should be in the usage
+  too... if not added, will only show 'not added'... if added, X/total".
+- **New canonical resolver** `resolveEnterpriseMediaAddonKey(apiSourceMode, slots)` (`watch-enterprise.ts`) —
+  maps a LIVE account's real provisioned `{apiSourceMode, slots}` to its actual `ENTERPRISE_MEDIA_ADDON` package
+  key (`managed50`/`byo50`/`byoUnlimited`) — Managed always resolves to `managed50` regardless of custom slot
+  count (no per-slot Managed media-addon variant exists); BYO Unlimited (`slots: null`) resolves to
+  `byoUnlimited`; an off-menu BYO slot count (shouldn't occur now that grants are tier-picker-only, per
+  v1.47.47) defensively falls back to the SMALLER `byo50` allowance rather than assuming the larger one. The
+  ONE place this mapping lives — reused by both real consumption enforcement and the Usage-page display, so
+  they can never disagree about which allowance applies.
+- **Real consumption metering, reusing the EXISTING self-serve infrastructure verbatim** — `watch_media_moderation_usage`
+  (migration 0091) is account+period scoped, not tier-specific, so it needed zero schema change to also serve
+  Enterprise. `runMediaModeration`'s gate (`community-runtime.ts`) restructured from a boolean
+  `enterpriseMediaAddonActive` check into a full `{active, units} | null` object threaded from
+  `handleCommunityUpdate` (which now also resolves the real allowance via `resolveEnterpriseMediaAddonKey` +
+  `ENTERPRISE_MEDIA_ADDON`, using the SAME already-fetched `resolveAccountEnterpriseEntitlement` result, no
+  extra query) — an Enterprise account without the add-on still gets the exact `media_addon_required` silent
+  skip from before; one WITH it now goes through the identical `resolveAccountBillingPeriod` →
+  `getWatchMediaModerationUsage` → `hasMediaModerationUnitsRemaining` → (after a real classification succeeds)
+  `incrementWatchMediaModerationUsage` pipeline the self-serve tiers already use — same "a unit means a real
+  successful classification happened, never an attempted-but-failed one" counting philosophy, zero new counting
+  logic written.
+- **New Usage-page card, always shown for an Enterprise account** (never conditionally hidden the way the
+  self-serve card is) — "Not added — contact support to add Media Moderation + to your Enterprise plan." when
+  inactive, or the real "X / total Media Moderation Units used this period" + progress bar when active,
+  computed from the same `resolveEnterpriseMediaAddonKey` + `getWatchMediaModerationUsage` the runtime gate
+  itself uses — display and enforcement share one source, can't drift apart.
+- New tests: `watch-enterprise.test.ts` (+4 — every `resolveEnterpriseMediaAddonKey` case incl. Managed's
+  slot-count independence and the off-menu-BYO defensive fallback). 1629 tests pass (up from 1625), `tsc
+  --noEmit` clean, production build clean. **`runMediaModeration`'s Enterprise branch itself has no dedicated
+  DB-mocked test** — same long-established convention for this exact function noted in every prior pass that's
+  touched it.
+- **No new migration** (reuses migration 0091's existing table verbatim). **Not deployed automatically, per
+  standing instruction.**
+
 ### 2026-08-25 — BYO Unlimited support + real customer label + Enterprise Media Moderation + grant + devops tool goes live (v1.47.47)
 - **Four related fixes from one live report** ("even the BYO is named managed... in superadmin there is only BYO
   50, no unlimited... also no way to add media moderation to accounts in superadmin... it should also be put in
