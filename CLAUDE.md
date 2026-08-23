@@ -127,6 +127,64 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — Critical fix: a standalone Enterprise Watcher did nothing on live Telegram (v1.47.39)
+- **Found while investigating Media Moderation Unit metering (the next queued task), reported and confirmed
+  before fixing** — an entire tier's live runtime was dark, not just one capability, so it was fixed first per
+  explicit direction.
+- **Root cause**: `resolveStandaloneModeratorSettings` (`watch-runtime.ts`), the function the live webhook
+  handler (`handleCommunityUpdate`) uses to build the capability-gating settings object for a standalone
+  (non-Panel) integration, had **no Enterprise branch at all**. It called `resolveAccountWatchTier` (only ever
+  returns the 4 self-serve tiers), then fell to a trial check, then returned `null`. For an account whose ONLY
+  entitlement is Enterprise, both checks fail and settings resolve to `null` — every downstream
+  `virtualMod*(settings)` capability check in `moderator/plan.ts` fails closed on `null`, so the Watcher
+  performed zero chatter, zero moderation, zero anything, for every real Telegram message. **Never caught
+  before now because there was no way to grant a real Enterprise entitlement to any account until the devops
+  tool (`setAccountDevOpsEnterprise`) shipped yesterday (v1.47.37)** — this bug was unreachable until then.
+- **Fix, scoped narrowly, not a rewrite of the capability model.** `moderator/plan.ts`'s
+  `ModeratorEntitlementSource` widened from `"trial" | ModeratorPlanTier | null` to also include
+  `"enterprise"` — mirroring the EXACT distinction Watch's own `AccountWatchContext.tier` already makes
+  (`ModeratorPlanTier | "trial" | "enterprise"`), never squeezing Enterprise into the 4-value
+  `ModeratorPlanTier` union (which would have broken `CAPACITY`/`MODERATOR_COMMUNITY_CAPACITY`'s fixed
+  `Record<ModeratorPlanTier, ...>` lookups). New `enterprise: boolean` field on `ModeratorAddonSub` (parsed by
+  `readModeratorAddon`, alongside the existing separate `trial` sub-object — same pattern, not reusing `tier`).
+  `moderatorEntitlementSource` now resolves it (precedence: self-serve tier > enterprise > trial, matching
+  `requireAccountWatchContext`'s own documented order). `virtualModProactiveMode` (and everything that
+  delegates through it — `virtualModAdvancedModeration`/`virtualModCommunityMemory`/`virtualModCustomPersonality`)
+  now includes `source === "enterprise"`, so Enterprise correctly unlocks everything Platinum unlocks.
+  `virtualModContentGeneration` also checks the new `enterprise` flag directly (was `!!moderatorTier(settings)`
+  only, which structurally excludes Enterprise since `moderatorTier` only ever reads the self-serve `tier`
+  field).
+- **New `buildStandaloneEnterpriseModeratorSettings()`** (`watch-runtime.ts`) synthesizes `{tier: null,
+  enterprise: true, ...}` — deliberately NOT reusing `"pro"`/Platinum as a shortcut. That would have introduced
+  a REAL second bug: `community-runtime.ts`'s AI-Generation-pool usage gate derives `paidTier` from the same
+  entitlement source and would have incorrectly capped an Enterprise account's generations against Platinum's
+  own smaller, separately-tracked 20,000/mo pool instead of Enterprise's real, separate 50,000/mo pool. Fixed
+  by keeping `paidTier` explicitly `null` for `"enterprise"` too (unchanged from its existing trial exclusion) —
+  Enterprise's own pool still isn't wired into consumption enforcement anywhere (a pre-existing, already-
+  documented gap, not introduced or worsened by this fix).
+- **`resolveStandaloneModeratorSettings`** now checks self-serve tier → Enterprise (via the already-existing
+  `resolveAccountEnterpriseEntitlement`, called in-module, no new export needed) → trial, in that order.
+- **Confirmed structurally unreachable, not fixed pre-emptively**: `moderatorCapacity`/
+  `moderatorCommunityExpansionCeiling`/`moderatorMaxSavedModerators` (`plan.ts`) index the fixed `CAPACITY`/
+  `MODERATOR_COMMUNITY_CAPACITY` tables directly — traced every real call site and confirmed all three are
+  ONLY ever called with `panels.settings` (the legacy Panel-owner flow), which structurally can never carry an
+  Enterprise source (Enterprise entitlement lives in `product_entitlements`, never `panels.settings`). Added an
+  explicit `source !== "enterprise"` guard to each anyway (satisfies the type system, falls back to the same
+  zero-capacity shape as "no entitlement" rather than fabricating a number these legacy functions have no way
+  to know) — defensive, not currently reachable.
+- New tests: `watch-runtime.test.ts` (+5 — the exact live-bug repro proving `resolveStandaloneModeratorSettings`
+  no longer returns null for an Enterprise-only account, the returned settings actually satisfy real capability
+  checks end-to-end (`virtualModProactiveMode`/`virtualModModeration`), self-serve-tier-wins-over-Enterprise and
+  Enterprise-wins-over-trial precedence, and the genuine no-entitlement case still correctly returns null),
+  `plan.test.ts` (+8 — `moderatorEntitlementSource` resolves `"enterprise"`, every proactive-mode-delegated
+  capability true for Enterprise, precedence guards, content-generation's master-switch-off case, and the
+  legacy capacity functions never crash/index-undefined on an enterprise-sourced settings object). 1462 tests
+  pass (up from 1449), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 5 files.
+- **Not deployed automatically, per standing instruction.**
+- **Media Moderation Unit metering (the originally queued task) resumes next**, now correctly informed by this
+  fix — Enterprise accounts will resolve real capability checks going forward, which the metering work needs to
+  reason about correctly for Enterprise vs. self-serve accounts.
+
 ### 2026-08-23 — Fix: devops Enterprise grant form didn't pre-fill an account's real current state (v1.47.38)
 - **Follow-up correction to v1.47.37, caught before deploying** — searching an account that ALREADY holds an
   Enterprise entitlement (e.g. 75 slots / 15 Communities) left the grant form showing the hardcoded defaults

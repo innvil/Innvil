@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage, moderatorEntitlementSource, virtualModProactiveMode, virtualModAdvancedModeration, virtualModCommunityMemory, virtualModCustomPersonality, virtualModModeration } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -218,4 +218,52 @@ test("REQUIRED: the customer-facing error message for the community-deployment c
 test("the customer-facing error message for the active-slot limit names the actual plan limit", () => {
   const msg = deploymentSlotCheckErrorMessage({ ok: false, reason: "active_slot_limit" }, 20);
   assert.match(msg, /20 active mod slot/i);
+});
+
+/* ------------------- Enterprise entitlement source (2026-08-23 fix) ---- */
+// "enterprise" is a real, distinct ModeratorEntitlementSource (never a
+// ModeratorPlanTier value) -- these pin the widened model directly, ahead
+// of the end-to-end proof in watch-runtime.test.ts.
+
+const enterpriseSettings = { addons: { moderator: { enterprise: true } } };
+
+test("REQUIRED: moderatorEntitlementSource resolves an enterprise-flagged addon to \"enterprise\"", () => {
+  assert.equal(moderatorEntitlementSource(enterpriseSettings), "enterprise");
+});
+
+test("REQUIRED: hasVirtualModerator/virtualModModeration are true for an Enterprise entitlement", () => {
+  assert.equal(hasVirtualModerator(enterpriseSettings), true);
+  assert.equal(virtualModModeration(enterpriseSettings), true);
+});
+
+test("REQUIRED: Enterprise unlocks Proactive Mode and everything that delegates to it -- same as Standard+", () => {
+  assert.equal(virtualModProactiveMode(enterpriseSettings), true);
+  assert.equal(virtualModAdvancedModeration(enterpriseSettings), true);
+  assert.equal(virtualModCommunityMemory(enterpriseSettings), true);
+  assert.equal(virtualModCustomPersonality(enterpriseSettings), true);
+});
+
+test("a self-serve tier on the same addon object still wins over the enterprise flag (defensive precedence)", () => {
+  const both = { addons: { moderator: { tier: "basic", enterprise: true } } };
+  assert.equal(moderatorEntitlementSource(both), "basic");
+});
+
+test("enterprise wins over an active trial on the same addon object", () => {
+  const both = { addons: { moderator: { enterprise: true, trial: { endsAt: new Date(Date.now() + 60_000).toISOString() } } } };
+  assert.equal(moderatorEntitlementSource(both), "enterprise");
+});
+
+test("content generation is OFF for Enterprise too when the master switch is off (same master-switch pattern as every other case above)", () => {
+  assert.equal(virtualModContentGeneration(enterpriseSettings), false);
+});
+
+test("REQUIRED: the legacy capacity functions never crash on an enterprise-sourced settings object -- fall back to the zero/no-entitlement shape rather than indexing an undefined table row", () => {
+  assert.deepEqual(moderatorCapacity(enterpriseSettings), { maxCommunities: 0, maxActiveSlots: 0 });
+  assert.equal(moderatorCommunityExpansionCeiling(enterpriseSettings), 0);
+  assert.equal(moderatorMaxSavedModerators(enterpriseSettings), 0);
+});
+
+test("plain settings with no enterprise flag are completely unaffected by this change", () => {
+  assert.equal(moderatorEntitlementSource({ addons: { moderator: { tier: "pro" } } }), "pro");
+  assert.equal(moderatorEntitlementSource({}), null);
 });

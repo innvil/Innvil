@@ -40,7 +40,13 @@ export const VIRTUAL_MODERATOR_ENABLED = process.env.NEXT_PUBLIC_VIRTUAL_MODERAT
 
 export type { ModeratorPlanTier };
 export type ModeratorCommercialMode = "commission" | "rental";
-export type ModeratorEntitlementSource = "trial" | ModeratorPlanTier | null;
+/** "enterprise" is a real, distinct entitlement source (Managed Enterprise,
+ *  manually-provisioned via product_entitlements -- see watch-runtime.ts's
+ *  AccountWatchContext), never a ModeratorPlanTier value -- mirrors that
+ *  exact distinction here too, rather than forcing it through the
+ *  self-serve tier/CAPACITY machinery below (CAPACITY has no "enterprise"
+ *  row by design, and stays that way). */
+export type ModeratorEntitlementSource = "trial" | "enterprise" | ModeratorPlanTier | null;
 
 const TIERS: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro"];
 const MODES: ModeratorCommercialMode[] = ["commission", "rental"];
@@ -73,6 +79,15 @@ export interface ModeratorAddonSub {
   /** true when a scheduled charge failed for lack of balance (paused until funded). Only meaningful for rental. */
   lapsed: boolean;
   trial: ModeratorTrialState;
+  /** True for a real, manually-provisioned Managed Enterprise entitlement --
+   *  a separate flag from `tier` (never a 5th value squeezed into
+   *  ModeratorPlanTier), mirroring how `trial` is already its own field
+   *  rather than a tier value. Only ever set by
+   *  buildStandaloneEnterpriseModeratorSettings (watch-runtime.ts) for a
+   *  standalone (account-native) integration -- the legacy Panel-owner
+   *  settings shape (panels.settings) never sets this, since Enterprise
+   *  entitlement doesn't live there. */
+  enterprise: boolean;
 }
 
 const OFF: ModeratorAddonSub = {
@@ -83,6 +98,7 @@ const OFF: ModeratorAddonSub = {
   nextChargeAt: null,
   lapsed: false,
   trial: { ...TRIAL_OFF },
+  enterprise: false,
 };
 
 function readTrialState(value: unknown): ModeratorTrialState {
@@ -115,6 +131,7 @@ export function readModeratorAddon(settings: unknown): ModeratorAddonSub {
           nextChargeAt: typeof o.nextChargeAt === "string" ? o.nextChargeAt : null,
           lapsed: o.lapsed === true,
           trial: readTrialState(o.trial),
+          enterprise: o.enterprise === true,
         };
       }
     }
@@ -126,10 +143,16 @@ export function moderatorTier(settings: unknown): ModeratorPlanTier | null {
   return readModeratorAddon(settings).tier;
 }
 
-/** A paid tier always supersedes an active trial (§47 — purchasing ends trial preview access). */
+/** A paid self-serve tier always supersedes Enterprise/trial (in practice an
+ *  account only ever holds one of these three at once -- this order is a
+ *  defensive precedence, not an expected real-world conflict). Enterprise
+ *  in turn supersedes trial, matching requireAccountWatchContext's own
+ *  documented precedence (watch-runtime.ts): self-serve tier > enterprise >
+ *  trial. */
 export function moderatorEntitlementSource(settings: unknown): ModeratorEntitlementSource {
   const addon = readModeratorAddon(settings);
   if (addon.tier) return addon.tier;
+  if (addon.enterprise) return "enterprise";
   if (addon.trial.active) return "trial";
   return null;
 }
@@ -234,11 +257,20 @@ export function deploymentSlotCheckErrorMessage(check: Extract<DeploymentSlotChe
   return `This community already has the maximum of ${MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY} Virtual Moderators. Remove an existing moderator before adding another.`;
 }
 
-/** Active Mod Slot / community capacity for the panel's current entitlement source (zero if none). */
+/** Active Mod Slot / community capacity for the panel's current entitlement
+ *  source (zero if none). NOTE: this reads the legacy panels.settings shape
+ *  only (every real call site passes ctx.panel.settings) -- Enterprise
+ *  entitlement never lives there (it's account-native, in
+ *  product_entitlements, resolved via watch-runtime.ts's own
+ *  requireAccountWatchContext instead), so "enterprise" is structurally
+ *  unreachable here in practice. Falls back to the same zero-capacity shape
+ *  as "no entitlement" rather than fabricating a number this function has
+ *  no way to know (Enterprise's real capacity is a manually-provisioned
+ *  value, never a fixed per-tier lookup). */
 export function moderatorCapacity(settings: unknown): ModeratorCapacity {
   const source = moderatorEntitlementSource(settings);
   if (source === "trial") return TRIAL_CAPACITY;
-  if (source) return CAPACITY[source];
+  if (source && source !== "enterprise") return CAPACITY[source];
   return { maxCommunities: 0, maxActiveSlots: 0 };
 }
 
@@ -247,22 +279,24 @@ export function moderatorCapacity(settings: unknown): ModeratorCapacity {
  *  to 5; Pro: up to 10; trial: fixed at TRIAL_CAPACITY). Purchasing the
  *  add-on itself is not yet wired to an action (Phase 4.N auto-posting isn't
  *  built) — this only defines the ceiling the future purchase flow must
- *  respect, from the single money.ts source. */
+ *  respect, from the single money.ts source. Enterprise is structurally
+ *  unreachable here -- see moderatorCapacity's own note above. */
 export function moderatorCommunityExpansionCeiling(settings: unknown): number {
   const source = moderatorEntitlementSource(settings);
   if (source === "trial") return TRIAL_CAPACITY.maxCommunities;
-  if (source) return MODERATOR_COMMUNITY_CAPACITY[source].maxWithAddons;
+  if (source && source !== "enterprise") return MODERATOR_COMMUNITY_CAPACITY[source].maxWithAddons;
   return 0;
 }
 
 /** Max saved VirtualModerator identities (distinct from active deployment
  *  slots, §63 of the PDF / §50 here) — mirrors the tier's Active Mod Slot
  *  count (2/5/10/20), since a persona a subscriber can't ever deploy isn't
- *  worth letting them save either. */
+ *  worth letting them save either. Enterprise is structurally unreachable
+ *  here -- see moderatorCapacity's own note above. */
 export function moderatorMaxSavedModerators(settings: unknown): number {
   const source = moderatorEntitlementSource(settings);
   if (source === "trial") return TRIAL_MAX_SAVED_MODERATORS;
-  if (source) return CAPACITY[source].maxActiveSlots;
+  if (source && source !== "enterprise") return CAPACITY[source].maxActiveSlots;
   return 0;
 }
 
@@ -274,10 +308,14 @@ export function virtualModNaturalChatter(settings: unknown): boolean {
   return hasVirtualModerator(settings);
 }
 
-/** Proactive Mode (GM/GN, dead-chat revival, conversation starters) — Standard+ OR an active trial (§15/§37). */
+/** Proactive Mode (GM/GN, dead-chat revival, conversation starters) —
+ *  Standard+, Enterprise, OR an active trial (§15/§37). Enterprise unlocks
+ *  everything Platinum unlocks and more, so it's included here alongside
+ *  the three self-serve tiers rather than requiring a separate check at
+ *  every call site. */
 export function virtualModProactiveMode(settings: unknown): boolean {
   const source = moderatorEntitlementSource(settings);
-  return source === "trial" || source === "standard" || source === "premium" || source === "pro";
+  return source === "trial" || source === "standard" || source === "premium" || source === "pro" || source === "enterprise";
 }
 
 /** Long-term Community Memory — Standard+ or trial (§18/§37). */
@@ -319,7 +357,7 @@ export function virtualModAnalytics(settings: unknown): boolean {
  *  AUTO_POSTING_ENABLED below, same env-driven pattern as the other
  *  Virtual Moderator feature flags. */
 export function virtualModContentGeneration(settings: unknown): boolean {
-  return AUTO_POSTING_ENABLED && !!moderatorTier(settings);
+  return AUTO_POSTING_ENABLED && (!!moderatorTier(settings) || readModeratorAddon(settings).enterprise);
 }
 
 /** Master switch for AI Telegram Auto-Posting — OFF in production until the

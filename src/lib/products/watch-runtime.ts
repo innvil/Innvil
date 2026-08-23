@@ -221,6 +221,36 @@ function buildStandaloneTrialModeratorSettings(trial: { startedAt: string; endsA
   };
 }
 
+/** Synthesizes the SAME settings shape for a real, manually-provisioned
+ *  Managed Enterprise entitlement -- `tier: null, enterprise: true` (never
+ *  reusing "pro"/Platinum: doing so would make an Enterprise account's live
+ *  runtime silently share Platinum's own smaller, separately-tracked AI
+ *  Generation pool via community-runtime.ts's paidTier-gated usage check,
+ *  which is a real correctness bug, not just a naming shortcut -- Enterprise
+ *  has its own separate, much larger pool per money.ts's own doc comment,
+ *  not yet wired into that specific runtime gate). moderator/plan.ts's
+ *  `enterprise` field on ModeratorAddonSub is what makes every capability
+ *  check (virtualModProactiveMode, virtualModContentGeneration, and
+ *  everything that delegates through hasVirtualModerator/
+ *  moderatorEntitlementSource) resolve correctly for it, without inventing
+ *  a second capability-gating system. */
+function buildStandaloneEnterpriseModeratorSettings(): unknown {
+  return {
+    addons: {
+      moderator: {
+        tier: null,
+        commercialMode: "commission",
+        since: null,
+        lastChargeAt: null,
+        nextChargeAt: null,
+        lapsed: false,
+        trial: { active: false, startedAt: null, endsAt: null },
+        enterprise: true,
+      },
+    },
+  };
+}
+
 /** The account_id owning a Watcher (`virtual_moderators.account_id`), or
  *  null if this Watcher is Panel-owned (or doesn't exist). */
 export async function resolveWatcherAccountId(admin: SupabaseClient, virtualModeratorId: string): Promise<string | null> {
@@ -231,12 +261,26 @@ export async function resolveWatcherAccountId(admin: SupabaseClient, virtualMode
 /** Resolves the moderator-capability "settings" blob for a standalone
  *  (Panel-less) integration/deployment -- the standalone counterpart to
  *  reading `panels.settings` for a Panel-backed one. Returns null if the
- *  account has no active Watch entitlement (never fabricates a tier). */
+ *  account has no active Watch entitlement (never fabricates a tier).
+ *
+ *  BUG FIX (2026-08-23): this previously had NO Enterprise branch at all --
+ *  resolveAccountWatchTier only ever returns the 4 self-serve tiers, so an
+ *  Enterprise-only account fell straight through to the trial check, found
+ *  none, and returned null. With settings: null, EVERY downstream
+ *  virtualMod*(settings) capability check in moderator/plan.ts fails closed
+ *  -- meaning a standalone Enterprise Watcher's live Telegram runtime did
+ *  literally nothing (no chatter, no moderation, nothing) for every real
+ *  message. Never caught before now because there was no way to grant a
+ *  real Enterprise entitlement to any account until the devops tool
+ *  (setAccountDevOpsEnterprise) shipped. Same precedence order as
+ *  requireAccountWatchContext itself: self-serve tier > enterprise > trial. */
 export async function resolveStandaloneModeratorSettings(admin: SupabaseClient, virtualModeratorId: string): Promise<unknown> {
   const accountId = await resolveWatcherAccountId(admin, virtualModeratorId);
   if (!accountId) return null;
   const tier = await resolveAccountWatchTier(admin, accountId);
   if (tier) return buildStandaloneModeratorSettings(tier);
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
+  if (enterprise) return buildStandaloneEnterpriseModeratorSettings();
   const trial = await getWatchTrialState(admin, accountId);
   if (trial.status === "active" && trial.startedAt && trial.endsAt) {
     return buildStandaloneTrialModeratorSettings({ startedAt: trial.startedAt, endsAt: trial.endsAt });

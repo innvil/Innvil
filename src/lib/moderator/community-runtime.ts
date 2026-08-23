@@ -2593,10 +2593,18 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // commercial model. `resolveStandaloneModeratorSettings` already
     // resolved `entitlementSource` to the account's REAL current paid tier
     // for a standalone integration, so this is a plain type-narrow, not a
-    // second entitlement lookup.
+    // second entitlement lookup. Enterprise is DELIBERATELY excluded here
+    // too (paidTier stays null for it) -- Enterprise has its own separate,
+    // much larger fixed AI Generation pool (money.ts's
+    // MANAGED_ENTERPRISE_50_AI_GENERATIONS) that isn't wired into this
+    // specific self-serve-tier gate; gating it here would incorrectly cap
+    // Enterprise usage against Platinum's own smaller pool. This is an
+    // existing, separate, already-documented gap (Enterprise's own pool
+    // isn't consumption-enforced anywhere yet), not a regression introduced
+    // by this fix.
     const accountId = integration.panel_id ? null : await resolveWatcherAccountId(admin, integration.virtual_moderator_id);
     const paidTier: ModeratorPlanTier | null =
-      !integration.panel_id && entitlementSource && entitlementSource !== "trial" ? entitlementSource : null;
+      !integration.panel_id && entitlementSource && entitlementSource !== "trial" && entitlementSource !== "enterprise" ? entitlementSource : null;
     await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier);
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;

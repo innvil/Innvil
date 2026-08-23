@@ -6,9 +6,10 @@ import {
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   getAccountProjectDetail, getAccountCommunityDetail, getAccountWatcherDetail, listAccountAttentionItems,
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
-  getAccountPaidPlan, nextProvisioningStatusAfterConnect,
+  getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
+import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration } from "@/src/lib/moderator/plan";
 
 /**
  * Proves the CRITICAL INTEGRATION scenario end to end: an account with a
@@ -1626,4 +1627,55 @@ test("Managed Enterprise zero-Panel: creating resources for an Enterprise accoun
   const watcher = await createAccountWatcher(admin, "acct-1", "Enterprise Watcher");
   assert.equal(watcher.ok, true);
   assert.equal((admin.__store.panels ?? []).length, 0);
+});
+
+/* -------------- resolveStandaloneModeratorSettings (2026-08-23 fix) ---- */
+// BUG: this function previously had NO Enterprise branch -- an Enterprise-
+// only account fell through to null, meaning the live Telegram runtime did
+// literally nothing for it (every virtualMod*(settings) check fails closed
+// on null settings). These tests prove the fix end-to-end: not just that
+// the function returns non-null, but that the REAL capability functions in
+// moderator/plan.ts actually resolve true against what it returns.
+
+const ENTERPRISE_WATCHER = { id: "w-ent", account_id: "acct-1", name: "Enterprise Watcher" };
+
+test("REQUIRED: an Enterprise-only account's Watcher resolves REAL, working settings -- not null", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50], virtual_moderators: [ENTERPRISE_WATCHER],
+  });
+  const settings = await resolveStandaloneModeratorSettings(admin, "w-ent");
+  assert.notEqual(settings, null, "the exact live bug -- an Enterprise-only account must never resolve to null settings");
+  assert.equal(hasVirtualModerator(settings), true);
+  assert.equal(moderatorEntitlementSource(settings), "enterprise");
+});
+
+test("REQUIRED: the resolved Enterprise settings actually unlock Proactive Mode / moderation, the real capabilities the runtime checks", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50], virtual_moderators: [ENTERPRISE_WATCHER],
+  });
+  const settings = await resolveStandaloneModeratorSettings(admin, "w-ent");
+  assert.equal(virtualModProactiveMode(settings), true, "Enterprise must unlock everything Platinum unlocks, including Proactive Mode");
+  assert.equal(virtualModModeration(settings), true);
+});
+
+test("a self-serve tier still wins over a stray Enterprise row for the same account (defensive precedence)", async () => {
+  const selfServe = { id: "e-pro2", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:deposit-9" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [selfServe], virtual_moderators: [ENTERPRISE_WATCHER] });
+  const settings = await resolveStandaloneModeratorSettings(admin, "w-ent");
+  assert.equal(moderatorEntitlementSource(settings), "pro", "resolveAccountWatchTier already resolves the self-serve tier -- Enterprise's own resolution is never reached in this case");
+});
+
+test("Enterprise wins over a stray active trial claim for the same account", async () => {
+  const trialClaim = { account_id: "acct-1", telegram_user_id: 1, started_at: new Date().toISOString(), ends_at: new Date(Date.now() + 60_000).toISOString() };
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50], virtual_moderators: [ENTERPRISE_WATCHER], watch_trial_claims: [trialClaim],
+  });
+  const settings = await resolveStandaloneModeratorSettings(admin, "w-ent");
+  assert.equal(moderatorEntitlementSource(settings), "enterprise");
+});
+
+test("still returns null with no self-serve tier, no Enterprise, and no active trial -- the genuine no-entitlement case is unaffected by this fix", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], virtual_moderators: [ENTERPRISE_WATCHER] });
+  const settings = await resolveStandaloneModeratorSettings(admin, "w-ent");
+  assert.equal(settings, null);
 });
