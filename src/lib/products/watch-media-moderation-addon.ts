@@ -13,16 +13,17 @@ import { MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
  * this module is the ONLY thing that reads `watch_subscription_addons` for
  * this addon_type directly.
  *
- * SCOPE OF THIS FILE, stated honestly: entitlement/capacity representation
- * ONLY. There is no purchase/renewal/removal action that writes a
- * 'media_moderation' row yet (that's the Community-Expansion-equivalent
- * purchase pipeline in innvil-credit.ts/watch-checkout.ts, not built for
- * this add-on), and no real per-request Media Moderation Unit CONSUMPTION
- * metering wired into the live moderation runtime (media-moderation.ts/
- * community-runtime.ts's runMediaModeration still runs unmetered, gated
- * only by MEDIA_MODERATION_ENABLED/virtualModModeration, exactly as before
- * this file existed). Both are real, separate, larger follow-ups -- see the
- * dated CLAUDE.md entry.
+ * READ layer only -- purchase/removal (`purchaseMediaModerationAddonWithCredit`/
+ * `scheduleMediaModerationAddonRemoval`, 2026-08-22) live in innvil-credit.ts
+ * alongside their Community Expansion counterparts, mirroring the exact
+ * existing precedent rather than a second billing module. Direct-crypto
+ * checkout for this add-on is NOT built (Innvil Credit only for now, same
+ * as Community Expansion's own monthly-only crypto gap for annual) -- see
+ * the dated CLAUDE.md entry. Real per-request Media Moderation Unit
+ * CONSUMPTION metering is also NOT wired into the live moderation runtime
+ * yet (media-moderation.ts/community-runtime.ts's runMediaModeration still
+ * runs unmetered, gated only by MEDIA_MODERATION_ENABLED/
+ * virtualModModeration) -- a separate, larger follow-up.
  */
 
 export interface MediaModerationAddonState {

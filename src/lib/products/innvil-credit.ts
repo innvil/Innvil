@@ -8,7 +8,8 @@ import { watchPlanOptions, watchPlanDisplayName, watchTierFromDisplayName, type 
 import { creditPriceCents, annualCreditPriceCents, ANNUAL_ELIGIBLE_TIERS } from "./innvil-credit-pricing";
 import type { WatchBillingInterval } from "./watch-billing-period";
 import { getCommunityExpansionState, finalizeAddonsOnRenewal, finalizeAddonsOnTierChange } from "./watch-community-expansion";
-import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
+import { getMediaModerationAddonState } from "./watch-media-moderation-addon";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
 
 /**
@@ -151,22 +152,39 @@ export async function purchaseWatchWithCredit(
   // scheduled for removal (cancel_at_period_end) -- a removal-pending
   // addon is finalized (see finalizeAddonsOnRenewal below) and simply
   // isn't charged for this final time.
-  let addonFolded = false;
+  const foldedAddonLabels: string[] = [];
   let addonToFinalizeOnTierChange = false;
   if (existingPlan && existingPlan.tier === tier && isCommunityExpansionEligibleTier(tier)) {
     const expansion = await getCommunityExpansionState(admin, accountId);
     if (expansion && !expansion.cancelAtPeriodEnd) {
       const addonRegular = COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
       priceCents += billingInterval === "annual" ? annualCreditPriceCents(addonRegular) : creditPriceCents(addonRegular, tier);
-      addonFolded = true;
+      foldedAddonLabels.push("Community Expansion");
     }
-  } else if (existingPlan && existingPlan.tier !== tier) {
+  }
+  // Media Moderation + renews together with the base subscription too --
+  // available on ALL FOUR self-serve tiers (never gated to Gold/Platinum
+  // like Community Expansion), so this check runs independently of the
+  // eligibility branch above; both addons can be folded into the SAME
+  // combined debit simultaneously.
+  if (existingPlan && existingPlan.tier === tier) {
+    const media = await getMediaModerationAddonState(admin, accountId, tier);
+    if (media && !media.cancelAtPeriodEnd) {
+      const addonRegular = MODERATOR_MEDIA_ADDON[tier].price;
+      priceCents += billingInterval === "annual" ? annualCreditPriceCents(addonRegular) : creditPriceCents(addonRegular, tier);
+      foldedAddonLabels.push("Media Moderation +");
+    }
+  }
+  if (existingPlan && existingPlan.tier !== tier) {
     // A plan CHANGE to a different tier never carries an active Community
-    // Expansion add-on across tiers -- see finalizeAddonsOnTierChange's own
-    // doc comment for why. Blocked here (not just hidden in UI) if current
-    // Community usage would exceed the NEW tier's plain INCLUDED capacity --
-    // the effective capacity the account will have once the add-on is
-    // finalized below.
+    // Expansion OR Media Moderation + add-on across tiers -- see
+    // finalizeAddonsOnTierChange's own doc comment for why. Blocked here
+    // (not just hidden in UI) if current Community usage would exceed the
+    // NEW tier's plain INCLUDED capacity -- the effective capacity the
+    // account will have once the add-on is finalized below. Media
+    // Moderation + has no equivalent usage-safety check (no per-request
+    // consumption metering exists to check against yet) -- it's simply
+    // finalized/removed on any tier change, same as Community Expansion.
     const expansion = await getCommunityExpansionState(admin, accountId);
     if (expansion) {
       const communities = await listAccountCommunities(admin, accountId);
@@ -179,11 +197,13 @@ export async function purchaseWatchWithCredit(
       }
       addonToFinalizeOnTierChange = true;
     }
+    const existingMedia = await getMediaModerationAddonState(admin, accountId, existingPlan.tier);
+    if (existingMedia) addonToFinalizeOnTierChange = true;
   }
 
   const debit = await applyCreditChange(admin, accountId, -priceCents, type, {
     productId: product.id as string,
-    description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}${addonFolded ? " (incl. Community Expansion)" : ""}`.replace(/\s+/g, " ").trim(),
+    description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}${foldedAddonLabels.length ? ` (incl. ${foldedAddonLabels.join(" + ")})` : ""}`.replace(/\s+/g, " ").trim(),
   });
   if (!debit.ok) return { ok: false, error: debit.error };
 
@@ -303,5 +323,96 @@ export async function scheduleCommunityExpansionRemoval(admin: SupabaseClient, a
 
   await admin.from("watch_subscription_addons").update({ cancel_at_period_end: true, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("addon_type", "community_expansion").eq("status", "active");
+  return { ok: true };
+}
+
+export type MediaModerationAddonPurchaseResult =
+  | { ok: true; balanceCents: number; active: true; units: number }
+  | { ok: false; error: string };
+
+/**
+ * Purchases (or, if already active, safely no-ops / un-cancels) Media
+ * Moderation + for the account's CURRENT self-serve tier -- Innvil Credit
+ * only (mirrors purchaseCommunityExpansionWithCredit exactly; there is no
+ * direct-crypto checkout path for this add-on yet, a real, documented gap
+ * -- see the dated CLAUDE.md entry, not silently faked here).
+ *
+ * Unlike Community Expansion, ALL FOUR self-serve tiers are eligible --
+ * there is no premium/pro-only restriction, since MODERATOR_MEDIA_ADDON
+ * defines a real price/unit allowance for every tier including Bronze.
+ * Priced at the account's own billing interval via the SAME canonical
+ * creditPriceCents/annualCreditPriceCents functions every other Watch
+ * purchase uses -- never a duplicated discount formula.
+ */
+export async function purchaseMediaModerationAddonWithCredit(admin: SupabaseClient, accountId: string): Promise<MediaModerationAddonPurchaseResult> {
+  const tier = await resolveAccountWatchTier(admin, accountId);
+  if (!tier) return { ok: false, error: "An active paid Watch subscription is required." };
+
+  const existing = await getMediaModerationAddonState(admin, accountId, tier);
+  if (existing) {
+    // Already active -- if it was scheduled for removal, un-cancel it (no
+    // re-charge; the customer already paid for the period it's still in).
+    if (existing.cancelAtPeriodEnd) {
+      await admin.from("watch_subscription_addons").update({ cancel_at_period_end: false, updated_at: new Date().toISOString() })
+        .eq("account_id", accountId).eq("addon_type", "media_moderation").eq("status", "active");
+    }
+    const balance = await getInnvilCreditBalance(admin, accountId);
+    return { ok: true, balanceCents: balance.balanceCents, active: true, units: existing.units };
+  }
+
+  const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
+  if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
+
+  const paidPlan = await getAccountPaidPlan(admin, accountId);
+  const billingInterval = paidPlan?.billingInterval ?? "monthly";
+  const regular = MODERATOR_MEDIA_ADDON[tier].price;
+  const priceCents = billingInterval === "annual" ? annualCreditPriceCents(regular) : creditPriceCents(regular, tier);
+  const planName = watchPlanDisplayName(tier);
+
+  const debit = await applyCreditChange(admin, accountId, -priceCents, "subscription_purchase", {
+    productId: product.id as string,
+    description: `${planName} Media Moderation +${billingInterval === "annual" ? " (annual)" : ""}`,
+  });
+  if (!debit.ok) return { ok: false, error: debit.error };
+
+  const { error } = await admin.from("watch_subscription_addons").insert({ account_id: accountId, addon_type: "media_moderation", status: "active" });
+  if (error) {
+    // A concurrent purchase already activated it (23505 on the partial
+    // unique index), or a genuine failure -- either way, reverse this
+    // debit; never leave a charge with nothing to show for it.
+    await applyCreditChange(admin, accountId, priceCents, "adjustment", {
+      productId: product.id as string,
+      paymentRef: `reversal:${debit.data.id}`,
+      description: error.code === "23505" ? "Reversal: Media Moderation + already active" : "Reversal: Media Moderation + activation failed",
+    });
+    if (error.code === "23505") {
+      const balance = await getInnvilCreditBalance(admin, accountId);
+      return { ok: true, balanceCents: balance.balanceCents, active: true, units: MODERATOR_MEDIA_ADDON[tier].units };
+    }
+    return { ok: false, error: "Could not activate Media Moderation +. Your credit was refunded." };
+  }
+
+  const balance = await getInnvilCreditBalance(admin, accountId);
+  return { ok: true, balanceCents: balance.balanceCents, active: true, units: MODERATOR_MEDIA_ADDON[tier].units };
+}
+
+/**
+ * Schedules Media Moderation + for removal at the end of the CURRENT paid
+ * period -- never an immediate cut, never a refund for unused time. No
+ * usage-safety check is needed here (unlike Community Expansion's Community-
+ * count check) -- there is no real per-request Media Moderation Unit
+ * consumption metering to check against yet, so there is nothing that could
+ * be left "over capacity" by removing this addon.
+ */
+export async function scheduleMediaModerationAddonRemoval(admin: SupabaseClient, accountId: string): Promise<ScheduleRemovalResult> {
+  const tier = await resolveAccountWatchTier(admin, accountId);
+  if (!tier) return { ok: false, error: "No active Media Moderation + to remove." };
+
+  const existing = await getMediaModerationAddonState(admin, accountId, tier);
+  if (!existing) return { ok: false, error: "No active Media Moderation + to remove." };
+  if (existing.cancelAtPeriodEnd) return { ok: true }; // already scheduled -- idempotent
+
+  await admin.from("watch_subscription_addons").update({ cancel_at_period_end: true, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("addon_type", "media_moderation").eq("status", "active");
   return { ok: true };
 }

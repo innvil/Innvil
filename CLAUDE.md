@@ -127,6 +127,64 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Media Moderation + becomes a real self-serve purchase, not a request (v1.47.33)
+- **Root cause of the incorrect "Request Media Moderation +" CTA**: v1.47.29 deliberately shipped the
+  ENTITLEMENT/pricing model only, with no purchase pipeline — the Plans card's only honest option at the time
+  was a link into the real support/contact channel. This pass builds the missing purchase pipeline, so the CTA
+  can now be a genuine direct action for the standard package.
+- **Canonical distinction, now enforced in code, not just docs**: **STANDARD Media Moderation +** (Bronze +$9.99/
+  1,000 units through Platinum +$24.99/4,000 units) is a real, immediate, server-owned self-serve add-on —
+  Innvil Credit only for now (no direct-crypto checkout path yet, an honest, documented gap — same category as
+  Community Expansion's own monthly-only crypto limitation). **EXTRA capacity beyond a standard package**
+  (e.g. BYO Enterprise Unlimited's 10,000-unit package) stays request/manual — no canonical self-serve overage
+  price exists, so nothing was invented; the BYO Unlimited Enterprise card now shows a distinct "Need more than
+  10,000 units?" note only when its own standard package is checked, never conflating the two.
+- **New self-serve purchase pipeline, reusing the SAME architecture Community Expansion already established** —
+  no parallel billing system: `purchaseMediaModerationAddonWithCredit`/`scheduleMediaModerationAddonRemoval`
+  (`innvil-credit.ts`) mirror `purchaseCommunityExpansionWithCredit`/`scheduleCommunityExpansionRemoval`
+  structurally (debit-then-activate with a compensating reversal, `23505`-tolerant idempotent duplicate-purchase
+  handling, schedule-for-removal-at-period-end with no immediate cut/refund). **Available on ALL FOUR self-serve
+  tiers** (Bronze included — unlike Community Expansion's Gold/Platinum-only restriction), since
+  `MODERATOR_MEDIA_ADDON` already defines a real price/allowance for every tier.
+- **`finalizeAddonsOnRenewal`/`finalizeAddonsOnTierChange` (`watch-community-expansion.ts`) generalized** from
+  `addon_type = 'community_expansion'`-only to ANY addon type on the shared `watch_subscription_addons` table —
+  both addons share the identical "renews with the base subscription, no independent period, never carries
+  across a tier change" lifecycle, so one shared finalize function correctly covers both, never a duplicated
+  finalize implementation per addon type. `purchaseWatchWithCredit`'s renewal-folding logic extended
+  independently for Media Moderation + (checked regardless of Community-Expansion tier-eligibility, since Media
+  Moderation + has none) — **both addons can be folded into the SAME combined renewal debit simultaneously**.
+- **Real UI**: new `MediaModerationAddonCard.tsx` (Add/Active+Manage/Remove, Innvil Credit) — mirrors
+  `CommunityExpansionCard.tsx`'s shape. Rendered on the Plans page ONLY for the account's actual current
+  self-serve plan card (`BillingPlanPicker.tsx`, gated on `isCurrentPlan` not the billing-interval-toggle-
+  dependent `isCurrent`, so it doesn't disappear when switching the Monthly/Annual view) — other plan cards show
+  the same price/units informationally with no CTA that would lead nowhere, since purchasing requires already
+  being subscribed to that exact tier. Usage page's existing read-only card gained a "Manage from Plans →" link
+  and an honest note that per-request unit CONSUMPTION isn't metered yet (this shows the active allowance, never
+  a fabricated "used" count).
+- **Plans/Billing/Usage consistency preserved by construction** — every surface reads the SAME
+  `getAccountCapacity()`/`getMediaModerationAddonState()` resolvers (unchanged from v1.47.29), so there's no
+  second entitlement source that could disagree.
+- **Enterprise Media Moderation + unchanged, correctly** — still inquiry/manual-provisioning (no self-service
+  Enterprise checkout of any kind exists, unrelated to this pass), matching the task's own explicit "don't build
+  fake Enterprise checkout" instruction.
+- New tests: `innvil-credit.test.ts` (+12 — Bronze eligibility vs. Community Expansion's restriction, exact
+  discounted purchase prices, no-subscription rejection, idempotent duplicate purchase, concurrent-purchase race
+  safety, cross-account isolation, removal scheduling, same-tier renewal folding, tier-change finalization, and
+  both addon types active simultaneously on one account). 1425 tests pass (up from 1415), `tsc --noEmit` clean,
+  production build clean. Diff reviewed: 10 files (9 changed + 1 new component), all directly in scope — zero
+  duplicated pricing literals, zero remaining "Request Media Moderation +" CTA for a standard package (confirmed
+  via repo-wide grep), zero Sightengine terminology anywhere customer-facing.
+- **Migration `0087` still needs to be run against the live database** — this pass adds real WRITES to the
+  `media_moderation` addon_type the migration's widened CHECK constraint permits; without it, a live purchase
+  attempt will fail at the DB level (the same honest gap already flagged in the v1.47.29 entry, now load-bearing
+  rather than dormant).
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately NOT built this pass**: direct-crypto checkout for this add-on (Innvil Credit only, an explicit,
+  reported gap — mirrors `watch-checkout.ts`'s existing `createCommunityExpansionCheckout` shape if built later);
+  real per-request Media Moderation Unit CONSUMPTION metering against the live Sightengine calls (still
+  completely unmetered, unrelated to entitlement — a separate, larger follow-up); any self-serve overage pricing
+  for capacity beyond a standard package (no canonical price exists to build against).
+
 ### 2026-08-22 — Fix: Managed Enterprise >50-slot pricing bug ($662→$407) + real add-on CTAs (v1.47.32)
 - **Root cause of the $662/51-slot bug**: `managedEnterprisePrice(slots)` (`watch-enterprise.ts`) still called the
   OLD, superseded Platinum-based dynamic per-slot formula (`moderatorEnterpriseSlotPrice`) for any slot count

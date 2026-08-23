@@ -3,6 +3,7 @@ import Link from "next/link";
 import { CreditCard, ShieldCheck, LifeBuoy } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getAccountCapacity } from "@/src/lib/products/watch-runtime";
+import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
 import { getWatchTrialState, TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/products/watch-trial";
 import { watchPlanOptions, watchAccessLabel } from "@/src/lib/products/watch-plans";
 import { WatchShell } from "@/src/components/watch/WatchShell";
@@ -32,6 +33,10 @@ export default async function PlansPage() {
 
   const options = watchPlanOptions();
   const currentDisplayName = capacity ? watchAccessLabel(capacity.tier) : null;
+  const mediaAddonState =
+    capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise"
+      ? await getMediaModerationAddonState(admin, accountId, capacity.tier)
+      : null;
   const platinum = options.find((o) => o.displayName === "Platinum")!;
   const enterpriseInquiryBody = capacity
     ? `Current plan: ${currentDisplayName}\nWatcher slots used: ${capacity.activeDeploymentCount}/${capacity.slotsTotal}\nCommunities used: ${capacity.communitiesUsed}/${capacity.communitiesTotal}\n\n`
@@ -64,6 +69,7 @@ export default async function PlansPage() {
             options={options}
             currentDisplayName={capacity?.tier !== "trial" ? currentDisplayName : null}
             currentBillingInterval={capacity && capacity.tier !== "trial" ? capacity.billingInterval : "monthly"}
+            mediaAddon={mediaAddonState ? { active: true, cancelAtPeriodEnd: mediaAddonState.cancelAtPeriodEnd, units: mediaAddonState.units } : { active: false, cancelAtPeriodEnd: false, units: 0 }}
           />
         </div>
 

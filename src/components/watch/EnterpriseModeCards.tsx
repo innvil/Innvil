@@ -109,6 +109,15 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
                   />
                   Media Moderation + (+${addon.price.toFixed(2)}/mo, {addon.units.toLocaleString()} Media Moderation Units/mo)
                 </label>
+                {/* BYO Unlimited's own standard package is a real fixed 10,000-unit
+                    entitlement, never a "request" itself -- only capacity BEYOND
+                    that standard package is request/manual, since no canonical
+                    self-serve overage price exists for it yet. */}
+                {enabled && tier.id === "byo_unlimited" && (
+                  <p className="text-[10px] w-text-faint mt-1.5">
+                    Need more than {addon.units.toLocaleString()} units? This request will note it — Innvil will follow up with additional capacity options.
+                  </p>
+                )}
               </div>
             );
           })}

@@ -11,10 +11,11 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import {
   getInnvilCreditBalance, listInnvilCreditActivity, purchaseWatchWithCredit,
   purchaseCommunityExpansionWithCredit, scheduleCommunityExpansionRemoval,
+  purchaseMediaModerationAddonWithCredit, scheduleMediaModerationAddonRemoval,
 } from "@/src/lib/products/innvil-credit";
 import type {
   InnvilCreditBalance, CreditActivityItem, PurchaseWithCreditResult,
-  CommunityExpansionPurchaseResult, ScheduleRemovalResult,
+  CommunityExpansionPurchaseResult, ScheduleRemovalResult, MediaModerationAddonPurchaseResult,
 } from "@/src/lib/products/innvil-credit";
 import type { WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
@@ -50,4 +51,16 @@ export async function scheduleCommunityExpansionRemovalAction(): Promise<Schedul
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return scheduleCommunityExpansionRemoval(admin, user.id);
+}
+
+export async function purchaseMediaModerationAddonWithCreditAction(): Promise<MediaModerationAddonPurchaseResult> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return purchaseMediaModerationAddonWithCredit(admin, user.id);
+}
+
+export async function scheduleMediaModerationAddonRemovalAction(): Promise<ScheduleRemovalResult> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return scheduleMediaModerationAddonRemoval(admin, user.id);
 }

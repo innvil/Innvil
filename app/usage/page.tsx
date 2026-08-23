@@ -220,9 +220,13 @@ export default async function UsagePage() {
         {capacity?.mediaModerationAddonActive && capacity.mediaModerationUnitAllowance != null && (
           <div className="w-card p-5">
             <SectionHeader icon={ShieldCheck} title="Media Moderation +" />
-            <p className="text-sm w-text-dim">
+            <p className="text-sm w-text-dim mb-1">
               Active — {capacity.mediaModerationUnitAllowance.toLocaleString()} Media Moderation Units included this period.
             </p>
+            <p className="text-xs w-text-faint mb-2">
+              Per-request unit usage isn't metered yet — this shows your active allowance, not a live "used" count.
+            </p>
+            <Link href="/plans#paid-plans" className="w-teal hover:underline text-xs font-medium">Manage from Plans →</Link>
           </div>
         )}
 

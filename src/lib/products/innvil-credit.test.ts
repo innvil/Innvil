@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   getInnvilCreditBalance, listInnvilCreditActivity, creditInnvilCreditTopUp, purchaseWatchWithCredit,
   purchaseCommunityExpansionWithCredit, scheduleCommunityExpansionRemoval,
+  purchaseMediaModerationAddonWithCredit, scheduleMediaModerationAddonRemoval,
 } from "./innvil-credit";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { getAccountCapacity } from "./watch-runtime";
@@ -620,4 +621,127 @@ test("REQUIRED: un-cancelling a removal-pending add-on via a fresh purchase call
   assert.equal(result.balanceCents, 100000, "no charge for un-cancelling an already-paid-for add-on");
   const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1");
   assert.equal(row?.cancel_at_period_end, false, "removal must be un-scheduled");
+});
+
+/* ===================================== media moderation + (2026-08-22) ==== */
+// Real self-serve purchase pipeline -- mirrors the Community Expansion tests
+// above structurally, but Media Moderation + is available on ALL FOUR
+// self-serve tiers (never Gold/Platinum-only), so a Bronze fixture is used
+// specifically to prove the eligibility difference.
+
+const BRONZE_ENTITLEMENT = { id: "e-bronze3", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "basic:dep-1" };
+
+test("REQUIRED: Bronze CAN purchase Media Moderation + (unlike Community Expansion, no tier restriction)", async () => {
+  const admin = fakeAdmin({ product_entitlements: [BRONZE_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }] });
+  const result = await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.units, 1000, "Bronze's real unit allowance");
+  assert.equal(result.balanceCents, 10000 - 999, "Bronze has 0% Innvil Credit discount, so $9.99 debits exactly");
+});
+
+test("REQUIRED: Gold Media Moderation + debits the exact discounted price ($18.99) and activates 3,000 units", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }] });
+  const result = await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.units, 3000);
+  assert.equal(result.balanceCents, 10000 - 1899);
+});
+
+test("REQUIRED: no active paid subscription -> Media Moderation + purchase is rejected", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }] });
+  const result = await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  assert.equal(result.ok, false);
+});
+
+test("REQUIRED: duplicate/idempotent activation -- purchasing again while already active is a safe no-op, never a second charge", async () => {
+  const admin = fakeAdmin({ product_entitlements: [BRONZE_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }] });
+  const first = await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  assert.equal(first.ok, true);
+  const second = await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.balanceCents, first.ok ? first.balanceCents : -1, "second call must not debit again");
+});
+
+test("REQUIRED: race safety -- two concurrent purchase attempts activate the add-on exactly once", async () => {
+  const admin = fakeAdmin({ product_entitlements: [BRONZE_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }] });
+  const [a, b] = await Promise.all([
+    purchaseMediaModerationAddonWithCredit(admin, "acct-1"),
+    purchaseMediaModerationAddonWithCredit(admin, "acct-1"),
+  ]);
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  const balance = await getInnvilCreditBalance(admin, "acct-1");
+  assert.equal(balance.balanceCents, 10000 - 999, "exactly ONE net charge survives");
+  assert.equal(admin.__store.watch_subscription_addons.filter((r: Row) => r.addon_type === "media_moderation" && r.status === "active").length, 1);
+});
+
+test("REQUIRED: account isolation -- another account's balance/entitlement is never touched by this account's purchase", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [BRONZE_ENTITLEMENT, { ...BRONZE_ENTITLEMENT, id: "e-other", account_id: "acct-2" }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }, { account_id: "acct-2", balance_cents: 10000 }],
+  });
+  await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  const other = await getInnvilCreditBalance(admin, "acct-2");
+  assert.equal(other.balanceCents, 10000, "account-2's balance must be completely unaffected");
+  const otherRow = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-2");
+  assert.equal(otherRow, undefined, "account-2 must have no addon row from account-1's purchase");
+});
+
+test("REQUIRED: removal -- scheduleMediaModerationAddonRemoval marks cancel_at_period_end, never an immediate cut", async () => {
+  const admin = fakeAdmin({ product_entitlements: [BRONZE_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 10000 }] });
+  await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  const result = await scheduleMediaModerationAddonRemoval(admin, "acct-1");
+  assert.equal(result.ok, true);
+  const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1" && r.addon_type === "media_moderation");
+  assert.equal(row?.cancel_at_period_end, true);
+  assert.equal(row?.status, "active", "still active until the period actually ends");
+});
+
+test("REQUIRED (renewal): a same-tier renewal with an active Media Moderation + add-on folds its price into ONE combined debit", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "basic:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "media_moderation", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Bronze");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  // Bronze base credit price ($29.99, 0% discount) + Bronze media addon credit price ($9.99) = $39.98, ONE debit.
+  assert.equal(result.balanceCents, 100000 - (2999 + 999));
+  const txs = admin.__store.innvil_credit_transactions.filter((t: Row) => t.type === "subscription_renewal");
+  assert.equal(txs.length, 1, "must be exactly ONE combined debit, never two separate charges");
+});
+
+test("REQUIRED: a plan CHANGE finalizes (removes) an active Media Moderation + add-on -- never carried across tiers for free", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "basic:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "media_moderation", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  // Silver's own base price only -- the Bronze-priced media add-on is never carried over/re-charged.
+  assert.equal(result.balanceCents, 100000 - 5699);
+  const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1" && r.addon_type === "media_moderation");
+  assert.equal(row?.status, "removed", "the addon must be finalized on the tier change");
+});
+
+test("REQUIRED: Community Expansion and Media Moderation + can BOTH be active on the SAME account simultaneously (independent addon types)", async () => {
+  const admin = fakeAdmin({ product_entitlements: [GOLD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const expansion = await purchaseCommunityExpansionWithCredit(admin, "acct-1");
+  const media = await purchaseMediaModerationAddonWithCredit(admin, "acct-1");
+  assert.equal(expansion.ok, true);
+  assert.equal(media.ok, true);
+  const activeRows = admin.__store.watch_subscription_addons.filter((r: Row) => r.account_id === "acct-1" && r.status === "active");
+  assert.equal(activeRows.length, 2, "both addon types coexist as two separate active rows");
 });

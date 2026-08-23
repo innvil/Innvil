@@ -7,6 +7,7 @@ import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/w
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
+import { MediaModerationAddonCard } from "./MediaModerationAddonCard";
 import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
 import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 
@@ -34,11 +35,17 @@ type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
  *  itself. Annual is Innvil-Credit-only (WatchCheckout enforces this by
  *  never rendering a crypto option when billingInterval="annual"). */
 export function BillingPlanPicker({
-  options, currentDisplayName, currentBillingInterval = "monthly",
+  options, currentDisplayName, currentBillingInterval = "monthly", mediaAddon,
 }: {
   options: WatchPlanOption[];
   currentDisplayName: string | null;
   currentBillingInterval?: WatchBillingInterval;
+  /** The account's REAL Media Moderation + state for its CURRENT self-serve
+   *  tier (if any) -- only the current-plan card can offer a real Add/Manage
+   *  action, since purchasing requires an active subscription on that exact
+   *  tier already. Optional so existing callers (e.g. the pre-authenticated
+   *  pricing preview, if any) don't need to supply it. */
+  mediaAddon?: { active: boolean; cancelAtPeriodEnd: boolean; units: number };
 }) {
   const [billingInterval, setBillingInterval] = useState<WatchBillingInterval>("monthly");
   const [checkoutPlan, setCheckoutPlan] = useState<SelfServePlan | null>(null);
@@ -153,25 +160,33 @@ export function BillingPlanPicker({
                 </div>
               </div>
 
-              {/* Media Moderation + -- deliberately visually prominent (an intentional
-                  upsell), but clearly marked optional. There is still no self-serve
-                  purchase action for this add-on, so the CTA points at the real
-                  existing support/inquiry channel instead of a fake "Buy" button --
-                  never a checkout path that doesn't exist. */}
-              <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <p className="w-display text-xs w-teal">Media Moderation +</p>
-                  <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Optional add-on</span>
+              {/* Media Moderation + -- a REAL, directly purchasable self-serve add-on
+                  (Innvil Credit), not a request/inquiry product. Only the CURRENT
+                  plan's card can offer the real Add/Manage action (purchasing
+                  requires an active subscription on that exact tier already);
+                  other cards show the same price/units informationally, with no
+                  CTA that would lead nowhere -- subscribing via this card's own
+                  bottom button is the real first step for those. */}
+              {isCurrentPlan && mediaAddon ? (
+                <div className="mb-4">
+                  <MediaModerationAddonCard
+                    tier={o.tier}
+                    billingInterval={billingInterval}
+                    active={mediaAddon.active}
+                    cancelAtPeriodEnd={mediaAddon.cancelAtPeriodEnd}
+                    units={mediaAddon.units || MODERATOR_MEDIA_ADDON[o.tier].units}
+                  />
                 </div>
-                <p className="text-[11px] w-text-faint mb-2">Photo & video media safety — {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} Media Moderation Units/mo</p>
-                <p className="w-display text-base w-text mb-2">+${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}<span className="text-[11px] w-text-faint font-normal">/mo</span></p>
-                <Link
-                  href="/support/contact"
-                  className="text-[11px] w-teal hover:underline font-medium"
-                >
-                  Request Media Moderation + →
-                </Link>
-              </div>
+              ) : (
+                <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="w-display text-xs w-teal">Media Moderation +</p>
+                    <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Optional add-on</span>
+                  </div>
+                  <p className="text-[11px] w-text-faint mb-2">Photo & video media safety — {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} Media Moderation Units/mo</p>
+                  <p className="w-display text-base w-text">+${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}<span className="text-[11px] w-text-faint font-normal">/mo</span></p>
+                </div>
+              )}
               {isCurrent ? (
                 <span className="mt-auto text-xs w-teal flex items-center gap-1"><CheckCircle2 size={13} /> Current plan</span>
               ) : (

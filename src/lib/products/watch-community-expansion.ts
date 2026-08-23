@@ -46,34 +46,41 @@ export async function hasActiveCommunityExpansion(admin: SupabaseClient, account
 }
 
 /** Called whenever the base Watch subscription successfully renews (either
- *  payment path) -- finalizes an addon scheduled for removal
- *  (`cancel_at_period_end`) by marking it 'removed', so its price is never
- *  charged again and effective capacity drops back to the plan's included
- *  count on the NEXT capacity read (`requireAccountWatchContext` only ever
- *  reads `status='active'` rows). Safe to call unconditionally after every
- *  renewal AND every initial purchase -- the WHERE clause only ever
- *  matches a row genuinely scheduled for removal, so it's a real no-op
- *  otherwise (never touches an addon with `cancel_at_period_end=false`). */
+ *  payment path) -- finalizes ANY addon type scheduled for removal
+ *  (`cancel_at_period_end`), not just Community Expansion, by marking it
+ *  'removed', so its price is never charged again and effective capacity
+ *  drops back to the plan's included/base state on the NEXT capacity read.
+ *  Generalized (2026-08-22) beyond `community_expansion` alone once Media
+ *  Moderation + became a second real purchasable addon_type on this SAME
+ *  table -- both addon types share the identical "renews with the base
+ *  subscription, no independent period" lifecycle, so one generic finalize
+ *  call correctly covers both, never a second/duplicated finalize function
+ *  per addon type. Safe to call unconditionally after every renewal AND
+ *  every initial purchase -- the WHERE clause only ever matches a row
+ *  genuinely scheduled for removal, so it's a real no-op otherwise (never
+ *  touches an addon with `cancel_at_period_end=false`). */
 export async function finalizeAddonsOnRenewal(admin: SupabaseClient, accountId: string): Promise<void> {
   await admin
     .from("watch_subscription_addons")
     .update({ status: "removed", updated_at: new Date().toISOString() })
     .eq("account_id", accountId)
-    .eq("addon_type", "community_expansion")
     .eq("status", "active")
     .eq("cancel_at_period_end", true);
 }
 
 /** Called whenever the base subscription's TIER actually changes (e.g. Gold
  *  -> Platinum, Platinum -> Gold) -- unconditionally finalizes ANY active
- *  Community Expansion row, `cancel_at_period_end` or not. A plan change
- *  never carries the add-on across tiers: it was priced and sized for the
- *  OLD tier, and silently re-pricing/re-sizing it for the new one would be
- *  exactly the "Gold's $9.99 add-on becomes Platinum's $14.99 one for
- *  free" (or the reverse) commercial mismatch this feature must avoid. No
+ *  addon row of ANY type (Community Expansion, Media Moderation +, or any
+ *  future addon_type on this table), `cancel_at_period_end` or not. A plan
+ *  change never carries an addon across tiers: every addon here is priced
+ *  and/or sized for the OLD tier (Community Expansion's capacity ceiling,
+ *  Media Moderation +'s price/unit allowance both vary by tier), and
+ *  silently carrying either over would be exactly the "Gold's $9.99
+ *  Community Expansion becomes Platinum's $14.99 one for free" (or a Media
+ *  Moderation + equivalent) commercial mismatch this feature must avoid. No
  *  refund is issued (same "no refunds for unused add-on time" rule as an
- *  explicit removal) -- the customer simply re-purchases Community
- *  Expansion under the new tier's own price/capacity if they still want it.
+ *  explicit removal) -- the customer simply re-purchases the addon under
+ *  the new tier's own price/allowance if they still want it.
  *  Callers MUST run the matching capacity-safety check (see
  *  `innvil-credit.ts`'s `purchaseWatchWithCredit` / `watch-checkout.ts`'s
  *  `createDirectWatchCheckout`) BEFORE the tier change is allowed to
@@ -84,6 +91,5 @@ export async function finalizeAddonsOnTierChange(admin: SupabaseClient, accountI
     .from("watch_subscription_addons")
     .update({ status: "removed", updated_at: new Date().toISOString() })
     .eq("account_id", accountId)
-    .eq("addon_type", "community_expansion")
     .eq("status", "active");
 }
