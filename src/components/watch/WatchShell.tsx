@@ -127,7 +127,7 @@ function SidebarContent({ active, capacity, isSuper, onNavigate }: { active: str
       {capacity && (
         <Link href="/plans" className="block px-4 py-3 mx-2.5 mb-2 rounded-lg w-surface-raised border w-line-soft shrink-0 hover:w-teal-border">
           <p className="text-[10px] uppercase tracking-wide w-text-faint mb-1">{capacity.tier === "trial" ? "Access" : "Plan"}</p>
-          <p className="w-display text-sm w-teal">{watchAccessLabel(capacity.tier)}</p>
+          <p className="w-display text-sm w-teal">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
           <p className="text-[11px] w-text-faint mt-0.5">
             {capacity.activeDeploymentCount}/{capacity.slotsTotal} slots · {capacity.communitiesUsed}/{capacity.communitiesTotal} Communities
           </p>

@@ -1786,6 +1786,74 @@ test("resolveAccountAiRouting with no communityId given still respects an accoun
   assert.equal(routing.credential, null);
 });
 
+/* ------------------------------- BYO Unlimited (enterprise_slots = null, 2026-08-25) ---- */
+// Fixes a real gap: enterprise_slots was already nullable at the DB level
+// (migration 0086's own check constraint always allowed it), but the
+// resolver treated a stored NULL as a provisioning inconsistency rather
+// than the real, meaningful "BYO Unlimited" state -- so BYO Unlimited could
+// never actually be granted/resolved end to end.
+
+const ENTITLED_BYO_UNLIMITED = {
+  id: "e-byo-unl", account_id: "acct-1", product_id: "product-watch", status: "active",
+  subscription_ref: "enterprise:manual-1", enterprise_slots: null, api_source_mode: "byo",
+};
+
+test("REQUIRED: a BYO account with enterprise_slots=null resolves as real Unlimited -- never a provisioning inconsistency", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO_UNLIMITED] });
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.ok(enterprise);
+  assert.equal(enterprise!.slots, null);
+  assert.equal(enterprise!.apiSourceMode, "byo");
+});
+
+test("REQUIRED: a MANAGED account with enterprise_slots=null is REJECTED -- there is no Managed Unlimited package, so this is a real inconsistency", async () => {
+  const managedNull = { ...ENTITLED_BYO_UNLIMITED, api_source_mode: "managed" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [managedNull] });
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(enterprise, null);
+});
+
+test("REQUIRED: requireAccountWatchContext resolves BYO Unlimited's maxActiveSlots to Number.POSITIVE_INFINITY -- never blocked by any real deployment count", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO_UNLIMITED] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.slotsTotal, Number.POSITIVE_INFINITY);
+});
+
+test("REQUIRED: AccountCapacity.enterpriseSlots exposes the real value -- null for BYO Unlimited, a real number for a normal BYO/Managed grant", async () => {
+  const unlimited = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO_UNLIMITED] }), "acct-1");
+  assert.equal(unlimited?.enterpriseSlots, null);
+  const fifty = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] }), "acct-1");
+  assert.equal(fifty?.enterpriseSlots, 50);
+});
+
+test("enterpriseSlots is always null for every non-enterprise tier", async () => {
+  const capacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD] }), "acct-1");
+  assert.equal(capacity?.enterpriseSlots, null);
+});
+
+/* ------------------------------- Enterprise Media Moderation + grant (migration 0097) ---- */
+
+test("REQUIRED: mediaAddonActive defaults to false for a NEW Enterprise row with no explicit grant", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(enterprise?.mediaAddonActive, false);
+});
+
+test("REQUIRED: mediaAddonActive resolves true when explicitly granted", async () => {
+  const withAddon = { ...ENTITLED_ENTERPRISE_50, enterprise_media_addon: true };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [withAddon] });
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(enterprise?.mediaAddonActive, true);
+});
+
+test("REQUIRED: AccountCapacity.enterpriseMediaAddonActive reflects the real grant, false for every non-enterprise tier", async () => {
+  const withAddon = { ...ENTITLED_ENTERPRISE_50, enterprise_media_addon: true };
+  const capacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [withAddon] }), "acct-1");
+  assert.equal(capacity?.enterpriseMediaAddonActive, true);
+  const selfServe = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD] }), "acct-1");
+  assert.equal(selfServe?.enterpriseMediaAddonActive, false);
+});
+
 /* ---------------- AccountCapacity's new apiSourceMode/hasByoCredential fields (0092) ---- */
 
 test("REQUIRED: AccountCapacity.apiSourceMode is null for every non-Enterprise tier", async () => {

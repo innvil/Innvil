@@ -42,7 +42,7 @@ import { extractVideoFrames } from "./media-frame-extractor";
 import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
 import {
-  resolveStandaloneModeratorSettings, resolveWatcherAccountId, resolveAccountAiRouting,
+  resolveStandaloneModeratorSettings, resolveWatcherAccountId, resolveAccountAiRouting, resolveAccountEnterpriseEntitlement,
   MANAGED_AI_ROUTING, type AccountAiRouting,
 } from "@/src/lib/products/watch-runtime";
 import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
@@ -1889,7 +1889,8 @@ async function runMediaModeration(
   now: Date,
   accountId: string | null = null,
   paidTier: ModeratorPlanTier | null = null,
-  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING
+  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
+  enterpriseMediaAddonActive: boolean | null = null
 ): Promise<{ handled: boolean }> {
   if (!virtualModMediaModeration(settings) || !deployments.length) return { handled: false };
 
@@ -1921,20 +1922,31 @@ async function runMediaModeration(
     }
   }
 
+  // Enterprise Media Moderation + gate (migration 0097) -- checked BEFORE
+  // the self-serve gate below since they're mutually exclusive (an account
+  // is either self-serve-tiered or Enterprise, never both). `null` means
+  // "not an Enterprise account" -- falls through untouched to the existing
+  // self-serve/trial logic. A real Enterprise account without the add-on
+  // granted gets the SAME silent-skip shape as a self-serve account with no
+  // active add-on -- never a fabricated result, never a deleted message.
+  if (enterpriseMediaAddonActive === false) {
+    await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_addon_required", { mediaKind: media.kind });
+    return { handled: false };
+  }
+
   // Media Moderation + gate -- self-serve accounts ONLY (paidTier is null
-  // for trial/enterprise/legacy Panel-distributed accounts, which all keep
-  // running media moderation unmetered exactly as before this gate existed
-  // -- trial can't purchase an add-on at all, and Enterprise's own Media
-  // Moderation + is inquiry/manual-provisioning with no persisted
-  // entitlement state to check against, see money.ts's ENTERPRISE_MEDIA_ADDON
-  // doc comment). A self-serve account with NO active add-on, or one that's
-  // exhausted its real monthly allowance, gets a silent skip -- never a
-  // fabricated explicit result, never a deleted message, matching every
-  // other "can't classify" case in this function. Deliberately NOT run
-  // through recordMediaDedup's cache: unlike too_large/duration_exceeded
-  // (permanent properties of the file), addon/allowance state is temporal
-  // -- caching it would incorrectly blacklist a file from ever being
-  // reclassified once the add-on is purchased or the period rolls over.
+  // for trial/enterprise/legacy Panel-distributed accounts). Trial can't
+  // purchase an add-on at all, so it keeps running media moderation
+  // unmetered exactly as before this gate existed; Enterprise is handled
+  // by the dedicated check just above. A self-serve account with NO active
+  // add-on, or one that's exhausted its real monthly allowance, gets a
+  // silent skip -- never a fabricated explicit result, never a deleted
+  // message, matching every other "can't classify" case in this function.
+  // Deliberately NOT run through recordMediaDedup's cache: unlike
+  // too_large/duration_exceeded (permanent properties of the file), addon/
+  // allowance state is temporal -- caching it would incorrectly blacklist
+  // a file from ever being reclassified once the add-on is purchased or
+  // the period rolls over.
   let mediaUsagePeriod: Awaited<ReturnType<typeof resolveAccountBillingPeriod>> = null;
   if (accountId && paidTier) {
     const addon = await getMediaModerationAddonState(admin, accountId, paidTier);
@@ -2055,7 +2067,8 @@ async function handleHumanMessage(
   settings: unknown,
   accountId: string | null = null,
   paidTier: ModeratorPlanTier | null = null,
-  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING
+  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
+  enterpriseMediaAddonActive: boolean | null = null
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
@@ -2069,7 +2082,9 @@ async function handleHumanMessage(
   // vision classifier itself (media-safety-provider.ts) is never BYO-routed
   // (see watch-byo.ts's own scope note).
   const chatId = String(message.chat.id);
-  const mediaModeration = await runMediaModeration(admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier, aiRouting);
+  const mediaModeration = await runMediaModeration(
+    admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier, aiRouting, enterpriseMediaAddonActive
+  );
   timer.mark("media_moderation_check", { handled: mediaModeration.handled });
   if (mediaModeration.handled) return;
 
@@ -2732,7 +2747,21 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // extra Enterprise-entitlement lookup. Threaded through every real
     // AI-generation call site inside handleHumanMessage.
     const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id);
-    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting);
+    // Enterprise Media Moderation + (migration 0097) -- same gating shape:
+    // a real, explicit grant, resolved once here, only for an Enterprise
+    // account (the self-serve tiers' own add-on is resolved separately,
+    // inside runMediaModeration itself, keyed off `paidTier`). `null` means
+    // "not applicable" (not an Enterprise account -- trial/self-serve/
+    // legacy Panel-distributed all fall through to their own existing,
+    // unchanged logic); a real `true`/`false` means this account IS
+    // Enterprise and the add-on either is or isn't granted.
+    const enterpriseMediaAddonActive: boolean | null =
+      entitlementSource === "enterprise" && accountId
+        ? ((await resolveAccountEnterpriseEntitlement(admin, accountId))?.mediaAddonActive ?? false)
+        : null;
+    await handleHumanMessage(
+      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, enterpriseMediaAddonActive
+    );
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;
   }

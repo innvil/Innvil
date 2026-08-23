@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions, watchAccessLabel } from "./watch-plans";
+import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions, watchAccessLabel, formatSlotLimit } from "./watch-plans";
 import { moderatorPlanPrice, MODERATOR_COMMUNITY_CAPACITY } from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
 import { TRIAL_CAPACITY } from "./watch-trial";
@@ -86,6 +86,46 @@ test("REQUIRED: watchAccessLabel shows 'Free Trial' for the trial pseudo-tier, r
   assert.equal(watchAccessLabel("trial"), "Free Trial");
   assert.equal(watchAccessLabel("basic"), "Bronze");
   assert.equal(watchAccessLabel("pro"), "Platinum");
+});
+
+/* --------------------------------------------- watchAccessLabel Enterprise detail ---- */
+// Fixes a real customer-facing bug (2026-08-25): a BYO Enterprise account
+// was shown "Managed Enterprise" everywhere, indistinguishable from an
+// actual Managed account.
+
+test("watchAccessLabel('enterprise') with no detail given keeps the original 'Managed Enterprise' behavior (backward compatible)", () => {
+  assert.equal(watchAccessLabel("enterprise"), "Managed Enterprise");
+});
+
+test("REQUIRED: a Managed Enterprise account shows 'Managed Enterprise'", () => {
+  assert.equal(watchAccessLabel("enterprise", { apiSourceMode: "managed", slots: 75 }), "Managed Enterprise");
+});
+
+test("REQUIRED: a BYO account with exactly 50 slots shows 'BYO 50'", () => {
+  assert.equal(watchAccessLabel("enterprise", { apiSourceMode: "byo", slots: 50 }), "BYO 50");
+});
+
+test("REQUIRED: a BYO account with null slots (Unlimited) shows 'BYO Unlimited'", () => {
+  assert.equal(watchAccessLabel("enterprise", { apiSourceMode: "byo", slots: null }), "BYO Unlimited");
+});
+
+test("a BYO account with an off-menu slot count falls back to a generic 'BYO Enterprise' label, never guesses a package", () => {
+  assert.equal(watchAccessLabel("enterprise", { apiSourceMode: "byo", slots: 37 }), "BYO Enterprise");
+});
+
+test("non-enterprise tiers never read enterpriseDetail even when one is passed", () => {
+  assert.equal(watchAccessLabel("basic", { apiSourceMode: "byo", slots: null }), "Bronze");
+});
+
+/* ------------------------------------------------------------- formatSlotLimit ---- */
+
+test("REQUIRED: formatSlotLimit renders a finite number as-is", () => {
+  assert.equal(formatSlotLimit(50), "50");
+  assert.equal(formatSlotLimit(0), "0");
+});
+
+test("REQUIRED: formatSlotLimit renders Infinity (BYO Unlimited's sentinel) as 'Unlimited'", () => {
+  assert.equal(formatSlotLimit(Number.POSITIVE_INFINITY), "Unlimited");
 });
 
 /* ------------------------------- plan-card capacity consistency (Plans page) ---- */

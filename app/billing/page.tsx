@@ -4,7 +4,7 @@ import { CreditCard, Receipt, ShieldCheck, Clock } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getAccountCapacity, getAccountPaidPlan } from "@/src/lib/products/watch-runtime";
 import { getWatchTrialState } from "@/src/lib/products/watch-trial";
-import { watchPlanOptions, watchAccessLabel, watchPlanDisplayName } from "@/src/lib/products/watch-plans";
+import { watchPlanOptions, watchAccessLabel, watchPlanDisplayName, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import { listWatchPaymentHistory, listAvailableDirectWatchGateways, getPendingWatchPayment } from "@/src/lib/products/watch-checkout";
 import { getInnvilCreditBalance, listInnvilCreditActivity } from "@/src/lib/products/innvil-credit";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
@@ -128,8 +128,8 @@ export default async function BillingPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div>
-                  <p className="w-display text-lg w-teal">Managed Enterprise</p>
-                  <p className="text-xs w-text-faint mt-0.5">{capacity.slotsTotal} Watcher slots · {capacity.communitiesTotal} Communities included</p>
+                  <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
+                  <p className="text-xs w-text-faint mt-0.5">{formatSlotLimit(capacity.slotsTotal)} Watcher slots · {capacity.communitiesTotal} Communities included</p>
                 </div>
                 <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
               </div>
@@ -139,7 +139,9 @@ export default async function BillingPage() {
                 <p className="text-xs w-text-faint">No tracked billing period on this subscription yet — it stays active until your next renewal.</p>
               )}
               <p className="text-xs w-text-faint">
-                Managed Enterprise capacity and billing are provisioned and renewed manually by the Innvil Enterprise team — contact support for changes or renewal.
+                {capacity.apiSourceMode === "byo"
+                  ? "Enterprise capacity and billing are provisioned and renewed manually by the Innvil Enterprise team — contact support for changes or renewal. Your own AI provider usage is billed separately by your provider."
+                  : "Managed Enterprise capacity and billing are provisioned and renewed manually by the Innvil Enterprise team — contact support for changes or renewal."}
               </p>
               <Link href="/support" className="text-xs w-teal hover:underline">Contact support</Link>
             </div>

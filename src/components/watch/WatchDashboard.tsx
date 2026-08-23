@@ -12,7 +12,7 @@ import type {
   CommunityOperationalStats,
 } from "@/src/lib/products/watch-runtime";
 import { communityOperationalStatus } from "@/src/lib/products/watch-status";
-import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import type { WatchTrialStatus } from "@/src/lib/products/watch-trial";
 import { onboardingChecklist, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
 import { moderatorPersonaIsAssigned } from "@/src/lib/moderator/domain";
@@ -136,9 +136,9 @@ export function WatchDashboard({
             <StatCard
               label="Watcher slots"
               value={capacity ? capacity.activeDeploymentCount : activeDeploymentCount}
-              denominator={capacity ? String(capacity.slotsTotal) : undefined}
+              denominator={capacity ? formatSlotLimit(capacity.slotsTotal) : undefined}
               note={`${activeWatcherCount} Watcher${activeWatcherCount === 1 ? "" : "s"} deployed`}
-              progress={capacity ? (capacity.activeDeploymentCount / Math.max(1, capacity.slotsTotal)) * 100 : undefined}
+              progress={capacity ? (Number.isFinite(capacity.slotsTotal) ? (capacity.activeDeploymentCount / Math.max(1, capacity.slotsTotal)) * 100 : 4) : undefined}
             />
             <StatCard
               label="Communities"
@@ -209,7 +209,7 @@ export function WatchDashboard({
               <SectionHeader icon={ShieldCheck} title="Plan & capacity" action={<Link href="/plans" className="text-xs w-teal hover:underline">Manage</Link>} />
               {capacity ? (
                 <div className="space-y-3">
-                  <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier)}</p>
+                  <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
                   {capacity.tier !== "trial" && capacity.paidThrough && (
                     <p className="text-xs w-text-faint">Paid through {new Date(capacity.paidThrough).toLocaleDateString()}</p>
                   )}

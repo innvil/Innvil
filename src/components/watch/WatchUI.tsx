@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AlertTriangle, CheckCircle2, PauseCircle, X } from "lucide-react";
 import type { CommunityOperationalStatus } from "@/src/lib/products/watch-status";
 import type { AttentionSeverity } from "@/src/lib/products/watch-runtime";
+import { formatSlotLimit } from "@/src/lib/products/watch-plans";
 
 /**
  * Shared presentational primitives for every Watch feature "world"
@@ -76,12 +77,12 @@ export function CapacityRow({ label, used, total }: { label: string; used: numbe
       <div className="flex items-center justify-between text-xs mb-1">
         <span className="w-text-dim">{label}</span>
         <span className="w-text">
-          {used} of {total}
+          {used} of {formatSlotLimit(total)}
           {full && <span className="w-teal ml-1.5">· Capacity full</span>}
         </span>
       </div>
       <div className="h-1.5 rounded-full w-surface-raised overflow-hidden">
-        <div className="h-full w-teal-bg rounded-full" style={{ width: `${Math.min(100, (used / Math.max(1, total)) * 100)}%` }} />
+        <div className="h-full w-teal-bg rounded-full" style={{ width: `${Number.isFinite(total) ? Math.min(100, (used / Math.max(1, total)) * 100) : 4}%` }} />
       </div>
     </div>
   );

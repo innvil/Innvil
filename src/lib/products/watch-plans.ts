@@ -45,11 +45,38 @@ export function watchPlanDisplayName(tier: ModeratorPlanTier): WatchPlanDisplayN
  *  the ONE display helper every surface that renders `AccountCapacity.tier`
  *  should call (WatchShell sidebar, Overview, Usage), so neither "trial"
  *  nor "enterprise" ever gets passed into watchPlanDisplayName (which has
- *  no entry for either) or shown as the raw internal string. */
-export function watchAccessLabel(tier: ModeratorPlanTier | "trial" | "enterprise"): string {
+ *  no entry for either) or shown as the raw internal string.
+ *
+ *  `enterpriseDetail` (optional) distinguishes the real Enterprise
+ *  packages -- Managed vs. BYO 50 vs. BYO Unlimited -- rather than always
+ *  showing the generic "Managed Enterprise" regardless of a BYO account's
+ *  actual mode (a real customer-facing bug, fixed 2026-08-25: a BYO
+ *  account was shown "Managed Enterprise" everywhere). Omitted (or
+ *  `apiSourceMode: "managed"`) keeps the original "Managed Enterprise"
+ *  behavior unchanged. `slots` should be `AccountCapacity.enterpriseSlots`
+ *  (50, or `null` for BYO Unlimited) -- an off-menu slot count under BYO
+ *  falls back to a generic "BYO Enterprise" label rather than guessing
+ *  which real package it corresponds to. */
+export function watchAccessLabel(
+  tier: ModeratorPlanTier | "trial" | "enterprise",
+  enterpriseDetail?: { apiSourceMode: "managed" | "byo"; slots: number | null }
+): string {
   if (tier === "trial") return "Free Trial";
-  if (tier === "enterprise") return "Managed Enterprise";
+  if (tier === "enterprise") {
+    if (!enterpriseDetail || enterpriseDetail.apiSourceMode === "managed") return "Managed Enterprise";
+    if (enterpriseDetail.slots === 50) return "BYO 50";
+    if (enterpriseDetail.slots === null) return "BYO Unlimited";
+    return "BYO Enterprise";
+  }
   return watchPlanDisplayName(tier);
+}
+
+/** Formats a capacity number for display -- `Infinity` (BYO Unlimited's
+ *  real sentinel for "no ceiling", see AccountCapacity.slotsTotal) renders
+ *  as "Unlimited" rather than the literal string "Infinity" or a broken
+ *  "∞/∞" ratio. Every other finite value renders as its plain number. */
+export function formatSlotLimit(n: number): string {
+  return Number.isFinite(n) ? String(n) : "Unlimited";
 }
 
 /** Display name -> stable internal tier, for form input / checkout. Never

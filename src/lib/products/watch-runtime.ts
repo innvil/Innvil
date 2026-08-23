@@ -96,7 +96,13 @@ export async function resolveAccountWatchTier(admin: SupabaseClient, accountId: 
 }
 
 export interface AccountEnterpriseEntitlement {
-  slots: number;
+  /** Watcher-slot ceiling. `null` = BYO Unlimited (unlimited LICENSED
+   *  Watcher deployments only -- never unlimited compute/storage/bandwidth)
+   *  -- a real, meaningful stored value, never a provisioning error. Only
+   *  reachable when `apiSourceMode === "byo"`; Managed Enterprise has no
+   *  "unlimited" package, so a Managed row's `slots` is always a real
+   *  positive number. */
+  slots: number | null;
   currentPeriodEnd: string | null;
   billingInterval: WatchBillingInterval;
   /** The REAL, manually-provisioned Community capacity (migration 0088) --
@@ -107,13 +113,21 @@ export interface AccountEnterpriseEntitlement {
   communityCapacity: number;
   /** "managed" (default -- Innvil covers the AI provider spend) or "byo"
    *  (the account supplies their own provider credential, migration 0092).
-   *  PURELY DESCRIPTIVE/ROUTING METADATA as of this field's introduction --
-   *  it does not yet change any capacity/capability resolution below, and
-   *  does not yet change which credential the live AI runtime actually
-   *  uses (see watch-byo.ts's own doc comment for that deliberate scope
-   *  boundary). Defaults to "managed" for any null/invalid stored value --
-   *  never fabricates "byo". */
+   *  Routes the live AI runtime (resolveAccountAiRouting) AND determines
+   *  slot-ceiling semantics (see `slots` above) AND the customer-facing
+   *  display label (watchAccessLabel). Defaults to "managed" for any
+   *  null/invalid stored value -- never fabricates "byo". */
   apiSourceMode: "managed" | "byo";
+  /** Enterprise Media Moderation + -- a real, superadmin-toggleable grant
+   *  (migration 0097), distinct from the self-serve tiers' own purchased/
+   *  metered add-on. Defaults to `true` ONLY for entitlement rows that
+   *  already existed before this column was introduced (a one-time
+   *  migration backfill) -- media moderation was unconditionally on for
+   *  every Enterprise account before this gate existed, and the backfill
+   *  preserves that for accounts already relying on it. Every NEW
+   *  Enterprise grant defaults to `false` (an explicit opt-in add-on,
+   *  matching its own "never bundled into the base price" pricing). */
+  mediaAddonActive: boolean;
 }
 
 /** The account's active Managed Enterprise entitlement, if any -- a
@@ -131,7 +145,7 @@ export async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient,
   if (!product) return null;
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("status, subscription_ref, current_period_end, enterprise_slots, enterprise_community_capacity, billing_interval, api_source_mode")
+    .select("status, subscription_ref, current_period_end, enterprise_slots, enterprise_community_capacity, billing_interval, api_source_mode, enterprise_media_addon")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -140,8 +154,21 @@ export async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient,
   if (refTier !== "enterprise") return null;
   const currentPeriodEnd = (entitlement.current_period_end as string | null) ?? null;
   if (periodHasExpired(currentPeriodEnd)) return null;
-  const slots = entitlement.enterprise_slots as number | null;
-  if (!slots || slots < 1) return null; // a provisioning inconsistency -- never a fabricated slot count
+  // Defensive: falls back to "managed" for anything other than the exact
+  // stored string "byo" -- never fabricates BYO from a null/unexpected value.
+  const apiSourceMode: "managed" | "byo" = entitlement.api_source_mode === "byo" ? "byo" : "managed";
+  const rawSlots = entitlement.enterprise_slots as number | null;
+  let slots: number | null;
+  if (rawSlots === null) {
+    // A stored NULL means BYO Unlimited ONLY for a BYO-flagged row -- there
+    // is no "Managed Unlimited" package, so a Managed row with no slots at
+    // all is a genuine provisioning inconsistency, never a fabricated cap.
+    if (apiSourceMode !== "byo") return null;
+    slots = null;
+  } else {
+    if (rawSlots < 1) return null; // a provisioning inconsistency -- never a fabricated slot count
+    slots = rawSlots;
+  }
   const billingInterval: WatchBillingInterval = entitlement.billing_interval === "annual" ? "annual" : "monthly";
   // Real, manually-provisioned Community capacity (migration 0088) -- never
   // derived from `slots`. A NULL/invalid value falls back to the base
@@ -149,10 +176,12 @@ export async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient,
   const rawCapacity = entitlement.enterprise_community_capacity as number | null;
   const communityCapacity =
     rawCapacity && validateEnterpriseCommunityCapacity("managed", rawCapacity) ? rawCapacity : getEnterpriseIncludedCommunities("managed");
-  // Defensive: falls back to "managed" for anything other than the exact
-  // stored string "byo" -- never fabricates BYO from a null/unexpected value.
-  const apiSourceMode: "managed" | "byo" = entitlement.api_source_mode === "byo" ? "byo" : "managed";
-  return { slots, currentPeriodEnd, billingInterval, communityCapacity, apiSourceMode };
+  // enterprise_media_addon (migration 0097) -- see AccountEnterpriseEntitlement's
+  // own doc comment for the grandfather-default rationale; a genuinely
+  // NULL/unexpected stored value (should never happen post-migration, the
+  // column is NOT NULL) still defaults safely to false, never true.
+  const mediaAddonActive = entitlement.enterprise_media_addon === true;
+  return { slots, currentPeriodEnd, billingInterval, communityCapacity, apiSourceMode, mediaAddonActive };
 }
 
 /**
@@ -413,8 +442,13 @@ async function requireAccountWatchContext(admin: SupabaseClient, accountId: stri
       // Entitlement's own doc comment: extra slots never imply extra
       // Communities; only enterprise_community_capacity does.
       maxCommunities: enterprise.communityCapacity,
-      maxActiveSlots: enterprise.slots,
-      maxSavedModerators: enterprise.slots,
+      // BYO Unlimited (enterprise.slots === null) has no real ceiling --
+      // Number.POSITIVE_INFINITY is the honest sentinel every downstream
+      // numeric comparison (checkDeploymentSlotCaps, capacity bars) already
+      // treats correctly as "never blocked/never full" without needing a
+      // separate branch.
+      maxActiveSlots: enterprise.slots ?? Number.POSITIVE_INFINITY,
+      maxSavedModerators: enterprise.slots ?? Number.POSITIVE_INFINITY,
     };
   }
   if (await hasActiveWatchTrial(admin, accountId)) {
@@ -883,6 +917,17 @@ export interface AccountCapacity {
    *  apiSourceMode (an admin may flag an account "byo" before a credential
    *  is ever stored, a real, representable, and honestly-surfaced state). */
   hasByoCredential: boolean;
+  /** The REAL provisioned Enterprise slot ceiling -- `null` for BYO
+   *  Unlimited (a genuine, meaningful value, matches `slotsTotal ===
+   *  Infinity`), or `null` simply because tier isn't "enterprise" (no
+   *  Enterprise concept applies at all). Exists so a display surface can
+   *  distinguish "BYO 50" from "BYO Unlimited" from "Managed Enterprise"
+   *  (watchAccessLabel) without a second query. */
+  enterpriseSlots: number | null;
+  /** True only when this Enterprise account's Media Moderation + has been
+   *  explicitly granted (see AccountEnterpriseEntitlement.mediaAddonActive).
+   *  Always false for every non-enterprise tier. */
+  enterpriseMediaAddonActive: boolean;
 }
 
 /** Real capacity/usage against the account's actual entitlement -- paid tier
@@ -946,6 +991,8 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     mediaModerationUnitAllowance: mediaAddon?.units ?? null,
     apiSourceMode: ctx.tier === "enterprise" ? (enterprise?.apiSourceMode ?? "managed") : null,
     hasByoCredential: byoCredentialStored,
+    enterpriseSlots: ctx.tier === "enterprise" ? (enterprise?.slots ?? null) : null,
+    enterpriseMediaAddonActive: ctx.tier === "enterprise" && (enterprise?.mediaAddonActive ?? false),
   };
 }
 

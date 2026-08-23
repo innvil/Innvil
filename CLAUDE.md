@@ -127,6 +127,77 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — BYO Unlimited support + real customer label + Enterprise Media Moderation + grant + devops tool goes live (v1.47.47)
+- **Four related fixes from one live report** ("even the BYO is named managed... in superadmin there is only BYO
+  50, no unlimited... also no way to add media moderation to accounts in superadmin... it should also be put in
+  live").
+- **(1) BYO Unlimited is now real, end to end.** `product_entitlements.enterprise_slots` was already nullable
+  at the DB level (migration 0086's own check constraint always allowed it), but `resolveAccountEnterpriseEntitlement`
+  treated a stored NULL as a provisioning inconsistency rather than the real, meaningful "BYO Unlimited" state —
+  so it could never actually be granted or resolved. Fixed: a stored NULL now resolves as Unlimited ONLY for a
+  BYO-flagged row (there's no "Managed Unlimited" package, so NULL on a Managed row is still correctly rejected
+  as an inconsistency). `AccountEnterpriseEntitlement.slots`/`activateWatchEntitlement`'s `enterpriseSlots`
+  param widened to `number | null` — critically, `undefined` (omitted) still means "don't touch this field"
+  (renewal-safe, unchanged), while an EXPLICIT `null` now actually writes NULL (previously conflated with
+  omission). `requireAccountWatchContext` resolves BYO Unlimited's `maxActiveSlots`/`maxSavedModerators` to
+  `Number.POSITIVE_INFINITY` — the honest sentinel `checkDeploymentSlotCaps`'s existing `count >= max` comparison
+  already handles correctly with zero code change (`count >= Infinity` is always false). New
+  `formatSlotLimit()` (`watch-plans.ts`) renders `Infinity` as "Unlimited" everywhere a slot count is shown
+  (`CapacityRow`, stat-card denominators, progress bars — a tiny 4% sliver instead of a broken/empty bar).
+- **(2) The customer-facing label was wrong for every BYO account** — `watchAccessLabel(tier)` hardcoded
+  "Managed Enterprise" for ANY `tier === "enterprise"`, regardless of `apiSourceMode`, across WatchShell's
+  sidebar, Overview, Usage, Billing, and Plans. Fixed: widened to `watchAccessLabel(tier, {apiSourceMode, slots})`
+  (optional — omitted keeps the exact old behavior, so no other non-Enterprise caller needed to change) —
+  resolves "Managed Enterprise" / "BYO 50" / "BYO Unlimited" from the account's REAL `apiSourceMode` +
+  `enterpriseSlots` (new fields added to `AccountCapacity`, sourced from `resolveAccountEnterpriseEntitlement`
+  in `getAccountCapacity`, zero extra queries — already-fetched data). An off-menu BYO slot count falls back to
+  a generic "BYO Enterprise" rather than guessing a package. All 5 call sites + Billing's second, separately
+  hardcoded "Managed Enterprise" string (the "Current subscription" card) updated.
+- **(3) Enterprise Media Moderation + is now a real, superadmin-grantable state** — previously it ran
+  unconditionally/unmetered for EVERY Enterprise account once `MEDIA_MODERATION_ENABLED` was on, with zero
+  persisted state to represent "does this account actually have the add-on." New migration
+  `0097_watch_enterprise_media_addon.sql` — `product_entitlements.enterprise_media_addon boolean not null
+  default false`, **with a one-time backfill to `true` for every currently-active Enterprise row** (a real
+  grandfather clause — no currently-live Enterprise account silently loses media moderation the moment this
+  gate goes into effect; every NEW grant going forward defaults to `false`, an explicit opt-in matching its own
+  "never bundled into the base price" pricing). `AccountEnterpriseEntitlement`/`AccountCapacity` gained
+  `mediaAddonActive`/`enterpriseMediaAddonActive`. `runMediaModeration` (`community-runtime.ts`) gained a new
+  gate, resolved once per message in `handleCommunityUpdate` (only for `entitlementSource === "enterprise"`,
+  zero extra cost for everyone else) and threaded through `handleHumanMessage` — a real Enterprise account
+  without the add-on gets the SAME silent-skip shape (`SKIPPED`/`media_addon_required`) the self-serve tiers'
+  own exhausted-add-on case already uses; `null` (not an Enterprise account at all) falls through completely
+  untouched to the existing self-serve/trial logic. **Deliberately NOT built this pass**: per-unit consumption
+  metering against `ENTERPRISE_MEDIA_ADDON`'s real per-package unit allowances (managed50/byo50/byoUnlimited
+  each have different unit counts) — this pass is the binary grant/gate only, matching what was actually
+  requested ("no way to ADD it"); real usage metering is a separate, larger follow-up, same category as the
+  self-serve tiers' own metering build.
+- **(4) The devops grant tool now works in every environment, including Production** — explicit instruction:
+  since Enterprise (Managed or BYO) has NO self-serve checkout anywhere in this codebase, manual devops
+  provisioning is the ONLY way a real Enterprise customer is ever onboarded, so restricting it to Preview (the
+  original QA-safety design) stopped making sense. Removed `isPreviewEnvironment()` from every mutating action
+  in `superadmin-watch-devops.ts` (`setAccountDevOpsSubscription`, `setAccountDevOpsEnterprise`,
+  `clearAccountDevOpsSubscription`, `clearAccountDevOpsByoCredential`) — `requireSuperAdmin()` remains, and
+  always was, the real security boundary. Doc comments rewritten to state this explicitly.
+- **Devops UI overhauled to match**: the BYO branch of the Enterprise grant form is now a real tier PICKER
+  (`WATCH_ENTERPRISE_BYO_TIERS` — "BYO 50" / "BYO Unlimited", with live price shown) instead of a free-number
+  slots input — prevents granting a nonsensical "BYO 37 slots" that doesn't correspond to any real priced
+  package. `setAccountDevOpsEnterprise` server-side validates this too (BYO must be exactly 50 or Unlimited;
+  Unlimited is rejected outright for Managed, which has no such package). New "Media Moderation +" checkbox in
+  the same grant form, pre-filled from the account's real current state on search. "Current entitlement" now
+  shows the real media-addon state and "Unlimited" instead of "?" for a BYO-Unlimited account.
+- New tests: `watch-plans.test.ts` (+8 — every `watchAccessLabel` Enterprise-detail case incl. the off-menu
+  fallback and backward-compatible no-detail default, `formatSlotLimit`'s finite/Infinity cases),
+  `watch-runtime.test.ts` (+9 — BYO-null-means-Unlimited vs. Managed-null-is-rejected, `maxActiveSlots`
+  resolving to real `Infinity`, `enterpriseSlots`/`enterpriseMediaAddonActive` on `AccountCapacity` for every
+  case), `ownership.test.ts` (+6 — the exact null-vs-undefined `enterpriseSlots` distinction incl. a renewal
+  never clobbering a persisted Unlimited grant, and the new `enterpriseMediaAddon` param's persist/omit/revoke
+  behavior). 1625 tests pass (up from 1603), `tsc --noEmit` clean, production build clean. **The Enterprise
+  Media Moderation + runtime gate itself (`runMediaModeration`) has no dedicated DB-mocked test** — consistent
+  with this exact function's own long-established convention in this codebase (verified via typecheck + build
+  + code review instead, same as every other pass that's touched it).
+- **Run migration `0097`** before this governs anything live. **Not deployed automatically, per standing
+  instruction.**
+
 ### 2026-08-25 — Security fix: removed the superadmin's ability to enter a customer's BYO API key (v1.47.46)
 - **Live report from the user, correctly flagged as a real security problem**: the Watch devops tool
   (`/superadmin` → Watch devops, and the owner-app sidebar mirror) had a form letting a superadmin TYPE a

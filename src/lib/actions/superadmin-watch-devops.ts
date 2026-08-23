@@ -1,27 +1,18 @@
 "use server";
 
 /**
- * Superadmin-only, Preview-only control for manually granting a Watch
- * subscription tier to an account, for live QA -- e.g. testing a Watcher's
- * behavior against a real Standard/Premium/Pro entitlement without needing
- * a real crypto/Innvil-Credit payment to go through first.
- *
- * Two separate safety gates, both server-side (never only hidden in the UI):
- *  1. requireSuperAdmin() -- same role check every other superadmin action
- *     in this codebase uses (superadmin.ts).
- *  2. isPreviewEnvironment() -- the MUTATING actions (set/clear) additionally
- *     hard-fail outside Vercel's Preview environment. The READ action
- *     (getAccountDevOpsSubscription) is NOT gated on Preview -- a superadmin
- *     must still be able to SEE an account's real entitlement (including one
- *     granted this way) from the Production superadmin surface, since
- *     Preview and Production share the same database; only the ability to
- *     CREATE/REMOVE a devops override is Preview-only.
- *
- * "Brought live": Preview and Production read/write the exact same Supabase
- * project (confirmed this session) -- there is no separate promotion step.
- * A devops entitlement granted while testing on Preview is, immediately,
- * the account's real entitlement everywhere, including Production. What's
- * restricted to Preview is only the ACT of granting/revoking it this way.
+ * Superadmin-only control for manually granting a Watch subscription/
+ * Enterprise entitlement to an account. Originally built (2026-08) as a
+ * Preview-only QA convenience; as of 2026-08-25 this is a real operational
+ * tool used in every environment, including Production -- there is no
+ * self-serve checkout for Enterprise anywhere in this codebase (Managed or
+ * BYO), so manual devops provisioning is the ONLY way a real Enterprise
+ * customer is ever onboarded. Restricting it to Preview stopped making
+ * sense once that became true; the real security boundary is, and always
+ * was, requireSuperAdmin() -- same role check every other superadmin
+ * action in this codebase uses (superadmin.ts). Preview and Production
+ * read/write the exact same Supabase project, so a grant made from either
+ * is immediately the account's real entitlement everywhere.
  *
  * Reuses the SAME canonical entitlement-activation function every real paid
  * purchase already calls (activateWatchEntitlement, ownership.ts) -- never a
@@ -45,11 +36,11 @@
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
-import { isPreviewEnvironment } from "@/src/lib/config";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import { validateEnterpriseCommunityCapacity } from "@/src/lib/products/watch-enterprise-community";
 import { hasByoCredential, clearAccountByoCredential } from "@/src/lib/products/watch-byo";
+import { WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 type Result<T = null> = { ok: true; data: T } | { ok: false; error: string };
@@ -115,6 +106,10 @@ export interface AccountDevOpsSubscriptionState {
    *  itself. Meaningful regardless of apiSourceMode (an admin may store a
    *  credential before or after flipping the mode). */
   hasByoCredential: boolean;
+  /** Only meaningful when tier === "enterprise" -- whether Media
+   *  Moderation + has been explicitly granted (migration 0097). False for
+   *  every non-enterprise/no-entitlement account. */
+  mediaAddonActive: boolean;
 }
 
 /** Read-only -- NOT Preview-gated (see file header). */
@@ -129,13 +124,13 @@ export async function getAccountDevOpsSubscription(accountId: string): Promise<R
       ok: true,
       data: {
         tier: null, status: null, isDevOps: false, subscriptionRef: null, enterpriseSlots: null, enterpriseCommunityCapacity: null,
-        apiSourceMode: "managed", hasByoCredential: byoCredentialStored,
+        apiSourceMode: "managed", hasByoCredential: byoCredentialStored, mediaAddonActive: false,
       },
     };
   }
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("subscription_ref, status, enterprise_slots, enterprise_community_capacity, api_source_mode")
+    .select("subscription_ref, status, enterprise_slots, enterprise_community_capacity, api_source_mode, enterprise_media_addon")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -151,16 +146,21 @@ export async function getAccountDevOpsSubscription(accountId: string): Promise<R
       enterpriseCommunityCapacity: (entitlement?.enterprise_community_capacity as number | null) ?? null,
       apiSourceMode: entitlement?.api_source_mode === "byo" ? "byo" : "managed",
       hasByoCredential: byoCredentialStored,
+      mediaAddonActive: entitlement?.enterprise_media_addon === true,
     },
   };
 }
 
 /** Grants (or replaces) a devops Watch subscription for the given account.
- *  Preview-only -- fails explicitly outside Preview, never a silent no-op. */
+ *  This is the ONLY grant path for Enterprise (see setAccountDevOpsEnterprise
+ *  below) -- there is no self-serve Enterprise checkout anywhere in this
+ *  codebase, so this action must work in every real environment, not just
+ *  Preview (explicit product decision, 2026-08-25 -- previously
+ *  Preview-only for QA safety; now a real operational tool for onboarding
+ *  actual customers). Superadmin-only remains the real security boundary. */
 export async function setAccountDevOpsSubscription(accountId: string, tier: ModeratorPlanTier): Promise<Result> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
-  if (!isPreviewEnvironment()) return { ok: false, error: "DevOps subscription overrides are only available in the Preview environment." };
 
   const admin = createAdminClient();
   const ref = `devops:${auth.userId}:${Date.now()}`;
@@ -175,25 +175,34 @@ export async function setAccountDevOpsSubscription(accountId: string, tier: Mode
   return { ok: true, data: null };
 }
 
-/** Grants (or replaces) a devops Managed Enterprise entitlement -- the
- *  first live path anywhere in this codebase for an actual account to
- *  receive Enterprise capacity. Kept as its OWN function rather than
- *  widening setAccountDevOpsSubscription's tier parameter -- "enterprise"
- *  is a structurally distinct entitlement source everywhere else in this
- *  codebase (watch-runtime.ts), never a ModeratorPlanTier value, so this
- *  mirrors that distinction instead of blurring it. Preview-only, same
- *  gate as every other mutating action in this file.
+/** Grants (or replaces) a devops Managed/BYO Enterprise entitlement -- the
+ *  ONLY grant path anywhere in this codebase for an actual account to
+ *  receive Enterprise capacity (no self-serve Enterprise checkout exists,
+ *  so this must work in every real environment -- see the 2026-08-25 note
+ *  on setAccountDevOpsSubscription above, same rationale). Kept as its OWN
+ *  function rather than widening setAccountDevOpsSubscription's tier
+ *  parameter -- "enterprise" is a structurally distinct entitlement source
+ *  everywhere else in this codebase (watch-runtime.ts), never a
+ *  ModeratorPlanTier value, so this mirrors that distinction instead of
+ *  blurring it.
  *
- *  `slots` must be a real, positive Watcher-slot count (the same floor
- *  resolveAccountEnterpriseEntitlement itself enforces -- a missing/zero
- *  count is treated as "no entitlement", never fabricated). `communityCapacity`
- *  is OPTIONAL -- omitted or `undefined` leaves it unset, which the real
- *  resolver already treats as "base package" (8 Communities); when given,
- *  it's validated against the canonical package matrix BEFORE ever being
- *  persisted -- an invalid value is rejected with a clear error here
- *  (not silently dropped, unlike activateWatchEntitlement's own internal
- *  write-time guard, since this is a direct admin action that deserves
- *  real feedback rather than a silent no-op).
+ *  `slots`:
+ *   - Managed: any real, positive Watcher-slot count (the same floor
+ *     resolveAccountEnterpriseEntitlement itself enforces) -- Managed's
+ *     pricing genuinely scales per-slot above the base 50 package, so a
+ *     free-form count is correct here.
+ *   - BYO: MUST be exactly one of the two real priced packages --
+ *     WATCH_ENTERPRISE_BYO_TIERS' own maxSlots values (50, or `null` for
+ *     BYO Unlimited) -- never an arbitrary custom number. There is no
+ *     "Managed Unlimited" package, so `null` is rejected outright when
+ *     apiSourceMode isn't "byo".
+ *  `communityCapacity` is OPTIONAL -- omitted or `undefined` leaves it
+ *  unset, which the real resolver already treats as "base package" (8
+ *  Communities); when given, it's validated against the canonical package
+ *  matrix BEFORE ever being persisted -- an invalid value is rejected with
+ *  a clear error here (not silently dropped, unlike activateWatchEntitlement's
+ *  own internal write-time guard, since this is a direct admin action that
+ *  deserves real feedback rather than a silent no-op).
  *
  *  `apiSourceMode` (default "managed") flags which routing mode the live
  *  AI runtime resolves for this account (see resolveAccountAiRouting in
@@ -201,27 +210,39 @@ export async function setAccountDevOpsSubscription(accountId: string, tier: Mode
  *  credential -- the customer must still store their own key via their own
  *  Settings -> AI Provider tab (watch-byo-settings.ts) before any BYO call
  *  can actually succeed; neither step is required to grant the entitlement
- *  itself. This action never touches the credential in any way. */
+ *  itself. This action never touches the credential in any way.
+ *
+ *  `mediaAddon` (optional, `undefined` = leave whatever was already
+ *  provisioned untouched) explicitly grants/revokes Enterprise Media
+ *  Moderation + -- see AccountEnterpriseEntitlement's own doc comment
+ *  (watch-runtime.ts) for the grandfather-default rationale on existing rows. */
 export async function setAccountDevOpsEnterprise(
-  accountId: string, slots: number, communityCapacity?: number, apiSourceMode?: "managed" | "byo"
+  accountId: string, slots: number | null, communityCapacity?: number, apiSourceMode?: "managed" | "byo", mediaAddon?: boolean
 ): Promise<Result> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
-  if (!isPreviewEnvironment()) return { ok: false, error: "DevOps subscription overrides are only available in the Preview environment." };
-  if (!Number.isInteger(slots) || slots < 1) return { ok: false, error: "Watcher slots must be a whole number of at least 1." };
+  const mode = apiSourceMode ?? "managed";
+  if (slots === null) {
+    if (mode !== "byo") return { ok: false, error: "Unlimited slots is only a real package under BYO -- Managed has no Unlimited tier." };
+  } else if (!Number.isInteger(slots) || slots < 1) {
+    return { ok: false, error: "Watcher slots must be a whole number of at least 1." };
+  } else if (mode === "byo" && !WATCH_ENTERPRISE_BYO_TIERS.some((t) => t.maxSlots === slots)) {
+    const options = WATCH_ENTERPRISE_BYO_TIERS.map((t) => t.label).join(" or ");
+    return { ok: false, error: `BYO Enterprise is only sold as ${options} -- pick one of the real priced packages, not a custom slot count.` };
+  }
   if (communityCapacity != null && !validateEnterpriseCommunityCapacity("managed", communityCapacity)) {
     return { ok: false, error: `${communityCapacity} isn't a real Managed Enterprise Community capacity package.` };
   }
 
   const admin = createAdminClient();
   const ref = `devops:${auth.userId}:${Date.now()}`;
-  await activateWatchEntitlement(admin, accountId, "enterprise", ref, "monthly", slots, communityCapacity, apiSourceMode);
+  await activateWatchEntitlement(admin, accountId, "enterprise", ref, "monthly", slots, communityCapacity, apiSourceMode, mediaAddon);
 
   await admin.from("audit_logs").insert({
     panel_id: null,
     actor_id: auth.userId,
     action: "superadmin.watch_devops_enterprise_set",
-    meta: { accountId, slots, communityCapacity: communityCapacity ?? null, apiSourceMode: apiSourceMode ?? "managed", devops: true },
+    meta: { accountId, slots, communityCapacity: communityCapacity ?? null, apiSourceMode: mode, mediaAddon: mediaAddon ?? null, devops: true },
   });
   return { ok: true, data: null };
 }
@@ -250,7 +271,6 @@ export async function setAccountDevOpsEnterprise(
 export async function clearAccountDevOpsByoCredential(accountId: string): Promise<Result> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
-  if (!isPreviewEnvironment()) return { ok: false, error: "DevOps subscription overrides are only available in the Preview environment." };
 
   const admin = createAdminClient();
   await clearAccountByoCredential(admin, accountId);
@@ -266,11 +286,10 @@ export async function clearAccountDevOpsByoCredential(accountId: string): Promis
 
 /** Revokes a devops Watch subscription -- refuses to touch anything that
  *  isn't itself devops-tagged, so this can never accidentally cancel a real
- *  paid subscription. Preview-only, same as setAccountDevOpsSubscription. */
+ *  paid subscription. */
 export async function clearAccountDevOpsSubscription(accountId: string): Promise<Result> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
-  if (!isPreviewEnvironment()) return { ok: false, error: "DevOps subscription overrides are only available in the Preview environment." };
 
   const admin = createAdminClient();
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();

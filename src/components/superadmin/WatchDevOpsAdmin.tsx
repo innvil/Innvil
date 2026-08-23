@@ -8,7 +8,7 @@ import {
   clearAccountDevOpsSubscription, clearAccountDevOpsByoCredential,
   type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
 } from "@/src/lib/actions/superadmin-watch-devops";
-import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
+import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 import { getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions } from "@/src/lib/products/watch-enterprise-community";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
@@ -17,19 +17,17 @@ const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
   { value: "standard", label: "Silver (Standard)" },
   { value: "premium", label: "Gold (Premium)" },
   { value: "pro", label: "Platinum (Pro)" },
-  { value: "enterprise", label: "Enterprise (Managed)" },
+  { value: "enterprise", label: "Enterprise" },
 ];
 
 const ENTERPRISE_COMMUNITY_BASE = getEnterpriseIncludedCommunities("managed");
 
-/** Superadmin-only control for manually granting a Watch subscription tier
- *  to an account, for live QA — e.g. testing a Watcher against a real
- *  Standard/Premium/Pro entitlement without a real payment. The MUTATING
- *  actions (set/clear) are hard-gated server-side to Vercel's Preview
- *  environment only (superadmin-watch-devops.ts) — this UI has no client-
- *  side way to know which environment it's running in, so it always shows
- *  the controls and surfaces the server's own rejection plainly if used
- *  outside Preview, rather than trying to guess and hide them. */
+/** Superadmin-only control for manually granting a Watch subscription/
+ *  Enterprise entitlement to an account. Works in every real environment
+ *  (not just Preview) as of 2026-08-25 -- there is no self-serve checkout
+ *  for Enterprise anywhere in this codebase, so this IS the real
+ *  onboarding path for a live Enterprise customer, not just a QA
+ *  convenience. requireSuperAdmin() is the real security boundary. */
 export function WatchDevOpsAdmin() {
   const [email, setEmail] = useState("");
   const [searching, setSearching] = useState(false);
@@ -38,8 +36,10 @@ export function WatchDevOpsAdmin() {
   const [state, setState] = useState<AccountDevOpsSubscriptionState | null>(null);
   const [tier, setTier] = useState<DevOpsGrantableTier>("standard");
   const [enterpriseSlots, setEnterpriseSlots] = useState(String(MANAGED_ENTERPRISE_50.slots));
+  const [byoTierId, setByoTierId] = useState<(typeof WATCH_ENTERPRISE_BYO_TIERS)[number]["id"]>(WATCH_ENTERPRISE_BYO_TIERS[0].id);
   const [enterpriseCapacity, setEnterpriseCapacity] = useState(String(ENTERPRISE_COMMUNITY_BASE));
   const [apiSourceMode, setApiSourceMode] = useState<"managed" | "byo">("managed");
+  const [mediaAddon, setMediaAddon] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
@@ -80,9 +80,15 @@ export function WatchDevOpsAdmin() {
       // right above in "Current entitlement".
       if (sub.data.tier) setTier(sub.data.tier);
       if (sub.data.tier === "enterprise") {
-        setEnterpriseSlots(String(sub.data.enterpriseSlots ?? MANAGED_ENTERPRISE_50.slots));
-        setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE));
         setApiSourceMode(sub.data.apiSourceMode);
+        if (sub.data.apiSourceMode === "byo") {
+          const matched = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.maxSlots === sub.data.enterpriseSlots);
+          setByoTierId((matched ?? WATCH_ENTERPRISE_BYO_TIERS[0]).id);
+        } else {
+          setEnterpriseSlots(String(sub.data.enterpriseSlots ?? MANAGED_ENTERPRISE_50.slots));
+        }
+        setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE));
+        setMediaAddon(sub.data.mediaAddonActive);
       }
       setByoError(null);
       setByoOk(null);
@@ -99,20 +105,23 @@ export function WatchDevOpsAdmin() {
     setBusy(true);
     setActionError(null);
     setActionOk(null);
+    const byoTier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.id === byoTierId)!;
+    const slots = apiSourceMode === "byo" ? byoTier.maxSlots : Number(enterpriseSlots);
     const res =
       tier === "enterprise"
         ? await setAccountDevOpsEnterprise(
             account.accountId,
-            Number(enterpriseSlots),
+            slots,
             enterpriseCapacity.trim() ? Number(enterpriseCapacity) : undefined,
-            apiSourceMode
+            apiSourceMode,
+            mediaAddon
           )
         : await setAccountDevOpsSubscription(account.accountId, tier as ModeratorPlanTier);
     setBusy(false);
     if (!res.ok) { setActionError(res.error); return; }
     setActionOk(
       tier === "enterprise"
-        ? `Devops Enterprise entitlement set (${enterpriseSlots} slots, ${apiSourceMode === "byo" ? "BYO" : "Managed"}).`
+        ? `Devops Enterprise entitlement set (${apiSourceMode === "byo" ? byoTier.label : `Managed, ${enterpriseSlots} slots`}, media +${mediaAddon ? " on" : " off"}).`
         : `Devops ${tier} subscription set.`
     );
     await refreshState(account.accountId);
@@ -145,10 +154,10 @@ export function WatchDevOpsAdmin() {
   return (
     <Card title="Watch devops subscription" icon={ShieldCheck}>
       <p className="fp-text-dim text-sm mb-4">
-        Manually grant a Watch subscription tier to an account for live QA — bypasses payment entirely. Reuses the
-        exact same entitlement activation every real purchase uses, tagged distinctly so it's never confused with a
-        real paid subscription. <span className="fp-gold">Granting/clearing only works in the Preview environment</span> —
-        the server rejects it in Production even if attempted here.
+        Manually grant a Watch subscription or Enterprise entitlement to an account — bypasses payment entirely.
+        Reuses the exact same entitlement activation every real purchase uses, tagged distinctly so it's never
+        confused with a real paid subscription. Enterprise has no self-serve checkout of any kind, so this is the
+        real onboarding path for a live Enterprise customer, not just a QA tool — works in every environment.
       </p>
 
       <div className="flex items-center gap-2 mb-4">
@@ -186,8 +195,9 @@ export function WatchDevOpsAdmin() {
               </p>
               {state.tier === "enterprise" && (
                 <p className="text-[11px] fp-text-faint">
-                  {state.enterpriseSlots ?? "?"} slots · {state.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE} Communities ·{" "}
-                  {state.apiSourceMode === "byo" ? "BYO" : "Managed"}
+                  {state.apiSourceMode === "byo" ? (state.enterpriseSlots ?? "Unlimited") : (state.enterpriseSlots ?? "?")} slots ·{" "}
+                  {state.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE} Communities ·{" "}
+                  {state.apiSourceMode === "byo" ? "BYO" : "Managed"} · Media +{state.mediaAddonActive ? " on" : " off"}
                   {state.apiSourceMode === "byo" && (
                     <span className={state.hasByoCredential ? "text-emerald-400" : "text-amber-400"}>
                       {" "}({state.hasByoCredential ? "credential stored" : "no credential stored"})
@@ -209,24 +219,6 @@ export function WatchDevOpsAdmin() {
             </select>
             {tier === "enterprise" && (
               <>
-                <input
-                  type="number"
-                  min={1}
-                  value={enterpriseSlots}
-                  onChange={(e) => setEnterpriseSlots(e.target.value)}
-                  placeholder="Watcher slots"
-                  className="w-28 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                />
-                <select
-                  value={enterpriseCapacity}
-                  onChange={(e) => setEnterpriseCapacity(e.target.value)}
-                  className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                >
-                  <option value={ENTERPRISE_COMMUNITY_BASE}>{ENTERPRISE_COMMUNITY_BASE} Communities (base)</option>
-                  {getEnterpriseCommunityExpansionOptions("managed").map((o) => (
-                    <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
-                  ))}
-                </select>
                 <div className="flex items-center gap-3 text-sm fp-text">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input type="radio" name="apiSourceMode" checked={apiSourceMode === "managed"} onChange={() => setApiSourceMode("managed")} />
@@ -237,6 +229,40 @@ export function WatchDevOpsAdmin() {
                     BYO
                   </label>
                 </div>
+                {apiSourceMode === "byo" ? (
+                  <select
+                    value={byoTierId}
+                    onChange={(e) => setByoTierId(e.target.value as typeof byoTierId)}
+                    className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                  >
+                    {WATCH_ENTERPRISE_BYO_TIERS.map((t) => (
+                      <option key={t.id} value={t.id}>{t.label} (${t.price.toFixed(2)}/mo{t.maxSlots ? `, ${t.maxSlots} slots` : ", unlimited slots"})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="number"
+                    min={1}
+                    value={enterpriseSlots}
+                    onChange={(e) => setEnterpriseSlots(e.target.value)}
+                    placeholder="Watcher slots"
+                    className="w-28 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                  />
+                )}
+                <select
+                  value={enterpriseCapacity}
+                  onChange={(e) => setEnterpriseCapacity(e.target.value)}
+                  className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                >
+                  <option value={ENTERPRISE_COMMUNITY_BASE}>{ENTERPRISE_COMMUNITY_BASE} Communities (base)</option>
+                  {getEnterpriseCommunityExpansionOptions("managed").map((o) => (
+                    <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
+                  ))}
+                </select>
+                <label className="flex items-center gap-1.5 cursor-pointer text-sm fp-text">
+                  <input type="checkbox" checked={mediaAddon} onChange={(e) => setMediaAddon(e.target.checked)} />
+                  Media Moderation +
+                </label>
               </>
             )}
             <button onClick={() => void grant()} disabled={busy} className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50">

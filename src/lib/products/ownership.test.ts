@@ -318,6 +318,76 @@ test("apiSourceMode='managed' can be explicitly (re)persisted, e.g. switching a 
   assert.equal(row?.api_source_mode, "managed");
 });
 
+/* -------------------------------------- BYO Unlimited: null vs undefined slots (2026-08-25) ---- */
+// `enterpriseSlots` OMITTED (undefined) must never touch the field (renewal
+// safety, unchanged); an EXPLICIT `null` must actually WRITE null -- a real,
+// meaningful "BYO Unlimited" value, not treated the same as omission.
+
+test("REQUIRED: an explicit null enterpriseSlots is actually WRITTEN as null, not treated as omitted", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", null, undefined, "byo");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.ok("enterprise_slots" in (row as Row), "the field must actually be present in the write, not skipped");
+  assert.equal(row?.enterprise_slots, null);
+});
+
+test("REQUIRED: omitting enterpriseSlots (undefined) on a renewal never clobbers a previously-persisted BYO Unlimited value", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: null, api_source_mode: "byo" },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_slots, null, "omitting the parameter must never reset a previously-persisted Unlimited grant to something else");
+});
+
+test("a real number still overwrites a previously-null (Unlimited) slots value, e.g. downgrading BYO Unlimited to BYO 50", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: null, api_source_mode: "byo" },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2", "monthly", 50);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_slots, 50);
+});
+
+/* ------------------------------------------- Enterprise Media Moderation + (migration 0097) ---- */
+
+test("REQUIRED: activateWatchEntitlement persists a real enterpriseMediaAddon value", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", 50, undefined, "managed", true);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_media_addon, true);
+});
+
+test("omitting enterpriseMediaAddon never clobbers a previously-persisted grant on renewal", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: 50, enterprise_media_addon: true },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_media_addon, true, "omitting the parameter must never reset an already-granted add-on");
+});
+
+test("enterpriseMediaAddon can be explicitly revoked (set to false)", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: 50, enterprise_media_addon: true },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2", "monthly", undefined, undefined, undefined, false);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_media_addon, false);
+});
+
 /* -------------------------------------------------------- account projects ---- */
 
 test("listAccountProjects returns only this account's projects, standalone and Panel-backed alike", async () => {

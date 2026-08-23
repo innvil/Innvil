@@ -96,8 +96,8 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
  */
 export async function activateWatchEntitlement(
   admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string,
-  billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number, enterpriseCommunityCapacity?: number,
-  apiSourceMode?: "managed" | "byo"
+  billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number | null, enterpriseCommunityCapacity?: number,
+  apiSourceMode?: "managed" | "byo", enterpriseMediaAddon?: boolean
 ): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
@@ -122,13 +122,19 @@ export async function activateWatchEntitlement(
       current_period_end: period.end,
       billing_interval: billingInterval,
       // Only meaningful for tier === "enterprise" (migration 0086) -- the
-      // manually-provisioned Watcher-slot count Managed Enterprise capacity
-      // resolves from (requireAccountWatchContext, watch-runtime.ts), never
-      // encoded into subscription_ref itself. Left OUT of the upsert object
-      // entirely (not overwritten with null) for every non-enterprise call,
-      // so re-activating/renewing a normal self-serve tier can never
-      // accidentally clear a stray value.
-      ...(enterpriseSlots != null ? { enterprise_slots: enterpriseSlots } : {}),
+      // manually-provisioned Watcher-slot count Managed/BYO Enterprise
+      // capacity resolves from (requireAccountWatchContext, watch-runtime.ts),
+      // never encoded into subscription_ref itself. `undefined` (the
+      // parameter simply omitted) means "don't touch this field" -- so
+      // re-activating/renewing a normal self-serve tier, or renewing an
+      // Enterprise account without re-specifying slots, can never
+      // accidentally clear a stray value. An EXPLICIT `null` is a real,
+      // meaningful value: BYO Unlimited -- unlimited LICENSED Watcher
+      // deployments, the column is already nullable at the DB level
+      // (migration 0086's own check constraint always allowed it) and
+      // resolveAccountEnterpriseEntitlement now interprets a stored NULL as
+      // exactly this, never as a provisioning inconsistency.
+      ...(enterpriseSlots !== undefined ? { enterprise_slots: enterpriseSlots } : {}),
       // Real, manually-provisioned Community capacity (migration 0088) --
       // validated against the canonical Managed Enterprise package matrix
       // BEFORE ever being persisted (never a client-supplied capacity taken
@@ -147,6 +153,12 @@ export async function activateWatchEntitlement(
       // (the type system already restricts this to exactly the two
       // allowed strings, so no further runtime validation is needed here).
       ...(apiSourceMode != null ? { api_source_mode: apiSourceMode } : {}),
+      // Enterprise Media Moderation + -- same never-clobber discipline:
+      // `undefined` (omitted) leaves whatever was already provisioned
+      // untouched; a real boolean explicitly sets it. See
+      // resolveAccountEnterpriseEntitlement's doc comment for the
+      // grandfather default applied to rows that predate this column.
+      ...(enterpriseMediaAddon !== undefined ? { enterprise_media_addon: enterpriseMediaAddon } : {}),
       // Annual is Innvil-Credit-only by product rule -- force it here so
       // Billing never has to re-derive it. Monthly is deliberately left
       // OUT of this object (not overwritten) since it can legitimately be

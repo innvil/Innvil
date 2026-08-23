@@ -5,7 +5,7 @@ import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getAccountCapacity } from "@/src/lib/products/watch-runtime";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
 import { getWatchTrialState, TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/products/watch-trial";
-import { watchPlanOptions, watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { watchPlanOptions, watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { BillingPlanPicker } from "@/src/components/watch/BillingPlanPicker";
@@ -32,14 +32,16 @@ export default async function PlansPage() {
   ]);
 
   const options = watchPlanOptions();
-  const currentDisplayName = capacity ? watchAccessLabel(capacity.tier) : null;
+  const currentDisplayName = capacity
+    ? watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })
+    : null;
   const mediaAddonState =
     capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise"
       ? await getMediaModerationAddonState(admin, accountId, capacity.tier)
       : null;
   const platinum = options.find((o) => o.displayName === "Platinum")!;
   const enterpriseInquiryBody = capacity
-    ? `Current plan: ${currentDisplayName}\nWatcher slots used: ${capacity.activeDeploymentCount}/${capacity.slotsTotal}\nCommunities used: ${capacity.communitiesUsed}/${capacity.communitiesTotal}\n\n`
+    ? `Current plan: ${currentDisplayName}\nWatcher slots used: ${capacity.activeDeploymentCount}/${formatSlotLimit(capacity.slotsTotal)}\nCommunities used: ${capacity.communitiesUsed}/${capacity.communitiesTotal}\n\n`
     : "";
 
   return (

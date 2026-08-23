@@ -18,7 +18,7 @@ import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
-import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
 import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 
@@ -110,7 +110,7 @@ export default async function UsagePage() {
           <StatCard
             label="Watcher slots"
             value={activeDeploymentCount}
-            denominator={capacity ? String(capacity.slotsTotal) : undefined}
+            denominator={capacity ? formatSlotLimit(capacity.slotsTotal) : undefined}
             note={`${activeWatcherCount} unique Watcher${activeWatcherCount === 1 ? "" : "s"} deployed`}
           />
           <StatCard label="Communities" value={communities.length} denominator={capacity ? String(capacity.communitiesTotal) : undefined} />
@@ -197,7 +197,7 @@ export default async function UsagePage() {
             <SectionHeader icon={ShieldCheck} title="Plan capacity" />
             {capacity ? (
               <>
-                <p className="w-display text-lg w-teal mb-1">{watchAccessLabel(capacity.tier)}</p>
+                <p className="w-display text-lg w-teal mb-1">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
                 {capacity.tier !== "trial" && capacity.paidThrough && (
                   <p className="text-xs w-text-faint mb-3">Paid through {new Date(capacity.paidThrough).toLocaleDateString()}</p>
                 )}
