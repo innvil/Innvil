@@ -12,6 +12,7 @@ import { projectBelongsToAccount, listAccountProjects } from "./ownership";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial, getWatchTrialState, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./watch-trial";
 import { periodHasExpired, type WatchBillingInterval } from "./watch-billing-period";
+import { getAccountByoCredential, hasByoCredential, type WatchByoCredential } from "./watch-byo";
 
 /**
  * Neutral ownership/creation layer for Communities, Watchers
@@ -151,6 +152,66 @@ export async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient,
   // stored string "byo" -- never fabricates BYO from a null/unexpected value.
   const apiSourceMode: "managed" | "byo" = entitlement.api_source_mode === "byo" ? "byo" : "managed";
   return { slots, currentPeriodEnd, billingInterval, communityCapacity, apiSourceMode };
+}
+
+/**
+ * BYO Enterprise runtime wiring (Phase 2, 2026-08-24) -- the resolved
+ * AI-provider routing decision for ONE account, computed once per inbound
+ * Telegram event (handleCommunityUpdate) and threaded through every real
+ * AI-generation call site: chatter replies (chatter-generate.ts), the
+ * ambient-greeting classifier, link classification/warning
+ * (link-classify.ts), and media-moderation warning text (media-warning.ts).
+ *
+ * `required: true` means this account holds an active Enterprise
+ * entitlement explicitly flagged api_source_mode='byo' -- every one of
+ * those call sites MUST use `credential`, or degrade via its own EXISTING
+ * safe failure path (a classifier's already-defined safe fallback value; a
+ * generator's already-handled "generation failed, stay silent" path; a
+ * warning generator's already-existing deterministic template pool). None
+ * of them may ever fall through to Innvil's own AI_API_KEY/DEEPSEEK_API_KEY
+ * credentials once `required` is true -- `credential: null` while
+ * `required` is true is a genuine misconfiguration (BYO flagged, nothing
+ * usable stored), not a signal to substitute Innvil's key.
+ *
+ * This is the ONLY new consumer of watch-byo.ts beyond the devops grant
+ * tool -- the generation modules themselves (chatter-generate.ts,
+ * link-classify.ts, media-warning.ts) only ever see this already-resolved
+ * `AccountAiRouting` value, never watch-byo.ts directly, preserving that
+ * module's original decoupling intent.
+ */
+export interface AccountAiRouting {
+  required: boolean;
+  credential: WatchByoCredential | null;
+}
+
+/** The default/non-BYO routing decision -- every Managed account (and
+ *  every trial/self-serve-tier account, which can never even resolve as
+ *  Enterprise) resolves to exactly this, with zero extra queries. */
+export const MANAGED_AI_ROUTING: AccountAiRouting = { required: false, credential: null };
+
+/** `isEnterprise` is the caller's already-computed `entitlementSource ===
+ *  "enterprise"` check -- gates the extra Enterprise-entitlement lookup so
+ *  a self-serve/trial account (the overwhelming majority of traffic) never
+ *  pays for it. Returns MANAGED_AI_ROUTING for any non-BYO-flagged account,
+ *  including a Managed Enterprise one. */
+export async function resolveAccountAiRouting(admin: SupabaseClient, accountId: string | null, isEnterprise: boolean): Promise<AccountAiRouting> {
+  if (!accountId || !isEnterprise) return MANAGED_AI_ROUTING;
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
+  if (!enterprise || enterprise.apiSourceMode !== "byo") return MANAGED_AI_ROUTING;
+  const credential = await getAccountByoCredential(admin, accountId);
+  return { required: true, credential };
+}
+
+/** Shared `aiComplete` providerOverride shape for a BYO credential -- one
+ *  place, reused by every generation module, so the per-provider default
+ *  baseUrl (used only when the stored one is null) can never drift between
+ *  call sites. */
+export function byoProviderOverride(credential: WatchByoCredential): { provider: "anthropic" | "openai"; apiKey: string; baseUrl: string } {
+  return {
+    provider: credential.provider,
+    apiKey: credential.apiKey,
+    baseUrl: credential.baseUrl || (credential.provider === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"),
+  };
 }
 
 export interface AccountPaidPlan {
@@ -801,6 +862,13 @@ export interface AccountCapacity {
   /** The real unit allowance while the add-on is active, else null -- never
    *  a fabricated number for an inactive/ineligible account. */
   mediaModerationUnitAllowance: number | null;
+  /** "managed" | "byo" only when tier === "enterprise" -- null for every
+   *  other tier (there's no Managed/BYO distinction outside Enterprise). */
+  apiSourceMode: "managed" | "byo" | null;
+  /** True only when a BYO credential is actually stored -- independent of
+   *  apiSourceMode (an admin may flag an account "byo" before a credential
+   *  is ever stored, a real, representable, and honestly-surfaced state). */
+  hasByoCredential: boolean;
 }
 
 /** Real capacity/usage against the account's actual entitlement -- paid tier
@@ -820,8 +888,8 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     isSelfServeTier ? getAccountPaidPlan(admin, accountId) : Promise.resolve(null),
     // A small extra query, mirroring the existing tier/getAccountPaidPlan
     // split above -- requireAccountWatchContext already resolved enough to
-    // know it's "enterprise", but not the real period/billing-interval
-    // detail, which only this richer resolver carries.
+    // know it's "enterprise", but not the real period/billing-interval/
+    // apiSourceMode detail, which only this richer resolver carries.
     ctx.tier === "enterprise" ? resolveAccountEnterpriseEntitlement(admin, accountId) : Promise.resolve(null),
     // All 4 self-serve tiers are Media Moderation + eligible (no tier
     // restriction, unlike Community Expansion) -- never queried for
@@ -830,6 +898,10 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     // -- TS can't narrow ctx.tier through a separately-stored boolean.)
     ctx.tier !== "trial" && ctx.tier !== "enterprise" ? getMediaModerationAddonState(admin, accountId, ctx.tier) : Promise.resolve(null),
   ]);
+  // A second, cheap existence-only query -- gated on the enterprise value
+  // already fetched above, so a Managed Enterprise (or non-Enterprise)
+  // account never pays for it.
+  const byoCredentialStored = ctx.tier === "enterprise" && enterprise?.apiSourceMode === "byo" ? await hasByoCredential(admin, accountId) : false;
   // Community Expansion is a self-serve Gold/Platinum add-on ONLY --
   // structurally excluded for both trial and enterprise (isCommunity
   // ExpansionEligibleTier only accepts a real ModeratorPlanTier, so this
@@ -858,6 +930,8 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     communityExpansionEligible: eligible,
     mediaModerationAddonActive: mediaAddon != null,
     mediaModerationUnitAllowance: mediaAddon?.units ?? null,
+    apiSourceMode: ctx.tier === "enterprise" ? (enterprise?.apiSourceMode ?? "managed") : null,
+    hasByoCredential: byoCredentialStored,
   };
 }
 

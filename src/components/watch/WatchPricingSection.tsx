@@ -7,6 +7,7 @@ import { CheckCircle2, Clock } from "lucide-react";
 import { WatchCheckout } from "./WatchCheckout";
 import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
+import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 
 type Plan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -90,11 +91,20 @@ export function WatchPricingSection({ options, authenticated }: { options: Watch
           <span className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full mb-3 w-teal-soft-bg w-teal">
             Enterprise
           </span>
-          <p className="text-xs w-text-faint mb-4">For large-scale deployments — custom pricing.</p>
-          <p className="text-2xl w-display mb-1 flex items-center gap-1"><CheckCircle2 size={18} className="w-teal" /> Custom</p>
-          <a href="/signup" className="mt-4 text-sm px-4 py-2 rounded-lg border w-line-soft w-surface text-center hover:w-text">
-            Contact us
-          </a>
+          <p className="text-xs w-text-faint mb-2">For large-scale deployments — two real ways to run it.</p>
+          <p className="text-2xl w-display mb-1 flex items-center gap-1">
+            <CheckCircle2 size={18} className="w-teal" /> from ${WATCH_ENTERPRISE_BYO_TIERS[0].price.toFixed(0)}<span className="text-sm w-text-faint">/mo</span>
+          </p>
+          <div className="text-[11px] w-text-dim space-y-1 mb-3">
+            <p>Managed — Innvil runs everything, from ${MANAGED_ENTERPRISE_50.price.toFixed(0)}/mo.</p>
+            <p>
+              BYO — bring your own AI provider credential and pay less (from ${WATCH_ENTERPRISE_BYO_TIERS[0].price.toFixed(0)}/mo); your
+              own provider usage is billed separately, not covered by Innvil.
+            </p>
+          </div>
+          <Link href="/plans#enterprise" className="mt-4 text-sm px-4 py-2 rounded-lg border w-line-soft w-surface text-center hover:w-text">
+            Compare Managed vs. BYO
+          </Link>
         </div>
       </div>
 

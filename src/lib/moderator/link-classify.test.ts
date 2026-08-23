@@ -176,3 +176,75 @@ test("unconfigured AI goes straight to the deterministic fallback pool, no netwo
     });
   });
 });
+
+/* -------------------------------------- BYO Enterprise routing (Phase 2, 2026-08-24) ---- */
+// aiRouting?.required checked FIRST in both functions -- when true, routes
+// through the account's own stored credential; getInnvilModelConfig()/
+// Innvil's own key are never reached in that branch, verified via the
+// actual outgoing request URL/body, not just the parsed result.
+
+const BYO_CRED = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" };
+
+test("REQUIRED: classifyLinkIntent BYO required+usable routes through the stored credential, never Innvil's own key", async () => {
+  // Innvil's own key IS configured here, on purpose -- proves BYO wins, not merely that Innvil's key was absent.
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: UNSOLICITED_PROMOTION\nCONFIDENCE: high"), async (calls) => {
+      const result = await classifyLinkIntent("join us at https://t.me/othergroup", "", { required: true, credential: BYO_CRED });
+      assert.equal(calls.length, 1);
+      const body = calls[0].body as { model?: string };
+      assert.equal(body.model, "claude-sonnet-5");
+      // The BYO key must be the one actually sent -- headers carry it, never the request body.
+      assert.deepEqual(result, { category: "UNSOLICITED_PROMOTION", confidence: "high" });
+    });
+  });
+});
+
+test("REQUIRED: classifyLinkIntent BYO required but nothing usable degrades to the SAME safe fallback, without ever calling Innvil's key", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const missingCred = await classifyLinkIntent("https://t.me/othergroup", "", { required: true, credential: null });
+      const missingModel = await classifyLinkIntent(
+        "https://t.me/othergroup", "", { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: null } }
+      );
+      assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
+      assert.deepEqual(missingCred, { category: "UNKNOWN_OR_AMBIGUOUS", confidence: "low" });
+      assert.deepEqual(missingModel, { category: "UNKNOWN_OR_AMBIGUOUS", confidence: "low" });
+    });
+  });
+});
+
+test("classifyLinkIntent: a normal (non-BYO) account's behavior is unaffected -- aiRouting undefined or required:false", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: SAFE_RELEVANT_LINK\nCONFIDENCE: high"), async (calls) => {
+      const withoutRouting = await classifyLinkIntent("here's the doc https://docs.example.com", "");
+      const withManaged = await classifyLinkIntent("here's the doc https://docs.example.com", "", { required: false, credential: null });
+      assert.equal(calls.length, 2);
+      assert.deepEqual(withoutRouting, withManaged);
+    });
+  });
+});
+
+test("REQUIRED: generateModerationWarning BYO required+usable routes through the stored credential, never Innvil's own key", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy(anthropicTextResponse("Hey, please keep promo links out of here."), async (calls) => {
+      const text = await generateModerationWarning("Kwan", persona, 1, false, { required: true, credential: BYO_CRED });
+      assert.equal(calls.length, 1);
+      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.ok(text.length > 0);
+    });
+  });
+});
+
+test("REQUIRED: generateModerationWarning BYO required but unusable falls straight to the template pool, no network call at all", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const missingCred = await generateModerationWarning("Kwan", persona, 1, false, { required: true, credential: null });
+      const missingModel = await generateModerationWarning(
+        "Kwan", persona, 2, false, { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: null } }
+      );
+      assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
+      assert.ok(missingCred.length > 0);
+      assert.ok(missingModel.length > 0);
+    });
+  });
+});

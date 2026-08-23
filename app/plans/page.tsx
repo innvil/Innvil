@@ -73,7 +73,7 @@ export default async function PlansPage() {
           />
         </div>
 
-        <div className="w-card-raised p-5 border w-teal-border">
+        <div id="enterprise" className="w-card-raised p-5 border w-teal-border scroll-mt-24">
           <SectionHeader icon={ShieldCheck} title="Enterprise" />
           <p className="text-sm w-text-dim mb-1">Innvil Watch Enterprise — for operations beyond Platinum.</p>
           <p className="text-xs w-text-faint mb-5">

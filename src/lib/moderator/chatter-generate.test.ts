@@ -387,8 +387,10 @@ test("REQUIRED: CASUAL_CHAT gets a low output-token cap; ANSWER keeps its genero
 });
 
 test("REQUIRED: routing keys strictly on action.type, not message content -- resolveChatterRoute takes no text/message argument at all", () => {
-  // Structural proof: the function signature is (action: ChatterGenerationAction) => ChatterRoute.
-  // If this ever grows a second parameter for message text, this call site breaks loudly.
+  // Structural proof: the function signature is (action, aiRouting?) => ChatterRoute --
+  // aiRouting is account-level BYO routing metadata (Phase 2, 2026-08-24), never derived
+  // from message text/content. If this ever grows a THIRD parameter for message text,
+  // this call site breaks loudly.
   withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
     const route = resolveChatterRoute("CASUAL_CHAT");
     assert.equal(route.ok, true);
@@ -403,6 +405,89 @@ test("REQUIRED: persona/prompt construction is provider-independent -- identical
     const withDeepseek = buildSystemPrompt(input);
     assert.equal(withDeepseek, withoutDeepseek);
     assert.match(withDeepseek, /laid-back, dry humor, terse/);
+  });
+});
+
+/* ---------------------------------------- BYO Enterprise routing (Phase 2, 2026-08-24) ---- */
+// aiRouting?.required is checked FIRST, before any action-based branching --
+// when true, BOTH ANSWER and CASUAL_CHAT route through the account's own
+// stored credential, and getInnvilModelConfig()/deepseekChatterProvider()
+// must never be reached. A missing credential or missing model fails
+// explicitly (ok:false), never falling back to Innvil's own routes.
+
+const BYO_CRED = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" };
+
+test("REQUIRED: BYO required+usable routes ANSWER through the stored credential, never Sonnet's own getInnvilModelConfig", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("ANSWER", { required: true, credential: BYO_CRED });
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "claude-sonnet-5");
+      assert.equal(route.automation, "NATURAL_CHATTER_ANSWER_BYO");
+      assert.ok(route.providerOverride, "must use the account's own credential, never Innvil's default resolution");
+      assert.equal(route.providerOverride?.apiKey, "sk-real-byo-key");
+      assert.equal(route.providerOverride?.provider, "anthropic");
+    }
+  });
+});
+
+test("REQUIRED: BYO required+usable routes CASUAL_CHAT through the stored credential, never DeepSeek", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT", { required: true, credential: BYO_CRED });
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.automation, "NATURAL_CHATTER_CASUAL_BYO");
+      assert.equal(route.providerOverride?.apiKey, "sk-real-byo-key");
+      assert.notEqual(route.providerOverride?.apiKey, "sk-deepseek-test");
+    }
+  });
+});
+
+test("REQUIRED: an openai-compatible BYO credential's own base URL/apiKey are used verbatim", () => {
+  const route = resolveChatterRoute("ANSWER", {
+    required: true,
+    credential: { provider: "openai", apiKey: "sk-oa-real", baseUrl: "https://my-own-proxy.example.com/v1", model: "gpt-5" },
+  });
+  assert.equal(route.ok, true);
+  if (route.ok) {
+    assert.equal(route.model, "gpt-5");
+    assert.equal(route.providerOverride?.provider, "openai");
+    assert.equal(route.providerOverride?.baseUrl, "https://my-own-proxy.example.com/v1");
+  }
+});
+
+test("an openai-compatible BYO credential with no stored baseUrl falls back to the real OpenAI-compatible default, never Innvil's own AI_BASE_URL", () => {
+  withEnv({ AI_BASE_URL: "https://innvils-own-gateway.example.com" }, () => {
+    const route = resolveChatterRoute("ANSWER", { required: true, credential: { provider: "openai", apiKey: "sk-oa-real", baseUrl: null, model: "gpt-5" } });
+    assert.equal(route.ok, true);
+    if (route.ok) assert.equal(route.providerOverride?.baseUrl, "https://api.openai.com/v1");
+  });
+});
+
+test("REQUIRED: BYO required but no credential stored fails explicitly -- never falls through to Sonnet/DeepSeek", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const answer = resolveChatterRoute("ANSWER", { required: true, credential: null });
+    const casual = resolveChatterRoute("CASUAL_CHAT", { required: true, credential: null });
+    assert.equal(answer.ok, false);
+    assert.equal(casual.ok, false);
+    if (!answer.ok) assert.doesNotMatch(answer.error, /sonnet|deepseek/i);
+    if (!casual.ok) assert.doesNotMatch(casual.error, /sonnet|deepseek/i);
+  });
+});
+
+test("REQUIRED: BYO required with a credential that has no configured model fails explicitly -- never guesses a model id", () => {
+  const route = resolveChatterRoute("ANSWER", { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: null } });
+  assert.equal(route.ok, false);
+  if (!route.ok) assert.match(route.error, /model/i);
+});
+
+test("a normal (non-BYO) account's routing is byte-identical to before BYO existed -- aiRouting undefined or required:false changes nothing", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const withoutRouting = resolveChatterRoute("ANSWER");
+    const withManagedRouting = resolveChatterRoute("ANSWER", { required: false, credential: null });
+    assert.deepEqual(withoutRouting, withManagedRouting);
+    assert.equal(withoutRouting.ok, true);
+    if (withoutRouting.ok) assert.equal(withoutRouting.automation, "NATURAL_CHATTER_ANSWER");
   });
 });
 

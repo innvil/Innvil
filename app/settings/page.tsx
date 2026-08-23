@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
-import { Bell, Settings as SettingsIcon, Lock } from "lucide-react";
+import { Bell, Settings as SettingsIcon, Lock, KeyRound } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getNotificationPreferences } from "@/src/lib/products/watch-notifications";
 import { getAccountPreferences } from "@/src/lib/products/watch-account-preferences";
 import { timezoneLabel } from "@/src/lib/products/watch-datetime";
+import { getAccountCapacity } from "@/src/lib/products/watch-runtime";
+import { getWatchByoCredentialState } from "@/src/lib/actions/watch-byo-settings";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { SettingsSectionNav } from "@/src/components/watch/SettingsSectionNav";
@@ -12,6 +14,7 @@ import type { WatchTab } from "@/src/components/watch/WatchTabs";
 import { NotificationsSettingsCard } from "@/src/components/watch/NotificationsSettingsCard";
 import { GeneralSettingsCard } from "@/src/components/watch/GeneralSettingsCard";
 import { SecuritySettingsCard } from "@/src/components/watch/SecuritySettingsCard";
+import { ByoCredentialSettingsCard } from "@/src/components/watch/ByoCredentialSettingsCard";
 
 export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -34,19 +37,28 @@ export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: 
 // "Default for new Watchers" concept this section existed to configure no
 // longer applies to anything. The old table (`watch_moderation_defaults`) is
 // left in place, unread by any code path -- not dropped in this pass.
+//
+// AI Provider (BYO Enterprise, Phase 2, 2026-08-24) is the newest real
+// section -- shown ONLY for an account whose real, current Enterprise
+// entitlement is explicitly flagged apiSourceMode === "byo" (never a
+// client-side/UI-only gate; the underlying actions re-verify this
+// server-side themselves regardless of whether this tab is even rendered).
 export default async function SettingsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [shell, notificationPrefs, generalPrefs, userRes] = await Promise.all([
+  const [shell, notificationPrefs, generalPrefs, userRes, capacity] = await Promise.all([
     getWatchShellContext(admin, accountId),
     getNotificationPreferences(admin, accountId),
     getAccountPreferences(admin, accountId),
     admin.auth.admin.getUserById(accountId),
+    getAccountCapacity(admin, accountId),
   ]);
 
   const notificationsEnabledCount = [
     notificationPrefs.noActiveWatcherEnabled, notificationPrefs.capacityWarningEnabled, notificationPrefs.watcherStatusEnabled,
   ].filter(Boolean).length;
   const emailVerified = Boolean(userRes.data.user?.email_confirmed_at);
+  const isByoEnterprise = capacity?.tier === "enterprise" && capacity.apiSourceMode === "byo";
+  const byoCredentialState = isByoEnterprise ? await getWatchByoCredentialState() : null;
 
   const tabs: WatchTab[] = [
     {
@@ -83,6 +95,22 @@ export default async function SettingsPage() {
       ),
     },
   ];
+
+  if (isByoEnterprise && byoCredentialState?.ok) {
+    tabs.push({
+      id: "ai-provider",
+      label: "AI Provider",
+      content: (
+        <div className="w-card p-5">
+          <SectionHeader icon={KeyRound} title="AI Provider" />
+          <p className="text-xs w-text-faint -mt-2 mb-4">
+            Your BYO Enterprise plan runs on your own AI provider credential — manage it here instead of contacting support.
+          </p>
+          <ByoCredentialSettingsCard initial={byoCredentialState.data} />
+        </div>
+      ),
+    });
+  }
 
   return (
     <WatchShell active="settings" capacity={shell.capacity} attentionCount={shell.attentionCount}>

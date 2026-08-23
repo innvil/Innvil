@@ -9,6 +9,7 @@ import { getCommunityExpansionState } from "@/src/lib/products/watch-community-e
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
 import { getWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
+import { getByoUsageSummary } from "@/src/lib/products/watch-byo-usage";
 import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
 import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
 import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
@@ -47,16 +48,21 @@ export default async function UsagePage() {
   // legacy never-expiring row predating migration 0080).
   // Managed Enterprise (2026-08-22 repricing) has its own fixed 50,000/mo
   // AI Generation pool (MANAGED_ENTERPRISE_50.aiGenerations) -- read
-  // separately from MODERATOR_AI_GENERATION_POOL's 4 self-serve-tier values,
-  // since there is currently no representable BYO Enterprise entitlement
-  // row anywhere in this schema (the manual devops grant tool that creates
-  // an "enterprise" entitlement has no Managed/BYO distinction), so every
-  // `tier === "enterprise"` account today IS de facto Managed -- never
-  // fabricated for a real BYO account once one becomes representable.
+  // separately from MODERATOR_AI_GENERATION_POOL's 4 self-serve-tier values.
+  // A BYO Enterprise account (real as of migration 0092/Phase 2) is
+  // deliberately excluded from THIS pool too -- BYO's own AI provider spend
+  // isn't Innvil's pool to meter; see the real call/outcome telemetry
+  // (getByoUsageSummary) below instead.
   const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? capacity.tier : null;
-  const isEnterprise = capacity?.tier === "enterprise";
+  const isEnterprise = capacity?.tier === "enterprise" && capacity.apiSourceMode !== "byo";
   const aiUsageLimit = paidTier ? aiGenerationPoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
   const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiGenerationUsage(admin, accountId, aiPeriod.start) : null;
+
+  // BYO Enterprise (Phase 2, 2026-08-24) -- real, observed call/outcome
+  // telemetry (watch-byo-usage.ts), never a fabricated token/cost figure.
+  // Only queried for a BYO-flagged account, so a Managed/self-serve/trial
+  // account never pays for this extra query.
+  const byoUsage = capacity?.apiSourceMode === "byo" ? await getByoUsageSummary(admin, accountId) : null;
 
   // Real per-request Media Moderation Unit consumption (2026-08-23) --
   // reuses the SAME real billing period aiPeriod already resolved above
@@ -243,6 +249,52 @@ export default async function UsagePage() {
               />
             </div>
             <Link href="/plans#paid-plans" className="w-teal hover:underline text-xs font-medium">Manage from Plans →</Link>
+          </div>
+        )}
+
+        {/* BYO Enterprise (Phase 2, 2026-08-24) -- real, observed call/outcome
+            counts for calls routed through this account's own stored AI
+            provider credential, never a fabricated token/cost figure. Shown
+            only for a BYO-flagged account -- byoUsage is null for everyone
+            else, and a genuine zero-calls-yet state (real, not hidden) shows
+            0/0/0 rather than being suppressed. */}
+        {capacity?.apiSourceMode === "byo" && byoUsage && (
+          <div className="w-card p-5">
+            <SectionHeader icon={Bot} title="BYO calls (last 30 days)" />
+            <p className="text-xs w-text-faint -mt-2 mb-3">
+              Real, observed calls made through your own stored AI provider credential — not a token/cost estimate.
+            </p>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div>
+                <p className="w-display text-xl w-text">{byoUsage.totalCalls.toLocaleString()}</p>
+                <p className="text-[11px] w-text-faint">Total calls</p>
+              </div>
+              <div>
+                <p className="w-display text-xl w-green">{byoUsage.successfulCalls.toLocaleString()}</p>
+                <p className="text-[11px] w-text-faint">Successful</p>
+              </div>
+              <div>
+                <p className="w-display text-xl w-amber">{byoUsage.failedCalls.toLocaleString()}</p>
+                <p className="text-[11px] w-text-faint">Failed</p>
+              </div>
+            </div>
+            {byoUsage.byAutomation.length > 0 ? (
+              <div className="space-y-1.5">
+                {byoUsage.byAutomation.map((a) => (
+                  <div key={a.automation} className="flex items-center justify-between text-xs">
+                    <span className="w-text-dim">{a.automation}</span>
+                    <span className="w-text-faint">{a.successful}/{a.total} succeeded</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs w-text-faint">No calls recorded yet.</p>
+            )}
+            {!capacity.hasByoCredential && (
+              <p className="text-xs w-amber mt-3">
+                No AI provider credential is currently stored for this account — every call will fail until one is configured.
+              </p>
+            )}
           </div>
         )}
 

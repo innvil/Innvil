@@ -1,5 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+// providerKeySecret() (src/lib/supabase/admin.ts) throws unless
+// PROVIDER_KEY_SECRET is set -- getAccountByoCredential (resolveAccountAiRouting's
+// only I/O beyond the already-mocked .from() queries) calls it. The real
+// value only ever lives in .env.local, not the plain test-runner
+// environment; this fake one is only ever passed through the mocked rpc()
+// in this file's own fakeAdmin, never used to decrypt anything real.
+process.env.PROVIDER_KEY_SECRET = "test-only-secret-never-used-for-anything-real";
+
 import {
   resolveAccountWatchTier, createAccountWatcher, listAccountWatchers,
   createAccountCommunity, deployAccountWatcher, resolveDeploymentTenant,
@@ -7,7 +16,7 @@ import {
   getAccountProjectDetail, getAccountCommunityDetail, getAccountWatcherDetail, listAccountAttentionItems,
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
-  resolveAccountEnterpriseEntitlement,
+  resolveAccountEnterpriseEntitlement, resolveAccountAiRouting,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration } from "@/src/lib/moderator/plan";
@@ -27,6 +36,7 @@ function fakeAdmin(seed: {
   virtual_moderators?: Row[]; communities?: Row[]; moderator_deployments?: Row[];
   moderator_activity_log?: Row[]; watch_moderation_defaults?: Row[];
   watch_trial_claims?: Row[]; watch_subscription_addons?: Row[];
+  watch_byo_provider_credentials?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     products: seed.products ?? [],
@@ -40,6 +50,7 @@ function fakeAdmin(seed: {
     watch_trial_claims: seed.watch_trial_claims ?? [],
     watch_subscription_addons: seed.watch_subscription_addons ?? [],
     watch_telegram_links: [],
+    watch_byo_provider_credentials: seed.watch_byo_provider_credentials ?? [],
   };
   let idCounter = 0;
 
@@ -111,6 +122,14 @@ function fakeAdmin(seed: {
         },
       };
       return builder;
+    },
+    async rpc(fn: string, args: Record<string, unknown>) {
+      if (fn === "get_watch_byo_credential") {
+        const row = store.watch_byo_provider_credentials.find((r) => r.account_id === args.p_account_id);
+        if (!row) return { data: [], error: null };
+        return { data: [{ provider: row.provider, api_key: row._plainKey, base_url: row.base_url ?? null, model: row.model ?? null }], error: null };
+      }
+      throw new Error(`unexpected rpc ${fn}`);
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -1651,6 +1670,93 @@ test("REQUIRED: Managed Enterprise entitlement never leaks across accounts", asy
   const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
   const capacity = await getAccountCapacity(admin, "acct-2");
   assert.equal(capacity, null, "a different account must never resolve another account's Enterprise entitlement");
+});
+
+/* ------------------------ BYO Enterprise runtime wiring: resolveAccountAiRouting (Phase 2, 0092) ---- */
+// The resolved AI-provider routing decision threaded into every real
+// generation call site -- proving the "never fall back to Innvil's own
+// credential" invariant starts from a correctly-resolved value.
+
+const BYO_CRED_ROW = { account_id: "acct-1", provider: "anthropic", _plainKey: "sk-real-byo-key", base_url: null, model: "claude-sonnet-5" };
+
+test("REQUIRED: resolveAccountAiRouting is never required for a non-Enterprise account, even with accountId set", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", false);
+  assert.equal(routing.required, false);
+  assert.equal(routing.credential, null);
+});
+
+test("resolveAccountAiRouting is never required with no accountId, even if isEnterprise is somehow true", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const routing = await resolveAccountAiRouting(admin, null, true);
+  assert.equal(routing.required, false);
+});
+
+test("REQUIRED: a Managed Enterprise account (apiSourceMode unset) never requires BYO routing", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true);
+  assert.equal(routing.required, false);
+  assert.equal(routing.credential, null);
+});
+
+test("REQUIRED: a real BYO-flagged Enterprise account with a stored credential resolves required+usable", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true);
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential?.apiKey, "sk-real-byo-key");
+  assert.equal(routing.credential?.provider, "anthropic");
+  assert.equal(routing.credential?.model, "claude-sonnet-5");
+});
+
+test("REQUIRED: BYO-flagged but nothing stored resolves required:true with a null credential -- a real misconfiguration, never a signal to fall back to Innvil", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true);
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential, null);
+});
+
+test("a different account's stored BYO credential is never resolved for this account", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo],
+    watch_byo_provider_credentials: [{ ...BYO_CRED_ROW, account_id: "acct-2", _plainKey: "sk-someone-elses-key" }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true);
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential, null, "acct-1 never sees acct-2's stored credential");
+});
+
+/* ---------------- AccountCapacity's new apiSourceMode/hasByoCredential fields (0092) ---- */
+
+test("REQUIRED: AccountCapacity.apiSourceMode is null for every non-Enterprise tier", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.apiSourceMode, null);
+  assert.equal(capacity?.hasByoCredential, false);
+});
+
+test("REQUIRED: AccountCapacity.apiSourceMode reflects the real value for a Managed Enterprise account", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_ENTERPRISE_50] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.apiSourceMode, "managed");
+  assert.equal(capacity?.hasByoCredential, false);
+});
+
+test("REQUIRED: AccountCapacity.hasByoCredential is true only when a real credential is stored for a BYO-flagged account", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.apiSourceMode, "byo");
+  assert.equal(capacity?.hasByoCredential, true);
+});
+
+test("AccountCapacity.hasByoCredential is false for a BYO-flagged account with nothing actually stored", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.hasByoCredential, false);
 });
 
 test("Managed Enterprise entitlement with a missing/zero provisioned slot count never fabricates capacity", async () => {

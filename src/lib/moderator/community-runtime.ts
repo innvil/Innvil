@@ -41,7 +41,38 @@ import { classifyImageBytes } from "./media-safety-provider";
 import { extractVideoFrames } from "./media-frame-extractor";
 import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
-import { resolveStandaloneModeratorSettings, resolveWatcherAccountId } from "@/src/lib/products/watch-runtime";
+import {
+  resolveStandaloneModeratorSettings, resolveWatcherAccountId, resolveAccountAiRouting,
+  MANAGED_AI_ROUTING, type AccountAiRouting,
+} from "@/src/lib/products/watch-runtime";
+import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
+
+/** Fire-and-forget BYO usage telemetry -- only ever called when
+ *  `aiRouting.required` is true (a Managed account has nothing BYO-specific
+ *  to record). Never awaited by callers, and recordByoUsageEvent itself
+ *  never throws (best-effort) -- a telemetry write must never add latency
+ *  to, or break, the 30s-bounded webhook handler it's called from.
+ *
+ *  Scoped to respondAsDeployment's own generateChatterReply outcome ONLY --
+ *  the ONE call site with a genuine, unambiguous ok/error signal to record
+ *  (matches the scope of Innvil's own MODERATOR_AI_GENERATION_POOL metering
+ *  for Managed accounts). classifyLinkIntent/classifyAmbientGreeting/the
+ *  warning-generation functions all degrade gracefully to a safe fallback
+ *  on ANY failure by design (never throw, never expose a clean success/
+ *  failure distinction in their return shape) -- recording them as "ok"
+ *  regardless of whether the underlying call actually succeeded would be
+ *  fabricated telemetry, so they are deliberately NOT instrumented here. */
+function recordByoCall(
+  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, automation: string, ok: boolean, error?: string
+): void {
+  if (!aiRouting.required || !accountId) return;
+  void recordByoUsageEvent(admin, {
+    accountId, communityId, automation,
+    provider: aiRouting.credential?.provider ?? "unconfigured",
+    model: aiRouting.credential?.model ?? "unconfigured",
+    ok, error,
+  });
+}
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
 import {
@@ -1593,7 +1624,8 @@ export async function runLinkModeration(
   chatId: string,
   event: CommunityEvent,
   deployments: ChatterDeployment[],
-  now: Date
+  now: Date,
+  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING
 ): Promise<{ handled: boolean; collabRoutable: boolean }> {
   const links = extractLinks(event.text);
   if (!links.length || !deployments.length) return { handled: false, collabRoutable: false };
@@ -1619,7 +1651,7 @@ export async function runLinkModeration(
   const floodRepeat = isFloodRepeat(observedState);
 
   const recentContextSummary = (await loadRecentContext(admin, community.id, 6)).map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
-  const classification = await classifyLinkIntent(event.text, recentContextSummary);
+  const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting);
 
   const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
   const isAdminOrTrusted = token ? await isSenderAdminOrTrusted(token, chatId, senderPlatformId) : false;
@@ -1741,7 +1773,9 @@ export async function runLinkModeration(
   const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
   const warningText = isScamEnforcement
     ? scamFirstOffenseWarningHtml(mention)
-    : `${mention}, ${await generateModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT)}`;
+    : `${mention}, ${await generateModerationWarning(
+        enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT, aiRouting
+      )}`;
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -1848,7 +1882,8 @@ async function runMediaModeration(
   settings: unknown,
   now: Date,
   accountId: string | null = null,
-  paidTier: ModeratorPlanTier | null = null
+  paidTier: ModeratorPlanTier | null = null,
+  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING
 ): Promise<{ handled: boolean }> {
   if (!virtualModMediaModeration(settings) || !deployments.length) return { handled: false };
 
@@ -1986,7 +2021,9 @@ async function runMediaModeration(
   // DELETE_WARN
   const nextState: LinkWarningState = { ...priorState, warningCount: enforcement.warningNumber };
   await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
-  const warningText = await generateMediaModerationWarning(enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT);
+  const warningText = await generateMediaModerationWarning(
+    enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT, aiRouting
+  );
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null, origin: "HUMAN", interactionDepth: 0, causationMessageId: event.messageId,
@@ -2011,7 +2048,8 @@ async function handleHumanMessage(
   timer: RequestTimer,
   settings: unknown,
   accountId: string | null = null,
-  paidTier: ModeratorPlanTier | null = null
+  paidTier: ModeratorPlanTier | null = null,
+  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
@@ -2021,8 +2059,11 @@ async function handleHumanMessage(
   // -- a message that's a flagged photo/video has nothing left to check for
   // links/task-route/chat about either. Never routed through DeepSeek/Claude
   // conversational paths -- only the specialized visual-safety classifier.
+  // aiRouting only ever affects the WARNING TEXT (media-warning.ts) -- the
+  // vision classifier itself (media-safety-provider.ts) is never BYO-routed
+  // (see watch-byo.ts's own scope note).
   const chatId = String(message.chat.id);
-  const mediaModeration = await runMediaModeration(admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier);
+  const mediaModeration = await runMediaModeration(admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier, aiRouting);
   timer.mark("media_moderation_check", { handled: mediaModeration.handled });
   if (mediaModeration.handled) return;
 
@@ -2030,7 +2071,7 @@ async function handleHumanMessage(
   // checked first, independent of and never disabled by the reactive
   // chatter quota (spec §45). If the message got deleted, there is nothing
   // left to task-route or chat about, so it short-circuits everything else.
-  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date());
+  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date(), aiRouting);
   timer.mark("link_moderation_check", { handled: moderation.handled });
   if (moderation.handled) return;
   const collabContact = moderation.collabRoutable ? (community.collab_contact ?? null) : null;
@@ -2104,7 +2145,7 @@ async function handleHumanMessage(
     // the original deterministic SILENCE stands, no escalation. Budget-
     // raced same as the main generation call below -- defense in depth on
     // top of the model-level timeout fix in client.ts's postJson.
-    const classifyResult = await raceWithTimeout(classifyAmbientGreeting(event.text), AMBIENT_CLASSIFY_BUDGET_MS);
+    const classifyResult = await raceWithTimeout(classifyAmbientGreeting(event.text, aiRouting), AMBIENT_CLASSIFY_BUDGET_MS);
     timer.mark("ambient_greeting_classification", { timedOut: !classifyResult.ok });
     if (classifyResult.ok && classifyResult.value.ok && classifyResult.value.isGreeting) {
       action = resolveAmbientOpenerFallback({ text: event.text, candidates, now, recentlyAnsweredByModerator, recentlyRespondedByHuman });
@@ -2166,6 +2207,7 @@ async function handleHumanMessage(
     otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
     collabContact,
     projectKnowledge,
+    aiRouting,
     timer,
   });
   let respondingDeployment = deployment;
@@ -2195,6 +2237,7 @@ async function handleHumanMessage(
         otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== named.deploymentId).map((d) => d.moderatorName),
         collabContact,
         projectKnowledge,
+        aiRouting,
         timer,
       });
       if (rerouted.replied) {
@@ -2268,6 +2311,7 @@ async function handleHumanMessage(
           individualContributionExpected,
           collabContact,
           projectKnowledge,
+          aiRouting,
           timer,
         });
         if (result.replied) priorResponses.push({ moderatorName: additionalDeployment.moderatorName, text: result.text });
@@ -2348,11 +2392,16 @@ export async function respondAsDeployment(params: {
    *  knowledge for THIS triggering message (see GenerateChatterReplyInput's
    *  doc comment). Only ever set for ANSWER. */
   projectKnowledge?: KnowledgeContextEntry[];
+  /** BYO Enterprise (Phase 2, 2026-08-24) -- the account's already-resolved
+   *  AI-provider routing decision (see GenerateChatterReplyInput's own doc
+   *  comment). Defaults to MANAGED_AI_ROUTING when omitted. */
+  aiRouting?: AccountAiRouting;
   timer: RequestTimer;
 }): Promise<{ replied: false; modelDeclined?: boolean } | { replied: true; text: string }> {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, accountId, paidTier, now, recentContext,
     isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
+    aiRouting = MANAGED_AI_ROUTING,
   } = params;
 
   // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
@@ -2407,8 +2456,10 @@ export async function respondAsDeployment(params: {
       reasons,
       actionType,
       // Mirrors resolveChatterRoute()'s own routing rule (chatter-generate.ts)
-      // -- CASUAL_CHAT -> DeepSeek Flash, ANSWER -> Sonnet 5 medium, always.
-      provider: actionType === "CASUAL_CHAT" ? "deepseek" : "anthropic",
+      // -- CASUAL_CHAT -> DeepSeek Flash, ANSWER -> Sonnet 5 medium, UNLESS
+      // this account is BYO Enterprise, in which case both route through the
+      // account's own stored credential/provider instead.
+      provider: aiRouting.required ? (aiRouting.credential?.provider ?? "byo_unconfigured") : actionType === "CASUAL_CHAT" ? "deepseek" : "anthropic",
     });
     timer.mark("generation_start", { actionType, deploymentId: deployment.deploymentId });
 
@@ -2432,6 +2483,7 @@ export async function respondAsDeployment(params: {
         individualContributionExpected,
         collabContact,
         projectKnowledge,
+        aiRouting,
       }),
       CHATTER_TOTAL_BUDGET_MS
     );
@@ -2448,6 +2500,7 @@ export async function respondAsDeployment(params: {
         reasons,
         budgetMs: CHATTER_TOTAL_BUDGET_MS,
       });
+      recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, false, "generation timed out");
       return { replied: false };
     }
     const generation = genRace.value;
@@ -2455,13 +2508,19 @@ export async function respondAsDeployment(params: {
     if (!generation.ok) {
       console.error("[telegram/community] chatter generation failed", generation.error);
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "GENERATION_FAILED", reasons.join(","), { reasons });
+      recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, false, generation.error);
       return { replied: false };
     }
     if ("noReply" in generation) {
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
+      // A genuine successful BYO call -- the model responded, it just chose
+      // not to reply. Real provider spend happened, so this counts as a
+      // successful call for telemetry purposes, same as any real reply.
+      recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, true);
       return { replied: false, modelDeclined: true };
     }
     replyText = generation.reply;
+    recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, true);
 
     // 2026-08-22 counting-semantics change: an "AI Generation" is consumed
     // the moment the provider successfully produces a usable reply -- NOT
@@ -2661,7 +2720,13 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     const accountId = integration.panel_id ? null : await resolveWatcherAccountId(admin, integration.virtual_moderator_id);
     const paidTier: ModeratorPlanTier | null =
       !integration.panel_id && entitlementSource && entitlementSource !== "trial" && entitlementSource !== "enterprise" ? entitlementSource : null;
-    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier);
+    // BYO Enterprise (Phase 2, 2026-08-24) -- resolved ONCE per message,
+    // gated on entitlementSource === "enterprise" so a self-serve/trial
+    // account (the overwhelming majority of traffic) never pays for the
+    // extra Enterprise-entitlement lookup. Threaded through every real
+    // AI-generation call site inside handleHumanMessage.
+    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise");
+    await handleHumanMessage(admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting);
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;
   }

@@ -3,6 +3,7 @@ import "server-only";
 import { aiComplete, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import type { KnowledgeContextEntry } from "./knowledge";
+import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
 /**
  * AI generation for Reactive Natural Chatter's TEXT-generating actions
@@ -93,6 +94,14 @@ export interface GenerateChatterReplyInput {
    *  was found — the moderator must say so rather than guessing, never fall
    *  back to inventing an answer. */
   projectKnowledge?: KnowledgeContextEntry[];
+  /** BYO Enterprise (Phase 2, 2026-08-24) — the account's already-resolved
+   *  AI-provider routing decision (community-runtime.ts's
+   *  handleCommunityUpdate, via watch-runtime.ts's resolveAccountAiRouting).
+   *  Undefined/`{required:false}` for every non-BYO account — the existing
+   *  Sonnet/DeepSeek routing below applies unchanged. `{required:true}`
+   *  means BOTH ANSWER and CASUAL_CHAT MUST use `credential`, or fail
+   *  explicitly — see resolveChatterRoute. */
+  aiRouting?: AccountAiRouting;
 }
 
 export type ChatterGenerationResult = { ok: true; reply: string } | { ok: true; noReply: true } | { ok: false; error: string };
@@ -378,8 +387,30 @@ export type ChatterRoute =
  * configured, this returns ok:false; generateChatterReply below surfaces that
  * as a generation failure and NEVER falls through to the Sonnet/ANSWER branch
  * -- there is no automatic escalation from a cheap model to an expensive one.
+ *
+ * BYO Enterprise (Phase 2, 2026-08-24): `aiRouting?.required` is checked
+ * FIRST, before any action-based branching -- when true, BOTH ANSWER and
+ * CASUAL_CHAT route through the account's own stored credential, and
+ * getInnvilModelConfig()/deepseekChatterProvider() are never called at all.
+ * A missing credential, or one with no configured model, fails explicitly
+ * (ok:false) rather than guessing a model id or falling back to either of
+ * Innvil's own routes -- there is no honest default model to assume for an
+ * arbitrary customer-configured endpoint.
  */
-function resolveChatterRoute(action: ChatterGenerationAction): ChatterRoute {
+function resolveChatterRoute(action: ChatterGenerationAction, aiRouting?: AccountAiRouting): ChatterRoute {
+  if (aiRouting?.required) {
+    const cred = aiRouting.credential;
+    if (!cred) return { ok: false, error: "BYO Enterprise: no AI provider credential is stored for this account" };
+    if (!cred.model) return { ok: false, error: "BYO Enterprise: the stored credential has no model configured" };
+    return {
+      ok: true,
+      model: cred.model,
+      providerOverride: byoProviderOverride(cred),
+      maxTokens: action === "ANSWER" ? 1024 : 150,
+      automation: action === "ANSWER" ? "NATURAL_CHATTER_ANSWER_BYO" : "NATURAL_CHATTER_CASUAL_BYO",
+    };
+  }
+
   if (action === "ANSWER") {
     const { model, effort } = getInnvilModelConfig();
     return {
@@ -423,7 +454,7 @@ function resolveChatterRoute(action: ChatterGenerationAction): ChatterRoute {
  *  routes to an actual model call. SILENCE/REACT/SHORT_ACK never call this
  *  function at all. */
 export async function generateChatterReply(input: GenerateChatterReplyInput): Promise<ChatterGenerationResult> {
-  const route = resolveChatterRoute(input.action);
+  const route = resolveChatterRoute(input.action, input.aiRouting);
   if (!route.ok) return { ok: false, error: route.error };
   if (!route.providerOverride && !aiConfigured()) return { ok: false, error: "AI not configured" };
 
@@ -532,13 +563,44 @@ export function shortAckText(persona: ModeratorPersona, random: () => number = M
  * expensive provider on failure -- an unconfigured or failed call just
  * means the original deterministic SILENCE stands, exactly like any other
  * generation failure elsewhere in this file.
+ *
+ * BYO Enterprise (Phase 2, 2026-08-24): `aiRouting?.required` is checked
+ * FIRST -- when true, this classification routes through the account's own
+ * stored credential instead of DeepSeek; deepseekChatterProvider() is never
+ * called in that branch. A missing/unusable BYO credential resolves to the
+ * SAME safe {ok:false} this function already returns for any other
+ * failure -- never escalated to Innvil's own DeepSeek key.
  */
-export async function classifyAmbientGreeting(text: string): Promise<{ ok: true; isGreeting: boolean } | { ok: false; error: string }> {
+export async function classifyAmbientGreeting(
+  text: string,
+  aiRouting?: AccountAiRouting
+): Promise<{ ok: true; isGreeting: boolean } | { ok: false; error: string }> {
+  const system = `You classify a single short chat message. Decide whether it functions as a GREETING or informal social check-in -- a bid to start or re-enter conversation (e.g. "hey", "yo", "sup", phonetic/slang spellings of "what's up" like "waddup"/"wassup", casual hellos) -- as opposed to an ordinary statement, question, or unrelated remark. Respond with EXACTLY one word: GREETING or OTHER. No punctuation, no explanation.`;
+
+  if (aiRouting?.required) {
+    const cred = aiRouting.credential;
+    if (!cred || !cred.model) return { ok: false, error: "BYO Enterprise: no usable AI provider credential is stored for this account" };
+    try {
+      const raw = await aiComplete({
+        system,
+        messages: [{ role: "user", content: text }],
+        model: cred.model,
+        providerOverride: byoProviderOverride(cred),
+        disableThinking: true,
+        maxTokens: 5,
+        automation: "AMBIENT_GREETING_CLASSIFY_BYO",
+      });
+      return { ok: true, isGreeting: raw.trim().toUpperCase().startsWith("GREETING") };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "ambient greeting classification failed" };
+    }
+  }
+
   const deepseek = deepseekChatterProvider();
   if (!deepseek) return { ok: false, error: "DeepSeek chatter provider not configured (DEEPSEEK_API_KEY)" };
   try {
     const raw = await aiComplete({
-      system: `You classify a single short chat message. Decide whether it functions as a GREETING or informal social check-in -- a bid to start or re-enter conversation (e.g. "hey", "yo", "sup", phonetic/slang spellings of "what's up" like "waddup"/"wassup", casual hellos) -- as opposed to an ordinary statement, question, or unrelated remark. Respond with EXACTLY one word: GREETING or OTHER. No punctuation, no explanation.`,
+      system,
       messages: [{ role: "user", content: text }],
       model: deepseek.model,
       providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },

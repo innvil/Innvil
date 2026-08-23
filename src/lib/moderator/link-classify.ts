@@ -3,6 +3,7 @@ import "server-only";
 import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import { PROMOTION_WARNING_LIMIT, type LinkCategory, type ClassificationConfidence } from "./link-moderation";
+import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
 /**
  * The AI-touching half of link moderation, kept separate from
@@ -65,29 +66,59 @@ CONFIDENCE: <low|medium|high>`;
  * happens). Any failure (unconfigured/errored) degrades to
  * UNKNOWN_OR_AMBIGUOUS/low confidence, which the policy layer always
  * resolves to ALLOW — an AI hiccup must never itself cause a deletion/ban.
+ *
+ * BYO Enterprise (Phase 2, 2026-08-24): `aiRouting?.required` is checked
+ * FIRST — when true, classification routes through the account's own
+ * stored credential; getInnvilModelConfig()/Innvil's own key are never
+ * reached in that branch. A missing/unusable BYO credential degrades to
+ * the SAME safe fallback as any other failure — never Innvil's key.
  */
-export async function classifyLinkIntent(messageText: string, recentContextSummary: string): Promise<LinkClassificationResult> {
+export async function classifyLinkIntent(messageText: string, recentContextSummary: string, aiRouting?: AccountAiRouting): Promise<LinkClassificationResult> {
   const fallback: LinkClassificationResult = { category: "UNKNOWN_OR_AMBIGUOUS", confidence: "low" };
+  const userContent = `Recent conversation (for context only):\n${recentContextSummary || "(none)"}\n\nMessage to classify:\n${messageText}`;
+
+  if (aiRouting?.required) {
+    const cred = aiRouting.credential;
+    if (!cred || !cred.model) return fallback;
+    try {
+      const raw = await aiComplete({
+        system: CLASSIFY_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userContent }],
+        model: cred.model,
+        providerOverride: byoProviderOverride(cred),
+        maxTokens: 64,
+        automation: "LINK_MODERATION_CLASSIFY_BYO",
+      });
+      return parseClassification(raw, fallback);
+    } catch {
+      return fallback;
+    }
+  }
+
   if (!aiConfigured()) return fallback;
   try {
     const { model, effort } = getInnvilModelConfig();
     const raw = await aiComplete({
       system: CLASSIFY_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: `Recent conversation (for context only):\n${recentContextSummary || "(none)"}\n\nMessage to classify:\n${messageText}` }],
+      messages: [{ role: "user", content: userContent }],
       model,
       effort,
       maxTokens: 64,
       automation: "LINK_MODERATION_CLASSIFY",
     });
-    const categoryMatch = raw.match(/CATEGORY:\s*([A-Z_]+)/i);
-    const confidenceMatch = raw.match(/CONFIDENCE:\s*(low|medium|high)/i);
-    const category = categoryMatch?.[1]?.toUpperCase() as LinkCategory | undefined;
-    const confidence = confidenceMatch?.[1]?.toLowerCase() as ClassificationConfidence | undefined;
-    if (!category || !CATEGORIES.includes(category) || !confidence) return fallback;
-    return { category, confidence };
+    return parseClassification(raw, fallback);
   } catch {
     return fallback;
   }
+}
+
+function parseClassification(raw: string, fallback: LinkClassificationResult): LinkClassificationResult {
+  const categoryMatch = raw.match(/CATEGORY:\s*([A-Z_]+)/i);
+  const confidenceMatch = raw.match(/CONFIDENCE:\s*(low|medium|high)/i);
+  const category = categoryMatch?.[1]?.toUpperCase() as LinkCategory | undefined;
+  const confidence = confidenceMatch?.[1]?.toLowerCase() as ClassificationConfidence | undefined;
+  if (!category || !CATEGORIES.includes(category) || !confidence) return fallback;
+  return { category, confidence };
 }
 
 const WARNING_FALLBACK_TEMPLATES = [
@@ -100,25 +131,54 @@ const WARNING_FALLBACK_TEMPLATES = [
  *  wording"). Falls back to a small VARIED template pool (never one fixed
  *  sentence) if generation fails, so enforcement always produces a natural-
  *  enough notice even when the model call itself has an issue — the
- *  DELETE/BAN action itself never depends on this succeeding. */
+ *  DELETE/BAN action itself never depends on this succeeding.
+ *
+ *  BYO Enterprise (Phase 2, 2026-08-24): `aiRouting?.required` is checked
+ *  FIRST — when true, generation routes through the account's own stored
+ *  credential; `aiConfigured()`/Innvil's own key are never reached in that
+ *  branch. Any BYO failure falls straight to the same template pool. */
 export async function generateModerationWarning(
   moderatorName: string,
   persona: ModeratorPersona,
   warningNumber: number,
-  isFinalWarning: boolean
+  isFinalWarning: boolean,
+  aiRouting?: AccountAiRouting
 ): Promise<string> {
+  const system = [
+    `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for posting unsolicited promotion (advertising another project/group with no relevance here).`,
+    `Write ONE short, natural warning to the person, in your own voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
+    `This is warning #${warningNumber} of ${PROMOTION_WARNING_LIMIT}.`,
+    isFinalWarning ? `This is their FINAL warning — make clear that the next violation results in removal from the community.` : `Keep it firm but not harsh — a normal warning, not a threat.`,
+    `Never output "Violation ${warningNumber}/${PROMOTION_WARNING_LIMIT}" or similar robotic/templated wording — write like a real person would.`,
+    `Respond with ONLY the message you'd actually send — no quotation marks, no explanation, under 30 words.`,
+  ].join("\n");
+
+  if (aiRouting?.required) {
+    const cred = aiRouting.credential;
+    if (cred?.model) {
+      try {
+        const raw = await aiComplete({
+          system,
+          messages: [{ role: "user", content: "Write the warning now." }],
+          model: cred.model,
+          providerOverride: byoProviderOverride(cred),
+          maxTokens: 200,
+          automation: "LINK_MODERATION_WARNING_BYO",
+        });
+        const text = raw.trim();
+        if (text) return text.slice(0, 300);
+      } catch {
+        // fall through to the deterministic pool below
+      }
+    }
+    return WARNING_FALLBACK_TEMPLATES[Math.min(warningNumber, WARNING_FALLBACK_TEMPLATES.length) - 1] ?? WARNING_FALLBACK_TEMPLATES[0];
+  }
+
   if (aiConfigured()) {
     try {
       const { model, effort } = getInnvilModelConfig();
       const raw = await aiComplete({
-        system: [
-          `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for posting unsolicited promotion (advertising another project/group with no relevance here).`,
-          `Write ONE short, natural warning to the person, in your own voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
-          `This is warning #${warningNumber} of ${PROMOTION_WARNING_LIMIT}.`,
-          isFinalWarning ? `This is their FINAL warning — make clear that the next violation results in removal from the community.` : `Keep it firm but not harsh — a normal warning, not a threat.`,
-          `Never output "Violation ${warningNumber}/${PROMOTION_WARNING_LIMIT}" or similar robotic/templated wording — write like a real person would.`,
-          `Respond with ONLY the message you'd actually send — no quotation marks, no explanation, under 30 words.`,
-        ].join("\n"),
+        system,
         messages: [{ role: "user", content: "Write the warning now." }],
         model,
         effort,

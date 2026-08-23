@@ -1361,3 +1361,84 @@ test("an arbitrary external @username with no other link and no other suspicious
   }
   assert.equal(touchedDb, true, "an arbitrary external handle (not the Watcher's own) must still reach real moderation logic, never silently exempted");
 });
+
+/* ------------------------------- BYO Enterprise routing threading (Phase 2, 2026-08-24) ---- */
+/* respondAsDeployment's own job (beyond forwarding aiRouting into
+   generateChatterReply, already covered by chatter-generate.test.ts's
+   resolveChatterRoute tests) is the GENERATION_STARTED log's `provider`
+   field, which now branches on aiRouting.required -- these are the
+   structural/wiring tests for that, consistent with how this file already
+   tests parameter-threading rather than live AI calls for these
+   orchestrators. runLinkModeration/runMediaModeration's own aiRouting
+   threading is a single passthrough parameter with no branching logic of
+   its own in this file -- verified via typecheck + the full BYO-required/
+   usable/missing matrix already covered at the classifyLinkIntent/
+   generateModerationWarning/generateMediaModerationWarning function level. */
+
+function fakeAdminForByoWiring() {
+  const activityLog: Record<string, unknown>[] = [];
+  return {
+    __activityLog: activityLog,
+    from(table: string) {
+      if (table === "moderator_activity_log") {
+        return { insert: async (row: Record<string, unknown>) => { activityLog.push(row); return { data: null, error: null }; } };
+      }
+      throw new Error(`unexpected table touch: ${table}`);
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+test("REQUIRED: GENERATION_STARTED logs the BYO credential's own provider when aiRouting.required is true", async () => {
+  const admin = fakeAdminForByoWiring();
+  // A fetch stub (no real network call) -- this test only cares about the
+  // GENERATION_STARTED log entry written BEFORE the model call, not the
+  // actual generation outcome.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("stubbed, no real network call", { status: 500 })) as typeof fetch;
+  let result: unknown;
+  try {
+    result = await respondAsDeployment({
+      admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+      deployment: AI_GATE_DEPLOYMENT, actionType: "ANSWER", reasons: ["directed"], isTrialEntitlement: false,
+      accountId: null, paidTier: null, now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+      otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+      aiRouting: { required: true, credential: { provider: "openai", apiKey: "sk-real-byo", baseUrl: null, model: "gpt-5" } },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(result, { replied: false });
+  const started = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_STARTED");
+  assert.ok(started, "GENERATION_STARTED must still be logged before the model call, regardless of BYO");
+  const meta = started!.meta as { provider?: string };
+  assert.equal(meta.provider, "openai", "must reflect the BYO credential's own provider, never the hardcoded deepseek/anthropic guess");
+});
+
+test("GENERATION_STARTED logs 'byo_unconfigured' when BYO is required but no usable credential exists -- never silently omits the field or claims Innvil's own provider", async () => {
+  const admin = fakeAdminForByoWiring();
+  await respondAsDeployment({
+    admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+    deployment: AI_GATE_DEPLOYMENT, actionType: "ANSWER", reasons: ["directed"], isTrialEntitlement: false,
+    accountId: null, paidTier: null, now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+    otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+    aiRouting: { required: true, credential: null },
+  });
+  const started = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_STARTED");
+  const failed = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_FAILED");
+  assert.equal((started!.meta as { provider?: string }).provider, "byo_unconfigured");
+  assert.ok(failed, "a required-but-unusable BYO credential must fail generation explicitly, logged as GENERATION_FAILED -- never a silent success");
+});
+
+test("GENERATION_STARTED logs the ORIGINAL deepseek/anthropic values for a normal (non-BYO) account -- unaffected by this pass", async () => {
+  const admin = fakeAdminForByoWiring();
+  await respondAsDeployment({
+    admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+    deployment: AI_GATE_DEPLOYMENT, actionType: "CASUAL_CHAT", reasons: ["ambient"], isTrialEntitlement: false,
+    accountId: null, paidTier: null, now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+    otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+    // aiRouting omitted entirely -- defaults to MANAGED_AI_ROUTING.
+  });
+  const started = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_STARTED");
+  assert.equal((started!.meta as { provider?: string }).provider, "deepseek");
+});

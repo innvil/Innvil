@@ -10,18 +10,31 @@ import { providerKeySecret } from "@/src/lib/supabase/admin";
  * pgp_sym_encrypt/decrypt, migration 0092) -- never a new/weaker secret
  * storage mechanism.
  *
- * DELIBERATE SCOPE BOUNDARY, stated plainly: this module is the DATA LAYER
- * ONLY. Storing or retrieving a credential here does NOT change any live
- * AI call anywhere in the moderation/chatter/media-classification runtime
- * -- every one of those still uses Innvil's own credential today,
- * regardless of what's stored here. Wiring the actual runtime to use a
- * BYO account's stored credential instead (and enforcing the "BYO must
- * never silently fall back to an Innvil-owned credential" invariant) is a
- * separate, deliberately deferred, safety-critical follow-up pass -- not
- * built yet. Do not import this module from any AI-generation call site
- * (chatter-generate.ts, media-safety-provider.ts, autopost-generate.ts,
- * bot-manager-classify.ts, link-classify.ts, media-warning.ts) until that
- * follow-up is explicitly built and tested.
+ * RUNTIME WIRING (2026-08-24): the live AI runtime now DOES use a BYO
+ * account's stored credential, for the call sites where it's actually
+ * reachable -- but ONLY through ONE consumer, `resolveAccountAiRouting()`
+ * in `watch-runtime.ts`, which resolves an account's routing decision ONCE
+ * per inbound Telegram event and hands the already-resolved
+ * `AccountAiRouting` value down to the generation modules
+ * (chatter-generate.ts, link-classify.ts, media-warning.ts). None of those
+ * modules import THIS file directly -- they only ever see the resolved
+ * type, preserving this module's original decoupling from the generation
+ * layer. `getAccountByoCredential`/`hasByoCredential` are otherwise still
+ * called only from `watch-runtime.ts` and the devops grant tool
+ * (`superadmin-watch-devops.ts`)/its UI/this file's own test.
+ *
+ * Deliberately NOT wired to BYO at all, confirmed by inspection (see the
+ * Phase 2 plan's "Explicitly OUT of BYO scope" section): `media-safety-
+ * provider.ts`/`sightengine-provider.ts` (a vision/NSFW classifier vendor
+ * category this table's `provider` check has no way to represent -- Innvil
+ * continues to own/pay for/meter it regardless of api_source_mode);
+ * `bot-manager-classify.ts` (innvil_bot_manager is Innvil's own platform-
+ * wide bot, with no per-account context to resolve BYO from at all);
+ * `autopost-generate.ts` (Auto-Posting is entirely Panel-scoped --
+ * `auto_post_windows.panel_id` is `not null` -- and Enterprise/BYO is
+ * entirely account-scoped, so an Enterprise BYO account cannot currently
+ * even create an Auto-Posting window; a pre-existing, separate gap, not
+ * something this pass fixes).
  */
 
 export type WatchByoProvider = "anthropic" | "openai";

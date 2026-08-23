@@ -127,6 +127,89 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-24 — BYO Enterprise, Phase 2: live runtime wiring + usage telemetry + self-serve credential UI + landing positioning (v1.47.43)
+- **Completes the four items deliberately deferred from Phase 1 (v1.47.42)** — BYO Enterprise now actually
+  DOES something: an account flagged `api_source_mode='byo'` with a stored credential now has its real
+  Telegram AI generation/classification calls routed through that credential, never Innvil's own. The
+  **hard invariant held throughout**: a BYO account never silently falls back to Innvil's
+  `AI_API_KEY`/`DEEPSEEK_API_KEY` — a required-but-unusable credential (missing entirely, or missing a
+  configured model) fails via each call site's own EXISTING safe path (a classifier's already-defined safe
+  fallback; a generator's already-handled "generation failed, stay silent"; a warning generator's existing
+  deterministic template pool) — confirmed by grep that `aiRouting?.required` is checked FIRST in every
+  updated function, always in a branch that returns before `aiConfigured()`/`getInnvilModelConfig()`/
+  `deepseekChatterProvider()` are ever reached.
+- **(1) Runtime wiring.** New `AccountAiRouting` type + `MANAGED_AI_ROUTING` constant + `resolveAccountAiRouting`
+  (`watch-runtime.ts`) — resolved ONCE per inbound Telegram event in `handleCommunityUpdate`, gated on
+  `entitlementSource === "enterprise"` so a self-serve/trial account (the overwhelming majority of traffic)
+  never pays for the extra Enterprise-entitlement lookup — and threaded through `handleHumanMessage` →
+  `runMediaModeration`/`runLinkModeration`/`respondAsDeployment`/the ambient-greeting `classifyAmbientGreeting`
+  call (`community-runtime.ts`). `resolveChatterRoute` (`chatter-generate.ts`) checks `aiRouting?.required`
+  BEFORE any action-based branching — when true, BOTH ANSWER and CASUAL_CHAT route through the account's own
+  credential (never `getInnvilModelConfig()`/`deepseekChatterProvider()`), using the credential's own configured
+  `model` — a credential with no model set fails explicitly rather than guessing a default, since there's no
+  honest default for an arbitrary customer-configured endpoint. Same BYO-first pattern applied to
+  `classifyLinkIntent`/`generateModerationWarning` (`link-classify.ts`) and `generateMediaModerationWarning`
+  (`media-warning.ts`). New shared `byoProviderOverride(credential)` helper (`watch-runtime.ts`) builds the
+  `aiComplete` `providerOverride` shape once, reused by every generation module, so the per-provider default
+  base URL (used only when the stored one is null) can never drift between call sites.
+- **Confirmed, not assumed, which call sites are reachable for BYO at all**: `media-safety-provider.ts`/
+  `sightengine-provider.ts` (the vision/NSFW CLASSIFIER, Sightengine — a fundamentally different vendor
+  category `watch_byo_provider_credentials.provider` (`anthropic|openai`) has no way to represent; Innvil
+  continues to own/pay for/meter it regardless of `api_source_mode`) and `bot-manager-classify.ts`
+  (`innvil_bot_manager` is Innvil's own platform-wide bot, with no per-account context to resolve BYO from at
+  all) are both **deliberately excluded**, a genuine scope correction from Phase 1's aspirational file list.
+  `autopost-generate.ts` is **structurally unreachable** for BYO today: `auto_post_windows.panel_id` is
+  `not null` and Auto-Posting has no account-scoped path at all, while Enterprise/BYO is exclusively
+  account-scoped — an Enterprise BYO account cannot currently even create an Auto-Posting window, a
+  pre-existing, separate, already-documented gap, not something this pass fixes.
+- **(2) Usage telemetry.** New migration `0093_watch_byo_ai_usage_events.sql` — `watch_byo_ai_usage_events`
+  (account_id, community_id nullable, automation, provider, model, `ok boolean`, error, created_at), indexed
+  on `(account_id, created_at desc)`, service-role only. New `src/lib/products/watch-byo-usage.ts` —
+  `recordByoUsageEvent` (best-effort, never throws — a telemetry write failure must never break moderation/
+  chatter) + `getByoUsageSummary` (real observed call/success/failure counts grouped by automation, never a
+  fabricated token/cost figure — deliberately NOT a token-cost accounting system, since capturing real token
+  counts would require widening `aiComplete()`'s return shape across every existing caller in the codebase,
+  a genuinely separate, larger change). **Scoped down from the original plan's "instrument all 4 call sites"
+  to conversational replies only** (`respondAsDeployment`'s `generateChatterReply` outcome) — the ONE call site
+  with a genuine, unambiguous ok/error signal to record (matches the scope of Innvil's own
+  `MODERATOR_AI_GENERATION_POOL` metering for Managed accounts); `classifyLinkIntent`/`classifyAmbientGreeting`/
+  the warning-generation functions all degrade gracefully to a safe fallback on ANY failure by design (never
+  throw, never expose success/failure in their return shape) — recording them as "ok" regardless of the real
+  outcome would be fabricated telemetry, so they're deliberately not instrumented. Recorded fire-and-forget
+  (`void recordByoUsageEvent(...)`, never awaited) so a telemetry write can never add latency to the 30s-bounded
+  webhook handler. `AccountCapacity` (`watch-runtime.ts`) gained `apiSourceMode`/`hasByoCredential` fields
+  (the latter needs one small extra existence-check query, only fired for a BYO-flagged account). New
+  **"BYO calls (last 30 days)"** card on `/usage`, shown only for a BYO-flagged account, real total/success/
+  failure counts + per-automation breakdown, an amber note when no credential is stored yet.
+- **(3) Self-serve credential UI.** New `src/lib/actions/watch-byo-settings.ts` (`getWatchByoCredentialState`/
+  `setWatchByoCredential`/`clearWatchByoCredential`) — customer-session-authed (`getAuthedAdmin()`), gated
+  server-side on the SIGNED-IN account's own real entitlement (`resolveAccountEnterpriseEntitlement(...)
+  .apiSourceMode === "byo"`) — never trusts a client-supplied account id or a UI-only gate; the read action
+  never returns the decrypted key, only `{hasCredential, provider, baseUrl, model}`. New
+  `ByoCredentialSettingsCard.tsx` (provider select, password-type API key input, model — required, base URL —
+  optional, Save/Replace/Clear). New **conditional "AI Provider" Settings tab** (`app/settings/page.tsx`),
+  pushed into the tabs array only for a real BYO-flagged Enterprise account, matching that file's own stated
+  "only sections backed by real functionality" convention. Enterprise itself remains entirely manual/
+  devops-provisioned (no self-serve PURCHASE flow exists) — this only lets an ALREADY-provisioned BYO account
+  manage its own credential without emailing support to rotate a key.
+- **(4) Landing positioning.** `WatchPricingSection.tsx`'s Enterprise card — previously a bare "Custom pricing /
+  Contact us" — now shows the real headline figures reused directly from `watch-enterprise.ts`
+  (`MANAGED_ENTERPRISE_50.price` = $399, the lower `WATCH_ENTERPRISE_BYO_TIERS` price = $299) plus one honest
+  line distinguishing Managed from BYO ("bring your own AI provider credential and pay less — your own
+  provider usage is billed separately, not covered by Innvil") — never claims guaranteed total-cost savings or
+  that Innvil pays/proxies provider usage. CTA now links to `/plans#enterprise` (new anchor id added to the
+  wrapping section in `app/plans/page.tsx`), landing the visitor on the real, already-built `EnterpriseModeCards`
+  configurator instead of a bare `/signup` dead end.
+- New/updated tests: `watch-runtime.test.ts` (+13 — `resolveAccountAiRouting`'s full required/usable/missing/
+  cross-account matrix, `AccountCapacity`'s new fields), `chatter-generate.test.ts` (+7 — BYO routes both
+  ANSWER/CASUAL_CHAT via the actual outgoing request, missing credential/model fail explicitly with zero
+  network calls, non-BYO behavior byte-identical to before), `link-classify.test.ts` (+5), `media-warning.test.ts`
+  (+8, new file), `community-runtime.test.ts` (+3 — `GENERATION_STARTED`'s `provider` log field reflects BYO/
+  `byo_unconfigured`/the original deepseek-or-anthropic values correctly), `watch-byo-usage.test.ts` (+8, new
+  file). 1543 tests pass (up from 1502), `tsc --noEmit` clean, production build clean. Diff reviewed: every
+  changed/new file maps directly to one of the four items.
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-23 — BYO Enterprise, Phase 1: real entitlement mode + encrypted credential storage + devops grant (v1.47.42)
 - **Closes the gap flagged repeatedly since the Enterprise-repricing pass (v1.47.26)**: "Bring Your Own [AI
   provider credential]" Enterprise has been a real, priced commercial mode on the Plans page (BYO 50 $299/mo,
