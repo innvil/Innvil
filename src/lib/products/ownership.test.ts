@@ -256,6 +256,35 @@ test("a subsequent activation for the SAME account+product now grants hasProduct
   assert.equal(await hasProductAccess(admin, "acct-1", WATCH_PRODUCT_SLUG), true);
 });
 
+/* --------------------------------- Enterprise Community capacity (0088) ---- */
+
+test("REQUIRED: activateWatchEntitlement persists a real, validated enterprise Community capacity package", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", 50, 15);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_community_capacity, 15, "15 is a real Managed Enterprise Community package");
+});
+
+test("REQUIRED: an invalid enterprise Community capacity is never persisted -- silently dropped, not written as-is", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", 50, 12);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.notEqual(row?.enterprise_community_capacity, 12, "12 is not a real Managed Enterprise Community package -- must never be persisted verbatim");
+  assert.equal(row?.enterprise_community_capacity, undefined, "an invalid value must be dropped from the write entirely, not defaulted to something else");
+});
+
+test("a renewal that omits enterpriseCommunityCapacity never clobbers a previously-persisted valid value", async () => {
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: 50, enterprise_community_capacity: 25 },
+    ],
+  });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-2");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_community_capacity, 25, "omitting the parameter on renewal must never reset an already-provisioned Community package");
+});
+
 /* -------------------------------------------------------- account projects ---- */
 
 test("listAccountProjects returns only this account's projects, standalone and Panel-backed alike", async () => {

@@ -1553,7 +1553,38 @@ test("REQUIRED: a Managed Enterprise entitlement resolves real capacity from the
   assert.ok(capacity);
   assert.equal(capacity?.tier, "enterprise");
   assert.equal(capacity?.slotsTotal, 50);
-  assert.equal(capacity?.communitiesTotal, 8, "50 slots -> +30 extra above the Pro base -> 8 included Communities (moderatorEnterpriseIncludedCommunities)");
+  assert.equal(
+    capacity?.communitiesTotal,
+    8,
+    "no enterprise_community_capacity was provisioned (migration 0088), so this resolves to the base Managed Enterprise Community package (8) -- never derived from the slot count"
+  );
+});
+
+/* -------------------------- Enterprise Community capacity (0088) ---- */
+// Community capacity is a SEPARATE commercial resource from Watcher slots --
+// extra slots above a package's base must never imply extra Communities;
+// only a real, manually-provisioned enterprise_community_capacity value does.
+
+test("REQUIRED: a real, provisioned enterprise Community capacity package overrides the base -- never derived from slots", async () => {
+  const expanded = { ...ENTITLED_ENTERPRISE_50, enterprise_community_capacity: 15 };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [expanded] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 15, "a real provisioned Community package (15) must be reflected exactly, not the base (8)");
+});
+
+test("REQUIRED: many more Watcher slots than the base package never grants extra Community capacity on their own", async () => {
+  const moreSlots = { ...ENTITLED_ENTERPRISE_50, enterprise_slots: 150 };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [moreSlots] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.slotsTotal, 150);
+  assert.equal(capacity?.communitiesTotal, 8, "150 Watcher slots with NO Community package provisioned must still resolve to the base (8), decoupled from slot count");
+});
+
+test("an invalid/stray enterprise_community_capacity value never fabricates a capacity -- falls back to the real base package", async () => {
+  const corrupted = { ...ENTITLED_ENTERPRISE_50, enterprise_community_capacity: 12 };
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [corrupted] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, 8, "12 is not a real Managed Enterprise Community package -- must never be trusted, falls back to the base");
 });
 
 test("REQUIRED: Managed Enterprise is never Community-Expansion-eligible -- that stays a self-serve Gold/Platinum add-on only", async () => {

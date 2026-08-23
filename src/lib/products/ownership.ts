@@ -5,6 +5,7 @@ import { hasVirtualModerator } from "@/src/lib/moderator/plan";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial } from "./watch-trial";
 import { computeRenewedPeriod, type WatchBillingInterval } from "./watch-billing-period";
+import { validateEnterpriseCommunityCapacity } from "./watch-enterprise-community";
 
 /**
  * Neutral account-to-product ownership/entitlement resolution — the
@@ -93,7 +94,10 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
  * Innvil-Credit-only by product rule, enforced by callers, but stored here
  * too so Billing never has to re-derive it).
  */
-export async function activateWatchEntitlement(admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string, billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number): Promise<void> {
+export async function activateWatchEntitlement(
+  admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string,
+  billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number, enterpriseCommunityCapacity?: number
+): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
 
@@ -124,6 +128,17 @@ export async function activateWatchEntitlement(admin: SupabaseClient, accountId:
       // so re-activating/renewing a normal self-serve tier can never
       // accidentally clear a stray value.
       ...(enterpriseSlots != null ? { enterprise_slots: enterpriseSlots } : {}),
+      // Real, manually-provisioned Community capacity (migration 0088) --
+      // validated against the canonical Managed Enterprise package matrix
+      // BEFORE ever being persisted (never a client-supplied capacity taken
+      // as authority); an invalid value is silently dropped from the
+      // upsert (left as whatever it already was) rather than corrupting
+      // the entitlement row with a value the resolver would then reject
+      // anyway. Left OUT entirely when not given, for the same
+      // never-clobber-a-stray-value reason as enterpriseSlots above.
+      ...(enterpriseCommunityCapacity != null && validateEnterpriseCommunityCapacity("managed", enterpriseCommunityCapacity)
+        ? { enterprise_community_capacity: enterpriseCommunityCapacity }
+        : {}),
       // Annual is Innvil-Credit-only by product rule -- force it here so
       // Billing never has to re-derive it. Monthly is deliberately left
       // OUT of this object (not overwritten) since it can legitimately be

@@ -2,7 +2,8 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ModeratorPlanTier } from "@/src/lib/money";
-import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier, moderatorEnterpriseIncludedCommunities } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier } from "@/src/lib/money";
+import { validateEnterpriseCommunityCapacity, getEnterpriseIncludedCommunities } from "./watch-enterprise-community";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
 import { hasActiveCommunityExpansion } from "./watch-community-expansion";
 import { getMediaModerationAddonState } from "./watch-media-moderation-addon";
@@ -96,6 +97,12 @@ export interface AccountEnterpriseEntitlement {
   slots: number;
   currentPeriodEnd: string | null;
   billingInterval: WatchBillingInterval;
+  /** The REAL, manually-provisioned Community capacity (migration 0088) --
+   *  never derived from `slots`. Extra Watcher slots above a package's base
+   *  never imply extra Community capacity; only this field does. Defaults
+   *  to the Managed Enterprise 50 base (8) when unset (a pre-0088 or
+   *  never-expanded entitlement). */
+  communityCapacity: number;
 }
 
 /** The account's active Managed Enterprise entitlement, if any -- a
@@ -113,7 +120,7 @@ async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient, accoun
   if (!product) return null;
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("status, subscription_ref, current_period_end, enterprise_slots, billing_interval")
+    .select("status, subscription_ref, current_period_end, enterprise_slots, enterprise_community_capacity, billing_interval")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -125,7 +132,13 @@ async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient, accoun
   const slots = entitlement.enterprise_slots as number | null;
   if (!slots || slots < 1) return null; // a provisioning inconsistency -- never a fabricated slot count
   const billingInterval: WatchBillingInterval = entitlement.billing_interval === "annual" ? "annual" : "monthly";
-  return { slots, currentPeriodEnd, billingInterval };
+  // Real, manually-provisioned Community capacity (migration 0088) -- never
+  // derived from `slots`. A NULL/invalid value falls back to the base
+  // Managed Enterprise 50 package (8), never a fabricated/scaled number.
+  const rawCapacity = entitlement.enterprise_community_capacity as number | null;
+  const communityCapacity =
+    rawCapacity && validateEnterpriseCommunityCapacity("managed", rawCapacity) ? rawCapacity : getEnterpriseIncludedCommunities("managed");
+  return { slots, currentPeriodEnd, billingInterval, communityCapacity };
 }
 
 export interface AccountPaidPlan {
@@ -255,15 +268,20 @@ async function requireAccountWatchContext(admin: SupabaseClient, accountId: stri
   // Enterprise entitlement is a real paid state, same precedence tier as
   // the self-serve check just above). Never touches CAPACITY/
   // MODERATOR_COMMUNITY_CAPACITY or Community Expansion eligibility --
-  // Enterprise capacity is entirely the provisioned slot count + the SAME
-  // canonical moderatorEnterpriseIncludedCommunities formula the Plans-page
-  // calculator and Panel-side Enterprise sale already use, never a second
-  // capacity model.
+  // Enterprise Watcher-slot capacity is entirely the provisioned slot
+  // count; Enterprise COMMUNITY capacity is a completely separate,
+  // manually-provisioned axis (watch-enterprise-community.ts's package
+  // model, resolved inside resolveAccountEnterpriseEntitlement itself),
+  // never derived from the slot count.
   const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
   if (enterprise) {
     return {
       ok: true, accountId, tier: "enterprise",
-      maxCommunities: moderatorEnterpriseIncludedCommunities(enterprise.slots),
+      // The REAL, manually-provisioned Community capacity (migration 0088)
+      // -- never derived from Watcher slots. See resolveAccountEnterprise
+      // Entitlement's own doc comment: extra slots never imply extra
+      // Communities; only enterprise_community_capacity does.
+      maxCommunities: enterprise.communityCapacity,
       maxActiveSlots: enterprise.slots,
       maxSavedModerators: enterprise.slots,
     };

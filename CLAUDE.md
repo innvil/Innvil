@@ -127,6 +127,74 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-22 — Enterprise Community Expansion: real, purchasable-shaped capacity packages per mode (v1.47.34)
+- **First implementation slice of the queued Enterprise Community Expansion spec** (see the
+  `innvil-enterprise-community-expansion-spec` memory note) — a genuinely SEPARATE commercial resource from
+  Watcher slots/AI Generations/Media Moderation Units, per every Enterprise mode: **Managed** base 8 →
+  +$9.99=10 → +$14.99=15 → +$24.99=25 (hard max); **BYO 50** base 10 → +$12.99=15 → +$19.99=25 (hard max);
+  **BYO Unlimited** base 10 → +$12.99=15 → +$19.99=25, then **no ceiling** — flat **+$4.90/mo per +10-Community
+  block** beyond 25 (derived: (19.99−12.99)×0.70=4.90; verified against every worked example in the spec: 35→
+  +$24.89, 45→+$29.79, 55→+$34.69, 65→+$39.59). Packages are **never additive** — the 25-package costs $24.99
+  total, never 9.99+14.99+24.99 — and **never per-Community pricing** — every price is a flat package total.
+- **New pure module `src/lib/products/watch-enterprise-community.ts`** — the ONE canonical source for this
+  resource (`getEnterpriseIncludedCommunities`, `getEnterpriseCommunityExpansionOptions`,
+  `getEnterpriseCommunityHardMax`, `validateEnterpriseCommunityCapacity`, `getEnterpriseCommunityExpansionPrice`,
+  `nextByoUnlimitedCapacityStep`) — every consuming surface (UI selectors, inquiry copy, the entitlement
+  resolver) reads from it, never a duplicated `if (mode === "managed") ...` branch scattered across files.
+- **New migration `0088_watch_enterprise_community_capacity.sql`** — `product_entitlements.enterprise_community_capacity`
+  (nullable int, `>= 8` check) — a REAL, manually-provisioned value, completely separate from `enterprise_slots`
+  (migration 0086). `NULL` means "base package, no expansion" — every existing Managed Enterprise entitlement
+  keeps resolving to its real base Community capacity with zero data migration required. **Run migration `0088`.**
+- **`requireAccountWatchContext`'s Enterprise branch (`watch-runtime.ts`) now reads real Community capacity from
+  this column, decoupled from Watcher slots** — replaces the prior mechanism where `managedEnterpriseCommunities()`
+  always returned the fixed base (8) regardless of slot count (v1.47.32's interim fix). `resolveAccountEnterpriseEntitlement`
+  validates the stored value against the canonical package matrix (`validateEnterpriseCommunityCapacity`) before
+  ever trusting it — an invalid/stray value (e.g. a corrupted `12`) falls back to the real base (8), never a
+  fabricated number. `AccountEnterpriseEntitlement` gained a `communityCapacity` field.
+- **`activateWatchEntitlement` (`ownership.ts`) gained an optional 7th parameter, `enterpriseCommunityCapacity`**
+  — validated BEFORE being persisted (same gate as the resolver reads with); an invalid value is silently
+  dropped from the upsert write entirely (never corrupts the row, never overwrites a previously-provisioned
+  valid value on a renewal that omits the parameter). No existing caller of `activateWatchEntitlement` passes
+  this yet — confirmed via a full grep of all 4 call sites (`superadmin-watch-devops.ts`, `platform.ts`,
+  `innvil-credit.ts`, `watch-binance.ts`), none of which currently support Enterprise capacity provisioning at
+  all (see "Deliberately NOT built this pass" below) — so this is purely additive, zero behavior change for
+  every real existing call.
+- **`buildEnterpriseInquiryBody` (`watch-enterprise.ts`) gained an optional 5th parameter**,
+  `communityCapacity: { communityMode, capacity }` — appends a real "Requested Community Expansion: up to N
+  Communities (+$X.XX/mo)." line to the submitted inquiry only when a genuinely non-base capacity is selected
+  (mirrors the existing `mediaAddonKey` parameter's "only show a line when there's something to show" pattern).
+- **Real UI selector on all three Enterprise mode cards** (`EnterpriseModeCards.tsx`) — new
+  `CommunityCapacitySelector` (pill-based: "N included" + one pill per fixed package + a bounded "+ Add 10
+  Communities" step control for BYO Unlimited beyond 25, never an infinite/unbounded list). Managed and both BYO
+  tier cards' displayed total price now genuinely includes the selected Community capacity cost alongside the
+  base price and any checked Media Moderation + add-on; the selection flows into the real submitted inquiry body
+  (remounts the contact form on selection change, same deliberate exception to the "don't remount on every
+  slider tweak" rule already established for the Media Moderation + checkbox in v1.47.32, since selecting a
+  pill IS the explicit "include this" action).
+- New tests: `watch-enterprise-community.test.ts` (+18, new file — every base/package/hard-max/worked-example
+  from the spec, the never-additive and never-per-Community-pricing guards, `nextByoUnlimitedCapacityStep`'s
+  walk, invalid-capacity/invalid-increment rejection), `watch-runtime.test.ts` (+3 — a real provisioned package
+  overrides the base, many extra Watcher slots alone never grant extra Community capacity, an invalid stored
+  value falls back to the real base rather than fabricating one; one pre-existing test's stale comment corrected
+  to describe the new resolution mechanism rather than the superseded slot-derived one), `ownership.test.ts`
+  (+3 — a valid capacity persists, an invalid one is silently dropped from the write rather than corrupting the
+  row, a renewal that omits the parameter never clobbers a previously-provisioned valid value). 1449 tests pass
+  (up from 1425), `tsc --noEmit` clean, production build clean. Diff reviewed: 3 new files + 4 changed files, all
+  directly in scope.
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately NOT built this pass** (a real, honestly-flagged prerequisite gap, not silently skipped): any
+  way to actually GRANT/select an Enterprise Community capacity package for a real account — the existing
+  devops/admin grant tool (`superadmin-watch-devops.ts`) still only supports the 4 self-serve tiers and has ZERO
+  Enterprise-granting capability of any kind (confirmed via inspection before starting this pass) — extending it
+  to Enterprise at all (slots, let alone Community capacity) is a separate, larger prerequisite that predates
+  this task and was already flagged in the v1.34.0/v1.47.24 changelog history. This pass builds the real,
+  fully-tested pricing/schema/resolver/UI-selector layer everything else needs, but there is still no live path
+  for a real account to actually receive a non-base Enterprise Community package today. Also not built: any
+  self-serve checkout/purchase flow for this resource (Enterprise remains entirely inquiry/manual-provisioning,
+  per the module's own doc comment — no fake checkout was invented); Usage/Billing page display of a real
+  Enterprise account's selected Community package (no live-provisioned account exists yet to display for); Help
+  Center article updates describing this model.
+
 ### 2026-08-22 — Media Moderation + becomes a real self-serve purchase, not a request (v1.47.33)
 - **Root cause of the incorrect "Request Media Moderation +" CTA**: v1.47.29 deliberately shipped the
   ENTITLEMENT/pricing model only, with no purchase pipeline — the Plans card's only honest option at the time

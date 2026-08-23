@@ -6,11 +6,69 @@ import { SupportContactForm } from "./SupportContactForm";
 import { ManagedEnterpriseCalculator } from "./ManagedEnterpriseCalculator";
 import {
   ENTERPRISE_MODES, buildEnterpriseInquiryBody, WATCH_ENTERPRISE_BYO_TIERS, compareEnterpriseModesAtSlots,
-  MANAGED_ENTERPRISE_50, enterpriseMediaAddon, enterprisePackageTotalWithMedia,
+  MANAGED_ENTERPRISE_50, enterpriseMediaAddon,
   type EnterpriseMode,
 } from "@/src/lib/products/watch-enterprise";
+import {
+  getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, getEnterpriseCommunityExpansionPrice,
+  nextByoUnlimitedCapacityStep, type EnterpriseCommunityMode,
+} from "@/src/lib/products/watch-enterprise-community";
 
 const MODE_ICON: Record<EnterpriseMode, typeof Server> = { managed: Server, byo: KeyRound };
+
+/** A single-selected Community capacity package -- Managed/BYO 50 show the
+ *  base + every fixed package as pills (never an infinite list, since both
+ *  have a real hard maximum); BYO Unlimited adds a bounded "Add 10
+ *  Communities" step control for capacity beyond its own last fixed
+ *  package, since it genuinely has no ceiling to enumerate to. */
+function CommunityCapacitySelector({
+  communityMode, value, onChange,
+}: {
+  communityMode: EnterpriseCommunityMode;
+  value: number;
+  onChange: (capacity: number) => void;
+}) {
+  const included = getEnterpriseIncludedCommunities(communityMode);
+  const options = getEnterpriseCommunityExpansionOptions(communityMode);
+  return (
+    <div className="mt-2.5">
+      <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">Community capacity</p>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => onChange(included)}
+          className={`text-[11px] px-2.5 py-1 rounded-full border ${value === included ? "w-teal-border w-teal-soft-bg w-teal" : "w-line-soft w-text-faint hover:w-teal-border"}`}
+        >
+          {included} included
+        </button>
+        {options.map((o) => (
+          <button
+            key={o.capacity}
+            type="button"
+            onClick={() => onChange(o.capacity)}
+            className={`text-[11px] px-2.5 py-1 rounded-full border ${value === o.capacity ? "w-teal-border w-teal-soft-bg w-teal" : "w-line-soft w-text-faint hover:w-teal-border"}`}
+          >
+            {o.capacity} — +${o.price.toFixed(2)}
+          </button>
+        ))}
+        {communityMode === "byoUnlimited" && value >= 25 && (
+          <button
+            type="button"
+            onClick={() => onChange(nextByoUnlimitedCapacityStep(value))}
+            className="text-[11px] px-2.5 py-1 rounded-full border w-line-soft w-text-faint hover:w-teal-border"
+          >
+            + Add 10 Communities
+          </button>
+        )}
+      </div>
+      {value > included && (
+        <p className="text-[10px] w-text-faint mt-1">
+          Up to {value} Communities — +${(getEnterpriseCommunityExpansionPrice(communityMode, value) ?? 0).toFixed(2)}/mo
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** Two related, commercially concrete Enterprise modes under the SAME
  *  Innvil Watch product — not separate products, domains, or CRMs (see
@@ -25,6 +83,11 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
   const [managedSlots, setManagedSlots] = useState(MANAGED_ENTERPRISE_50.slots + 1);
   const [managedMediaAddon, setManagedMediaAddon] = useState(false);
   const [byoMediaAddon, setByoMediaAddon] = useState<Record<string, boolean>>({});
+  const [managedCommunityCapacity, setManagedCommunityCapacity] = useState(getEnterpriseIncludedCommunities("managed"));
+  const [byoCommunityCapacity, setByoCommunityCapacity] = useState<Record<string, number>>({
+    byo_50: getEnterpriseIncludedCommunities("byo50"),
+    byo_unlimited: getEnterpriseIncludedCommunities("byoUnlimited"),
+  });
   const comparison = compareEnterpriseModesAtSlots(MANAGED_ENTERPRISE_50.slots); // the one real, equivalent-capacity point (BYO 50's own tier)
   // Which Media Moderation + package (if any) is currently checked, keyed to
   // the SAME addon-key shape enterpriseMediaAddon/buildEnterpriseInquiryBody
@@ -35,6 +98,22 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
     mode === "managed"
       ? (managedMediaAddon ? "managed50" : undefined)
       : (Object.entries(byoMediaAddon).find(([, on]) => on)?.[0] === "byo_50" ? "byo50" : byoMediaAddon.byo_unlimited ? "byoUnlimited" : undefined);
+  // Same "one selection drives the inquiry text" simplification as the
+  // media add-on above -- BYO mode shows two independent tier cards, but
+  // only whichever one has a genuinely non-base capacity selected feeds
+  // the request (the base/included state needs no line at all).
+  const activeCommunityCapacity: { communityMode: EnterpriseCommunityMode; capacity: number } | undefined = (() => {
+    if (mode === "managed") {
+      return managedCommunityCapacity > getEnterpriseIncludedCommunities("managed")
+        ? { communityMode: "managed", capacity: managedCommunityCapacity }
+        : undefined;
+    }
+    const byo50Cap = byoCommunityCapacity.byo_50 ?? getEnterpriseIncludedCommunities("byo50");
+    if (byo50Cap > getEnterpriseIncludedCommunities("byo50")) return { communityMode: "byo50", capacity: byo50Cap };
+    const byoUnlimitedCap = byoCommunityCapacity.byo_unlimited ?? getEnterpriseIncludedCommunities("byoUnlimited");
+    if (byoUnlimitedCap > getEnterpriseIncludedCommunities("byoUnlimited")) return { communityMode: "byoUnlimited", capacity: byoUnlimitedCap };
+    return undefined;
+  })();
 
   return (
     <div>
@@ -74,10 +153,15 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
           <div className="w-surface-raised border w-teal-border rounded-lg p-4 mb-3">
             <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">Managed Enterprise 50</p>
             <p className="w-display text-xl w-teal mb-1">
-              ${(managedMediaAddon ? enterprisePackageTotalWithMedia(MANAGED_ENTERPRISE_50.price, "managed50") : MANAGED_ENTERPRISE_50.price).toFixed(2)}
+              ${(
+                MANAGED_ENTERPRISE_50.price
+                + (getEnterpriseCommunityExpansionPrice("managed", managedCommunityCapacity) ?? 0)
+                + (managedMediaAddon ? enterpriseMediaAddon("managed50").price : 0)
+              ).toFixed(2)}
               <span className="text-xs w-text-faint font-normal">/mo</span>
             </p>
-            <p className="text-xs w-text-dim">{MANAGED_ENTERPRISE_50.slots} Watcher slots · {MANAGED_ENTERPRISE_50.communities} Communities included · {MANAGED_ENTERPRISE_50.aiGenerations.toLocaleString()} pooled AI Generations/mo</p>
+            <p className="text-xs w-text-dim">{MANAGED_ENTERPRISE_50.slots} Watcher slots · {MANAGED_ENTERPRISE_50.aiGenerations.toLocaleString()} pooled AI Generations/mo</p>
+            <CommunityCapacitySelector communityMode="managed" value={managedCommunityCapacity} onChange={setManagedCommunityCapacity} />
             <label className="flex items-center gap-2 mt-2.5 text-xs w-text-dim cursor-pointer">
               <input type="checkbox" checked={managedMediaAddon} onChange={(e) => setManagedMediaAddon(e.target.checked)} />
               Media Moderation + (+${enterpriseMediaAddon("managed50").price.toFixed(2)}/mo, {enterpriseMediaAddon("managed50").units.toLocaleString()} Media Moderation Units/mo)
@@ -90,17 +174,24 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
           {WATCH_ENTERPRISE_BYO_TIERS.map((tier) => {
             const addonKey = tier.id === "byo_50" ? "byo50" : "byoUnlimited";
+            const communityMode: EnterpriseCommunityMode = tier.id === "byo_50" ? "byo50" : "byoUnlimited";
             const addon = enterpriseMediaAddon(addonKey);
             const enabled = !!byoMediaAddon[tier.id];
+            const communityCapacity = byoCommunityCapacity[tier.id] ?? getEnterpriseIncludedCommunities(communityMode);
+            const total = tier.price + (getEnterpriseCommunityExpansionPrice(communityMode, communityCapacity) ?? 0) + (enabled ? addon.price : 0);
             return (
               <div key={tier.id} className="w-surface-raised border w-line-soft rounded-lg p-4">
                 <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1">{tier.label}</p>
                 <p className="w-display text-xl w-teal mb-1">
-                  ${(enabled ? enterprisePackageTotalWithMedia(tier.price, addonKey) : tier.price).toFixed(2)}
+                  ${total.toFixed(2)}
                   <span className="text-xs w-text-faint font-normal">/mo</span>
                 </p>
                 <p className="text-xs w-text-dim">{tier.maxSlots ? `Up to ${tier.maxSlots} licensed Watcher deployments` : "Unlimited licensed Watcher deployments"}</p>
-                <p className="text-[11px] w-text-faint mt-1.5">Community capacity: Custom</p>
+                <CommunityCapacitySelector
+                  communityMode={communityMode}
+                  value={communityCapacity}
+                  onChange={(cap) => setByoCommunityCapacity((prev) => ({ ...prev, [tier.id]: cap }))}
+                />
                 <label className="flex items-center gap-2 mt-2.5 text-xs w-text-dim cursor-pointer">
                   <input
                     type="checkbox"
@@ -145,9 +236,9 @@ export function EnterpriseModeCards({ baseBody }: { baseBody: string }) {
             the visible calculator numbers stay live regardless, and the message
             itself is always editable before sending. */}
         <SupportContactForm
-          key={`${mode}-${activeMediaAddonKey ?? "none"}`}
+          key={`${mode}-${activeMediaAddonKey ?? "none"}-${activeCommunityCapacity?.capacity ?? "base"}`}
           defaultSubject={ENTERPRISE_MODES[mode].inquirySubject}
-          defaultBody={buildEnterpriseInquiryBody(mode, baseBody, mode === "managed" ? managedSlots : undefined, activeMediaAddonKey)}
+          defaultBody={buildEnterpriseInquiryBody(mode, baseBody, mode === "managed" ? managedSlots : undefined, activeMediaAddonKey, activeCommunityCapacity)}
         />
       </div>
     </div>

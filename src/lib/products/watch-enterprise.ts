@@ -38,8 +38,12 @@ import {
   ENTERPRISE_BYO_50_PRICE, ENTERPRISE_BYO_UNLIMITED_PRICE, ENTERPRISE_MEDIA_ADDON,
   type EnterpriseMediaAddonPricing,
 } from "@/src/lib/money";
+import {
+  getEnterpriseCommunityExpansionPrice, getEnterpriseIncludedCommunities, type EnterpriseCommunityMode,
+} from "./watch-enterprise-community";
 
 export { ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE };
+export type { EnterpriseCommunityMode };
 
 export type EnterpriseMode = "managed" | "byo";
 
@@ -89,20 +93,34 @@ export function buildEnterpriseInquiryBody(
   baseUsageContext: string,
   managedSlots?: number,
   mediaAddonKey?: "managed50" | "byo50" | "byoUnlimited",
+  /** The selected Community capacity PACKAGE (never the base/included
+   *  state, which needs no line here) -- keyed to the SAME
+   *  EnterpriseCommunityMode the canonical watch-enterprise-community.ts
+   *  helpers use, so this can never drift from the price actually shown in
+   *  the selector UI. */
+  communityCapacity?: { communityMode: EnterpriseCommunityMode; capacity: number },
 ): string {
   const mediaLine = mediaAddonKey
     ? `Requested add-on: Media Moderation + (+$${ENTERPRISE_MEDIA_ADDON[mediaAddonKey].price.toFixed(2)}/mo, ${ENTERPRISE_MEDIA_ADDON[mediaAddonKey].units.toLocaleString()} Media Moderation Units/mo).\n\n`
     : "";
-  if (mode !== "managed") return `${mediaLine}${baseUsageContext}`;
+  const communityLine = (() => {
+    if (!communityCapacity) return "";
+    const { communityMode, capacity } = communityCapacity;
+    if (capacity === getEnterpriseIncludedCommunities(communityMode)) return "";
+    const price = getEnterpriseCommunityExpansionPrice(communityMode, capacity);
+    if (price == null) return "";
+    return `Requested Community Expansion: up to ${capacity} Communities (+$${price.toFixed(2)}/mo).\n\n`;
+  })();
+  if (mode !== "managed") return `${mediaLine}${communityLine}${baseUsageContext}`;
   if (managedSlots && managedSlots > MANAGED_ENTERPRISE_50.slots) {
     const price = managedEnterprisePrice(managedSlots);
     const communities = managedEnterpriseCommunities(managedSlots);
     const configuredLine = `Requested Managed Enterprise capacity: ${managedSlots} Watcher slots -- $${price.toFixed(2)}/mo (canonical price: $${MANAGED_ENTERPRISE_50.price.toFixed(2)} base + $${ENTERPRISE_MANAGED_EXTRA_SLOT_PRICE}/slot above ${MANAGED_ENTERPRISE_50.slots}), ${communities} Communities included. Provisioning is completed with Innvil support.`;
-    return `${configuredLine}\n\n${mediaLine}${baseUsageContext}`;
+    return `${configuredLine}\n\n${mediaLine}${communityLine}${baseUsageContext}`;
   }
   const fixed = MANAGED_ENTERPRISE_50;
   const configuredLine = `Requested Managed Enterprise 50: ${fixed.slots} Watcher slots, $${fixed.price.toFixed(2)}/mo, ${fixed.communities} Communities included, ${fixed.aiGenerations.toLocaleString()} pooled AI Generations/mo.`;
-  return `${configuredLine}\n\n${mediaLine}${baseUsageContext}`;
+  return `${configuredLine}\n\n${mediaLine}${communityLine}${baseUsageContext}`;
 }
 
 /** Managed Enterprise price at ANY Watcher slot count -- the ONE canonical
