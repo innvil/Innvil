@@ -127,6 +127,46 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-23 — Enterprise entitlements can now actually be granted — devops tool extended (v1.47.37)
+- **Closes the prerequisite gap flagged repeatedly across v1.47.24 through v1.47.34**: until this pass, there
+  was NO way anywhere in this codebase to actually grant an Enterprise entitlement to a real account — the
+  devops/admin tool (`superadmin-watch-devops.ts`) only ever supported the 4 self-serve tiers. Every Enterprise
+  pricing/resolver/UI-selector pass this session (Managed formula fix, Media Moderation +, Community Expansion)
+  had no live account to run against.
+- **New `setAccountDevOpsEnterprise(accountId, slots, communityCapacity?)`** — kept as its OWN function, not a
+  widened `tier` parameter on the existing `setAccountDevOpsSubscription` — "enterprise" is a structurally
+  distinct entitlement source everywhere else in this codebase (`watch-runtime.ts`), never a `ModeratorPlanTier`
+  value, so this mirrors that distinction instead of blurring it. Same two safety gates as every other mutating
+  action in this file (super-admin role + Preview-only), reuses the same `activateWatchEntitlement` every real
+  purchase already calls (no second entitlement-writing path), tagged with the same `devops:` marker so
+  `clearAccountDevOpsSubscription` (already tier-agnostic, needed no change) can revoke it safely.
+- **Real validation, real feedback** — `slots` must be a whole number ≥ 1 (the same floor
+  `resolveAccountEnterpriseEntitlement` itself enforces); `communityCapacity`, when given, is checked against
+  the canonical package matrix (`validateEnterpriseCommunityCapacity`) BEFORE being persisted, and an invalid
+  value is REJECTED with a clear error here — deliberately not the same silent-drop behavior
+  `activateWatchEntitlement`'s own internal write-time guard uses, since this is a direct admin action that
+  deserves real feedback, not a quiet no-op.
+- **`AccountDevOpsSubscriptionState` widened** — `tier` now reads `enterprise` too (new `DevOpsGrantableTier`
+  union, exported), plus real `enterpriseSlots`/`enterpriseCommunityCapacity` fields so the admin can see an
+  account's actual provisioned state before touching it.
+- **UI** (`WatchDevOpsAdmin.tsx`, unchanged dual-mount — `/superadmin`'s Watch devops tab AND the owner-app
+  super-admin sidebar both pick this up automatically, no separate wiring needed) — the tier picker gained an
+  "Enterprise (Managed)" option that reveals a Watcher-slots number input and a Community-capacity dropdown
+  (base + every real package from `getEnterpriseCommunityExpansionOptions`, never a free-text/unbounded field).
+  Current-entitlement display shows the real provisioned slots/Community count for an Enterprise account.
+- **No new tests** — consistent with this file's own pre-existing convention (every other function in
+  `superadmin-watch-devops.ts` has zero dedicated tests, since `requireSuperAdmin()`/`getAuthedAdmin()` depend
+  on real session-cookie resolution this codebase doesn't mock for server actions). The logic this new function
+  actually reuses (`activateWatchEntitlement`'s `enterpriseCommunityCapacity` handling,
+  `validateEnterpriseCommunityCapacity` itself) is already fully unit-tested from the v1.47.34/v1.47.36 passes.
+  1449 tests pass (unchanged), `tsc --noEmit` clean, production build clean. Diff reviewed: exactly 2 files.
+- **Not deployed automatically, per standing instruction.**
+- **This is the first genuine end-to-end live path for Enterprise** — a real account can now receive a real
+  Managed Enterprise entitlement, including a real Community capacity package, and see it reflected correctly
+  across Usage/Billing/the Community-creation cap, all through infrastructure already built and tested in prior
+  passes. Still not built: an equivalent grant path for BYO 50/BYO Unlimited (those modes have no `api_source_mode`
+  concept or credential storage yet at all — a separate, larger prerequisite, see Phase 4.V in the roadmap).
+
 ### 2026-08-23 — Admin tooling: real `profiles.email` column — delete a test account in one place (v1.47.36)
 - **Follow-up correction to v1.47.35, per explicit request** — the view-based lookup wasn't what was actually
   needed: deleting a row from `product_entitlements_with_email`/`profiles_with_email` (both views) does

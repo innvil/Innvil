@@ -38,11 +38,18 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { isPreviewEnvironment } from "@/src/lib/config";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
+import { validateEnterpriseCommunityCapacity } from "@/src/lib/products/watch-enterprise-community";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 type Result<T = null> = { ok: true; data: T } | { ok: false; error: string };
 
 const DEVOPS_MARKER = ":devops:";
+
+/** A devops-grantable tier -- the 4 real self-serve tiers, or "enterprise",
+ *  which is structurally NOT a ModeratorPlanTier anywhere else in this
+ *  codebase (see watch-runtime.ts's own doc comments) -- kept as a distinct
+ *  union here too, never silently widened into ModeratorPlanTier. */
+export type DevOpsGrantableTier = ModeratorPlanTier | "enterprise";
 
 async function requireSuperAdmin(): Promise<{ ok: true; userId: string } | { ok: false }> {
   const { user, admin } = await getAuthedAdmin();
@@ -52,9 +59,9 @@ async function requireSuperAdmin(): Promise<{ ok: true; userId: string } | { ok:
   return { ok: true, userId: user.id };
 }
 
-function parseTierFromRef(subscriptionRef: string | null): ModeratorPlanTier | null {
+function parseTierFromRef(subscriptionRef: string | null): DevOpsGrantableTier | null {
   const tier = (subscriptionRef ?? "").split(":")[0];
-  if (tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro") return tier;
+  if (tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro" || tier === "enterprise") return tier;
   return null;
 }
 
@@ -74,10 +81,20 @@ export async function findAccountByEmail(email: string): Promise<Result<{ accoun
 }
 
 export interface AccountDevOpsSubscriptionState {
-  tier: ModeratorPlanTier | null;
+  tier: DevOpsGrantableTier | null;
   status: string | null;
   isDevOps: boolean;
   subscriptionRef: string | null;
+  /** Only meaningful when tier === "enterprise" -- the REAL, manually-
+   *  provisioned Watcher-slot count (migration 0086). Null otherwise. */
+  enterpriseSlots: number | null;
+  /** Only meaningful when tier === "enterprise" -- the REAL, manually-
+   *  provisioned Community capacity (migration 0088). Null means "base
+   *  package, no expansion" -- never a fabricated number here either;
+   *  the resolver (watch-runtime.ts) is what applies the real base-8
+   *  fallback at read time for the live product, this is just the raw
+   *  stored value for the admin's own visibility. */
+  enterpriseCommunityCapacity: number | null;
 }
 
 /** Read-only -- NOT Preview-gated (see file header). */
@@ -86,10 +103,12 @@ export async function getAccountDevOpsSubscription(accountId: string): Promise<R
   if (!auth.ok) return { ok: false, error: "Super admin only." };
   const admin = createAdminClient();
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
-  if (!product) return { ok: true, data: { tier: null, status: null, isDevOps: false, subscriptionRef: null } };
+  if (!product) {
+    return { ok: true, data: { tier: null, status: null, isDevOps: false, subscriptionRef: null, enterpriseSlots: null, enterpriseCommunityCapacity: null } };
+  }
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("subscription_ref, status")
+    .select("subscription_ref, status, enterprise_slots, enterprise_community_capacity")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -101,6 +120,8 @@ export async function getAccountDevOpsSubscription(accountId: string): Promise<R
       status: (entitlement?.status as string | null) ?? null,
       isDevOps: subscriptionRef?.includes(DEVOPS_MARKER) ?? false,
       subscriptionRef,
+      enterpriseSlots: (entitlement?.enterprise_slots as number | null) ?? null,
+      enterpriseCommunityCapacity: (entitlement?.enterprise_community_capacity as number | null) ?? null,
     },
   };
 }
@@ -121,6 +142,47 @@ export async function setAccountDevOpsSubscription(accountId: string, tier: Mode
     actor_id: auth.userId,
     action: "superadmin.watch_devops_subscription_set",
     meta: { accountId, tier, devops: true },
+  });
+  return { ok: true, data: null };
+}
+
+/** Grants (or replaces) a devops Managed Enterprise entitlement -- the
+ *  first live path anywhere in this codebase for an actual account to
+ *  receive Enterprise capacity. Kept as its OWN function rather than
+ *  widening setAccountDevOpsSubscription's tier parameter -- "enterprise"
+ *  is a structurally distinct entitlement source everywhere else in this
+ *  codebase (watch-runtime.ts), never a ModeratorPlanTier value, so this
+ *  mirrors that distinction instead of blurring it. Preview-only, same
+ *  gate as every other mutating action in this file.
+ *
+ *  `slots` must be a real, positive Watcher-slot count (the same floor
+ *  resolveAccountEnterpriseEntitlement itself enforces -- a missing/zero
+ *  count is treated as "no entitlement", never fabricated). `communityCapacity`
+ *  is OPTIONAL -- omitted or `undefined` leaves it unset, which the real
+ *  resolver already treats as "base package" (8 Communities); when given,
+ *  it's validated against the canonical package matrix BEFORE ever being
+ *  persisted -- an invalid value is rejected with a clear error here
+ *  (not silently dropped, unlike activateWatchEntitlement's own internal
+ *  write-time guard, since this is a direct admin action that deserves
+ *  real feedback rather than a silent no-op). */
+export async function setAccountDevOpsEnterprise(accountId: string, slots: number, communityCapacity?: number): Promise<Result> {
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return { ok: false, error: "Super admin only." };
+  if (!isPreviewEnvironment()) return { ok: false, error: "DevOps subscription overrides are only available in the Preview environment." };
+  if (!Number.isInteger(slots) || slots < 1) return { ok: false, error: "Watcher slots must be a whole number of at least 1." };
+  if (communityCapacity != null && !validateEnterpriseCommunityCapacity("managed", communityCapacity)) {
+    return { ok: false, error: `${communityCapacity} isn't a real Managed Enterprise Community capacity package.` };
+  }
+
+  const admin = createAdminClient();
+  const ref = `devops:${auth.userId}:${Date.now()}`;
+  await activateWatchEntitlement(admin, accountId, "enterprise", ref, "monthly", slots, communityCapacity);
+
+  await admin.from("audit_logs").insert({
+    panel_id: null,
+    actor_id: auth.userId,
+    action: "superadmin.watch_devops_enterprise_set",
+    meta: { accountId, slots, communityCapacity: communityCapacity ?? null, devops: true },
   });
   return { ok: true, data: null };
 }

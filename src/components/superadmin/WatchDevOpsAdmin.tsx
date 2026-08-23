@@ -4,17 +4,22 @@ import React, { useState } from "react";
 import { Search, ShieldCheck, AlertTriangle, XCircle } from "lucide-react";
 import { Card } from "@/src/components/ui";
 import {
-  findAccountByEmail, getAccountDevOpsSubscription, setAccountDevOpsSubscription, clearAccountDevOpsSubscription,
-  type AccountDevOpsSubscriptionState,
+  findAccountByEmail, getAccountDevOpsSubscription, setAccountDevOpsSubscription, setAccountDevOpsEnterprise,
+  clearAccountDevOpsSubscription, type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
 } from "@/src/lib/actions/superadmin-watch-devops";
+import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
+import { getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions } from "@/src/lib/products/watch-enterprise-community";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
-const TIERS: Array<{ value: ModeratorPlanTier; label: string }> = [
+const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
   { value: "basic", label: "Bronze (Basic)" },
   { value: "standard", label: "Silver (Standard)" },
   { value: "premium", label: "Gold (Premium)" },
   { value: "pro", label: "Platinum (Pro)" },
+  { value: "enterprise", label: "Enterprise (Managed)" },
 ];
+
+const ENTERPRISE_COMMUNITY_BASE = getEnterpriseIncludedCommunities("managed");
 
 /** Superadmin-only control for manually granting a Watch subscription tier
  *  to an account, for live QA — e.g. testing a Watcher against a real
@@ -30,7 +35,9 @@ export function WatchDevOpsAdmin() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [account, setAccount] = useState<{ accountId: string; email: string } | null>(null);
   const [state, setState] = useState<AccountDevOpsSubscriptionState | null>(null);
-  const [tier, setTier] = useState<ModeratorPlanTier>("standard");
+  const [tier, setTier] = useState<DevOpsGrantableTier>("standard");
+  const [enterpriseSlots, setEnterpriseSlots] = useState(String(MANAGED_ENTERPRISE_50.slots));
+  const [enterpriseCapacity, setEnterpriseCapacity] = useState(String(ENTERPRISE_COMMUNITY_BASE));
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
@@ -64,10 +71,17 @@ export function WatchDevOpsAdmin() {
     setBusy(true);
     setActionError(null);
     setActionOk(null);
-    const res = await setAccountDevOpsSubscription(account.accountId, tier);
+    const res =
+      tier === "enterprise"
+        ? await setAccountDevOpsEnterprise(
+            account.accountId,
+            Number(enterpriseSlots),
+            enterpriseCapacity.trim() ? Number(enterpriseCapacity) : undefined
+          )
+        : await setAccountDevOpsSubscription(account.accountId, tier as ModeratorPlanTier);
     setBusy(false);
     if (!res.ok) { setActionError(res.error); return; }
-    setActionOk(`Devops ${tier} subscription set.`);
+    setActionOk(tier === "enterprise" ? `Devops Enterprise entitlement set (${enterpriseSlots} slots).` : `Devops ${tier} subscription set.`);
     await refreshState(account.accountId);
   };
 
@@ -125,6 +139,11 @@ export function WatchDevOpsAdmin() {
                 {state.tier ? TIERS.find((t) => t.value === state.tier)?.label ?? state.tier : "None"}
                 {state.isDevOps && <span className="fp-gold-soft-bg fp-gold text-[10px] px-1.5 py-0.5 rounded-full ml-2">devops</span>}
               </p>
+              {state.tier === "enterprise" && (
+                <p className="text-[11px] fp-text-faint">
+                  {state.enterpriseSlots ?? "?"} slots · {state.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE} Communities
+                </p>
+              )}
               {state.status && <p className="text-[11px] fp-text-faint">{state.status}</p>}
             </div>
           </div>
@@ -132,13 +151,35 @@ export function WatchDevOpsAdmin() {
           <div className="flex items-center gap-2 flex-wrap">
             <select
               value={tier}
-              onChange={(e) => setTier(e.target.value as ModeratorPlanTier)}
+              onChange={(e) => setTier(e.target.value as DevOpsGrantableTier)}
               className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
             >
               {TIERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
+            {tier === "enterprise" && (
+              <>
+                <input
+                  type="number"
+                  min={1}
+                  value={enterpriseSlots}
+                  onChange={(e) => setEnterpriseSlots(e.target.value)}
+                  placeholder="Watcher slots"
+                  className="w-28 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                />
+                <select
+                  value={enterpriseCapacity}
+                  onChange={(e) => setEnterpriseCapacity(e.target.value)}
+                  className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
+                >
+                  <option value={ENTERPRISE_COMMUNITY_BASE}>{ENTERPRISE_COMMUNITY_BASE} Communities (base)</option>
+                  {getEnterpriseCommunityExpansionOptions("managed").map((o) => (
+                    <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
+                  ))}
+                </select>
+              </>
+            )}
             <button onClick={() => void grant()} disabled={busy} className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50">
-              {busy ? "Working…" : "Set devops subscription"}
+              {busy ? "Working…" : tier === "enterprise" ? "Set devops Enterprise entitlement" : "Set devops subscription"}
             </button>
             {state.isDevOps && (
               <button onClick={() => void clear()} disabled={busy} className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text-dim hover:fp-text flex items-center gap-1.5 disabled:opacity-50">
