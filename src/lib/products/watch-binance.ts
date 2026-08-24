@@ -25,6 +25,8 @@ import { getPayTransactions, BinanceApiError, type BinanceSecrets } from "@/src/
 import { activateWatchEntitlement } from "./ownership";
 import { watchPlanOptions, type WatchPlanDisplayName, watchTierFromDisplayName } from "./watch-plans";
 import { WATCH_PRODUCT_SLUG } from "./watch";
+import { annualDirectPriceUsd } from "./innvil-credit-pricing";
+import type { WatchBillingInterval } from "./watch-billing-period";
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -39,14 +41,24 @@ export interface WatchBinanceDepositInfo {
 }
 
 /** Starts a direct Watch Binance Pay deposit — returns the amount to pay
- *  and Innvil's own Pay ID (never a panel owner's). */
-export async function createWatchBinanceDeposit(planName: Exclude<WatchPlanDisplayName, "Enterprise">): Promise<Result<WatchBinanceDepositInfo>> {
+ *  and Innvil's own Pay ID (never a panel owner's). `billingInterval`
+ *  (2026-08-25) — annual via Binance Pay is priced the SAME 5% direct
+ *  discount as Cryptomus/NOWPayments (`annualDirectPriceUsd`), one of the
+ *  real "available payment options" for the annual-direct offer. No
+ *  Community Expansion renewal-folding here either way — Binance Pay's
+ *  claim-by-transaction-id shape never folded addon pricing to begin with
+ *  (a fixed exact amount is set once at deposit-creation time). */
+export async function createWatchBinanceDeposit(
+  planName: Exclude<WatchPlanDisplayName, "Enterprise">,
+  billingInterval: WatchBillingInterval = "monthly"
+): Promise<Result<WatchBinanceDepositInfo>> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
 
   const tier = watchTierFromDisplayName(planName);
-  const price = watchPlanOptions().find((o) => o.tier === tier)?.price;
-  if (!price) return { ok: false, error: "Unknown plan." };
+  const basePrice = watchPlanOptions().find((o) => o.tier === tier)?.price;
+  if (!basePrice) return { ok: false, error: "Unknown plan." };
+  const price = billingInterval === "annual" ? annualDirectPriceUsd(basePrice) : basePrice;
 
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
   if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
@@ -69,6 +81,7 @@ export async function createWatchBinanceDeposit(planName: Exclude<WatchPlanDispl
       credit_amount: price,
       currency: "USD",
       status: "pending",
+      billing_interval: billingInterval,
     })
     .select("id")
     .single();
@@ -93,7 +106,7 @@ export async function claimWatchBinancePayment(depositId: string, transactionId:
 
   const { data: deposit } = await admin
     .from("platform_deposits")
-    .select("id, owner_id, status, gateway, purpose, paid_amount, plan")
+    .select("id, owner_id, status, gateway, purpose, paid_amount, plan, billing_interval")
     .eq("id", depositId)
     .maybeSingle();
   if (!deposit || deposit.owner_id !== user.id) return { ok: false, error: "Payment not found." };
@@ -138,6 +151,7 @@ export async function claimWatchBinancePayment(depositId: string, transactionId:
   }
   if (!claimed) return { ok: true, data: null }; // lost the race to another concurrent claim -- already completed
 
-  await activateWatchEntitlement(admin, deposit.owner_id as string, deposit.plan as string, deposit.id as string);
+  const paidBillingInterval: WatchBillingInterval = (deposit.billing_interval as string | null) === "annual" ? "annual" : "monthly";
+  await activateWatchEntitlement(admin, deposit.owner_id as string, deposit.plan as string, deposit.id as string, paidBillingInterval, undefined, undefined, undefined, undefined, false);
   return { ok: true, data: null };
 }

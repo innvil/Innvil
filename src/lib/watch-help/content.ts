@@ -15,7 +15,7 @@
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
-import { INNVIL_CREDIT_DISCOUNT, ANNUAL_CREDIT_DISCOUNT_BPS } from "@/src/lib/products/innvil-credit-pricing";
+import { INNVIL_CREDIT_DISCOUNT, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_DIRECT_DISCOUNT_BPS } from "@/src/lib/products/innvil-credit-pricing";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 
 export type HelpCategoryId =
@@ -53,6 +53,7 @@ const slotLine = plans.map((p) => `${p.displayName} ${p.slots}`).join(" · ");
 const discountedTiers = plans.filter((p) => INNVIL_CREDIT_DISCOUNT[p.tier] > 0).map((p) => p.displayName).join("/");
 const monthlyDiscountPct = Math.round((plans.find((p) => INNVIL_CREDIT_DISCOUNT[p.tier] > 0) ? INNVIL_CREDIT_DISCOUNT[plans.find((p) => INNVIL_CREDIT_DISCOUNT[p.tier] > 0)!.tier] : 0) * 100);
 const annualDiscountPct = ANNUAL_CREDIT_DISCOUNT_BPS / 100;
+const annualDirectDiscountPct = ANNUAL_DIRECT_DISCOUNT_BPS / 100;
 
 export const HELP_ARTICLES: HelpArticle[] = [
   {
@@ -214,7 +215,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       `Self-serve monthly plans: ${planLine}. Each includes a Watcher-slot allowance (${slotLine}) and a separate Community allowance.`,
       `Each plan also includes a pooled monthly AI Generations allowance — Bronze ${MODERATOR_AI_GENERATION_POOL.basic.toLocaleString()}, Silver ${MODERATOR_AI_GENERATION_POOL.standard.toLocaleString()}, Gold ${MODERATOR_AI_GENERATION_POOL.premium.toLocaleString()}, Platinum ${MODERATOR_AI_GENERATION_POOL.pro.toLocaleString()} per billing period, shared across every Watcher on the account. An AI Generation is counted once your Watcher's AI reply is successfully generated — deterministic actions like silence, reactions, short acknowledgements, and moderation decisions never consume one.`,
       `Media Moderation + is an optional add-on available on every self-serve plan — Bronze +$${MODERATOR_MEDIA_ADDON.basic.price.toFixed(2)}/mo, Silver +$${MODERATOR_MEDIA_ADDON.standard.price.toFixed(2)}/mo, Gold +$${MODERATOR_MEDIA_ADDON.premium.price.toFixed(2)}/mo, Platinum +$${MODERATOR_MEDIA_ADDON.pro.price.toFixed(2)}/mo, each with its own included Media Moderation Unit allowance per period.`,
-      `Annual billing is available on every self-serve plan, at ${annualDiscountPct}% off 12 months of the regular price — paid upfront with Innvil Credit only, no direct crypto option for annual.`,
+      `Annual billing is available on every self-serve plan, paid upfront: ${annualDirectDiscountPct}% off 12 months of the regular price with any direct payment option (crypto), or ${annualDiscountPct}% off with Innvil Credit — the bigger discount.`,
       "Watch is billed with crypto payments (Cryptomus, NOWPayments, or Binance Pay, depending on what's configured) or Innvil Credit, a discounted second way to pay. There is currently no auto-renewal — you renew manually from the Billing page when your period ends; nothing about your existing Projects, Communities, or Watchers is affected while a subscription is expired.",
       `Enterprise (beyond Platinum) is three fixed packages: Managed Enterprise 50 ($${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo), Bring Your Own Provider 50 ($${WATCH_ENTERPRISE_BYO_TIERS[0].price}/mo), and Bring Your Own Provider Unlimited ($${WATCH_ENTERPRISE_BYO_TIERS[1].price}/mo) — see the Innvil Watch Enterprise article for what each includes.`,
     ],
@@ -243,7 +244,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["innvil credit", "credit", "prepaid", "balance"],
     body: [
       "Innvil Credit is a reusable, account-owned prepaid service credit. 1 Innvil Credit = $1.00 USD of eligible Innvil service value.",
-      `Add credit using a supported crypto gateway; it's then usable for eligible Innvil purchases, including Watch subscriptions and Community Expansion — often at a discount versus paying directly (${discountedTiers} get ${monthlyDiscountPct}% off when paying with Innvil Credit; annual billing is Innvil Credit only, at a further ${annualDiscountPct}% off 12 months of the regular price).`,
+      `Add credit using a supported crypto gateway; it's then usable for eligible Innvil purchases, including Watch subscriptions and Community Expansion — often at a discount versus paying directly (${discountedTiers} get ${monthlyDiscountPct}% off when paying with Innvil Credit; annual billing gets ${annualDiscountPct}% off with Innvil Credit, vs. ${annualDirectDiscountPct}% off with a direct crypto payment for the same 12 months upfront).`,
       "Innvil Credit is account-owned, non-transferable, and non-withdrawable — it is explicitly NOT a crypto custody wallet; there is no coin/token quantity stored, no exchange, and no code path anywhere exposes a withdrawal.",
       "Top-ups are generally non-refundable except where required by applicable law.",
       "Manage your balance and see your full activity history from the Billing page.",

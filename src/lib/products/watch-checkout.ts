@@ -34,6 +34,8 @@ import { getAccountPaidPlan, listAccountCommunities } from "./watch-runtime";
 import { getCommunityExpansionState } from "./watch-community-expansion";
 import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
+import { annualDirectPriceUsd } from "./innvil-credit-pricing";
+import type { WatchBillingInterval } from "./watch-billing-period";
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -71,6 +73,7 @@ export interface PendingWatchPayment {
   amount: number;
   currency: string;
   createdAt: string;
+  billingInterval: WatchBillingInterval;
 }
 export async function getPendingWatchPayment(): Promise<PendingWatchPayment | null> {
   const { user, admin } = await getAuthedAdmin();
@@ -78,7 +81,7 @@ export async function getPendingWatchPayment(): Promise<PendingWatchPayment | nu
   const staleBefore = new Date(Date.now() - PENDING_CHECKOUT_STALE_MINUTES * 60_000).toISOString();
   const { data } = await admin
     .from("platform_deposits")
-    .select("id, gateway, plan, paid_amount, currency, created_at")
+    .select("id, gateway, plan, paid_amount, currency, created_at, billing_interval")
     .eq("owner_id", user.id)
     .eq("purpose", "watch_subscription")
     .eq("status", "pending")
@@ -94,6 +97,7 @@ export async function getPendingWatchPayment(): Promise<PendingWatchPayment | nu
     amount: Number(data.paid_amount ?? 0),
     currency: (data.currency as string | null) ?? "USD",
     createdAt: data.created_at as string,
+    billingInterval: (data.billing_interval as string | null) === "annual" ? "annual" : "monthly",
   };
 }
 
@@ -107,10 +111,25 @@ export async function getPendingWatchPayment(): Promise<PendingWatchPayment | nu
  * entitlement state at that moment to decide whether to extend an existing
  * period or start a fresh one) -- so there's no separate "renewal purpose"
  * to invent or keep in sync.
+ *
+ * `billingInterval` (2026-08-25) -- annual is now available via direct
+ * crypto too, at its own 5% discount (`annualDirectPriceUsd`), independent
+ * of and smaller than the existing 10% Innvil-Credit annual discount --
+ * two genuinely different offers, not one discount two ways. Community
+ * Expansion renewal-folding (below) is deliberately SKIPPED for an annual
+ * checkout -- that addon only has a MONTHLY price table
+ * (`COMMUNITY_EXPANSION_MONTHLY_PRICE`); folding it into an annual charge
+ * would require a real annual addon price this pass doesn't build. An
+ * account with an active, un-cancelled Community Expansion that renews
+ * annually via direct crypto keeps the addon active (never silently
+ * dropped) but isn't charged for it through THIS checkout -- documented as
+ * a deliberate scope-down, matching this codebase's own established
+ * "smallest safe" precedent, not a silent gap.
  */
 export async function createDirectWatchCheckout(
   planName: Exclude<WatchPlanDisplayName, "Enterprise">,
-  gateway: string
+  gateway: string,
+  billingInterval: WatchBillingInterval = "monthly"
 ): Promise<Result<{ url: string }>> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
@@ -126,13 +145,16 @@ export async function createDirectWatchCheckout(
   const basePrice = watchPlanOptions().find((o) => o.tier === tier)?.price;
   if (!basePrice) return { ok: false, error: "Unknown plan." };
 
+  const isAnnual = billingInterval === "annual";
+  let price = isAnnual ? annualDirectPriceUsd(basePrice) : basePrice;
+
   // Community Expansion renews TOGETHER with the base subscription -- if
-  // this is a renewal (same tier already held) with an active, non-
+  // this is a MONTHLY renewal (same tier already held) with an active, non-
   // removal-pending addon, its price is folded into this SAME checkout,
-  // never a second/independent crypto charge.
-  let price = basePrice;
+  // never a second/independent crypto charge. See the doc comment above
+  // for why this is skipped entirely for an annual checkout.
   const existingPlan = await getAccountPaidPlan(admin, user.id);
-  if (existingPlan && existingPlan.tier === tier && isCommunityExpansionEligibleTier(tier)) {
+  if (!isAnnual && existingPlan && existingPlan.tier === tier && isCommunityExpansionEligibleTier(tier)) {
     const expansion = await getCommunityExpansionState(admin, user.id);
     if (expansion && !expansion.cancelAtPeriodEnd) price += COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
   } else if (existingPlan && existingPlan.tier !== tier) {
@@ -180,6 +202,7 @@ export async function createDirectWatchCheckout(
       credit_amount: price, // no top-up bonus logic for a direct subscription purchase
       currency: "USD",
       status: "pending",
+      billing_interval: billingInterval,
     })
     .select("id")
     .single();

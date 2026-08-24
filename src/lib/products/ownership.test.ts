@@ -222,12 +222,55 @@ test("a renewal after the existing period already expired starts a fresh period 
   assert.ok(new Date(row?.current_period_start as string).getTime() >= before, "the new period must start from settlement time, never retroactively from the old expiry");
 });
 
-test("REQUIRED: activateWatchEntitlement persists billing_interval='annual' and forces renewal_mode='innvil_credit' when called with 'annual'", async () => {
+test("REQUIRED: activateWatchEntitlement persists billing_interval='annual'", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
-  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-1", "annual");
+  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-1", "annual", undefined, undefined, undefined, undefined, true);
   const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
   assert.equal(row?.billing_interval, "annual");
+});
+
+/* ------------------------- renewal_mode: real payment-method signal (not interval) ---- */
+// 2026-08-25: annual billing became available via BOTH Innvil Credit AND
+// direct crypto (5% vs. 10% discount) -- renewal_mode is now driven purely
+// by the explicit paidViaCredit signal, never derived from billingInterval.
+
+test("REQUIRED: paidViaCredit:true sets renewal_mode='innvil_credit' for an ANNUAL purchase", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-1", "annual", undefined, undefined, undefined, undefined, true);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
   assert.equal(row?.renewal_mode, "innvil_credit");
+});
+
+test("REQUIRED: paidViaCredit:false sets renewal_mode='manual_crypto' for an ANNUAL purchase -- annual is no longer Credit-exclusive", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-annual-1", "annual", undefined, undefined, undefined, undefined, false);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.billing_interval, "annual");
+  assert.equal(row?.renewal_mode, "manual_crypto");
+});
+
+test("REQUIRED: paidViaCredit:true also sets renewal_mode='innvil_credit' for a MONTHLY purchase (previously only annual set this field)", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-2", "monthly", undefined, undefined, undefined, undefined, true);
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.renewal_mode, "innvil_credit");
+});
+
+test("omitting paidViaCredit entirely (e.g. the devops grant tool) never touches renewal_mode", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "manual-1", "monthly");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.renewal_mode, undefined, "renewal_mode should never be set on the upsert payload when paidViaCredit is omitted");
+});
+
+test("a customer switching from Credit to crypto on renewal correctly flips renewal_mode back to manual_crypto", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "standard", "credit:tx-1", "monthly", undefined, undefined, undefined, undefined, true);
+  let row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.renewal_mode, "innvil_credit");
+  await activateWatchEntitlement(admin, "acct-1", "standard", "deposit-2", "monthly", undefined, undefined, undefined, undefined, false);
+  row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.renewal_mode, "manual_crypto");
 });
 
 test("activateWatchEntitlement defaults to billing_interval='monthly' when the parameter is omitted -- every existing (crypto webhook) caller is unaffected", async () => {

@@ -152,3 +152,18 @@ test("REQUIRED: Plans and Billing article states the real per-tier AI Generation
   assert.ok(text.includes(`$${MODERATOR_MEDIA_ADDON.basic.price.toFixed(2)}`));
   assert.ok(text.includes(`$${MODERATOR_MEDIA_ADDON.pro.price.toFixed(2)}`));
 });
+
+test("REQUIRED: Plans and Billing article correctly states annual billing has TWO real discounts (5% direct, 10% Innvil Credit) -- never the superseded 'Innvil Credit only' claim", () => {
+  const a = getArticle("plans-and-billing")!;
+  const text = a.body.join(" ");
+  assert.ok(text.includes("5%"), "must state the real 5% direct-payment annual discount");
+  assert.ok(text.includes("10%"), "must state the real 10% Innvil Credit annual discount");
+  assert.ok(!/Innvil Credit only/i.test(text), "annual is no longer Innvil-Credit-exclusive as of 2026-08-25");
+});
+
+test("REQUIRED: Innvil Credit article no longer claims annual billing is Innvil-Credit-exclusive", () => {
+  const a = getArticle("innvil-credit")!;
+  const text = a.body.join(" ");
+  assert.ok(!/annual billing is Innvil Credit only/i.test(text));
+  assert.ok(text.includes("5%") && text.includes("10%"), "must state both real annual discount rates");
+});

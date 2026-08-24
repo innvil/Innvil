@@ -8,7 +8,7 @@ import { watchPlanOptions, watchAccessLabel, watchPlanDisplayName, formatSlotLim
 import { listWatchPaymentHistory, listAvailableDirectWatchGateways, getPendingWatchPayment } from "@/src/lib/products/watch-checkout";
 import { getInnvilCreditBalance, listInnvilCreditActivity } from "@/src/lib/products/innvil-credit";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
-import { annualCreditPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
+import { annualCreditPriceUsd, annualDirectPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
 import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
@@ -65,6 +65,21 @@ export default async function BillingPage() {
     ? COMMUNITY_EXPANSION_MONTHLY_PRICE[capacity.tier]
     : null;
   const combinedPrice = price != null ? price + (expansionActive ?? 0) : null;
+  // Annual now has TWO real prices (5% off via any direct/crypto gateway, 10%
+  // off via Innvil Credit) -- there is no stored record of which METHOD the
+  // account actually paid with, so the headline figure is the direct/crypto
+  // price (the real "starting from" price, matching /plans' own presentation)
+  // with the bigger Credit discount shown as a savings note underneath.
+  // Community Expansion's own addon price stays Credit-only for annual (a
+  // deliberate, documented scope boundary -- addon folding was never
+  // extended to annual-direct-crypto), so its contribution to both totals
+  // below is unconditionally the Credit price.
+  const annualDirectTotal = price != null
+    ? annualDirectPriceUsd(price) + (expansionActive != null ? annualCreditPriceUsd(expansionActive) : 0)
+    : null;
+  const annualCreditTotal = price != null
+    ? annualCreditPriceUsd(price) + (expansionActive != null ? annualCreditPriceUsd(expansionActive) : 0)
+    : null;
 
   return (
     <WatchShell active="billing" capacity={shell.capacity} attentionCount={shell.attentionCount}>
@@ -83,15 +98,15 @@ export default async function BillingPage() {
                   <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier)}</p>
                   <p className="text-xs w-text-faint mt-0.5">
                     {capacity.billingInterval === "annual" ? (
-                      <>
-                        ${(annualCreditPriceUsd(options.find((o) => o.tier === capacity.tier)?.price ?? 0)
-                          + (expansionActive != null ? annualCreditPriceUsd(expansionActive) : 0)).toFixed(2)}/year
-                      </>
+                      annualDirectTotal != null && <>${annualDirectTotal.toFixed(2)}/year</>
                     ) : (
                       combinedPrice != null && <>${combinedPrice.toFixed(2)}/mo</>
                     )}
                     {expansionActive != null && <span className="w-text-faint"> (incl. Community Expansion)</span>}
                   </p>
+                  {capacity.billingInterval === "annual" && annualCreditTotal != null && (
+                    <p className="text-[11px] w-teal mt-0.5">Save more — ${annualCreditTotal.toFixed(2)}/year with Innvil Credit</p>
+                  )}
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
@@ -108,11 +123,9 @@ export default async function BillingPage() {
                 <p className="text-xs w-text-faint">No tracked billing period on this subscription yet — it stays active until your next renewal or plan change.</p>
               )}
               <p className="text-xs w-text-faint">
-                {capacity.billingInterval === "annual"
-                  ? "Renewal: Innvil Credit only. Annual billing does not currently auto-charge — you'll renew manually when your period ends."
-                  : "Renewal: manual crypto payment, or Innvil Credit. Innvil Watch does not currently auto-charge a recurring payment."}
+                Renewal: manual crypto payment, or Innvil Credit. Innvil Watch does not currently auto-charge a recurring payment.
               </p>
-              {pending && capacity.billingInterval !== "annual" ? (
+              {pending ? (
                 <PendingPaymentNote pending={pending} />
               ) : (
                 <RenewWatchButton tier={capacity.tier} label="Pay renewal" billingInterval={capacity.billingInterval} />
@@ -156,15 +169,11 @@ export default async function BillingPage() {
               </div>
               {paidPlan.currentPeriodEnd && <p className="text-xs w-text-dim">Paid through {formatDate(paidPlan.currentPeriodEnd)}</p>}
               <p className="text-sm w-text-dim">Your Watch setup is still saved.</p>
-              {pending && paidPlan.billingInterval !== "annual" ? (
+              {pending ? (
                 <PendingPaymentNote pending={pending} />
               ) : (
                 <div className="flex items-center gap-2">
-                  <RenewWatchButton
-                    tier={paidPlan.tier}
-                    label={paidPlan.billingInterval === "annual" ? "Renew with Innvil Credit" : "Renew with crypto"}
-                    billingInterval={paidPlan.billingInterval}
-                  />
+                  <RenewWatchButton tier={paidPlan.tier} label="Renew" billingInterval={paidPlan.billingInterval} />
                   <Link href="/plans" className="text-xs w-teal hover:underline">View plans</Link>
                 </div>
               )}

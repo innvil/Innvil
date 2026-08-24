@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   creditPriceUsd, creditSavingsUsd, INNVIL_CREDIT_DISCOUNT, toCents,
   annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_ELIGIBLE_TIERS,
+  annualDirectPriceUsd, annualDirectSavingsUsd, annualDirectEquivalentMonthlyUsd, annualCreditExtraSavingsUsd, ANNUAL_DIRECT_DISCOUNT_BPS,
 } from "./innvil-credit-pricing";
 import {
   COMMUNITY_EXPANSION_MONTHLY_PRICE,
@@ -128,6 +129,62 @@ test("REQUIRED (test 10): savings is computed against 12x the REGULAR monthly pr
 test("annual pricing works for a tier with NO monthly credit discount (Bronze) -- the two discounts are independent", () => {
   assert.equal(INNVIL_CREDIT_DISCOUNT.basic, 0);
   assert.ok(annualSavingsUsd(49.99) > 0, "Bronze still gets the annual 10% discount even though its monthly credit discount is 0%");
+});
+
+/* --------------------------------------------- annual billing via DIRECT payment ---- */
+// 2026-08-25: a SECOND annual offer, independent of the Innvil-Credit-only
+// one above -- 5% off via any direct payment option (crypto), smaller than
+// the 10% Credit discount by design (Credit is meant to be the bigger
+// incentive). Same base (12x regular monthly), same never-stack-the-
+// monthly-discount rule, same integer-cent rounding.
+
+test("REQUIRED: annual DIRECT discount is exactly 5%, always half the Innvil Credit annual discount", () => {
+  assert.equal(ANNUAL_DIRECT_DISCOUNT_BPS, 500);
+  assert.equal(ANNUAL_DIRECT_DISCOUNT_BPS, ANNUAL_CREDIT_DISCOUNT_BPS / 2);
+});
+
+test("REQUIRED: real current canonical annual-direct prices for all four self-serve tiers", () => {
+  assert.equal(annualDirectPriceUsd(MODERATOR_BASIC_PRICE), 341.89);
+  assert.equal(annualDirectPriceUsd(MODERATOR_STANDARD_PRICE), 683.89);
+  assert.equal(annualDirectPriceUsd(MODERATOR_PREMIUM_PRICE), 1139.89);
+  assert.equal(annualDirectPriceUsd(MODERATOR_PRO_PRICE), 2268.6);
+});
+
+test("REQUIRED: annualDirectPriceUsd is always MORE than annualCreditPriceUsd for the same tier -- Credit is always the bigger incentive", () => {
+  for (const price of [MODERATOR_BASIC_PRICE, MODERATOR_STANDARD_PRICE, MODERATOR_PREMIUM_PRICE, MODERATOR_PRO_PRICE]) {
+    assert.ok(annualDirectPriceUsd(price) > annualCreditPriceUsd(price));
+  }
+});
+
+test("REQUIRED: annualDirectPriceUsd is never stacked on top of any monthly discount -- computed straight from the regular monthly price", () => {
+  const viaRegular = annualDirectPriceUsd(129.99);
+  const viaDiscountedMonthly = Math.round(creditPriceUsd(129.99, "standard") * 12 * 0.95 * 100) / 100;
+  assert.notEqual(viaRegular, viaDiscountedMonthly);
+});
+
+test("REQUIRED: annualDirectSavingsUsd is computed against 12x the REGULAR monthly price, same baseline as annualSavingsUsd", () => {
+  assert.equal(annualDirectSavingsUsd(59.99), 35.99);
+  assert.ok(annualDirectSavingsUsd(59.99) < annualSavingsUsd(59.99), "the direct 5% saving must be smaller than the Credit 10% saving on the same base");
+});
+
+test("annualDirectEquivalentMonthlyUsd matches annualDirectPriceUsd/12, rounded to the cent", () => {
+  assert.equal(annualDirectEquivalentMonthlyUsd(99.99), 94.99);
+});
+
+test("REQUIRED: annualCreditExtraSavingsUsd is the real dollar delta between the two annual offers, always positive", () => {
+  assert.equal(annualCreditExtraSavingsUsd(29.99), 18.0);
+  assert.equal(annualCreditExtraSavingsUsd(199.0), 119.4);
+  for (const price of [MODERATOR_BASIC_PRICE, MODERATOR_STANDARD_PRICE, MODERATOR_PREMIUM_PRICE, MODERATOR_PRO_PRICE]) {
+    assert.ok(annualCreditExtraSavingsUsd(price) > 0);
+  }
+});
+
+test("annual-direct pricing works for Bronze (0% monthly discount) exactly like every other tier -- the annual-direct offer is independent of the monthly discount too", () => {
+  assert.ok(annualDirectSavingsUsd(49.99) > 0);
+});
+
+test("REQUIRED: annualDirectPriceUsd rounding is deterministic across repeated calls", () => {
+  assert.equal(annualDirectPriceUsd(129.99), annualDirectPriceUsd(129.99));
 });
 
 /* ------------------------------------ Community Expansion add-on pricing ---- */

@@ -8,7 +8,11 @@ import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-peri
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
 import { MediaModerationAddonCard } from "./MediaModerationAddonCard";
-import { creditPriceUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
+import {
+  creditPriceUsd, creditSavingsUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd,
+  annualDirectPriceUsd, annualDirectEquivalentMonthlyUsd, annualDirectSavingsUsd, annualCreditExtraSavingsUsd,
+} from "@/src/lib/products/innvil-credit-pricing";
+import { Coins } from "lucide-react";
 import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 
 type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
@@ -32,8 +36,14 @@ type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
  *  Monthly/Annual is a BILLING INTERVAL on the same plan identity, never a
  *  second product ("Silver Annual") -- selecting Annual changes only the
  *  price shown + what WatchCheckout charges for, never the plan grid
- *  itself. Annual is Innvil-Credit-only (WatchCheckout enforces this by
- *  never rendering a crypto option when billingInterval="annual"). */
+ *  itself. Annual has TWO real offers as of 2026-08-25 -- 5% off via any
+ *  direct payment option (crypto), or 10% off via Innvil Credit -- both
+ *  reachable from WatchCheckout's own payment-method choice screen.
+ *
+ *  Every card also surfaces a real, visible "pay with Innvil Credit and
+ *  save" callout (not just a small price line) -- the discount is real,
+ *  computed from the same canonical creditPriceUsd/annualCreditPriceUsd
+ *  functions Billing/WatchCheckout already use, never a duplicated number. */
 export function BillingPlanPicker({
   options, currentDisplayName, currentBillingInterval = "monthly", mediaAddon,
 }: {
@@ -67,12 +77,12 @@ export function BillingPlanPicker({
           aria-pressed={billingInterval === "annual"}
           className={`text-xs font-medium px-3 py-1.5 rounded-md flex items-center gap-1.5 ${billingInterval === "annual" ? "w-teal-soft-bg w-teal" : "w-text-faint hover:w-text-dim"}`}
         >
-          Annual <span className="w-pill w-green-soft-bg w-green text-[10px]">Save 10%</span>
+          Annual <span className="w-pill w-green-soft-bg w-green text-[10px]">Save up to 10%</span>
         </button>
       </div>
       {billingInterval === "annual" && (
         <p className="text-xs w-text-faint mb-4">
-          Pay one year upfront with Innvil Credit and save 10% vs. paying monthly. Annual billing is Innvil Credit only.
+          Pay one year upfront and save — 5% off with any direct payment option (crypto), or 10% off with Innvil Credit.
         </p>
       )}
 
@@ -88,17 +98,31 @@ export function BillingPlanPicker({
                 <>
                   <p className="w-display text-xl w-teal mb-0.5">${o.price.toFixed(2)}<span className="text-xs w-text-faint font-normal">/mo</span></p>
                   {INNVIL_CREDIT_DISCOUNT[o.tier] > 0 ? (
-                    <p className="text-[11px] w-text-faint mb-3">${creditPriceUsd(o.price, o.tier).toFixed(2)} with Innvil Credit</p>
+                    <div className="w-surface-raised border w-teal-border rounded-lg px-2.5 py-1.5 mb-3 flex items-center gap-1.5">
+                      <Coins size={12} className="w-teal shrink-0" />
+                      <p className="text-[11px] w-text leading-tight">
+                        Save {(INNVIL_CREDIT_DISCOUNT[o.tier] * 100).toFixed(0)}%? Pay with Innvil Credit —{" "}
+                        <span className="w-teal font-semibold">${creditPriceUsd(o.price, o.tier).toFixed(2)}/mo</span>
+                        <span className="w-text-faint"> (save ${creditSavingsUsd(o.price, o.tier).toFixed(2)})</span>
+                      </p>
+                    </div>
                   ) : (
                     <p className="mb-3" />
                   )}
                 </>
               ) : (
                 <>
-                  <p className="w-display text-xl w-teal mb-0.5">${annualCreditPriceUsd(o.price).toFixed(2)}<span className="text-xs w-text-faint font-normal">/year</span></p>
-                  <p className="text-[11px] w-text-faint">Equivalent to ${annualEquivalentMonthlyUsd(o.price).toFixed(2)}/month</p>
-                  <p className="text-[11px] w-teal mb-1">Save ${annualSavingsUsd(o.price).toFixed(2)}/year</p>
-                  <p className="text-[10px] w-text-faint mb-3">Innvil Credit only</p>
+                  <p className="w-display text-xl w-teal mb-0.5">${annualDirectPriceUsd(o.price).toFixed(2)}<span className="text-xs w-text-faint font-normal">/year</span></p>
+                  <p className="text-[11px] w-text-faint">Equivalent to ${annualDirectEquivalentMonthlyUsd(o.price).toFixed(2)}/month</p>
+                  <p className="text-[11px] w-green mb-2">Save ${annualDirectSavingsUsd(o.price).toFixed(2)}/year with any direct payment option</p>
+                  <div className="w-surface-raised border w-teal-border rounded-lg px-2.5 py-1.5 mb-3 flex items-center gap-1.5">
+                    <Coins size={12} className="w-teal shrink-0" />
+                    <p className="text-[11px] w-text leading-tight">
+                      Save 10%? Pay with Innvil Credit —{" "}
+                      <span className="w-teal font-semibold">${annualCreditPriceUsd(o.price).toFixed(2)}/year</span>
+                      <span className="w-text-faint"> (${annualCreditExtraSavingsUsd(o.price).toFixed(2)} more than crypto)</span>
+                    </p>
+                  </div>
                 </>
               )}
               <div className="mb-4 border-t w-line-soft pt-3">

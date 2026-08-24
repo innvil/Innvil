@@ -5,7 +5,10 @@ import { ExternalLink, Loader2, CheckCircle2, XCircle, Coins } from "lucide-reac
 import { listAvailableDirectWatchGateways, createDirectWatchCheckout } from "@/src/lib/products/watch-checkout";
 import { createWatchBinanceDeposit, claimWatchBinancePayment, type WatchBinanceDepositInfo } from "@/src/lib/products/watch-binance";
 import { watchPlanOptions, watchTierFromDisplayName, type WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
-import { creditPriceUsd, creditSavingsUsd, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd } from "@/src/lib/products/innvil-credit-pricing";
+import {
+  creditPriceUsd, creditSavingsUsd, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd,
+  annualDirectPriceUsd, annualCreditExtraSavingsUsd,
+} from "@/src/lib/products/innvil-credit-pricing";
 import { getInnvilCreditBalanceAction, purchaseWatchWithCreditAction } from "@/src/lib/actions/innvil-credit";
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import { AddCreditCard } from "./AddCreditCard";
@@ -41,13 +44,13 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
   // Payment-method choice: direct crypto (existing flow, gated below the
   // `method === "crypto"` branch) vs. Innvil Credit (a real, atomic,
   // account-owned prepaid balance -- never a mixed/partial payment; see
-  // innvil-credit.ts). Regular price never changes; the credit price is a
-  // payment-METHOD benefit computed on top of it. Annual is Innvil-Credit-
-  // ONLY (server-enforced too, see innvil-credit.ts/watch-checkout.ts's own
-  // doc comments) -- it skips the "choose" screen entirely and never shows
-  // a crypto option, rather than merely hiding a button that could still
-  // be reached.
-  const [method, setMethod] = useState<"choose" | "crypto" | "credit">(isAnnual ? "credit" : "choose");
+  // innvil-credit.ts). Regular price never changes; both the direct-crypto
+  // AND the Innvil Credit prices are payment-METHOD benefits computed on
+  // top of it. Annual now has TWO real offers (2026-08-25) -- 5% off via
+  // any direct payment option (crypto), 10% off via Innvil Credit -- so it
+  // always starts at the same "choose" screen as monthly, never skips
+  // straight to credit.
+  const [method, setMethod] = useState<"choose" | "crypto" | "credit">("choose");
   const [creditBalanceCents, setCreditBalanceCents] = useState<number | null>(null);
   const [creditBusy, setCreditBusy] = useState(false);
   const [creditError, setCreditError] = useState<string | null>(null);
@@ -57,13 +60,20 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
   const tier = watchTierFromDisplayName(plan);
   const option = watchPlanOptions().find((o) => o.tier === tier);
   const regularPrice = option?.price ?? 0;
+  // The DIRECT (crypto) price for this interval -- monthly's own regular
+  // price, or annual's own 5%-off price. Never the same number as
+  // `creditPrice` below once annual is selected.
+  const directPrice = isAnnual ? annualDirectPriceUsd(regularPrice) : regularPrice;
   const creditPrice = isAnnual ? annualCreditPriceUsd(regularPrice) : creditPriceUsd(regularPrice, tier);
   const savings = isAnnual ? annualSavingsUsd(regularPrice) : creditSavingsUsd(regularPrice, tier);
+  // How much MORE Credit saves vs. the direct-crypto annual price -- the
+  // "upgrade your savings" delta shown as a callout on the crypto option.
+  const creditExtraSavings = isAnnual ? annualCreditExtraSavingsUsd(regularPrice) : savings;
   const equivalentMonthly = isAnnual ? annualEquivalentMonthlyUsd(regularPrice) : null;
   const hasEnoughCredit = creditBalanceCents != null && creditBalanceCents >= Math.round(creditPrice * 100);
 
   useEffect(() => {
-    if (!isAnnual) listAvailableDirectWatchGateways().then(setGateways).catch(() => setGateways([]));
+    listAvailableDirectWatchGateways().then(setGateways).catch(() => setGateways([]));
     getInnvilCreditBalanceAction().then((b) => setCreditBalanceCents(b.balanceCents)).catch(() => setCreditBalanceCents(0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -81,7 +91,7 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
   const startHostedCheckout = async (gateway: "cryptomus" | "nowpayments") => {
     setBusy(true);
     setError(null);
-    const res = await createDirectWatchCheckout(plan, gateway);
+    const res = await createDirectWatchCheckout(plan, gateway, billingInterval);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setRedirecting(true);
@@ -91,7 +101,7 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
   const startBinanceDeposit = async () => {
     setBusy(true);
     setError(null);
-    const res = await createWatchBinanceDeposit(plan);
+    const res = await createWatchBinanceDeposit(plan, billingInterval);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setBinanceDeposit(res.data);
@@ -114,23 +124,34 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
           <button onClick={onClose} className="text-sm w-text-dim hover:w-text">Close</button>
         </div>
 
-        {method === "choose" && !isAnnual && (
+        {method === "choose" && (
           <div className="space-y-2">
+            {isAnnual && (
+              <p className="text-xs w-text-faint mb-1">
+                Pay one year upfront, either way — both annual options below charge the full amount now, not in installments.
+              </p>
+            )}
             <p className="text-xs w-text-faint mb-2">Payment method</p>
             <button
               onClick={() => setMethod("crypto")}
               className="w-full text-left w-surface-raised border w-line-soft rounded-lg px-4 py-3 hover:w-teal-border"
             >
-              <p className="text-sm w-text">Pay directly with crypto</p>
-              <p className="w-display text-base w-teal mt-0.5">${regularPrice.toFixed(2)}</p>
+              <p className="text-sm w-text">Pay directly with crypto{isAnnual && " — annual"}</p>
+              <p className="w-display text-base w-teal mt-0.5">
+                ${directPrice.toFixed(2)}{isAnnual && <span className="text-xs w-text-faint font-normal">/year</span>}
+                {isAnnual && <span className="w-pill w-green-soft-bg w-green text-[10px] ml-1.5 align-middle">Save 5%</span>}
+              </p>
+              {isAnnual && (
+                <p className="text-[11px] w-teal mt-0.5">Want to save even more? Pay with Innvil Credit instead — save 10% (${creditExtraSavings.toFixed(2)} more).</p>
+              )}
             </button>
             <button
               onClick={() => setMethod("credit")}
-              className="w-full text-left w-surface-raised border w-line-soft rounded-lg px-4 py-3 hover:w-teal-border"
+              className="w-full text-left w-surface-raised border w-teal-border rounded-lg px-4 py-3 hover:opacity-90"
             >
-              <p className="text-sm w-text flex items-center gap-1.5"><Coins size={14} className="w-teal" /> Pay with Innvil Credit</p>
+              <p className="text-sm w-text flex items-center gap-1.5"><Coins size={14} className="w-teal" /> Pay with Innvil Credit{isAnnual && " — annual"}</p>
               <p className="w-display text-base w-teal mt-0.5">
-                ${creditPrice.toFixed(2)}
+                ${creditPrice.toFixed(2)}{isAnnual && <span className="text-xs w-text-faint font-normal">/year</span>}
                 {savings > 0 && <span className="text-xs w-text-faint font-normal ml-1.5">Save ${savings.toFixed(2)}</span>}
               </p>
               <p className="text-[11px] w-text-faint mt-0.5">
@@ -144,7 +165,7 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
           <div className="space-y-3">
             {isAnnual && (
               <p className="text-xs w-text-faint">
-                Pay one year upfront with Innvil Credit and save 10%. Annual billing is Innvil Credit only — no direct crypto option.
+                Pay one year upfront with Innvil Credit and save 10% — the best available rate, bigger than the 5% direct-payment annual discount.
               </p>
             )}
             <div className="w-surface-raised border w-line-soft rounded-lg p-3 text-sm">
@@ -161,11 +182,9 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
             )}
             {creditError && <p className="text-xs text-red-400">{creditError}</p>}
             <div className="flex gap-2">
-              {!isAnnual && (
-                <button onClick={() => setMethod("choose")} disabled={creditBusy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
-                  Back
-                </button>
-              )}
+              <button onClick={() => setMethod("choose")} disabled={creditBusy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
+                Back
+              </button>
               <button
                 onClick={payWithCredit}
                 disabled={creditBusy || !hasEnoughCredit}
@@ -198,7 +217,9 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
         {method === "crypto" && gateways !== null && gateways.length > 0 && !selected && (
           <div className="space-y-2">
             <button onClick={() => setMethod("choose")} className="text-xs w-text-faint hover:w-text mb-1">← Back</button>
-            <p className="text-xs w-text-faint mb-2">Choose a gateway</p>
+            <p className="text-xs w-text-faint mb-2">
+              Choose a gateway — ${directPrice.toFixed(2)}{isAnnual ? "/year" : "/mo"}
+            </p>
             {gateways.map((g) => (
               <button
                 key={g}

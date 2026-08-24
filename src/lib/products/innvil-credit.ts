@@ -208,7 +208,7 @@ export async function purchaseWatchWithCredit(
   if (!debit.ok) return { ok: false, error: debit.error };
 
   try {
-    await activateWatchEntitlement(admin, accountId, tier, `credit:${debit.data.id}`, billingInterval);
+    await activateWatchEntitlement(admin, accountId, tier, `credit:${debit.data.id}`, billingInterval, undefined, undefined, undefined, undefined, true);
     await finalizeAddonsOnRenewal(admin, accountId);
     if (addonToFinalizeOnTierChange) await finalizeAddonsOnTierChange(admin, accountId);
   } catch (e) {

@@ -90,14 +90,23 @@ async function resolveProductId(admin: SupabaseClient, slug: string): Promise<st
  * successful payment specified -- it takes effect immediately (accurately
  * describing what governs the NEXT renewal), never scheduled for later,
  * since it doesn't change plan capacity, only renewal price/behavior. An
- * annual purchase always forces `renewal_mode: "innvil_credit"` (annual is
- * Innvil-Credit-only by product rule, enforced by callers, but stored here
- * too so Billing never has to re-derive it).
+ * `paidViaCredit` (2026-08-25, once annual billing became available via
+ * BOTH Innvil Credit AND direct crypto payment -- see watch-checkout.ts/
+ * watch-binance.ts) is the real, explicit payment-method signal:
+ * `renewal_mode` is `"innvil_credit"` when the caller says this specific
+ * payment actually WAS Innvil Credit, `"manual_crypto"` when it explicitly
+ * says it wasn't -- for EITHER billing interval, never derived from
+ * `billingInterval` alone anymore (that conflated "which interval" with
+ * "which payment method," which broke the moment annual stopped being
+ * Innvil-Credit-exclusive). `undefined` (the parameter omitted entirely --
+ * the devops grant tool's two call sites, which represent no real payment
+ * at all) leaves the field completely untouched, same never-clobber-a-
+ * stray-value discipline as every other optional field on this row.
  */
 export async function activateWatchEntitlement(
   admin: SupabaseClient, accountId: string, tier: string, subscriptionRef: string,
   billingInterval: WatchBillingInterval = "monthly", enterpriseSlots?: number | null, enterpriseCommunityCapacity?: number,
-  apiSourceMode?: "managed" | "byo", enterpriseMediaAddon?: boolean
+  apiSourceMode?: "managed" | "byo", enterpriseMediaAddon?: boolean, paidViaCredit?: boolean
 ): Promise<void> {
   const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
   if (!productId) return; // catalog row missing -- nothing to activate against, never fabricate one here
@@ -159,12 +168,11 @@ export async function activateWatchEntitlement(
       // resolveAccountEnterpriseEntitlement's doc comment for the
       // grandfather default applied to rows that predate this column.
       ...(enterpriseMediaAddon !== undefined ? { enterprise_media_addon: enterpriseMediaAddon } : {}),
-      // Annual is Innvil-Credit-only by product rule -- force it here so
-      // Billing never has to re-derive it. Monthly is deliberately left
-      // OUT of this object (not overwritten) since it can legitimately be
-      // paid by either crypto or credit and this field isn't yet surfaced
-      // anywhere that would need that distinction.
-      ...(billingInterval === "annual" ? { renewal_mode: "innvil_credit" } : {}),
+      // Real payment-method signal (see the doc comment above) -- set
+      // explicitly whenever a caller reports a real payment, for EITHER
+      // billing interval; left OUT of the upsert entirely (never touched)
+      // when the caller passes nothing, e.g. the devops grant tool.
+      ...(paidViaCredit !== undefined ? { renewal_mode: paidViaCredit ? "innvil_credit" : "manual_crypto" } : {}),
     },
     { onConflict: "account_id,product_id" }
   );

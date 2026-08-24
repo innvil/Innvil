@@ -51,10 +51,12 @@ export function creditSavingsUsd(regularPriceUsd: number, tier: ModeratorPlanTie
 
 /**
  * Annual billing -- a BILLING INTERVAL on the existing plan identity, never
- * a second product/plan id ("Silver Annual" etc.). Innvil-Credit-only:
- * paid one year upfront, 10% off the normal 12-month canonical DIRECT
- * price (never stacked with the separate monthly 5% credit discount --
- * annual has its own dedicated pricing path entirely).
+ * a second product/plan id ("Silver Annual" etc.). Two independent annual
+ * offers, both paid one year upfront: 10% off via Innvil Credit (below), or
+ * 5% off via any available direct payment option (crypto -- see
+ * ANNUAL_DIRECT_DISCOUNT_BPS further down). Neither stacks with the
+ * separate monthly 5% credit discount -- annual has its own dedicated
+ * pricing path entirely, for both payment methods.
  */
 export const ANNUAL_CREDIT_DISCOUNT_BPS = 1000; // 10%, basis points (avoids a bare float percentage)
 
@@ -92,6 +94,51 @@ export function annualSavingsUsd(monthlyRegularPriceUsd: number): number {
  *  charged the full annual amount upfront; this never implies installments. */
 export function annualEquivalentMonthlyUsd(monthlyRegularPriceUsd: number): number {
   return Math.round(annualCreditPriceCents(monthlyRegularPriceUsd) / 12) / 100;
+}
+
+/**
+ * Annual billing via DIRECT payment (crypto: Cryptomus/NOWPayments/Binance
+ * Pay) -- a SECOND, smaller annual discount, independent of the Innvil
+ * Credit annual discount above. Same base (12 * regular monthly price),
+ * same "never stack with the monthly credit discount" rule, same
+ * integer-cent rounding discipline. The two annual paths are genuinely
+ * different offers, not one discount with a payment-method modifier:
+ * paying a full year upfront in crypto saves 5%; paying a full year
+ * upfront with Innvil Credit saves 10% -- Credit is the bigger incentive
+ * by design, to encourage funding/holding a Credit balance.
+ */
+export const ANNUAL_DIRECT_DISCOUNT_BPS = 500; // 5%, basis points
+
+/** The DIRECT (crypto) price for a full year, in integer cents -- 5% off
+ *  12 x the canonical MONTHLY DIRECT price. Deterministically rounded the
+ *  same way as annualCreditPriceCents. */
+export function annualDirectPriceCents(monthlyRegularPriceUsd: number): number {
+  const base = annualBaseCents(monthlyRegularPriceUsd);
+  return Math.round((base * (10000 - ANNUAL_DIRECT_DISCOUNT_BPS)) / 10000);
+}
+
+export function annualDirectPriceUsd(monthlyRegularPriceUsd: number): number {
+  return annualDirectPriceCents(monthlyRegularPriceUsd) / 100;
+}
+
+/** Savings vs. 12 ordinary monthly DIRECT payments (the same baseline
+ *  annualSavingsUsd compares against, so the two annual offers' savings
+ *  figures are directly comparable on the same page). */
+export function annualDirectSavingsUsd(monthlyRegularPriceUsd: number): number {
+  return (annualBaseCents(monthlyRegularPriceUsd) - annualDirectPriceCents(monthlyRegularPriceUsd)) / 100;
+}
+
+/** Display-only "equivalent to $X/month" for the DIRECT annual price. */
+export function annualDirectEquivalentMonthlyUsd(monthlyRegularPriceUsd: number): number {
+  return Math.round(annualDirectPriceCents(monthlyRegularPriceUsd) / 12) / 100;
+}
+
+/** How much MORE a customer saves by choosing Innvil Credit over direct
+ *  crypto for the SAME annual purchase (10% vs. 5% -- the "upgrade your
+ *  savings" delta the UI advertises), in USD. Always positive since the
+ *  Credit discount is always the larger one, by construction. */
+export function annualCreditExtraSavingsUsd(monthlyRegularPriceUsd: number): number {
+  return (annualDirectPriceCents(monthlyRegularPriceUsd) - annualCreditPriceCents(monthlyRegularPriceUsd)) / 100;
 }
 
 /** Innvil Credit top-up bounds -- kept in this plain (non-`"use server"`)

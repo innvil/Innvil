@@ -127,6 +127,90 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Visible "pay with Innvil Credit and save" callouts + a real annual option paid via direct crypto (5% off, alongside the existing 10%-off Credit annual) (v1.47.57)
+- **Two related pricing-UX changes, both explicitly requested**: (1) every self-serve plan card now shows a
+  PROMINENT, bordered "Save N%? Pay with Innvil Credit" callout (was previously a small grey price line easy to
+  miss) for both the monthly and annual price; (2) annual billing — previously Innvil-Credit-EXCLUSIVE — now also
+  has a real, working direct-crypto option at **5% off** (12× the regular monthly price), with the existing
+  10%-off Innvil Credit annual option kept as the bigger, still-more-attractive incentive. Neither discount is
+  stacked with the other or with the separate monthly 5% credit discount — each is computed independently from
+  the same canonical regular-price base.
+- **New pricing functions** (`innvil-credit-pricing.ts`): `ANNUAL_DIRECT_DISCOUNT_BPS = 500` (5%, mirrors the
+  existing `ANNUAL_CREDIT_DISCOUNT_BPS = 1000`), `annualDirectPriceCents`/`annualDirectPriceUsd`/
+  `annualDirectSavingsUsd`/`annualDirectEquivalentMonthlyUsd`, plus `annualCreditExtraSavingsUsd` (the extra
+  dollar amount Credit saves on top of the direct-annual price, for the "want to save even more?" upsell).
+  Worked examples verified via direct calculation before writing tests: Bronze $341.89/yr, Silver $683.89/yr,
+  Gold $1,139.89/yr, Platinum $2,268.60/yr — all strictly more than the corresponding Credit price for the same
+  tier (a dedicated test asserts this ordering holds for every tier).
+- **Migration `0105_watch_direct_annual_billing.sql`** — `platform_deposits.billing_interval` (text, default
+  `'monthly'`, check `in ('monthly','annual')`) — the async-settlement pattern this table already uses for
+  `plan`/`product_id` (a checkout-creation function stores intent on the pending row; the webhook handler or
+  Binance claim function reads it back at settlement to correctly activate the entitlement, since payment
+  confirmation is asynchronous). **Run migration `0105`.**
+- **`activateWatchEntitlement` (`ownership.ts`) signature corrected, not just extended.** Gained a `billingInterval`
+  parameter (now properly threaded through every caller — previously only the Innvil-Credit path could produce an
+  annual entitlement at all) and a `paidViaCredit?: boolean` parameter. **Found and fixed a real pre-existing bug
+  while wiring this up**: `renewal_mode` was previously derived as `billingInterval === "annual" ? "innvil_credit"
+  : (omitted)` — meaning a MONTHLY purchase via Innvil Credit never correctly recorded `renewal_mode:
+  "innvil_credit"` at all, and (once annual-direct shipped) an ANNUAL purchase via crypto would have been
+  mislabeled `"innvil_credit"` it never was. Replaced with the correct, interval-independent signal:
+  `renewal_mode` is now derived purely from `paidViaCredit` (`true` → `"innvil_credit"`, `false` →
+  `"manual_crypto"`, omitted → left untouched on the row, same "omit to preserve" idiom already used for
+  `enterpriseSlots`/`apiSourceMode`/`enterpriseMediaAddon`). Every call site (webhook activation in `platform.ts`,
+  `watch-binance.ts`'s claim function, `innvil-credit.ts`'s `purchaseWatchWithCredit`) now passes both the real
+  settled `billing_interval` it read back off the pending deposit AND an explicit `paidViaCredit` matching which
+  path actually ran — a credit purchase always passes `true`, every crypto/Binance path always passes `false`.
+- **`createDirectWatchCheckout`/`createWatchBinanceDeposit`** (`watch-checkout.ts`/`watch-binance.ts`) both gained
+  a `billingInterval: WatchBillingInterval = "monthly"` parameter — when `"annual"`, charges
+  `annualDirectPriceUsd(basePrice)` instead of the regular monthly price, and **deliberately skips the existing
+  Community-Expansion-addon-renewal-folding branch** (that logic only has a monthly price table for the addon;
+  extending it to annual-direct is a real, separate, un-requested scope — documented explicitly in the doc
+  comment as a scope-down, not silently dropped). `getPendingWatchPayment`'s returned shape gained
+  `billingInterval` so the UI can correctly resume/display a pending annual-crypto payment (previously
+  impossible, since annual could never have a "pending" crypto state before this pass).
+- **`WatchCheckout.tsx` rewritten** to always offer BOTH payment methods for annual (was: annual silently forced
+  straight into the Credit-only flow, with the crypto/"choose a gateway" step completely inaccessible). The
+  choose-method screen now shows a real annual crypto price with a "Save 5%" pill and a "want to save even more?
+  pay with Credit" hint pointing at the bigger discount; the gateway-selection screen shows the real computed
+  annual-or-monthly price; `startHostedCheckout`/`startBinanceDeposit` both thread `billingInterval` through to
+  the checkout-creation calls above.
+- **`BillingPlanPicker.tsx`**: the toggle badge changed from "Save 10%" to "Save up to 10%" (now that a smaller,
+  still-real 5% direct-annual discount also exists); the previously-easy-to-miss small grey credit-price line on
+  both the monthly and annual cards is now a bordered, `Coins`-icon callout box ("Save N%? Pay with Innvil
+  Credit — $X.XX/mo (save $Y.YY)"), shown for every tier with a non-zero credit discount; the annual price block's
+  headline now shows the real `annualDirectPriceUsd` (the direct/crypto entry price) with a "Save $X/year with any
+  direct payment option" line underneath, and its own Credit callout shows the bigger discount + the extra savings
+  delta on top of the direct price.
+- **`app/billing/page.tsx` — three genuinely stale "annual = Innvil Credit only" spots found and fixed** (a
+  real accuracy bug, not just incomplete copy, since this task's whole point makes the old claim false): (1) the
+  current-subscription price display previously showed ONLY the Credit annual price unconditionally — now shows
+  the real direct/crypto price as the headline (matching `/plans`' own presentation) with a "Save more — $X/year
+  with Innvil Credit" note underneath, since there's no stored record of which payment METHOD an account actually
+  used for its annual purchase; (2) the "Renewal: Innvil Credit only..." disclosure text is now the same
+  interval-agnostic wording used for monthly ("manual crypto payment, or Innvil Credit... does not currently
+  auto-charge"); (3) the pending-payment gate (`pending && billingInterval !== "annual"`) — previously correct
+  ONLY because an annual pending crypto payment could never exist before this pass — now correctly shows a real
+  pending annual-crypto payment instead of silently hiding it and offering a duplicate-purchase renew button; (4)
+  `RenewWatchButton`'s label ternary (previously hardcoded `"Renew with Innvil Credit"` for every annual renewal)
+  is now the plain, accurate "Renew" — `WatchCheckout` itself now presents both real options.
+- **`src/lib/watch-help/content.ts`** — found and fixed two more stale "annual billing is Innvil Credit only"
+  claims (the "Plans and Billing" and "Innvil Credit" Help Center articles) during this pass's own audit, unrelated
+  to but caught by the same sweep — both now state the real 5%/10% dual-discount model.
+- **Investigated and confirmed accurate, left unchanged**: `CommunityExpansionCard.tsx`/
+  `MediaModerationAddonCard.tsx`'s own "(Innvil Credit only)" labels — these correctly describe those TWO ADDONS'
+  own, still-genuinely-Credit-only annual purchase path (a deliberate, unrelated, unchanged scope boundary — addon
+  folding was never extended to annual-direct-crypto), not the base subscription this pass changed.
+- New tests: `innvil-credit-pricing.test.ts` (+11 — every tier's exact worked annual-direct dollar figure,
+  direct-always-more-than-credit ordering, never stacked with the monthly discount, `annualCreditExtraSavingsUsd`
+  always positive), `ownership.test.ts` (+5 — `paidViaCredit`-driven `renewal_mode` for both intervals, including
+  a dedicated test proving a later crypto renewal correctly flips `renewal_mode` back from `"innvil_credit"` to
+  `"manual_crypto"`), `content.test.ts` (+2 — both Help Center articles state both real discount rates and never
+  match the superseded "Innvil Credit only" claim). 1701 tests pass (up from 1685 at the last commit before this
+  pass began), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Run migration `0105`** before this governs anything live — until then every annual checkout attempt (direct
+  or Binance) will fail at the DB insert, since `platform_deposits.billing_interval` doesn't exist yet.
+
 ### 2026-08-25 — BYO Enterprise: real token counts for the AI client + token-based usage ceilings — closes the
   last two blocked items off Phase 4.V.1's honest deferred list (v1.47.56)
 - **Explicit instruction: "implement full specs for Watch first before we go live."** The two remaining items

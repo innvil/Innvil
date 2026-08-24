@@ -64,7 +64,7 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
   const admin = createAdminClient();
   const { data: deposit } = await admin
     .from("platform_deposits")
-    .select("id, panel_id, gateway, credit_amount, status, purpose, owner_id, plan")
+    .select("id, panel_id, gateway, credit_amount, status, purpose, owner_id, plan, billing_interval")
     .eq("id", depositId)
     .maybeSingle();
   if (!deposit || deposit.gateway !== gateway) return NextResponse.json({ ok: true }, { status: 200 });
@@ -91,7 +91,7 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
     .update({ status: "completed" })
     .eq("id", deposit.id)
     .eq("status", "pending")
-    .select("id, panel_id, credit_amount, purpose, owner_id, plan")
+    .select("id, panel_id, credit_amount, purpose, owner_id, plan, billing_interval")
     .maybeSingle();
   if (!claimed) return NextResponse.json({ ok: true }, { status: 200 });
 
@@ -106,7 +106,8 @@ export async function handlePlatformWebhook(req: Request, gateway: string): Prom
     const isTierChange = priorPlan != null && priorPlan.tier !== claimed.plan;
     const hadExpansion = isTierChange ? await getCommunityExpansionState(admin, claimed.owner_id as string) : null;
 
-    await activateWatchEntitlement(admin, claimed.owner_id as string, claimed.plan as string, claimed.id as string);
+    const paidBillingInterval = (claimed.billing_interval as string | null) === "annual" ? "annual" : "monthly";
+    await activateWatchEntitlement(admin, claimed.owner_id as string, claimed.plan as string, claimed.id as string, paidBillingInterval, undefined, undefined, undefined, undefined, false);
     // Finalizes (marks 'removed') a Community Expansion scheduled for
     // removal -- a real no-op unless one is actually pending, safe to call
     // after every base-subscription settlement (initial purchase or renewal).
