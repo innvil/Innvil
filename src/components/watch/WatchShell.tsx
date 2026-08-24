@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  LayoutGrid, FolderKanban, Users, Bot, Activity,
+  LayoutGrid, FolderKanban, Users, Bot, Activity, Network,
   CreditCard, Layers, Settings, LogOut, Menu, X, Plus, User, HelpCircle, ShieldCheck,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
@@ -37,8 +37,15 @@ const WORKSPACE_NAV: NavItem[] = [
 // all yet (actions/autopost.ts is still hard Panel-owner-scoped) -- omitted
 // entirely rather than left as a disabled placeholder, per the standing
 // "no disabled-looking navigation" rule. See CLAUDE.md's "REMAINING GAPS".
+//
+// Deployments (app/deployments/page.tsx) is the real operational surface for
+// "what is deployed, where, and why it's consuming Watcher slots" -- a
+// Deployment (Watcher <-> Community relationship) is its own CRM-style
+// record, not just a Billing/Usage side-effect, so it gets its own
+// Operations destination instead of being buried inside Usage.
 const OPERATIONS_NAV: NavItem[] = [
   { id: "activity", label: "Activity", icon: Activity, href: "/activity", implemented: true },
+  { id: "deployments", label: "Deployments", icon: Network, href: "/deployments", implemented: true },
 ];
 
 // Profile = who the account is (Innvil identity + connected Telegram

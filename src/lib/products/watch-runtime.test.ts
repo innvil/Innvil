@@ -1751,8 +1751,8 @@ test("REQUIRED: a real credential + an EXHAUSTED account-wide usage policy resol
   const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
-    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, period: "monthly", request_limit: 5 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", period_key: periodKey, request_count: 5 }],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "reactive", period: "monthly", request_limit: 5 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "reactive", period_key: periodKey, request_count: 5 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1");
   assert.equal(routing.required, true);
@@ -1765,8 +1765,8 @@ test("a real credential + a Community-level policy that's exhausted for a DIFFER
   const periodKey = `daily:${now.toISOString().slice(0, 10)}`;
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
-    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: "community-1", period: "daily", request_limit: 1 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "community-1", period_key: periodKey, request_count: 1 }],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: "community-1", kind: "reactive", period: "daily", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "community-1", kind: "reactive", period_key: periodKey, request_count: 1 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-2");
   assert.equal(routing.required, true);
@@ -1779,11 +1779,39 @@ test("resolveAccountAiRouting with no communityId given still respects an accoun
   const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
-    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, period: "monthly", request_limit: 1 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", period_key: periodKey, request_count: 1 }],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "reactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "reactive", period_key: periodKey, request_count: 1 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true);
   assert.equal(routing.credential, null);
+});
+
+/* -------------------- reactive/proactive kind split (Phase 4.V.1, 2026-08-25) ---- */
+
+test("REQUIRED: resolveAccountAiRouting defaults to kind:'reactive' when omitted -- an exhausted PROACTIVE-only policy never blocks it", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "proactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "proactive", period_key: periodKey, request_count: 1 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1"); // kind omitted -> "reactive"
+  assert.equal(routing.credential?.apiKey, "sk-real-byo-key", "the exhausted PROACTIVE policy must never gate a reactive call");
+});
+
+test("REQUIRED: an exhausted proactive policy DOES block a proactive-kind call, independent of the reactive gate", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "proactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "proactive", period_key: periodKey, request_count: 1 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1", "proactive");
+  assert.equal(routing.credential, null, "the exhausted proactive policy must gate a genuinely proactive call");
 });
 
 /* ------------------------------- BYO Unlimited (enterprise_slots = null, 2026-08-25) ---- */

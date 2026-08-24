@@ -1,9 +1,9 @@
 import Link from "next/link";
 import type { Metadata } from "next";
-import { LayoutGrid, ShieldCheck, Bot, Users, MessageSquare } from "lucide-react";
+import { LayoutGrid, ShieldCheck, Bot, MessageSquare } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import {
-  getAccountCapacity, countRecentModerationActions, listAccountCommunities, listAccountWatchers, getAccountSlotBreakdown,
+  getAccountCapacity, countRecentModerationActions, listAccountCommunities, listAccountWatchers,
 } from "@/src/lib/products/watch-runtime";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
@@ -26,13 +26,12 @@ export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { i
 
 export default async function UsagePage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, actions7d, actions30d, communities, watchers, breakdown, shell, expansion, gateways, aiPeriod] = await Promise.all([
+  const [capacity, actions7d, actions30d, communities, watchers, shell, expansion, gateways, aiPeriod] = await Promise.all([
     getAccountCapacity(admin, accountId),
     countRecentModerationActions(admin, accountId, 7),
     countRecentModerationActions(admin, accountId, 30),
     listAccountCommunities(admin, accountId),
     listAccountWatchers(admin, accountId),
-    getAccountSlotBreakdown(admin, accountId),
     getWatchShellContext(admin, accountId),
     getCommunityExpansionState(admin, accountId),
     listAvailableDirectWatchGateways(),
@@ -353,58 +352,17 @@ export default async function UsagePage() {
           <ByoUsagePolicyCard initial={byoPolicies} communities={communities.map((c) => ({ id: c.id, title: c.title ?? c.chatId }))} />
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <div className="w-card p-5">
-            <SectionHeader icon={Bot} title="Slots by Watcher" />
-            {breakdown.byWatcher.length === 0 ? (
-              <EmptyRow text="No active deployments yet." />
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
-                    <th className="font-semibold pb-2">Watcher</th>
-                    <th className="font-semibold pb-2">Deployments</th>
-                    <th className="font-semibold pb-2">Slots</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {breakdown.byWatcher.map((w) => (
-                    <tr key={w.watcherId} className="border-t w-line-soft">
-                      <td className="py-2"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal">{w.watcherName}</Link></td>
-                      <td className="py-2 w-text-dim">{w.deployments}</td>
-                      <td className="py-2 w-text-dim">{w.slots}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+        {/* Which Watcher/Community is actually consuming a slot is
+            operational data, not a usage/limits concept -- it now lives on
+            its own Operations -> Deployments page (app/deployments/page.tsx),
+            never duplicated here. Usage stays about consumption/limits only. */}
+        <Link href="/deployments" className="w-card p-4 flex items-center justify-between gap-3 hover:w-teal-border">
+          <div>
+            <p className="w-text text-sm font-medium">See what's actually consuming your Watcher slots</p>
+            <p className="text-xs w-text-faint mt-0.5">Real per-Watcher / per-Community deployment breakdown, in Operations → Deployments.</p>
           </div>
-          <div className="w-card p-5">
-            <SectionHeader icon={Users} title="Slots by Community" />
-            {breakdown.byCommunity.length === 0 ? (
-              <EmptyRow text="No active deployments yet." />
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
-                    <th className="font-semibold pb-2">Community</th>
-                    <th className="font-semibold pb-2">Watchers</th>
-                    <th className="font-semibold pb-2">Slots</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {breakdown.byCommunity.map((c) => (
-                    <tr key={c.communityId} className="border-t w-line-soft">
-                      <td className="py-2"><Link href={`/communities/${c.communityId}`} className="w-text hover:w-teal">{c.communityTitle}</Link></td>
-                      <td className="py-2 w-text-dim">{c.deployments}</td>
-                      <td className="py-2 w-text-dim">{c.slots}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+          <span className="text-xs w-teal shrink-0">Open Deployments →</span>
+        </Link>
       </div>
     </WatchShell>
   );

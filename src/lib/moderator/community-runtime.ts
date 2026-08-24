@@ -66,7 +66,10 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  fabricated telemetry, so they are deliberately NOT instrumented here.
  *  Same reasoning for the usage-policy counter (Phase 4.V) -- only a real
  *  successful generation ever counts toward a customer's configured spend
- *  ceiling, never an attempted-but-failed one. */
+ *  ceiling, never an attempted-but-failed one. Always recorded as
+ *  kind:"reactive" (Phase 4.V.1) -- this whole file's chatter-generation
+ *  path is exclusively human-message-triggered; the proactive counterpart
+ *  lives in presence-runtime.ts, its own genuinely scheduler-driven caller. */
 function recordByoCall(
   admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, automation: string, ok: boolean, error?: string
 ): void {
@@ -77,7 +80,7 @@ function recordByoCall(
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
   });
-  if (ok) void recordByoPolicyUsage(admin, accountId, communityId);
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, "reactive");
 }
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
@@ -2747,8 +2750,12 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // gated on entitlementSource === "enterprise" so a self-serve/trial
     // account (the overwhelming majority of traffic) never pays for the
     // extra Enterprise-entitlement lookup. Threaded through every real
-    // AI-generation call site inside handleHumanMessage.
-    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id);
+    // AI-generation call site inside handleHumanMessage. `kind: "reactive"`
+    // (explicit, Phase 4.V.1) -- this whole path only ever runs off a REAL
+    // inbound Telegram message, never a scheduler tick, so it's always
+    // governed by the customer's reactive usage-policy ceiling, never the
+    // proactive one (Watcher Presence Scheduling's own, separate ceiling).
+    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, "reactive");
     // Enterprise Media Moderation + (migration 0097) -- same gating shape:
     // a real, explicit grant, resolved once here, only for an Enterprise
     // account (the self-serve tiers' own add-on is resolved separately,

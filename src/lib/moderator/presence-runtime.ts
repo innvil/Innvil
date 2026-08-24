@@ -6,8 +6,29 @@ import { telegramApiCall } from "./telegram-client";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { presenceAt, applyCoverageWindow, type PresenceConfig } from "./presence-schedule";
 import { generatePresenceMessage, type PresenceTransitionKind } from "./presence-generate";
-import { resolveDeploymentTenant, getAccountCapacity, resolveAccountAiRouting } from "@/src/lib/products/watch-runtime";
+import { resolveDeploymentTenant, getAccountCapacity, resolveAccountAiRouting, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 import { presenceSchedulingEligible } from "@/src/lib/products/watch-plans";
+import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
+import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy";
+
+/** Fire-and-forget BYO telemetry + usage-POLICY accounting for a presence
+ *  transition send -- the "proactive" counterpart to community-runtime.ts's
+ *  recordByoCall (that one is exclusively reactive; this is exclusively
+ *  proactive, per Phase 4.V.1's reactive/proactive ceiling split). Only
+ *  ever called when aiRouting.required is true (a Managed account has
+ *  nothing BYO-specific to record); never awaited, never throws. */
+function recordByoPresenceCall(
+  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string, communityId: string, ok: boolean, error?: string
+): void {
+  if (!aiRouting.required) return;
+  void recordByoUsageEvent(admin, {
+    accountId, communityId, automation: "WATCHER_PRESENCE",
+    provider: aiRouting.credential?.provider ?? "unconfigured",
+    model: aiRouting.credential?.model ?? "unconfigured",
+    ok, error,
+  });
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, "proactive");
+}
 
 /**
  * Watcher Presence Scheduling (Phase 4.U) — the cron-driven sweep. Every
@@ -231,11 +252,20 @@ export async function sweepPresenceSchedules(admin: SupabaseClient = createAdmin
       const bot = await loadModeratorBotToken(admin, row.deployment_id);
       if (bot) {
         const isEnterprise = capacity.tier === "enterprise";
-        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId);
+        // kind: "proactive" (Phase 4.V.1) -- this whole sweep is
+        // scheduler-driven, never triggered by a real inbound message, so
+        // it's governed by the customer's PROACTIVE usage-policy ceiling,
+        // fully independent of the reactive one community-runtime.ts uses.
+        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId, "proactive");
         const text = await generatePresenceMessage(bot.moderatorName, bot.persona, kind, aiRouting);
         const sent = await telegramApiCall(bot.token, "sendMessage", { chat_id: bot.chatId, text });
-        if (sent.ok) sentText = text;
-        else console.error(`[presence] send failed for deployment ${row.deployment_id}: ${JSON.stringify(sent)}`);
+        if (sent.ok) {
+          sentText = text;
+          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, true);
+        } else {
+          console.error(`[presence] send failed for deployment ${row.deployment_id}: ${JSON.stringify(sent)}`);
+          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, false, sent.error);
+        }
       }
     }
 

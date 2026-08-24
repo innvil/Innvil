@@ -127,6 +127,85 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Real Operations → Deployments page (a genuine CRM record surface) + BYO reactive/proactive usage-ceiling split (v1.47.50)
+- **Two pieces this pass, per direct product direction.**
+- **(1) Operations → Deployments — the FIRST item off Phase 4.V.1's honest deferred list, unlocked by
+  v1.47.44's Watcher Presence Scheduling shipping a real proactive (unprompted, scheduler-driven) BYO call
+  site.** Until now `resolveAccountAiRouting()`'s usage-policy check (Phase 4.V, v1.47.45) had exactly ONE
+  ceiling — "requests per period" — shared between reactive chatter replies (community-runtime.ts) and, once
+  Presence Scheduling landed, proactive transition messages (presence-runtime.ts). This was a real asymmetry,
+  not just an unfinished feature: a proactive send could be BLOCKED by an exhausted reactive counter, but
+  presence-runtime.ts never RECORDED anything against it, so in practice proactive calls got a silent free
+  ride relative to whatever reactive traffic had already consumed.
+  - **Migration `0098_watch_byo_usage_policy_kind.sql`** — additive `kind text not null default 'reactive'
+    check (kind in ('reactive','proactive'))` on both `watch_byo_usage_policies` and `watch_byo_usage_counters`
+    (0096); re-scoped the two partial unique indexes to `(account_id, kind)` / `(account_id, community_id,
+    kind)` so a reactive AND a proactive policy can now coexist at the same scope; widened
+    `watch_byo_usage_counters`' primary key to `(account_id, scope_key, kind, period_key)`; `increment_watch_byo_usage`
+    gained a `p_kind default 'reactive'` parameter (the old 3-arg overload explicitly dropped, not left
+    stale). Backward-compatible by construction — every pre-existing row/counter defaults to `'reactive'`,
+    the exact semantic every one of them already represented (the only kind of BYO call that existed before
+    Presence Scheduling shipped).
+  - `watch-byo-usage-policy.ts`: every export (`setByoUsagePolicy`/`clearByoUsagePolicy`/`checkByoUsageAllowed`/
+    `recordByoPolicyUsage`) now takes a `kind: "reactive" | "proactive"` parameter (defaults to `"reactive"`
+    where a default makes sense, so no pre-existing caller broke). The two kinds are FULLY independent gates —
+    an exhausted reactive policy never blocks a proactive call at the same scope, and vice versa (a real,
+    directly tested requirement, not just documented).
+  - `resolveAccountAiRouting()` (`watch-runtime.ts`) gained a `kind` parameter (default `"reactive"`), threaded
+    to `checkByoUsageAllowed`. `community-runtime.ts`'s one call site now passes `"reactive"` explicitly (it
+    only ever runs off a real inbound Telegram message); `presence-runtime.ts`'s sweep now passes `"proactive"`
+    explicitly AND — a real gap closed, not just labeled — now actually RECORDS both telemetry
+    (`recordByoUsageEvent`, automation `WATCHER_PRESENCE`/`WATCHER_PRESENCE_BYO`) and policy usage
+    (`recordByoPolicyUsage(..., "proactive")`) after every successful BYO-routed send, via a new
+    `recordByoPresenceCall()` helper mirroring `community-runtime.ts`'s existing `recordByoCall` shape.
+  - `ByoUsagePolicyCard.tsx` (Usage page) gained a "Kind" selector (Reactive replies / Proactive scheduled) —
+    an account can now configure genuinely separate ceilings, e.g. cap unattended scheduled presence chatter
+    tighter than real conversational replies.
+  - New tests: `watch-byo-usage-policy.test.ts` rewritten with `kind` threaded through every fixture (+8 net
+    new — reactive/proactive coexistence at the same scope, an exhausted one never blocking the other,
+    per-kind `getByoUsageStatus` reporting, cross-kind clear isolation), `watch-runtime.test.ts` (+2 — the
+    default-to-reactive proof and the explicit-proactive-gate proof). 1636 tests pass (up from 1634), `tsc
+    --noEmit` clean, production build clean.
+  - **Run migration `0098`** before this splits anything live — until then every BYO call (reactive or
+    proactive) continues sharing the single pre-existing counter, exactly as before this pass.
+  - **Deliberately not built this pass** (the rest of Phase 4.V.1's honest list, unchanged): per-Watcher/
+    deployment-level policy granularity (still account+Community only), token-based ceilings, provider/model
+    POLICY beyond the single stored credential, provider health/observability, richer telemetry dimensions,
+    the full landing-page primary-offer treatment.
+- **(2) Real Operations → Deployments page — closes a genuine CRM gap the user flagged directly, twice
+  (per-Watcher/per-Community slot-consumption data existed but was "cramped" inside the Usage page instead of
+  living on its own Operations surface, as previously requested).** A Deployment (Watcher↔Community
+  relationship) is a real record, not merely a Usage/Billing side-effect — it now gets its own operational
+  page, matching the explicit product rule: **Billing = entitlement/purchasing. Usage = consumption/limits.
+  Operations → Deployments = what is deployed, where, and why it's consuming slots.**
+  - New **`app/deployments/page.tsx`** — built entirely from data that already existed
+    (`listAccountCommunities`'s per-Community `watchers` array already carries every deployment, enabled or
+    paused; `getAccountSlotBreakdown` groups the SAME data by Watcher/Community) — no new query shape, no
+    fabricated numbers. A compact capacity summary strip ("N/Total Watcher slots used", "N Watcher profiles",
+    "N active deployments", "N Communities"); a prominent, always-visible three-concept glossary (Watcher
+    Profile = reusable identity/persona / Active Deployment = a Watcher assigned+enabled in one Community /
+    Watcher Slot = the capacity one active deployment consumes); a collapsible "How slots work, using your own
+    deployments" panel that renders the REAL relationship (e.g. "Aegis → Community A = 1 slot", "Aegis →
+    Community B = 1 additional slot", "= 2 Watcher slots") from the account's own `getAccountSlotBreakdown`
+    data — never a hardcoded example — linking out to the existing Help Center article
+    (`/support/watchers/watcher-profiles-deployments-slots`, reusing `SlotInfoPopover`'s established target,
+    not a new one); and the real flat operational truth table (Watcher | Community | Status | Slot usage) —
+    one row per (Watcher, Community) pairing, including PAUSED deployments (shown with "—" slot usage, never
+    "1 slot", matching the backend's own enforcement that a paused deployment consumes zero slots), each
+    Watcher/Community name linking to its own detail page.
+  - New **"Deployments"** item in the `WatchShell` sidebar's **Operations** group (alongside Activity) —
+    `/deployments`, using a `Network` icon.
+  - **Usage page decluttered, not duplicated**: the "Slots by Watcher" / "Slots by Community" tables (and the
+    `getAccountSlotBreakdown` call/`breakdown` variable that powered them) were REMOVED from `app/usage/page.tsx`
+    entirely, replaced with a single compact pointer card ("See what's actually consuming your Watcher slots →
+    Open Deployments"). Usage now stays scoped to consumption/limits only, per the stated rule — the
+    operational relationship data lives in exactly one place.
+  - No migration (pure UI/read-composition, reusing existing exported functions). `tsc --noEmit` clean, full
+    test suite unaffected (1636 pass — no new pure logic was introduced, this is page composition over
+    already-tested data functions, consistent with this codebase's established convention for comparable Watch
+    UI pages), production build clean (`/deployments` confirmed in the build output).
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-25 — Enterprise Media Moderation + gets real per-request consumption metering + Usage-page visibility (v1.47.48)
 - **Follow-up to v1.47.47's grant/gate-only pass** — that pass made Media Moderation + a real superadmin-
   grantable boolean but explicitly deferred per-unit consumption metering, and had no Usage-page visibility at

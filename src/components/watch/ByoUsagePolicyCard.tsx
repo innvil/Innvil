@@ -14,9 +14,18 @@ const ACCOUNT_LABEL = "Whole account";
  *  the read-only "BYO calls" telemetry card above it: this is where the
  *  customer actually SETS a limit. Never rendered for a non-BYO account
  *  (gated by the caller, app/usage/page.tsx, on capacity.apiSourceMode). */
+type Kind = "reactive" | "proactive";
+
+const KIND_LABEL: Record<Kind, string> = { reactive: "Reactive replies", proactive: "Proactive (scheduled)" };
+const KIND_HINT: Record<Kind, string> = {
+  reactive: "Real replies to human messages — chatter/Q&A.",
+  proactive: "Unprompted scheduled messages — currently Watcher Presence Scheduling only.",
+};
+
 export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsagePolicyStatus[]; communities: Array<{ id: string; title: string }> }) {
   const [policies, setPolicies] = useState(initial);
   const [scope, setScope] = useState<string>(""); // "" = account-wide
+  const [kind, setKind] = useState<Kind>("reactive");
   const [period, setPeriod] = useState<"daily" | "monthly">("monthly");
   const [limit, setLimit] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -28,6 +37,7 @@ export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsage
   };
 
   const communityTitle = (id: string | null) => (id ? communities.find((c) => c.id === id)?.title ?? "A Community" : ACCOUNT_LABEL);
+  const rowKey = (p: ByoUsagePolicyStatus) => `${p.communityId ?? "__account__"}:${p.kind}`;
 
   const submit = async () => {
     setError(null);
@@ -37,7 +47,7 @@ export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsage
       return;
     }
     setBusy("save");
-    const res = await saveByoUsagePolicy(scope || null, period, n);
+    const res = await saveByoUsagePolicy(scope || null, kind, period, n);
     setBusy(null);
     if (!res.ok) {
       setError(res.error);
@@ -47,9 +57,10 @@ export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsage
     await refresh();
   };
 
-  const remove = async (communityId: string | null) => {
-    setBusy(communityId ?? "__account__");
-    await removeByoUsagePolicy(communityId);
+  const remove = async (communityId: string | null, k: Kind) => {
+    const key = `${communityId ?? "__account__"}:${k}`;
+    setBusy(key);
+    await removeByoUsagePolicy(communityId, k);
     setBusy(null);
     await refresh();
   };
@@ -58,24 +69,25 @@ export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsage
     <div className="w-card p-5">
       <SectionHeader icon={Gauge} title="BYO usage controls" />
       <p className="text-xs w-text-faint -mt-2 mb-4">
-        Cap how many replies your own AI provider credential is allowed to generate per period — a limit YOU set, to control your own provider spend.
-        Innvil's plan/pricing is unaffected either way. The tightest configured limit (account-wide or per-Community) always applies.
+        Cap how much your own AI provider credential is allowed to generate per period — a limit YOU set, to control your own provider spend.
+        Innvil's plan/pricing is unaffected either way. Reactive (replies to messages) and proactive (scheduled, unprompted) usage are capped
+        independently — the tightest configured limit for each (account-wide or per-Community) always applies.
       </p>
 
       {policies.length > 0 && (
         <div className="space-y-2 mb-4">
           {policies.map((p) => (
-            <div key={p.communityId ?? "__account__"} className="flex items-center justify-between gap-3 border w-line-soft rounded-lg p-3 text-sm">
+            <div key={rowKey(p)} className="flex items-center justify-between gap-3 border w-line-soft rounded-lg p-3 text-sm">
               <div>
-                <p className="w-text">{communityTitle(p.communityId)}</p>
+                <p className="w-text">{communityTitle(p.communityId)} · <span className="w-text-faint">{KIND_LABEL[p.kind]}</span></p>
                 <p className="text-xs w-text-faint">
                   {p.used.toLocaleString()} / {p.requestLimit.toLocaleString()} requests · resets {p.period === "daily" ? "daily" : "monthly"}
                 </p>
               </div>
               <button
                 type="button"
-                disabled={busy === (p.communityId ?? "__account__")}
-                onClick={() => remove(p.communityId)}
+                disabled={busy === rowKey(p)}
+                onClick={() => remove(p.communityId, p.kind)}
                 className="text-xs w-red hover:underline disabled:opacity-50"
               >
                 Remove
@@ -91,6 +103,13 @@ export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsage
           <select value={scope} onChange={(e) => setScope(e.target.value)} className="text-xs w-surface-raised border w-line-soft rounded-lg px-2.5 py-1.5 w-text outline-none focus:w-teal-border">
             <option value="">{ACCOUNT_LABEL}</option>
             {communities.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wide w-text-faint font-semibold block mb-1">Kind</label>
+          <select value={kind} onChange={(e) => setKind(e.target.value as Kind)} title={KIND_HINT[kind]} className="text-xs w-surface-raised border w-line-soft rounded-lg px-2.5 py-1.5 w-text outline-none focus:w-teal-border">
+            <option value="reactive">{KIND_LABEL.reactive}</option>
+            <option value="proactive">{KIND_LABEL.proactive}</option>
           </select>
         </div>
         <div>
@@ -111,6 +130,7 @@ export function ByoUsagePolicyCard({ initial, communities }: { initial: ByoUsage
           {busy === "save" && <Loader2 size={12} className="animate-spin" />} Save limit
         </button>
       </div>
+      <p className="text-[11px] w-text-faint mt-1.5">{KIND_HINT[kind]}</p>
       {error && <p className="text-xs w-red mt-2">{error}</p>}
     </div>
   );

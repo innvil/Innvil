@@ -4,7 +4,7 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { resolveAccountEnterpriseEntitlement } from "@/src/lib/products/watch-runtime";
 import {
   listByoUsagePolicies, setByoUsagePolicy, clearByoUsagePolicy, getByoUsageStatus,
-  type WatchByoUsagePolicy, type UsagePolicyPeriod,
+  type WatchByoUsagePolicy, type UsagePolicyPeriod, type UsagePolicyKind,
 } from "@/src/lib/products/watch-byo-usage-policy";
 
 /**
@@ -37,18 +37,18 @@ export async function getByoUsagePolicyStatus(): Promise<Result<ByoUsagePolicySt
   return { ok: true, data: rows };
 }
 
-export async function saveByoUsagePolicy(communityId: string | null, period: UsagePolicyPeriod, requestLimit: number): Promise<Result> {
+export async function saveByoUsagePolicy(communityId: string | null, kind: UsagePolicyKind, period: UsagePolicyPeriod, requestLimit: number): Promise<Result> {
   const ctx = await requireByoEnterprise();
   if (!ctx.ok) return ctx;
-  const res = await setByoUsagePolicy(ctx.admin, ctx.accountId, communityId, period, requestLimit);
+  const res = await setByoUsagePolicy(ctx.admin, ctx.accountId, communityId, kind, period, requestLimit);
   if (!res.ok) return res;
   return { ok: true, data: null };
 }
 
-export async function removeByoUsagePolicy(communityId: string | null): Promise<Result> {
+export async function removeByoUsagePolicy(communityId: string | null, kind: UsagePolicyKind): Promise<Result> {
   const ctx = await requireByoEnterprise();
   if (!ctx.ok) return ctx;
-  await clearByoUsagePolicy(ctx.admin, ctx.accountId, communityId);
+  await clearByoUsagePolicy(ctx.admin, ctx.accountId, communityId, kind);
   return { ok: true, data: null };
 }
 

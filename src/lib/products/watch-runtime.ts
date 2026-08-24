@@ -13,7 +13,7 @@ import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial, getWatchTrialState, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS } from "./watch-trial";
 import { periodHasExpired, type WatchBillingInterval } from "./watch-billing-period";
 import { getAccountByoCredential, hasByoCredential, type WatchByoCredential } from "./watch-byo";
-import { checkByoUsageAllowed } from "./watch-byo-usage-policy";
+import { checkByoUsageAllowed, type UsagePolicyKind } from "./watch-byo-usage-policy";
 
 /**
  * Neutral ownership/creation layer for Communities, Watchers
@@ -233,14 +233,25 @@ export const MANAGED_AI_ROUTING: AccountAiRouting = { required: false, credentia
  *  -- the EXACT same "unusable" shape a missing/misconfigured credential
  *  already produces, so every downstream consumer's existing
  *  required-but-unusable handling covers this with zero changes needed at
- *  any generation call site. */
-export async function resolveAccountAiRouting(admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null): Promise<AccountAiRouting> {
+ *  any generation call site.
+ *
+ *  `kind` (Phase 4.V.1, default "reactive" -- every pre-existing caller is
+ *  unaffected) selects WHICH of the customer's two independent usage-policy
+ *  ceilings governs this call: "reactive" for a real triggering human
+ *  message (chatter, via community-runtime.ts), "proactive" for unprompted
+ *  scheduler-driven generation (Watcher Presence Scheduling's transition
+ *  messages, presence-runtime.ts -- the only real proactive BYO call site
+ *  today). The two ceilings are fully independent -- an exhausted reactive
+ *  policy never blocks a proactive call, and vice versa. */
+export async function resolveAccountAiRouting(
+  admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null, kind: UsagePolicyKind = "reactive"
+): Promise<AccountAiRouting> {
   if (!accountId || !isEnterprise) return MANAGED_AI_ROUTING;
   const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
   if (!enterprise || enterprise.apiSourceMode !== "byo") return MANAGED_AI_ROUTING;
   const credential = await getAccountByoCredential(admin, accountId);
   if (!credential) return { required: true, credential: null };
-  const usage = await checkByoUsageAllowed(admin, accountId, communityId);
+  const usage = await checkByoUsageAllowed(admin, accountId, communityId, kind);
   if (!usage.allowed) return { required: true, credential: null };
   return { required: true, credential };
 }
