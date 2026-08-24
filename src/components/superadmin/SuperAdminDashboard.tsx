@@ -8,6 +8,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { WatchDevOpsAdmin } from "./WatchDevOpsAdmin";
+import { BotManagerCampaignsAdmin } from "./BotManagerCampaignsAdmin";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
@@ -1537,6 +1538,7 @@ const TABS = [
   { k: "landing", label: "Landing video", icon: PlayCircle },
   { k: "support", label: "Support", icon: LifeBuoy },
   { k: "watch-devops", label: "Watch devops", icon: Wrench },
+  { k: "bot-manager-campaigns", label: "Bot manager campaigns", icon: Megaphone },
 ];
 
 export function SuperAdminDashboard() {
@@ -1592,6 +1594,7 @@ export function SuperAdminDashboard() {
         {tab === "landing" && <LandingTab />}
         {tab === "support" && <SupportTab />}
         {tab === "watch-devops" && <WatchDevOpsAdmin />}
+        {tab === "bot-manager-campaigns" && <BotManagerCampaignsAdmin />}
       </div>
     </div>
   );

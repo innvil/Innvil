@@ -127,6 +127,89 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — `innvil_bot_manager` proactive marketing campaigns — the deliberately-deferred Phase 4.Q half now
+  ships (v1.47.54)
+- **Closes the last item explicitly deferred at v1.20.0** ("only the reactive-support half is built this pass...
+  the proactive marketing-campaign SEND path is scaffolded at the DB layer only"). `innvil_bot_manager`'s
+  `bot_manager_campaigns`/`bot_manager_campaign_sends`/`bot_manager_chats` schema (migration `0064`) has existed
+  since that pass with real approval-gated rows and a `recordKnownChat()` that already upserts every inbound
+  chat into `bot_manager_chats` on every message — this pass finally reads it and actually sends.
+- **New `src/lib/moderator/bot-manager-campaign-runtime.ts`** — `sweepBotManagerCampaigns(admin, now)`, mirroring
+  the exact idempotent-cron-sweep shape already established by Auto-Posting/Presence Scheduling this session:
+  (1) `claimDueCampaigns` moves every `approved=true, status='scheduled'` campaign whose `scheduled_at` has
+  passed (or is `null`, meaning "send as soon as approved") into `sending`, via a conditional
+  `UPDATE ... WHERE status='scheduled'` — two concurrent sweep ticks can't both claim the same campaign;
+  (2) `sendDueBatch` sends a **bounded batch** (`MAX_SENDS_PER_SWEEP = 25`, shared globally across every
+  concurrently-`sending` campaign, so one large campaign can never starve another's progress within a tick) of
+  not-yet-sent, currently-known, `marketing_enabled=true` target chats matching the campaign's audience — a large
+  campaign spreads across several 5-minute ticks rather than risking a function timeout, never a single
+  unbounded blast. Every real send (success OR failure) is recorded into `bot_manager_campaign_sends`
+  (`unique(campaign_id, chat_id)` — the real duplicate-send guard; a `23505` unique-violation on a retried/
+  overlapping sweep is a harmless race loss, never treated as an error) — a campaign only moves to `sent` once
+  every currently-eligible chat has a real send record for it, including the honest zero-eligible-chats case
+  (marked `sent` immediately rather than stuck forever with nothing to send to).
+- **Hard approval gate preserved, per the spec's own "9. Campaign controls, not unrestricted auto-posting"** —
+  nothing ever sends without `approved=true` AND `status='scheduled'` both being true; editing/creating/
+  scheduling a campaign only ever writes STATE, never itself sends — only the cron sweep, on its own next tick,
+  actually calls Telegram, mirroring the "editing config never itself triggers an announcement" discipline
+  already established for Presence Scheduling's owner-facing actions.
+- **Uses `innvil_bot_manager`'s own credential (`INNVIL_OFFICIAL_BOT_TOKEN`) — never `TELEGRAM_MANAGER_BOT_TOKEN`**
+  (the control-plane-only Manager Bot, which must never post customer/community-facing content, per every prior
+  pass that's touched it) — read the same way `bot-manager-runtime.ts`'s existing `botManagerToken()` already
+  does, no new credential-storage mechanism.
+- **Real, not-a-guess audience targeting** — new `src/lib/moderator/bot-manager-campaign-audience.ts` (a
+  deliberately separate, pure, client-safe module — see the server/client boundary fix below) maps
+  `target_audience` (`all|private_users|groups|channels`) onto Telegram's own real `chat_type` values
+  (`private|group|supergroup|channel`, `groups` covering both `group` and `supergroup` — the same distinction
+  Telegram itself draws, irrelevant to a marketing audience) — every send target is a real, already-known chat
+  from `bot_manager_chats`, never an invented/guessed id.
+- **New cron route `app/api/cron/bot-manager-campaigns`** + **migration `0101_supabase_bot_manager_campaigns_cron.sql`**
+  (schedules `innvil-bot-manager-campaigns-every-5-min`, byte-for-byte mirroring migration `0095`'s established
+  vault-secret/`net.http_get` pattern). **Run migration `0101`** (+ schedule/verify the pg_cron job) before this
+  does anything live.
+- **New superadmin CRUD `src/lib/actions/bot-manager-campaigns.ts`** (`requireSuperAdmin()`-gated, same role-check
+  pattern as every other superadmin action file) — `listCampaigns` (with real per-campaign send/error counts),
+  `createCampaign`, `updateCampaignMessage` (blocked once real sends exist for a campaign — editing copy after
+  delivery has already begun would make already-sent copies disagree with a fresh send), `approveCampaign`,
+  `scheduleCampaign`, `cancelCampaign` (blocked once `sent`), and `getKnownChatsSummary` (real
+  marketing-opted-in chat counts by type, so a superadmin can see "0 eligible chats" before approving a campaign
+  that would otherwise silently complete with zero real sends).
+- **New superadmin UI `src/components/superadmin/BotManagerCampaignsAdmin.tsx`** — create/edit/approve/schedule/
+  cancel, a live known-chats summary strip, a real eligible-chat-count preview per audience selection (computed
+  via the SAME `chatTypesForAudience` mapping the sweep itself uses, never a duplicated category list), and a
+  per-campaign send/failure count. **Dual-mounted** in both surfaces per this codebase's established convention
+  — the `/superadmin` route (new "Bot manager campaigns" tab) and the owner-app super-admin sidebar (new
+  "Bot manager campaigns" section, `isSuper`-gated).
+- **Real server/client boundary bug caught and fixed before shipping** (the exact class already documented in
+  this codebase's history, e.g. `watch-status.ts`'s own extraction): the audience-mapping function was
+  initially defined inline inside the `server-only` runtime file and re-exported for the UI to use for its
+  eligible-count preview — this pulled the WHOLE server-only module graph (`createAdminClient`/
+  `telegramApiCall`) into the client bundle, breaking the production build (`'server-only' cannot be imported
+  from a Client Component module`). Fixed by extracting `chatTypesForAudience` into its own tiny pure module
+  with zero server/admin imports (`bot-manager-campaign-audience.ts`) that both the server-only runtime file and
+  the client UI component import independently — caught by `npm run build`, not shipped.
+- **Also caught before shipping**: the new action file initially re-exported the (synchronous, non-async)
+  `chatTypesForAudience` function for the UI's convenience — a `"use server"` file may only export async
+  functions (Next's own Server Actions rule, not caught by `tsc`); doing so would have silently broken the
+  entire actions bundle at module-evaluation time, the exact incident already documented in this codebase's
+  history (v1.23.4, the `/api/v2` "Invalid API key" root cause). Removed before it ever reached a build; the UI
+  imports `chatTypesForAudience` directly from the pure module instead.
+- New test: `bot-manager-campaign-audience.test.ts` (+5 — every audience→chat_type mapping incl. the `null`
+  "no filter" case for `all`, and a guard that every non-`all` mapping only ever contains Telegram's own real
+  chat_type vocabulary). **`sweepBotManagerCampaigns` itself has no full DB/Telegram-mocked orchestrator test**
+  — consistent with this codebase's own established convention for comparably complex orchestrators
+  (`sweepPresenceSchedules`/`runAutoPostSweep`/`handleCommunityUpdate`, none of which has one either) — verified
+  via typecheck + build + code review instead. 1658 tests pass, `tsc --noEmit` clean, production build clean
+  (confirmed `/api/cron/bot-manager-campaigns` in the build output).
+- **Not deployed automatically, per standing instruction.**
+- **Deliberately not built this pass** (documented, not silently skipped): AI-assisted campaign copywriting (the
+  spec allows AI to help write copy elsewhere, but this pass is the send-mechanics half only — copy is
+  superadmin-authored, plain text); priority-over-customer-moderators in a shared group for marketing content
+  specifically (the existing reactive-support priority behavior from v1.20.0 is unrelated and unaffected); a
+  campaign-performance/delivery-rate dashard beyond the simple send/failure counts already shown; recurring/
+  repeating campaigns (a campaign is a one-shot send-until-exhausted, matching the schema's own `status`
+  lifecycle, which has no repeat/recurrence concept).
+
 ### 2026-08-25 — AI Telegram Auto-Posting now works for standalone (Panel-less) Watch accounts (Phase 4.N.1) (v1.47.53)
 - **Closes a real, previously-documented product gap, per direct instruction to finish the remaining Watch
   specs before going live.** The Watch landing page itself advertises Auto-Posting ("Schedule per-Watcher

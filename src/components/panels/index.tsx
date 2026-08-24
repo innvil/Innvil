@@ -35,6 +35,7 @@ import { PRReview } from "@/src/components/superadmin/PRReview";
 import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdmin";
 import { ProductsAdmin } from "@/src/components/superadmin/ProductsAdmin";
 import { WatchDevOpsAdmin } from "@/src/components/superadmin/WatchDevOpsAdmin";
+import { BotManagerCampaignsAdmin } from "@/src/components/superadmin/BotManagerCampaignsAdmin";
 import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
@@ -238,6 +239,7 @@ function navItemsFor(isSuper: boolean) {
     ...(isSuper ? [{ k: "design-pricing", label: "Design pricing", icon: Tag }] : []),
     ...(isSuper ? [{ k: "products", label: "Products", icon: Boxes }] : []),
     ...(isSuper ? [{ k: "watch-devops", label: "Watch devops", icon: Wrench }] : []),
+    ...(isSuper ? [{ k: "bot-manager-campaigns", label: "Bot manager campaigns", icon: Bot }] : []),
     { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
 }
@@ -1479,6 +1481,15 @@ export function InnvilApp({ setWorld, initialSection }: {
               <p className="fp-text-dim text-sm mt-1">Manually grant a Watch subscription tier to an account for live QA (Preview only).</p>
             </div>
             <WatchDevOpsAdmin />
+          </div>
+        )}
+        {section === "bot-manager-campaigns" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Bot manager campaigns</h1>
+              <p className="fp-text-dim text-sm mt-1">innvil_bot_manager&apos;s proactive marketing sends — approved-campaign-only.</p>
+            </div>
+            <BotManagerCampaignsAdmin />
           </div>
         )}
       </div>
