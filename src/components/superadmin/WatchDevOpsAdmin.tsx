@@ -9,7 +9,10 @@ import {
   type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
 } from "@/src/lib/actions/superadmin-watch-devops";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
-import { getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions } from "@/src/lib/products/watch-enterprise-community";
+import {
+  getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, nextByoUnlimitedCapacityStep,
+  type EnterpriseCommunityMode,
+} from "@/src/lib/products/watch-enterprise-community";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
@@ -20,7 +23,18 @@ const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
   { value: "enterprise", label: "Enterprise" },
 ];
 
-const ENTERPRISE_COMMUNITY_BASE = getEnterpriseIncludedCommunities("managed");
+/** The real Community-capacity package matrix is DIFFERENT per Enterprise
+ *  mode (Managed base 8; BYO 50/BYO Unlimited both base 10 -- see
+ *  watch-enterprise-community.ts's own table) -- this derives the actual
+ *  mode from (apiSourceMode, slots), the SAME mapping
+ *  resolveEnterpriseMediaAddonKey (watch-enterprise.ts) already uses for the
+ *  media add-on, so the two can never disagree about which mode an account
+ *  is actually in. `slots === null` only ever means BYO Unlimited (Managed
+ *  has no Unlimited package, enforced server-side). */
+function communityModeFor(apiSourceMode: "managed" | "byo", slots: number | null): EnterpriseCommunityMode {
+  if (apiSourceMode === "managed") return "managed";
+  return slots === null ? "byoUnlimited" : "byo50";
+}
 
 /** Superadmin-only control for manually granting a Watch subscription/
  *  Enterprise entitlement to an account. Works in every real environment
@@ -37,9 +51,15 @@ export function WatchDevOpsAdmin() {
   const [tier, setTier] = useState<DevOpsGrantableTier>("standard");
   const [enterpriseSlots, setEnterpriseSlots] = useState(String(MANAGED_ENTERPRISE_50.slots));
   const [byoTierId, setByoTierId] = useState<(typeof WATCH_ENTERPRISE_BYO_TIERS)[number]["id"]>(WATCH_ENTERPRISE_BYO_TIERS[0].id);
-  const [enterpriseCapacity, setEnterpriseCapacity] = useState(String(ENTERPRISE_COMMUNITY_BASE));
+  const [enterpriseCapacity, setEnterpriseCapacity] = useState(String(getEnterpriseIncludedCommunities("managed")));
   const [apiSourceMode, setApiSourceMode] = useState<"managed" | "byo">("managed");
   const [mediaAddon, setMediaAddon] = useState(false);
+  // The real Community-capacity mode for whatever's CURRENTLY selected in
+  // the grant form -- drives the base/options shown in the select below, and
+  // is recomputed on every apiSourceMode/byoTierId change.
+  const formByoTier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.id === byoTierId)!;
+  const formCommunityMode: EnterpriseCommunityMode = communityModeFor(apiSourceMode, apiSourceMode === "byo" ? formByoTier.maxSlots : null);
+  const formCommunityBase = getEnterpriseIncludedCommunities(formCommunityMode);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
@@ -87,7 +107,12 @@ export function WatchDevOpsAdmin() {
         } else {
           setEnterpriseSlots(String(sub.data.enterpriseSlots ?? MANAGED_ENTERPRISE_50.slots));
         }
-        setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE));
+        // Derived from the account's REAL apiSourceMode/enterpriseSlots, not
+        // React state -- setApiSourceMode above hasn't taken effect yet
+        // within this same synchronous block, so reading the mode back off
+        // component state here would still reflect the PREVIOUS search.
+        const realCommunityMode = communityModeFor(sub.data.apiSourceMode, sub.data.enterpriseSlots);
+        setEnterpriseCapacity(String(sub.data.enterpriseCommunityCapacity ?? getEnterpriseIncludedCommunities(realCommunityMode)));
         setMediaAddon(sub.data.mediaAddonActive);
       }
       setByoError(null);
@@ -196,7 +221,7 @@ export function WatchDevOpsAdmin() {
               {state.tier === "enterprise" && (
                 <p className="text-[11px] fp-text-faint">
                   {state.apiSourceMode === "byo" ? (state.enterpriseSlots ?? "Unlimited") : (state.enterpriseSlots ?? "?")} slots ·{" "}
-                  {state.enterpriseCommunityCapacity ?? ENTERPRISE_COMMUNITY_BASE} Communities ·{" "}
+                  {state.enterpriseCommunityCapacity ?? getEnterpriseIncludedCommunities(communityModeFor(state.apiSourceMode, state.enterpriseSlots))} Communities ·{" "}
                   {state.apiSourceMode === "byo" ? "BYO" : "Managed"} · Media +{state.mediaAddonActive ? " on" : " off"}
                   {state.apiSourceMode === "byo" && (
                     <span className={state.hasByoCredential ? "text-emerald-400" : "text-amber-400"}>
@@ -221,18 +246,29 @@ export function WatchDevOpsAdmin() {
               <>
                 <div className="flex items-center gap-3 text-sm fp-text">
                   <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" name="apiSourceMode" checked={apiSourceMode === "managed"} onChange={() => setApiSourceMode("managed")} />
+                    <input
+                      type="radio" name="apiSourceMode" checked={apiSourceMode === "managed"}
+                      onChange={() => { setApiSourceMode("managed"); setEnterpriseCapacity(String(getEnterpriseIncludedCommunities("managed"))); }}
+                    />
                     Managed
                   </label>
                   <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" name="apiSourceMode" checked={apiSourceMode === "byo"} onChange={() => setApiSourceMode("byo")} />
+                    <input
+                      type="radio" name="apiSourceMode" checked={apiSourceMode === "byo"}
+                      onChange={() => { setApiSourceMode("byo"); setEnterpriseCapacity(String(getEnterpriseIncludedCommunities(communityModeFor("byo", formByoTier.maxSlots)))); }}
+                    />
                     BYO
                   </label>
                 </div>
                 {apiSourceMode === "byo" ? (
                   <select
                     value={byoTierId}
-                    onChange={(e) => setByoTierId(e.target.value as typeof byoTierId)}
+                    onChange={(e) => {
+                      const nextId = e.target.value as typeof byoTierId;
+                      setByoTierId(nextId);
+                      const nextTier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.id === nextId)!;
+                      setEnterpriseCapacity(String(getEnterpriseIncludedCommunities(communityModeFor("byo", nextTier.maxSlots))));
+                    }}
                     className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
                   >
                     {WATCH_ENTERPRISE_BYO_TIERS.map((t) => (
@@ -254,11 +290,33 @@ export function WatchDevOpsAdmin() {
                   onChange={(e) => setEnterpriseCapacity(e.target.value)}
                   className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
                 >
-                  <option value={ENTERPRISE_COMMUNITY_BASE}>{ENTERPRISE_COMMUNITY_BASE} Communities (base)</option>
-                  {getEnterpriseCommunityExpansionOptions("managed").map((o) => (
+                  <option value={formCommunityBase}>{formCommunityBase} Communities (base)</option>
+                  {getEnterpriseCommunityExpansionOptions(formCommunityMode).map((o) => (
                     <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
                   ))}
+                  {/* BYO Unlimited has no fixed ceiling above its 25-Community
+                      package -- if the currently-selected value is a real
+                      block continuation beyond 25 (not one of the fixed
+                      options/base above), a synthetic option keeps it
+                      correctly displayed/selected rather than showing blank. */}
+                  {formCommunityMode === "byoUnlimited" && Number(enterpriseCapacity) > 25 && (
+                    <option value={enterpriseCapacity}>{enterpriseCapacity} Communities (custom)</option>
+                  )}
                 </select>
+                {/* A real +10 STEP forward, never itself an <option> (an
+                    <option> that always relabels to "the next step" can never
+                    correctly display the value actually currently selected) --
+                    mirrors the customer-facing selector's own "+ Add 10
+                    Communities" button (EnterpriseModeCards.tsx). */}
+                {formCommunityMode === "byoUnlimited" && Number(enterpriseCapacity) >= 25 && (
+                  <button
+                    type="button"
+                    onClick={() => setEnterpriseCapacity(String(nextByoUnlimitedCapacityStep(Number(enterpriseCapacity))))}
+                    className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-xs fp-text-dim hover:fp-text"
+                  >
+                    + Add 10 Communities
+                  </button>
+                )}
                 <label className="flex items-center gap-1.5 cursor-pointer text-sm fp-text">
                   <input type="checkbox" checked={mediaAddon} onChange={(e) => setMediaAddon(e.target.checked)} />
                   Media Moderation +

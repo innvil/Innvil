@@ -127,6 +127,49 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Fix: the devops Enterprise grant tool showed Managed's Community-capacity numbers for
+  every mode, and validated BYO capacities against Managed's own package matrix (v1.47.58)
+- **Live bug report, correctly flagged as a real regression against the explicit product table**: "from managed
+  to byo unli — all are 8 communities included, all re the same price for expansion." Investigated before
+  touching anything — the CANONICAL pricing module (`watch-enterprise-community.ts`, shipped 2026-08-22 as
+  v1.47.34) was confirmed byte-for-byte correct against the exact table given (Managed base 8 → 10/$9.99,
+  15/$14.99, 25/$24.99; BYO 50 and BYO Unlimited both base 10 → 15/$12.99, 25/$19.99, BYO Unlimited continuing
+  uncapped at +$4.90/mo per +10 block beyond 25) — and the real, customer-facing `/plans` selector
+  (`EnterpriseModeCards.tsx`) already reads it correctly per mode. The actual bug was isolated to the **devops
+  Enterprise-grant tool** (`WatchDevOpsAdmin.tsx` + `setAccountDevOpsEnterprise`, the ONLY live path to grant a
+  real Enterprise entitlement today, since there's still no self-serve Enterprise checkout).
+- **Root cause, UI half**: `WatchDevOpsAdmin.tsx` had a single MODULE-LEVEL constant,
+  `const ENTERPRISE_COMMUNITY_BASE = getEnterpriseIncludedCommunities("managed")` (= 8), used as the Community-
+  capacity select's base option AND its fallback whenever a stored value was null — for every mode, regardless
+  of whether the admin had actually selected Managed, BYO 50, or BYO Unlimited. The select's own expansion
+  options were likewise hardcoded to `getEnterpriseCommunityExpansionOptions("managed")` unconditionally, so
+  switching to BYO never changed what the dropdown actually offered — explaining exactly what was reported.
+- **Root cause, server half — a real safety gap, not just display**: `setAccountDevOpsEnterprise`
+  (`superadmin-watch-devops.ts`) validated every submitted `communityCapacity` against
+  `validateEnterpriseCommunityCapacity("managed", communityCapacity)` unconditionally too — meaning any real BYO
+  Unlimited capacity beyond 25 (a valid, uncapped block continuation for that mode) would have been REJECTED
+  outright (Managed has a hard max of 25), and a capacity that merely happened to coincide with a Managed
+  package number (e.g. 10) would pass for the wrong reason rather than being validated against BYO's own table.
+- **Fix**: new `communityModeFor(apiSourceMode, slots)` — the SAME `(apiSourceMode, slots) → mode` mapping
+  `resolveEnterpriseMediaAddonKey` (`watch-enterprise.ts`) already uses for the Media Moderation + add-on, so the
+  two can never disagree about which mode an account is actually being granted. Added independently to both the
+  UI (`WatchDevOpsAdmin.tsx`) and the action (`superadmin-watch-devops.ts`) — the UI now derives the select's
+  base/options from the CURRENTLY-selected mode (`apiSourceMode` + the chosen BYO tier's `maxSlots`), resets the
+  capacity field to the new mode's real base whenever the mode/tier radio or dropdown changes (so a stale value
+  from the previous mode's table can never linger unnoticed), correctly derives the current-entitlement display's
+  fallback from the ACCOUNT's own real stored `apiSourceMode`/`enterpriseSlots` (not the form's in-progress
+  selection), and gained a real "+ Add 10 Communities" step button (mirroring `EnterpriseModeCards.tsx`'s own
+  customer-facing affordance) plus a synthetic current-value option so a BYO Unlimited capacity beyond 25
+  displays/matches correctly instead of silently showing blank. The server action now validates against the
+  real derived mode, with an error message naming the correct package family.
+- **No migration, no dedicated test file** — consistent with this exact file's own long-established, already-
+  documented convention (every other function in `superadmin-watch-devops.ts` has zero dedicated tests, since
+  `requireSuperAdmin()` depends on real session-cookie resolution this codebase doesn't mock for server actions);
+  verified instead via `tsc --noEmit` + the full 1701-test suite (unaffected, since the canonical
+  `watch-enterprise-community.ts` module itself was never wrong) + production build + direct code review of the
+  derivation logic against `resolveEnterpriseMediaAddonKey`'s already-tested equivalent mapping.
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-25 — Visible "pay with Innvil Credit and save" callouts + a real annual option paid via direct crypto (5% off, alongside the existing 10%-off Credit annual) (v1.47.57)
 - **Two related pricing-UX changes, both explicitly requested**: (1) every self-serve plan card now shows a
   PROMINENT, bordered "Save N%? Pay with Innvil Credit" callout (was previously a small grey price line easy to

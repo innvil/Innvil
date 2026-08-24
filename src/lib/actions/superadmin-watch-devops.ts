@@ -38,7 +38,7 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
-import { validateEnterpriseCommunityCapacity } from "@/src/lib/products/watch-enterprise-community";
+import { validateEnterpriseCommunityCapacity, type EnterpriseCommunityMode } from "@/src/lib/products/watch-enterprise-community";
 import { hasByoCredential, clearAccountByoCredential } from "@/src/lib/products/watch-byo";
 import { WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 import type { ModeratorPlanTier } from "@/src/lib/money";
@@ -230,8 +230,19 @@ export async function setAccountDevOpsEnterprise(
     const options = WATCH_ENTERPRISE_BYO_TIERS.map((t) => t.label).join(" or ");
     return { ok: false, error: `BYO Enterprise is only sold as ${options} -- pick one of the real priced packages, not a custom slot count.` };
   }
-  if (communityCapacity != null && !validateEnterpriseCommunityCapacity("managed", communityCapacity)) {
-    return { ok: false, error: `${communityCapacity} isn't a real Managed Enterprise Community capacity package.` };
+  // The valid Community-capacity package matrix is different PER MODE (see
+  // watch-enterprise-community.ts's own table: Managed base 8, BYO 50/BYO
+  // Unlimited both base 10, with BYO Unlimited's own +10-block continuation
+  // beyond 25) -- this used to always validate against "managed" regardless
+  // of the account actually being granted BYO, which both rejected valid BYO
+  // capacities (e.g. any BYO Unlimited block beyond 25) and silently
+  // accepted a capacity that only happened to coincide with a Managed
+  // package number. Derived the same (mode, slots) -> community-mode mapping
+  // resolveEnterpriseMediaAddonKey already uses for the media add-on, so the
+  // two can never disagree about which mode this account is actually in.
+  const communityMode: EnterpriseCommunityMode = mode === "managed" ? "managed" : (slots === null ? "byoUnlimited" : "byo50");
+  if (communityCapacity != null && !validateEnterpriseCommunityCapacity(communityMode, communityCapacity)) {
+    return { ok: false, error: `${communityCapacity} isn't a real ${communityMode === "managed" ? "Managed Enterprise" : communityMode === "byo50" ? "BYO Enterprise 50" : "BYO Enterprise Unlimited"} Community capacity package.` };
   }
 
   const admin = createAdminClient();
