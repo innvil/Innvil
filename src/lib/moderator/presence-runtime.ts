@@ -5,7 +5,7 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { presenceAt, applyCoverageWindow, type PresenceConfig } from "./presence-schedule";
-import { generatePresenceMessage, type PresenceTransitionKind } from "./presence-generate";
+import { generatePresenceMessage, type PresenceTransitionKind, type PresenceMessageUsage } from "./presence-generate";
 import { resolveDeploymentTenant, getAccountCapacity, resolveAccountAiRouting, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 import { presenceSchedulingEligible } from "@/src/lib/products/watch-plans";
 import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
@@ -21,9 +21,14 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  community-runtime.ts's chatter path, this sweep already iterates
  *  per-deployment, so the per-Watcher usage-policy scope increments
  *  directly, no separate re-check step needed. Also recorded on the
- *  telemetry event itself (Phase 4.V.1, deployment-level attribution). */
+ *  telemetry event itself (Phase 4.V.1, deployment-level attribution).
+ *  `usage` (2026-08-25) -- real tokens/duration from generatePresenceMessage's
+ *  own aiCompleteWithMeta() call, when a real AI call actually produced this
+ *  transition's text (absent if it fell through to the deterministic
+ *  fallback pool) -- same "never fabricate usage for a call that didn't
+ *  happen" rule as community-runtime.ts's recordByoCall. */
 function recordByoPresenceCall(
-  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string, communityId: string, deploymentId: string, ok: boolean, error?: string
+  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string, communityId: string, deploymentId: string, ok: boolean, error?: string, usage?: PresenceMessageUsage
 ): void {
   if (!aiRouting.required) return;
   void recordByoUsageEvent(admin, {
@@ -31,8 +36,12 @@ function recordByoPresenceCall(
     provider: aiRouting.credential?.provider ?? "unconfigured",
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
+    inputTokens: usage?.inputTokens ?? null,
+    outputTokens: usage?.outputTokens ?? null,
+    durationMs: usage?.durationMs ?? null,
   });
-  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "proactive");
+  const totalTokens = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "proactive", totalTokens);
 }
 
 /**
@@ -266,14 +275,15 @@ export async function sweepPresenceSchedules(admin: SupabaseClient = createAdmin
         // once-per-message resolution, so the per-Watcher ceiling applies
         // in the SAME resolution call, no separate re-check needed.
         const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId, row.deployment_id, "proactive");
-        const text = await generatePresenceMessage(bot.moderatorName, bot.persona, kind, aiRouting);
+        const generated = await generatePresenceMessage(bot.moderatorName, bot.persona, kind, aiRouting);
+        const text = generated.text;
         const sent = await telegramApiCall(bot.token, "sendMessage", { chat_id: bot.chatId, text });
         if (sent.ok) {
           sentText = text;
-          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, row.deployment_id, true);
+          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, row.deployment_id, true, undefined, generated.usage);
         } else {
           console.error(`[presence] send failed for deployment ${row.deployment_id}: ${JSON.stringify(sent)}`);
-          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, row.deployment_id, false, sent.error);
+          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, row.deployment_id, false, sent.error, generated.usage);
         }
       }
     }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { INNVIL_REQUIRED_MODEL, assertInnvilModel, getInnvilModelConfig, deepseekChatterProvider, aiComplete } from "./client";
+import { INNVIL_REQUIRED_MODEL, assertInnvilModel, getInnvilModelConfig, deepseekChatterProvider, aiComplete, aiCompleteWithMeta } from "./client";
 
 /**
  * Model-enforcement invariant: every Innvil-authored AI automation must
@@ -164,6 +164,69 @@ test("without disableThinking, no thinking field is sent on the OpenAI-compatibl
     });
     const body = calls[0].body as { thinking?: unknown };
     assert.equal(body.thinking, undefined);
+  });
+});
+
+/**
+ * aiCompleteWithMeta() (2026-08-25, Phase 4.V.1 items 1/3) -- real per-call
+ * token counts + wall-clock duration for callers that need to record/
+ * enforce real usage (BYO telemetry + token-based ceilings). Same request/
+ * resolution logic as aiComplete() (shared via aiCompleteFull internally),
+ * just returns the fuller shape -- verified below that aiComplete()'s own
+ * behavior is provably unaffected by this refactor.
+ */
+
+test("REQUIRED: aiCompleteWithMeta reports real input/output tokens from Anthropic's usage field", async () => {
+  await withFetchSpy({ content: [{ type: "text", text: "hello there" }], usage: { input_tokens: 42, output_tokens: 7 } }, async () => {
+    const result = await aiCompleteWithMeta({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "claude-sonnet-5",
+      providerOverride: { provider: "anthropic", apiKey: "sk-test", baseUrl: "https://api.anthropic.com" },
+    });
+    assert.equal(result.text, "hello there");
+    assert.equal(result.inputTokens, 42);
+    assert.equal(result.outputTokens, 7);
+    assert.ok(typeof result.durationMs === "number" && result.durationMs >= 0);
+  });
+});
+
+test("REQUIRED: aiCompleteWithMeta reports real tokens from the OpenAI-compatible (DeepSeek) usage shape", async () => {
+  await withFetchSpy({ choices: [{ message: { content: "hey" } }], usage: { prompt_tokens: 100, completion_tokens: 15 } }, async () => {
+    const result = await aiCompleteWithMeta({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "deepseek-v4-flash",
+      providerOverride: { provider: "openai", apiKey: "sk-test", baseUrl: "https://api.deepseek.com" },
+    });
+    assert.equal(result.inputTokens, 100);
+    assert.equal(result.outputTokens, 15);
+  });
+});
+
+test("aiCompleteWithMeta reports null tokens (never fabricated) when the provider response has no usage field", async () => {
+  await withFetchSpy({ content: [{ type: "text", text: "ok" }] }, async () => {
+    const result = await aiCompleteWithMeta({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "claude-sonnet-5",
+      providerOverride: { provider: "anthropic", apiKey: "sk-test", baseUrl: "https://api.anthropic.com" },
+    });
+    assert.equal(result.inputTokens, null);
+    assert.equal(result.outputTokens, null);
+  });
+});
+
+test("REQUIRED: aiComplete()'s own return value is unaffected by the aiCompleteWithMeta refactor -- still a bare string, same text", async () => {
+  await withFetchSpy({ content: [{ type: "text", text: "unaffected" }], usage: { input_tokens: 5, output_tokens: 2 } }, async () => {
+    const text = await aiComplete({
+      system: "sys",
+      messages: [{ role: "user", content: "hi" }],
+      model: "claude-sonnet-5",
+      providerOverride: { provider: "anthropic", apiKey: "sk-test", baseUrl: "https://api.anthropic.com" },
+    });
+    assert.equal(typeof text, "string");
+    assert.equal(text, "unaffected");
   });
 });
 

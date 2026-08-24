@@ -57,6 +57,7 @@ export function ByoUsagePolicyCard({
   const [kind, setKind] = useState<Kind>("reactive");
   const [period, setPeriod] = useState<"daily" | "monthly">("monthly");
   const [limit, setLimit] = useState("");
+  const [tokenLimit, setTokenLimit] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,14 +81,28 @@ export function ByoUsagePolicyCard({
       setError("Enter a positive number of requests.");
       return;
     }
+    // Token limit is genuinely optional: a blank field means "don't set (or
+    // leave alone) a token ceiling" -- passed as `undefined`, never 0/null,
+    // so an existing token limit on this exact (scope, kind) survives a
+    // request-limit-only edit. A non-blank field must be a positive number.
+    let tokenN: number | undefined;
+    const trimmedTokenLimit = tokenLimit.trim();
+    if (trimmedTokenLimit) {
+      tokenN = Number(trimmedTokenLimit);
+      if (!Number.isFinite(tokenN) || tokenN <= 0) {
+        setError("Token limit must be a positive number, or left blank.");
+        return;
+      }
+    }
     setBusy("save");
-    const res = await saveByoUsagePolicy(keyToScope(scopeKey), kind, period, n);
+    const res = await saveByoUsagePolicy(keyToScope(scopeKey), kind, period, n, tokenN);
     setBusy(null);
     if (!res.ok) {
       setError(res.error);
       return;
     }
     setLimit("");
+    setTokenLimit("");
     await refresh();
   };
 
@@ -102,9 +117,10 @@ export function ByoUsagePolicyCard({
     <div className="w-card p-5">
       <SectionHeader icon={Gauge} title="BYO usage controls" />
       <p className="text-xs w-text-faint -mt-2 mb-4">
-        Cap how much your own AI provider credential is allowed to generate per period — a limit YOU set, to control your own provider spend.
-        Innvil's plan/pricing is unaffected either way. Reactive (replies to messages) and proactive (scheduled, unprompted) usage are capped
-        independently — the tightest configured limit for each (account-wide, per-Community, or per-Watcher) always applies.
+        These are limits <span className="w-text font-semibold">you</span> configure on your <span className="w-text font-semibold">own</span> AI
+        provider spend — a genuinely different concept from your Innvil BYO Enterprise plan itself, which has no separate usage
+        quota to hit. Reactive (replies to messages) and proactive (scheduled, unprompted) usage are capped independently — the tightest
+        configured limit for each (account-wide, per-Community, or per-Watcher) always applies.
       </p>
 
       {policies.length > 0 && (
@@ -115,6 +131,7 @@ export function ByoUsagePolicyCard({
                 <p className="w-text">{scopeLabel(p.scope)} · <span className="w-text-faint">{KIND_LABEL[p.kind]}</span></p>
                 <p className="text-xs w-text-faint">
                   {p.used.toLocaleString()} / {p.requestLimit.toLocaleString()} requests · resets {p.period === "daily" ? "daily" : "monthly"}
+                  {p.tokenLimit != null && <> · {p.usedTokens.toLocaleString()} / {p.tokenLimit.toLocaleString()} tokens</>}
                 </p>
               </div>
               <button
@@ -170,11 +187,18 @@ export function ByoUsagePolicyCard({
             className="text-xs w-surface-raised border w-line-soft rounded-lg px-2.5 py-1.5 w-text outline-none focus:w-teal-border w-28"
           />
         </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wide w-text-faint font-semibold block mb-1">Token limit (optional)</label>
+          <input
+            type="number" min={1} value={tokenLimit} onChange={(e) => setTokenLimit(e.target.value)} placeholder="e.g. 500000"
+            className="text-xs w-surface-raised border w-line-soft rounded-lg px-2.5 py-1.5 w-text outline-none focus:w-teal-border w-32"
+          />
+        </div>
         <button type="button" disabled={busy === "save"} onClick={submit} className="text-xs w-teal hover:underline px-3 py-1.5 rounded-lg border w-line-soft disabled:opacity-50 flex items-center gap-1.5">
           {busy === "save" && <Loader2 size={12} className="animate-spin" />} Save limit
         </button>
       </div>
-      <p className="text-[11px] w-text-faint mt-1.5">{KIND_HINT[kind]}</p>
+      <p className="text-[11px] w-text-faint mt-1.5">{KIND_HINT[kind]} A blank token limit means no token ceiling — only the request count is capped.</p>
       {error && <p className="text-xs w-red mt-2">{error}</p>}
     </div>
   );

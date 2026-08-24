@@ -91,27 +91,31 @@ function fakeAdmin(seed: { policies?: Row[]; counters?: Row[] } = {}) {
     },
     async rpc(fn: string, args: Record<string, unknown>) {
       if (fn !== "increment_watch_byo_usage") throw new Error(`unexpected rpc ${fn}`);
+      const tokens = Math.max(0, Math.round((args.p_tokens as number | undefined) ?? 0));
       const idx = counters.findIndex((r) => r.account_id === args.p_account_id && r.scope_key === args.p_scope_key && r.kind === (args.p_kind ?? "reactive") && r.period_key === args.p_period_key);
-      if (idx >= 0) { counters[idx] = { ...counters[idx], request_count: (counters[idx].request_count as number) + 1 }; return { data: counters[idx].request_count, error: null }; }
-      const row = { account_id: args.p_account_id, scope_key: args.p_scope_key, kind: args.p_kind ?? "reactive", period_key: args.p_period_key, deployment_id: args.p_deployment_id ?? null, request_count: 1 };
+      if (idx >= 0) {
+        counters[idx] = { ...counters[idx], request_count: (counters[idx].request_count as number) + 1, used_tokens: ((counters[idx].used_tokens as number | undefined) ?? 0) + tokens };
+        return { data: [{ request_count: counters[idx].request_count, used_tokens: counters[idx].used_tokens }], error: null };
+      }
+      const row = { account_id: args.p_account_id, scope_key: args.p_scope_key, kind: args.p_kind ?? "reactive", period_key: args.p_period_key, deployment_id: args.p_deployment_id ?? null, request_count: 1, used_tokens: tokens };
       counters.push(row);
-      return { data: 1, error: null };
+      return { data: [{ request_count: 1, used_tokens: tokens }], error: null };
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
 
-function policyRow(accountId: string, scope: UsagePolicyScope, kind: "reactive" | "proactive", period: "daily" | "monthly", requestLimit: number): Row {
+function policyRow(accountId: string, scope: UsagePolicyScope, kind: "reactive" | "proactive", period: "daily" | "monthly", requestLimit: number, tokenLimit: number | null = null): Row {
   return {
     id: `pol-${accountId}-${JSON.stringify(scope)}-${kind}`,
     account_id: accountId,
     community_id: scope.type === "community" ? scope.communityId : null,
     deployment_id: scope.type === "deployment" ? scope.deploymentId : null,
-    kind, period, request_limit: requestLimit,
+    kind, period, request_limit: requestLimit, token_limit: tokenLimit,
   };
 }
-function counterRow(accountId: string, scopeKey: string, kind: "reactive" | "proactive", periodKeyStr: string, count: number): Row {
-  return { account_id: accountId, scope_key: scopeKey, kind, period_key: periodKeyStr, request_count: count };
+function counterRow(accountId: string, scopeKey: string, kind: "reactive" | "proactive", periodKeyStr: string, count: number, usedTokens = 0): Row {
+  return { account_id: accountId, scope_key: scopeKey, kind, period_key: periodKeyStr, request_count: count, used_tokens: usedTokens };
 }
 
 /* --------------------------------------------------------------- periodKey ---- */
@@ -296,7 +300,7 @@ test("only ONE kind's policy configured -- the OTHER kind resolves as genuinely 
 test("REQUIRED: recording usage increments only the scopes that have a CONFIGURED policy for that kind", async () => {
   const admin = fakeAdmin({ policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 100)] });
   const now = new Date("2026-08-25T00:00:00.000Z");
-  await recordByoPolicyUsage(admin, "acct-1", "community-1", null, "reactive", now); // community-1 has NO configured policy
+  await recordByoPolicyUsage(admin, "acct-1", "community-1", null, "reactive", 0, now); // community-1 has NO configured policy
   assert.equal(admin.__counters.length, 1, "only the account-wide scope should have been written to");
   assert.equal(admin.__counters[0].scope_key, "account:__");
   assert.equal(admin.__counters[0].request_count, 1);
@@ -312,7 +316,7 @@ test("recording usage increments ALL THREE scopes when account-wide, Community, 
   const admin = fakeAdmin({
     policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 100), policyRow("acct-1", COMMUNITY_1, "reactive", "daily", 10), policyRow("acct-1", DEPLOYMENT_1, "reactive", "daily", 5)],
   });
-  await recordByoPolicyUsage(admin, "acct-1", "community-1", "deployment-1", "reactive", new Date("2026-08-25T00:00:00.000Z"));
+  await recordByoPolicyUsage(admin, "acct-1", "community-1", "deployment-1", "reactive", 0, new Date("2026-08-25T00:00:00.000Z"));
   assert.equal(admin.__counters.length, 3);
 });
 
@@ -320,7 +324,7 @@ test("REQUIRED: recording a reactive call never increments a deployment's proact
   const admin = fakeAdmin({
     policies: [policyRow("acct-1", DEPLOYMENT_1, "reactive", "monthly", 100), policyRow("acct-1", DEPLOYMENT_1, "proactive", "monthly", 100), policyRow("acct-1", DEPLOYMENT_2, "reactive", "monthly", 100)],
   });
-  await recordByoPolicyUsage(admin, "acct-1", "community-1", "deployment-1", "reactive", new Date("2026-08-25T00:00:00.000Z"));
+  await recordByoPolicyUsage(admin, "acct-1", "community-1", "deployment-1", "reactive", 0, new Date("2026-08-25T00:00:00.000Z"));
   assert.equal(admin.__counters.length, 1);
   assert.equal(admin.__counters[0].scope_key, "deployment:deployment-1");
   assert.equal(admin.__counters[0].kind, "reactive");
@@ -329,9 +333,9 @@ test("REQUIRED: recording a reactive call never increments a deployment's proact
 test("REQUIRED: the increment RPC is atomic-upsert-shaped -- a second increment for the same scope+kind+period increments, not duplicates", async () => {
   const admin = fakeAdmin({ policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 100)] });
   const now = new Date("2026-08-25T00:00:00.000Z");
-  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", now);
-  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", now);
-  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", now);
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", 0, now);
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", 0, now);
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", 0, now);
   assert.equal(admin.__counters.length, 1);
   assert.equal(admin.__counters[0].request_count, 3);
 });
@@ -377,6 +381,123 @@ test("getByoUsageStatus reports account/Community/deployment scopes independentl
   const deployment = status.find((s) => s.scope.type === "deployment")!;
   assert.equal(account.used, 12);
   assert.equal(deployment.used, 4);
+});
+
+/* ----------------------------------------------------- token-based ceilings (4.V.1) ---- */
+// Closes item 1 off the honest deferred list -- a token ceiling is an
+// OPTIONAL second dimension on the same policy row, independent of the
+// always-required request ceiling; the gate blocks if EITHER is exhausted.
+
+test("REQUIRED: setByoUsagePolicy rejects a non-positive tokenLimit when one is given, writes nothing", async () => {
+  const admin = fakeAdmin();
+  const res = await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 100, 0);
+  assert.equal(res.ok, false);
+  assert.equal(admin.__policies.length, 0);
+});
+
+test("REQUIRED: a policy can be created with a real tokenLimit alongside its requestLimit", async () => {
+  const admin = fakeAdmin();
+  await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 5000, 200000);
+  const list = await listByoUsagePolicies(admin, "acct-1");
+  assert.equal(list[0].requestLimit, 5000);
+  assert.equal(list[0].tokenLimit, 200000);
+});
+
+test("omitting tokenLimit on an update leaves a previously-configured token limit completely untouched", async () => {
+  const admin = fakeAdmin();
+  await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 5000, 200000);
+  await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 6000); // tokenLimit omitted entirely
+  const list = await listByoUsagePolicies(admin, "acct-1");
+  assert.equal(list[0].requestLimit, 6000, "the request limit change should have applied");
+  assert.equal(list[0].tokenLimit, 200000, "the token limit must survive an update that never mentions it");
+});
+
+test("REQUIRED: explicit null tokenLimit clears a previously-configured token limit", async () => {
+  const admin = fakeAdmin();
+  await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 5000, 200000);
+  await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 5000, null);
+  const list = await listByoUsagePolicies(admin, "acct-1");
+  assert.equal(list[0].tokenLimit, null);
+});
+
+test("a brand-new policy with tokenLimit omitted has no token ceiling at all (null, not 0)", async () => {
+  const admin = fakeAdmin();
+  await setByoUsagePolicy(admin, "acct-1", ACCOUNT, "reactive", "monthly", 5000);
+  const list = await listByoUsagePolicies(admin, "acct-1");
+  assert.equal(list[0].tokenLimit, null);
+});
+
+test("REQUIRED: a policy with a configured token limit blocks once TOKEN usage is exhausted, even with real request-count headroom", async () => {
+  const now = new Date("2026-08-25T00:00:00.000Z");
+  const admin = fakeAdmin({
+    policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 10000, 5000)], // plenty of requests, tight tokens
+    counters: [counterRow("acct-1", "account:__", "reactive", periodKey("monthly", now), 3, 5000)], // only 3/10000 requests used, but tokens exhausted
+  });
+  const gate = await checkByoUsageAllowed(admin, "acct-1", null, null, "reactive", now);
+  assert.equal(gate.allowed, false);
+  assert.equal(gate.blockedScope, "account");
+  assert.equal(gate.blockedBy, "tokens");
+});
+
+test("REQUIRED: blockedBy reports 'requests' when the request ceiling (not the token one) is what's exhausted", async () => {
+  const now = new Date("2026-08-25T00:00:00.000Z");
+  const admin = fakeAdmin({
+    policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 5, 1000000)], // tight requests, generous tokens
+    counters: [counterRow("acct-1", "account:__", "reactive", periodKey("monthly", now), 5, 100)],
+  });
+  const gate = await checkByoUsageAllowed(admin, "acct-1", null, null, "reactive", now);
+  assert.equal(gate.allowed, false);
+  assert.equal(gate.blockedBy, "requests");
+});
+
+test("a policy with NO token limit configured is never blocked by token usage, no matter how high", async () => {
+  const now = new Date("2026-08-25T00:00:00.000Z");
+  const admin = fakeAdmin({
+    policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 10000, null)],
+    counters: [counterRow("acct-1", "account:__", "reactive", periodKey("monthly", now), 3, 999999999)],
+  });
+  const gate = await checkByoUsageAllowed(admin, "acct-1", null, null, "reactive", now);
+  assert.equal(gate.allowed, true);
+});
+
+test("REQUIRED: allowed gate returns blockedBy:null", async () => {
+  const admin = fakeAdmin({ policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 100, 100000)] });
+  const gate = await checkByoUsageAllowed(admin, "acct-1", null, null, "reactive");
+  assert.equal(gate.allowed, true);
+  assert.equal(gate.blockedBy, null);
+});
+
+test("REQUIRED: recordByoPolicyUsage's tokens param accumulates real usage on the counter", async () => {
+  const admin = fakeAdmin({ policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 5000, 100000)] });
+  const now = new Date("2026-08-25T00:00:00.000Z");
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", 1200, now);
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", 800, now);
+  assert.equal(admin.__counters[0].request_count, 2);
+  assert.equal(admin.__counters[0].used_tokens, 2000);
+});
+
+test("recordByoPolicyUsage with tokens omitted (default 0) never inflates the token counter", async () => {
+  const admin = fakeAdmin({ policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 5000, 100000)] });
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive");
+  assert.equal(admin.__counters[0].used_tokens, 0);
+});
+
+test("REQUIRED: recordByoPolicyUsage adds tokens to a scope's counter even when that scope has NO token limit configured -- real accrued usage, never dropped", async () => {
+  const admin = fakeAdmin({ policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 5000, null)] });
+  await recordByoPolicyUsage(admin, "acct-1", null, null, "reactive", 1500);
+  assert.equal(admin.__counters[0].used_tokens, 1500, "tokens should accrue even without a configured token ceiling, so a limit added mid-period reflects real usage");
+});
+
+test("getByoUsageStatus reports real usedTokens alongside used (request count)", async () => {
+  const now = new Date("2026-08-25T00:00:00.000Z");
+  const admin = fakeAdmin({
+    policies: [policyRow("acct-1", ACCOUNT, "reactive", "monthly", 5000, 100000)],
+    counters: [counterRow("acct-1", "account:__", "reactive", periodKey("monthly", now), 12, 45000)],
+  });
+  const status = await getByoUsageStatus(admin, "acct-1", now);
+  assert.equal(status[0].used, 12);
+  assert.equal(status[0].usedTokens, 45000);
+  assert.equal(status[0].tokenLimit, 100000);
 });
 
 /* -------------------------------------------------------- cross-account isolation ---- */

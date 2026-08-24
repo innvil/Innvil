@@ -6,14 +6,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * routed through a BYO account's own AI provider credential
  * (watch-runtime.ts's resolveAccountAiRouting).
  *
- * A plain call/outcome LEDGER, not a token-cost accounting system. Per-call
- * token counts are DELIBERATELY not captured here -- `aiComplete()`
- * (ai/client.ts) currently returns only the generated text, and widening
- * its return shape to also carry usage would touch every existing caller
- * across the codebase. This module records only what's genuinely, cheaply
- * observable at the orchestration layer today: which account, which
- * automation, which provider/model, whether the call succeeded, and when.
- * Never fabricates a token/cost figure it doesn't actually have.
+ * A real call/outcome/usage LEDGER. As of 2026-08-25, per-call token counts
+ * and wall-clock duration ARE captured -- `aiCompleteWithMeta()`
+ * (ai/client.ts) finally gave the AI client a real per-call usage return
+ * path (closing the exact gap this comment used to document), so this
+ * module records genuinely observed input/output tokens and duration
+ * where the caller has them, never a fabricated figure where it doesn't.
+ * Also records which account, which automation, which provider/model,
+ * whether the call succeeded, and when.
  *
  * `recordByoUsageEvent` is called fire-and-forget from community-runtime.ts
  * (never awaited on the critical path) -- a telemetry write failure must
@@ -35,6 +35,15 @@ export interface ByoUsageEventInput {
   model: string;
   ok: boolean;
   error?: string | null;
+  /** Real token counts from the provider's own reported usage (see
+   *  aiCompleteWithMeta() -- never estimated). Omitted/null for call sites
+   *  with no clean usage signal to report. */
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  /** Real wall-clock call duration in milliseconds, measured by the AI
+   *  client around the request -- never omitted for a call that actually
+   *  used aiCompleteWithMeta(), null otherwise. */
+  durationMs?: number | null;
 }
 
 /** Best-effort insert -- never throws. A telemetry write failure is logged
@@ -52,6 +61,9 @@ export async function recordByoUsageEvent(admin: SupabaseClient, input: ByoUsage
       model: input.model,
       ok: input.ok,
       error: input.error ?? null,
+      input_tokens: input.inputTokens ?? null,
+      output_tokens: input.outputTokens ?? null,
+      duration_ms: input.durationMs ?? null,
     });
     if (error) console.error("[watch-byo-usage] recordByoUsageEvent failed", input.accountId, error.message);
   } catch (err) {
@@ -90,12 +102,28 @@ export interface ByoUsageSummary {
   totalCalls: number;
   successfulCalls: number;
   failedCalls: number;
+  /** Real summed input/output tokens across every event that reported
+   *  usage -- null (never 0) when NOT ONE event in the window has a
+   *  recorded token count, so the UI can distinguish "genuinely zero
+   *  tokens" (impossible) from "no usage data available for this period"
+   *  (e.g. every call predates migration 0104, or none had a clean usage
+   *  signal). Once ANY event reports usage, missing individual events are
+   *  simply skipped, never treated as 0. */
+  totalInputTokens: number | null;
+  totalOutputTokens: number | null;
+  /** Real average call duration (ms) across every event that reported one
+   *  -- same null-when-nothing-observed rule as the token totals above. */
+  avgDurationMs: number | null;
   byAutomation: ByoUsageAutomationCount[];
   byCommunity: ByoUsageCommunityCount[];
   byDeployment: ByoUsageDeploymentCount[];
 }
 
-const EMPTY_SUMMARY: ByoUsageSummary = { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [], byCommunity: [], byDeployment: [] };
+const EMPTY_SUMMARY: ByoUsageSummary = {
+  totalCalls: 0, successfulCalls: 0, failedCalls: 0,
+  totalInputTokens: null, totalOutputTokens: null, avgDurationMs: null,
+  byAutomation: [], byCommunity: [], byDeployment: [],
+};
 
 function tallyBucket(map: Map<string, { total: number; successful: number; failed: number }>, key: string, ok: boolean): void {
   const bucket = map.get(key) ?? { total: 0, successful: 0, failed: 0 };
@@ -104,7 +132,7 @@ function tallyBucket(map: Map<string, { total: number; successful: number; faile
   map.set(key, bucket);
 }
 
-/** Real, observed call/outcome counts for this account over the last
+/** Real, observed call/outcome/usage counts for this account over the last
  *  `sinceDays` -- never a fabricated/estimated number. Returns the empty
  *  summary (never throws) when nothing has been recorded yet, a genuine,
  *  expected state for an account that hasn't made a BYO call recently.
@@ -115,7 +143,7 @@ export async function getByoUsageSummary(admin: SupabaseClient, accountId: strin
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await admin
     .from("watch_byo_ai_usage_events")
-    .select("automation, community_id, deployment_id, ok")
+    .select("automation, community_id, deployment_id, ok, input_tokens, output_tokens, duration_ms")
     .eq("account_id", accountId)
     .gte("created_at", since);
   if (error || !data) return EMPTY_SUMMARY;
@@ -125,17 +153,28 @@ export async function getByoUsageSummary(admin: SupabaseClient, accountId: strin
   const byDeployment = new Map<string, { total: number; successful: number; failed: number }>();
   let successfulCalls = 0;
   let failedCalls = 0;
-  for (const row of data as Array<{ automation: string; community_id: string | null; deployment_id: string | null; ok: boolean }>) {
+  let totalInputTokens: number | null = null;
+  let totalOutputTokens: number | null = null;
+  let durationSum = 0;
+  let durationSamples = 0;
+  type Row = { automation: string; community_id: string | null; deployment_id: string | null; ok: boolean; input_tokens: number | null; output_tokens: number | null; duration_ms: number | null };
+  for (const row of data as Row[]) {
     tallyBucket(byAutomation, row.automation, row.ok);
     if (row.community_id) tallyBucket(byCommunity, row.community_id, row.ok);
     if (row.deployment_id) tallyBucket(byDeployment, row.deployment_id, row.ok);
     if (row.ok) successfulCalls += 1; else failedCalls += 1;
+    if (row.input_tokens != null) totalInputTokens = (totalInputTokens ?? 0) + row.input_tokens;
+    if (row.output_tokens != null) totalOutputTokens = (totalOutputTokens ?? 0) + row.output_tokens;
+    if (row.duration_ms != null) { durationSum += row.duration_ms; durationSamples += 1; }
   }
 
   return {
     totalCalls: data.length,
     successfulCalls,
     failedCalls,
+    totalInputTokens,
+    totalOutputTokens,
+    avgDurationMs: durationSamples > 0 ? Math.round(durationSum / durationSamples) : null,
     byAutomation: Array.from(byAutomation.entries())
       .map(([automation, c]) => ({ automation, total: c.total, successful: c.successful, failed: c.failed }))
       .sort((a, b) => b.total - a.total),

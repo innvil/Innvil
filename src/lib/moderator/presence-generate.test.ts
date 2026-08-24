@@ -54,11 +54,23 @@ const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "
 test("REQUIRED: routes to DeepSeek (never Sonnet 5) when no BYO routing is in effect", async () => {
   await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", ANTHROPIC_API_KEY: undefined, AI_API_KEY: undefined }, async () => {
     await withFetchSpy(openaiTextResponse("Morning! I'm around for a bit."), async (calls) => {
-      const text = await generatePresenceMessage("Kwan", persona, "presence_started");
+      const result = await generatePresenceMessage("Kwan", persona, "presence_started");
       assert.equal(calls.length, 1);
       assert.match(calls[0].url, /deepseek/i);
       assert.equal((calls[0].body as { model?: string }).model, "deepseek-v4-flash");
-      assert.ok(text.length > 0);
+      assert.ok(result.text.length > 0);
+    });
+  });
+});
+
+test("REQUIRED: a real successful AI call reports real usage on the result", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "Morning!" } }], usage: { prompt_tokens: 120, completion_tokens: 8 } }, async () => {
+      const result = await generatePresenceMessage("Kwan", persona, "presence_started");
+      assert.ok(result.usage, "a real successful AI call must report usage");
+      assert.equal(result.usage?.inputTokens, 120);
+      assert.equal(result.usage?.outputTokens, 8);
+      assert.ok(typeof result.usage?.durationMs === "number");
     });
   });
 });
@@ -66,9 +78,10 @@ test("REQUIRED: routes to DeepSeek (never Sonnet 5) when no BYO routing is in ef
 test("unconfigured DeepSeek goes straight to the deterministic fallback pool, no network call", async () => {
   await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     await withFetchSpy({}, async (calls) => {
-      const text = await generatePresenceMessage("Kwan", persona, "presence_started");
+      const result = await generatePresenceMessage("Kwan", persona, "presence_started");
       assert.equal(calls.length, 0);
-      assert.ok(text.length > 0);
+      assert.ok(result.text.length > 0);
+      assert.equal(result.usage, undefined, "the deterministic fallback pool never has real usage to report");
     });
   });
 });
@@ -79,13 +92,17 @@ test("REQUIRED: a failed generation call falls back to a VARIED deterministic te
     globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
     try {
       const seen = new Set<string>();
-      for (let i = 0; i < 20; i++) seen.add(await generatePresenceMessage("Kwan", persona, "presence_started"));
+      for (let i = 0; i < 20; i++) {
+        const r = await generatePresenceMessage("Kwan", persona, "presence_started");
+        seen.add(r.text);
+        assert.equal(r.usage, undefined, "a failed call must never report usage");
+      }
       assert.ok(seen.size > 1, "should draw from more than one fixed sentence across repeated calls");
       const ending = await generatePresenceMessage("Kwan", persona, "presence_ending");
       const resumed = await generatePresenceMessage("Kwan", persona, "presence_resumed");
-      assert.ok(ending.length > 0);
-      assert.ok(resumed.length > 0);
-      assert.notEqual(ending, resumed);
+      assert.ok(ending.text.length > 0);
+      assert.ok(resumed.text.length > 0);
+      assert.notEqual(ending.text, resumed.text);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -133,10 +150,10 @@ const BYO_CRED = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", ba
 test("REQUIRED: BYO required+usable routes through the stored credential, never Innvil's own key", async () => {
   await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy(anthropicTextResponse("Heading out for a bit."), async (calls) => {
-      const text = await generatePresenceMessage("Kwan", persona, "presence_ending", { required: true, credential: BYO_CRED });
+      const result = await generatePresenceMessage("Kwan", persona, "presence_ending", { required: true, credential: BYO_CRED });
       assert.equal(calls.length, 1);
       assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
-      assert.ok(text.length > 0);
+      assert.ok(result.text.length > 0);
     });
   });
 });
@@ -149,8 +166,10 @@ test("REQUIRED: BYO required but unusable falls straight to the template pool, n
         "Kwan", persona, "presence_started", { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: null } }
       );
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
-      assert.ok(missingCred.length > 0);
-      assert.ok(missingModel.length > 0);
+      assert.ok(missingCred.text.length > 0);
+      assert.ok(missingModel.text.length > 0);
+      assert.equal(missingCred.usage, undefined);
+      assert.equal(missingModel.usage, undefined);
     });
   });
 });
@@ -161,8 +180,8 @@ test("a normal (non-BYO) account's behavior is unaffected -- aiRouting undefined
       const withoutRouting = await generatePresenceMessage("Kwan", persona, "presence_started");
       const withManaged = await generatePresenceMessage("Kwan", persona, "presence_started", { required: false, credential: null });
       assert.equal(calls.length, 2);
-      assert.ok(withoutRouting.length > 0);
-      assert.ok(withManaged.length > 0);
+      assert.ok(withoutRouting.text.length > 0);
+      assert.ok(withManaged.text.length > 0);
     });
   });
 });

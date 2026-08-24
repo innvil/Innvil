@@ -321,7 +321,7 @@ export default async function UsagePage() {
           <div className="w-card p-5">
             <SectionHeader icon={Bot} title="BYO calls (last 30 days)" />
             <p className="text-xs w-text-faint -mt-2 mb-3">
-              Real, observed calls made through your own stored AI provider credential — not a token/cost estimate.
+              Real, observed calls made through your own stored AI provider credential.
             </p>
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div>
@@ -337,6 +337,31 @@ export default async function UsagePage() {
                 <p className="text-[11px] w-text-faint">Failed</p>
               </div>
             </div>
+            {/* Real token/duration totals (Phase 4.V.1) -- omitted entirely
+                when nothing in the window reported usage (e.g. every call
+                predates migration 0104), never shown as a fabricated 0. */}
+            {(byoUsage.totalInputTokens != null || byoUsage.totalOutputTokens != null || byoUsage.avgDurationMs != null) && (
+              <div className="grid grid-cols-3 gap-3 mb-3 pb-3 border-b w-line-soft">
+                {byoUsage.totalInputTokens != null && (
+                  <div>
+                    <p className="w-display text-lg w-text">{byoUsage.totalInputTokens.toLocaleString()}</p>
+                    <p className="text-[11px] w-text-faint">Input tokens</p>
+                  </div>
+                )}
+                {byoUsage.totalOutputTokens != null && (
+                  <div>
+                    <p className="w-display text-lg w-text">{byoUsage.totalOutputTokens.toLocaleString()}</p>
+                    <p className="text-[11px] w-text-faint">Output tokens</p>
+                  </div>
+                )}
+                {byoUsage.avgDurationMs != null && (
+                  <div>
+                    <p className="w-display text-lg w-text">{byoUsage.avgDurationMs.toLocaleString()}ms</p>
+                    <p className="text-[11px] w-text-faint">Avg. call duration</p>
+                  </div>
+                )}
+              </div>
+            )}
             {byoUsage.byAutomation.length > 0 ? (
               <div className="space-y-1.5">
                 {byoUsage.byAutomation.map((a) => (

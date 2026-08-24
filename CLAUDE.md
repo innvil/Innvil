@@ -127,6 +127,80 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — BYO Enterprise: real token counts for the AI client + token-based usage ceilings — closes the
+  last two blocked items off Phase 4.V.1's honest deferred list (v1.47.56)
+- **Explicit instruction: "implement full specs for Watch first before we go live."** The two remaining items
+  from Phase 4.V.1 (token-based ceilings, call-latency telemetry) were previously reported as genuinely blocked
+  on `aiComplete()`'s return shape not exposing real usage — this pass removes that blocker and builds on top of
+  it, closing both, plus the deliberately-deferred "commercial-vs-BYO limit UX copy pass."
+- **`src/lib/ai/client.ts`: new `aiCompleteWithMeta()`**, additive — every existing caller of `aiComplete()`
+  (~40 across the codebase: moderation, blog, media warnings, link classification, bot manager, etc.) is
+  **completely unaffected**, confirmed by `tsc --noEmit` + the full test suite passing unchanged and a
+  dedicated new test proving `aiComplete()`'s own return value is byte-identical to before this refactor.
+  Internally, `anthropicComplete`/`openaiComplete` now return `{text, inputTokens, outputTokens}` instead of a
+  bare string (Anthropic's real `usage.input_tokens`/`usage.output_tokens`, OpenAI-compatible's real
+  `usage.prompt_tokens`/`usage.completion_tokens` — DeepSeek's endpoint is OpenAI-compatible, so this covers it
+  too); a new shared `aiCompleteFull()` holds the exact same primary/fallback/`providerOverride` resolution
+  logic as before (copied once, not duplicated), and both `aiComplete()` (unwraps to a bare string, unchanged
+  signature) and the new `aiCompleteWithMeta()` (returns `{text, inputTokens, outputTokens, durationMs}` — real
+  wall-clock duration measured around the call) delegate to it. Never estimates a token count from visible text
+  — a provider response with no `usage` field reports `null`, never a fabricated 0.
+- **Wired into the two real generation call sites that produce BYO telemetry** — `chatter-generate.ts`'s
+  `generateChatterReply` (reactive, chatter ANSWER/CASUAL_CHAT) and `presence-generate.ts`'s
+  `generatePresenceMessage` (proactive, Watcher Presence Scheduling transitions) both switched from
+  `aiComplete` to `aiCompleteWithMeta`, threading real `{inputTokens, outputTokens, durationMs}` onto their
+  result types (`ChatterGenerationResult`/`PresenceMessageResult`, both gained a `usage`/`usage?` field) —
+  present on every real AI call outcome (including a model's own decline — real spend happened even without a
+  visible reply), absent when generation fell through to a deterministic fallback (chatter's own error path;
+  presence's template pool) since no real call happened there to report usage for.
+- **`community-runtime.ts`'s `recordByoCall`** and **`presence-runtime.ts`'s `recordByoPresenceCall`** both
+  gained a `usage` parameter, now recorded on BOTH the telemetry event (real `inputTokens`/`outputTokens`/
+  `durationMs` columns, migration `0104`, additive/nullable on `watch_byo_ai_usage_events`) AND fed as a real
+  `tokens` count into `recordByoPolicyUsage` (input+output combined — the real total spend driver) for the
+  NEW token-ceiling enforcement below.
+- **Token-based usage ceilings (migration `0103`)** — `watch_byo_usage_policies` gained an optional
+  `token_limit` column (independent of the always-required `request_limit` — a policy can set either, both, or
+  neither); `watch_byo_usage_counters` gained `used_tokens`; `increment_watch_byo_usage`'s RPC widened to a
+  6-arg overload (`p_tokens default 0`, old 5-arg overload dropped) incrementing both counters atomically in
+  one upsert. `checkByoUsageAllowed`/`recordByoPolicyUsage`/`setByoUsagePolicy`/`getByoUsageStatus`
+  (`watch-byo-usage-policy.ts`) all extended: the gate blocks if EITHER a configured request OR token ceiling
+  is exhausted (`ByoUsageGateResult` gained `blockedBy: "requests" | "tokens" | null` for diagnostics);
+  `setByoUsagePolicy`'s `tokenLimit` param follows the established omit/null/number three-state idiom (omitted
+  = leave an existing token limit untouched on update; explicit `null` = clear it; a positive number = set
+  it) — the same "omit to preserve" pattern already used for `activateWatchEntitlement`'s `enterpriseSlots`.
+  Tokens accrue on a scope's counter even when that scope has no token ceiling CONFIGURED yet, so a limit added
+  mid-period reflects real already-accrued usage rather than starting from an artificial zero.
+- **UI**: `ByoUsagePolicyCard.tsx` gained a "Token limit (optional)" input alongside the existing request-limit
+  field, and each configured-policy row now shows real `usedTokens / tokenLimit` alongside the existing request
+  count when a token ceiling is set. The Usage page's "BYO calls" card gained a real token/duration summary
+  block (total input tokens, total output tokens, average call duration) — omitted entirely (never a fabricated
+  0) when nothing in the window reported usage, e.g. every recorded event predates migration `0104`.
+- **Commercial-vs-BYO limit UX copy pass** (the last remaining Phase 4.V.1 item, previously assessed as "largely
+  moot in practice since Enterprise doesn't consume the self-serve AI Generation pool at all" — confirmed again
+  this pass: `isEnterprise` explicitly excludes `apiSourceMode === "byo"`, so the AI Generations pool card
+  structurally never renders alongside the BYO usage controls card for the same account) — `ByoUsagePolicyCard`'s
+  own description now explicitly states these are limits the CUSTOMER configures on their OWN provider spend, a
+  genuinely different concept from the Innvil BYO Enterprise plan itself (which has no separate usage quota to
+  hit), rather than the previous vaguer "Innvil's plan/pricing is unaffected either way" phrasing.
+- New tests: `client.test.ts` (+4 — real Anthropic/OpenAI-compatible usage-field parsing, null-not-fabricated
+  when a response has no usage field, `aiComplete()`'s own behavior unaffected), `watch-byo-usage-policy.test.ts`
+  (+13 — the full token-limit CRUD three-state semantics, token-exhaustion blocking with real request headroom,
+  `blockedBy` for both dimensions, a policy with no token limit never blocked by token usage no matter how high,
+  tokens accruing even without a configured ceiling, `getByoUsageStatus` reporting `usedTokens`),
+  `watch-byo-usage.test.ts` (+4 — real token/duration recording on insert, null-when-omitted, sum/average
+  aggregation in `getByoUsageSummary`, an event with no usage skipped from totals rather than treated as 0, and
+  totals reporting `null` not `0` when nothing in the window reported usage — corrected 2 pre-existing
+  empty-summary assertions for the widened shape), `presence-generate.test.ts` (+2, plus every existing test
+  updated for the new `{text, usage?}` return shape — real usage present on a successful call, absent on every
+  fallback path). 1685 tests pass (up from 1662), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Run migrations `0103` and `0104`** before this governs anything live — until then, token-limit policies
+  can't be saved and telemetry has no columns to record real usage into.
+- **This closes Phase 4.V.1's full itemized deferred list except**: multi-credential provider/model scoped
+  ASSIGNMENT (still deliberately deferred — a genuinely larger, security-sensitive encrypted-credential-storage
+  rearchitecture for a feature with zero live BYO customers today, unaffected by this pass) and the spec's own
+  structured test/report checklist as a discrete deliverable (documentation/QA exercise, not a code gap).
+
 ### 2026-08-25 — BYO usage telemetry: deployment-level attribution — closes part of Phase 4.V.1's honest
   deferred list (v1.47.55)
 - **Continuation of the same-day Watch documentation/status audit** ("all watch related done?") — while
@@ -10423,7 +10497,7 @@ Architecture direction for future implementation:
   account_id / Deployment → Community → Project → account_id, no synthetic Panel,
   consistent with every other Watch table added this session.
 
-### Phase 4.V.1: BYO Enterprise — remaining refinement (MOSTLY CLOSED — see the status note below for exactly what's left; the header title "the honest deferred list" is kept for continuity across passes)
+### Phase 4.V.1: BYO Enterprise — remaining refinement (NEARLY FULLY CLOSED — only multi-credential provider/model scoped assignment (deliberately deferred) and the spec's own test/report checklist remain; see the status note below)
 
 > **What actually shipped from Phase 4.V (real, live, tested):** credential storage
 > (`watch-byo.ts`, encrypted, self-serve entry via the customer's own Settings → AI
@@ -10452,18 +10526,25 @@ Architecture direction for future implementation:
 > **Watcher/deployment-level attribution + per-Community usage breakdown CLOSED,
 > v1.47.55** (migration `0102`, `getByoUsageSummary`'s `byDeployment`/`byCommunity`,
 > surfaced on Usage) — the specific gap called out in "richer telemetry dimensions"
-> below. What genuinely remains open, itemized below: token-based ceilings,
-> multi-credential provider/model scoped ASSIGNMENT, call-latency in the usage
-> summary, the spec's own structured test/report checklist, and a dedicated
-> commercial-vs-BYO limit UX copy pass.
+> below.
 >
-> **What's still missing from the full spec** (`docs/moderator/byo-enterprise-refinement-spec.md`),
-> itemized directly against the spec's own sections rather than summarized away:
-> - **Token-based ceilings** — deliberately still not built; `aiComplete()`'s return
->   shape doesn't reliably expose a token count to every caller across providers, and
->   fabricating one would violate this spec's own explicit "do not fabricate token
->   counts" rule. Would need widening `aiComplete`'s return contract first — a
->   separate, larger change touching every existing caller.
+> **Token-based ceilings, call-latency telemetry, and the commercial-vs-BYO limit UX
+> copy pass ALL CLOSED, v1.47.56.** `aiComplete()`'s return shape (the previously-cited
+> blocker for both the token and latency items) is fixed via a new additive
+> `aiCompleteWithMeta()` (`ai/client.ts`) — every existing `aiComplete()` caller is
+> unaffected (verified: same signature, same behavior, dedicated regression test).
+> `chatter-generate.ts`/`presence-generate.ts` now report real
+> `{inputTokens, outputTokens, durationMs}` on every real AI call; `watch-byo-usage.ts`
+> records them (migration `0104`) and `getByoUsageSummary` aggregates real totals/
+> averages; `watch-byo-usage-policy.ts` gained an optional `token_limit` alongside the
+> existing `request_limit` (migration `0103`) — the gate blocks on EITHER dimension.
+> See the v1.47.56 changelog entry for the full implementation.
+>
+> **What genuinely remains open**: only multi-credential provider/model scoped
+> ASSIGNMENT (deliberately deferred — see below) and the spec's own structured test/
+> report checklist as a discrete deliverable (a documentation/QA exercise, not a code
+> gap — real coverage already exists, just not organized against that exact checklist).
+>
 > - **Provider/model POLICY — multi-credential scoped ASSIGNMENT specifically**
 >   (as opposed to provider/model CONFIGURATION, and as opposed to the usage-policy
 >   3-level scope built in item 2) — a customer can still store exactly one
@@ -10475,31 +10556,21 @@ Architecture direction for future implementation:
 >   currently has exactly one row per account by design), for a feature with zero
 >   live BYO customers today (confirmed via the live Supabase project) — judged
 >   premature relative to the lower-risk, more broadly useful items already closed.
-> - **Richer telemetry dimensions — PARTIALLY CLOSED, v1.47.55.** Provider health
->   (v1.47.52) added last-success/last-error/7-day call volume; **Watcher/deployment-
->   level attribution AND per-Community breakdown are now real too** (migration `0102`,
->   `getByoUsageSummary`'s new `byDeployment`/`byCommunity`, surfaced on the Usage
->   page's "BYO calls" card). Still genuinely missing: **latency** in the usage summary
->   (`aiComplete()` doesn't currently return call duration to its callers — same class
->   of "would need to widen a return shape everywhere" limitation as the token-count
->   gap below). Input/output tokens remain correctly unrecorded (not reliably
->   available), per the spec's own rule.
 > - **The spec's own structured test/report checklist** — landing-page tests (BYO
 >   discoverability, CTA routing, no-duplicate-sections, mobile layout), the full BYO
 >   eligibility/secret/provider-config/policy/runtime-separation test categories, and
 >   the 29-point Final Report format were never run/produced as a discrete deliverable
 >   — coverage exists (BYO routing, credential storage, usage-policy gate/CAS
->   idempotency, label correctness, media-addon key resolution are all tested), but
->   not organized against this exact checklist, and several categories (landing tests,
->   provider-config accept/reject tests, secret-non-exposure tests as their own
->   explicit suite) have no dedicated test file at all.
-> - **Clear commercial-vs-BYO limit UX** — partially done; the Usage page shows both
->   Innvil's own entitlement numbers and BYO's configured ceilings, but there was never
->   a pass specifically making the distinction explicit in copy the way the spec asks
->   ("Innvil commercial/contract entitlement vs. Customer-configured BYO operational
->   ceiling — do not blur those concepts"). Largely moot in practice since Enterprise
->   doesn't consume the self-serve AI Generation pool at all, but the copy was never
->   revisited with this framing in mind.
+>   idempotency, label correctness, media-addon key resolution, token ceilings, real
+>   usage telemetry are all tested), but not organized against this exact checklist,
+>   and several categories (landing tests, provider-config accept/reject tests,
+>   secret-non-exposure tests as their own explicit suite) have no dedicated test file.
+> - ~~**Clear commercial-vs-BYO limit UX**~~ — CLOSED v1.47.56. Largely moot in
+>   practice since Enterprise
+>   doesn't consume the self-serve AI Generation pool at all (so the two concepts were
+>   never actually rendered side-by-side to begin with) — the copy itself was still
+>   revisited/sharpened this pass to state the distinction explicitly rather than rely
+>   on that structural non-overlap alone.
 >
 > **Not a safety concern** — every gap above is an INCOMPLETENESS gap (a control that
 > doesn't exist yet), never a CORRECTNESS gap (nothing that exists is broken, fake, or

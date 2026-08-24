@@ -265,7 +265,19 @@ async function postJson(
   }
 }
 
-async function anthropicComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
+/** Internal shape shared by both provider adapters -- real token counts
+ *  when the provider reports them (never estimated/fabricated), null when
+ *  it doesn't. `aiComplete()` (below) unwraps this to a bare string for its
+ *  ~40 existing callers, unchanged; `aiCompleteWithMeta()` returns the full
+ *  shape for callers that need real usage/duration (BYO telemetry + token-
+ *  ceiling enforcement -- see chatter-generate.ts's ChatterGenerationResult). */
+interface TextWithUsage {
+  text: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+async function anthropicComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<TextWithUsage> {
   // Anthropic direct authenticates via x-api-key. Third-party Anthropic-compatible
   // proxies (Claude-Code-style resellers) usually want `Authorization: Bearer`, so
   // when a custom base URL is set we send BOTH — Anthropic ignores the extra one.
@@ -291,10 +303,16 @@ async function anthropicComplete(baseUrl: string, key: string, model: string, op
   }
   const data = JSON.parse(res.bodyText) as { content?: Array<{ type: string; text?: string }>; usage?: AnthropicUsage };
   logAiUsage(opts, model, data.usage);
-  return (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
+  const text = (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
+  return { text, inputTokens: data.usage?.input_tokens ?? null, outputTokens: data.usage?.output_tokens ?? null };
 }
 
-async function openaiComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
+interface OpenAiUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+}
+
+async function openaiComplete(baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<TextWithUsage> {
   const res = await postJson(`${baseUrl}/chat/completions`, {
     "content-type": "application/json",
     authorization: `Bearer ${key}`,
@@ -318,22 +336,23 @@ async function openaiComplete(baseUrl: string, key: string, model: string, opts:
   if (!res.ok) {
     throw new Error(`AI provider (openai) ${res.status}: ${res.bodyText.slice(0, 300)}`);
   }
-  const data = JSON.parse(res.bodyText) as { choices?: Array<{ message?: { content?: string } }> };
-  return (data.choices?.[0]?.message?.content ?? "").trim();
+  const data = JSON.parse(res.bodyText) as { choices?: Array<{ message?: { content?: string } }>; usage?: OpenAiUsage };
+  const text = (data.choices?.[0]?.message?.content ?? "").trim();
+  return { text, inputTokens: data.usage?.prompt_tokens ?? null, outputTokens: data.usage?.completion_tokens ?? null };
 }
 
-async function completeOnce(provider: AiProvider, baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<string> {
-  const text = provider === "openai" ? await openaiComplete(baseUrl, key, model, opts) : await anthropicComplete(baseUrl, key, model, opts);
-  if (!text) throw new Error("Empty response from model.");
-  return text;
+async function completeOnce(provider: AiProvider, baseUrl: string, key: string, model: string, opts: AiCompleteOptions): Promise<TextWithUsage> {
+  const result = provider === "openai" ? await openaiComplete(baseUrl, key, model, opts) : await anthropicComplete(baseUrl, key, model, opts);
+  if (!result.text) throw new Error("Empty response from model.");
+  return result;
 }
 
-/** Single non-streaming completion. Tries the primary provider; on failure,
- *  retries once against the fallback provider if one is configured. Returns
- *  the text, or throws the primary's error (fallback failures are logged but
- *  don't replace it, since the primary is almost always the more actionable
- *  signal — a misconfigured key vs. a transient timeout look the same otherwise). */
-export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
+/** The real primary/fallback/providerOverride resolution logic, shared by
+ *  both aiComplete() and aiCompleteWithMeta() below -- exactly ONE copy of
+ *  this control flow, never duplicated between the two public entry points.
+ *  Returns the full TextWithUsage shape; each public wrapper decides how
+ *  much of it to expose. */
+async function aiCompleteFull(opts: AiCompleteOptions): Promise<TextWithUsage> {
   if (opts.providerOverride) {
     const { provider, apiKey: overrideKey, baseUrl } = opts.providerOverride;
     return completeOnce(provider, baseUrl, overrideKey, opts.model || DEFAULT_AI_MODEL, opts);
@@ -365,6 +384,44 @@ export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
       throw primaryErr;
     }
   }
+}
+
+/** Single non-streaming completion. Tries the primary provider; on failure,
+ *  retries once against the fallback provider if one is configured. Returns
+ *  the text, or throws the primary's error (fallback failures are logged but
+ *  don't replace it, since the primary is almost always the more actionable
+ *  signal — a misconfigured key vs. a transient timeout look the same otherwise).
+ *  Unchanged signature/behavior for every existing caller -- internally now a
+ *  thin wrapper over aiCompleteFull(), which does the exact same work. */
+export async function aiComplete(opts: AiCompleteOptions): Promise<string> {
+  const result = await aiCompleteFull(opts);
+  return result.text;
+}
+
+export interface AiCompletionMeta {
+  text: string;
+  /** Real input/output token counts from the provider's own reported usage
+   *  -- null when the provider didn't report usage (should not happen for
+   *  either currently-supported provider, but never assumed). Never
+   *  estimated from the visible text. */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Real wall-clock duration of this call (request start to response body
+   *  fully read), measured here -- not a provider-reported figure. */
+  durationMs: number;
+}
+
+/** Same request/resolution behavior as aiComplete() (byte-identical primary/
+ *  fallback/providerOverride logic, via the shared aiCompleteFull()), but
+ *  returns real token counts + wall-clock duration instead of a bare
+ *  string -- for callers that need to record/enforce real usage (BYO
+ *  telemetry + token-based usage ceilings). Added 2026-08-25 specifically
+ *  to close the "aiComplete()'s return shape doesn't expose token counts"
+ *  gap that previously made token-based BYO ceilings dishonest to build. */
+export async function aiCompleteWithMeta(opts: AiCompleteOptions): Promise<AiCompletionMeta> {
+  const start = Date.now();
+  const result = await aiCompleteFull(opts);
+  return { text: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs: Date.now() - start };
 }
 
 /**

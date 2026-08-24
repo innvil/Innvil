@@ -16,7 +16,7 @@ import {
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback, resolveAdditionalReactors,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
-import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage } from "./chatter-generate";
+import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage, type ChatterGenerationUsage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource, type KnowledgeContextEntry } from "./knowledge";
 import { resolveContactIntent, findCommunityContactOverride, CONTACT_LABELS, type ProjectContacts } from "./project-profile";
@@ -76,9 +76,18 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  increments from a genuinely successful call by THAT Watcher. It's also
  *  recorded on the telemetry event itself (Phase 4.V.1, deployment-level
  *  attribution), so the Usage page's BYO summary can report "which Watcher
- *  actually made these calls," not just which automation/Community. */
+ *  actually made these calls," not just which automation/Community.
+ *  `usage` (2026-08-25, closing item 1/3 off the honest deferred list) --
+ *  the real input+output token counts and wall-clock duration from
+ *  generateChatterReply's own aiCompleteWithMeta() call, present on every
+ *  `ok:true` outcome (a real call happened, whether or not it produced a
+ *  visible reply). Absent on a failed/timed-out call, since no usage was
+ *  ever observed for those. Recorded on BOTH the telemetry event (real
+ *  cost/latency observability) AND fed into recordByoPolicyUsage as the
+ *  token count a customer's own configured token ceiling is measured
+ *  against -- input+output combined, the real total spend driver. */
 function recordByoCall(
-  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, deploymentId: string, automation: string, ok: boolean, error?: string
+  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, deploymentId: string, automation: string, ok: boolean, error?: string, usage?: ChatterGenerationUsage
 ): void {
   if (!aiRouting.required || !accountId) return;
   void recordByoUsageEvent(admin, {
@@ -86,8 +95,12 @@ function recordByoCall(
     provider: aiRouting.credential?.provider ?? "unconfigured",
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
+    inputTokens: usage?.inputTokens ?? null,
+    outputTokens: usage?.outputTokens ?? null,
+    durationMs: usage?.durationMs ?? null,
   });
-  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "reactive");
+  const totalTokens = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "reactive", totalTokens);
 }
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
@@ -2575,11 +2588,11 @@ export async function respondAsDeployment(params: {
       // A genuine successful BYO call -- the model responded, it just chose
       // not to reply. Real provider spend happened, so this counts as a
       // successful call for telemetry purposes, same as any real reply.
-      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true);
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
       return { replied: false, modelDeclined: true };
     }
     replyText = generation.reply;
-    recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true);
+    recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
 
     // 2026-08-22 counting-semantics change: an "AI Generation" is consumed
     // the moment the provider successfully produces a usable reply -- NOT

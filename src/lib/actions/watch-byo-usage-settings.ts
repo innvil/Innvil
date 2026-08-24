@@ -29,6 +29,7 @@ async function requireByoEnterprise(): Promise<{ ok: true; admin: Awaited<Return
 
 export interface ByoUsagePolicyStatus extends WatchByoUsagePolicy {
   used: number;
+  usedTokens: number;
 }
 
 export async function getByoUsagePolicyStatus(): Promise<Result<ByoUsagePolicyStatus[]>> {
@@ -38,10 +39,13 @@ export async function getByoUsagePolicyStatus(): Promise<Result<ByoUsagePolicySt
   return { ok: true, data: rows };
 }
 
-export async function saveByoUsagePolicy(scope: UsagePolicyScope, kind: UsagePolicyKind, period: UsagePolicyPeriod, requestLimit: number): Promise<Result> {
+/** `tokenLimit` follows setByoUsagePolicy's own omit/null/number semantics
+ *  exactly: omitted -> leave any existing token limit untouched; explicit
+ *  null -> clear it; a positive number -> set it. */
+export async function saveByoUsagePolicy(scope: UsagePolicyScope, kind: UsagePolicyKind, period: UsagePolicyPeriod, requestLimit: number, tokenLimit?: number | null): Promise<Result> {
   const ctx = await requireByoEnterprise();
   if (!ctx.ok) return ctx;
-  const res = await setByoUsagePolicy(ctx.admin, ctx.accountId, scope, kind, period, requestLimit);
+  const res = await setByoUsagePolicy(ctx.admin, ctx.accountId, scope, kind, period, requestLimit, tokenLimit);
   if (!res.ok) return res;
   return { ok: true, data: null };
 }

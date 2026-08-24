@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { recordByoUsageEvent, getByoUsageSummary, getByoProviderHealth } from "./watch-byo-usage";
 
 /**
- * BYO Enterprise -- Phase 2 (2026-08-24) usage telemetry. A plain
- * call/outcome ledger -- never a fabricated token/cost figure -- see the
- * module's own doc comment for why per-call token counts are out of scope.
+ * BYO Enterprise -- Phase 2 (2026-08-24) usage telemetry, extended
+ * 2026-08-25 with real per-call token counts + duration (Phase 4.V.1,
+ * items 1/3 off the honest deferred list) once aiCompleteWithMeta() gave
+ * the AI client a real usage return path. Never a fabricated token/cost
+ * figure -- an event/summary with no observed usage reports null, not 0.
  */
 
 type Row = Record<string, unknown>;
@@ -96,6 +98,27 @@ test("REQUIRED: recordByoUsageEvent records the given deploymentId (Phase 4.V.1 
   assert.equal(row.deployment_id, "dep-1");
 });
 
+test("REQUIRED: recordByoUsageEvent records real input/output tokens + duration", async () => {
+  const admin = fakeAdmin({});
+  await recordByoUsageEvent(admin, {
+    accountId: "acct-1", automation: "NATURAL_CHATTER_ANSWER_BYO", provider: "anthropic", model: "m", ok: true,
+    inputTokens: 812, outputTokens: 143, durationMs: 2450,
+  });
+  const row = admin.__store.watch_byo_ai_usage_events[0];
+  assert.equal(row.input_tokens, 812);
+  assert.equal(row.output_tokens, 143);
+  assert.equal(row.duration_ms, 2450);
+});
+
+test("inputTokens/outputTokens/durationMs default to null when omitted (never a fabricated 0)", async () => {
+  const admin = fakeAdmin({});
+  await recordByoUsageEvent(admin, { accountId: "acct-1", automation: "x", provider: "anthropic", model: "m", ok: true });
+  const row = admin.__store.watch_byo_ai_usage_events[0];
+  assert.equal(row.input_tokens, null);
+  assert.equal(row.output_tokens, null);
+  assert.equal(row.duration_ms, null);
+});
+
 /* -------------------------------------------------------- getByoUsageSummary ---- */
 
 const ROWS_FOR_ACCT1: Row[] = [
@@ -123,7 +146,47 @@ test("REQUIRED: getByoUsageSummary computes real total/success/failure counts, g
 test("getByoUsageSummary returns the empty summary (never throws) for an account with nothing recorded", async () => {
   const admin = fakeAdmin({});
   const summary = await getByoUsageSummary(admin, "acct-empty");
-  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [], byCommunity: [], byDeployment: [] });
+  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, totalInputTokens: null, totalOutputTokens: null, avgDurationMs: null, byAutomation: [], byCommunity: [], byDeployment: [] });
+});
+
+test("REQUIRED: getByoUsageSummary sums real input/output tokens and averages real duration across the window", async () => {
+  const admin = fakeAdmin({
+    watch_byo_ai_usage_events: [
+      { account_id: "acct-1", automation: "A", ok: true, input_tokens: 500, output_tokens: 100, duration_ms: 2000, created_at: new Date().toISOString() },
+      { account_id: "acct-1", automation: "A", ok: true, input_tokens: 300, output_tokens: 80, duration_ms: 1000, created_at: new Date().toISOString() },
+    ],
+  });
+  const summary = await getByoUsageSummary(admin, "acct-1");
+  assert.equal(summary.totalInputTokens, 800);
+  assert.equal(summary.totalOutputTokens, 180);
+  assert.equal(summary.avgDurationMs, 1500);
+});
+
+test("REQUIRED: an event with no recorded usage is skipped from the totals, never treated as 0", async () => {
+  const admin = fakeAdmin({
+    watch_byo_ai_usage_events: [
+      { account_id: "acct-1", automation: "A", ok: true, input_tokens: 500, output_tokens: 100, duration_ms: 2000, created_at: new Date().toISOString() },
+      { account_id: "acct-1", automation: "A", ok: true, input_tokens: null, output_tokens: null, duration_ms: null, created_at: new Date().toISOString() },
+    ],
+  });
+  const summary = await getByoUsageSummary(admin, "acct-1");
+  assert.equal(summary.totalCalls, 2, "the call itself still counts");
+  assert.equal(summary.totalInputTokens, 500, "only the event that reported usage contributes");
+  assert.equal(summary.avgDurationMs, 2000, "average is over samples that reported a duration, not all calls");
+});
+
+test("REQUIRED: totalInputTokens/totalOutputTokens/avgDurationMs are null (not 0) when NOTHING in the window reported usage", async () => {
+  const admin = fakeAdmin({
+    watch_byo_ai_usage_events: [
+      { account_id: "acct-1", automation: "A", ok: true, created_at: new Date().toISOString() },
+      { account_id: "acct-1", automation: "A", ok: false, created_at: new Date().toISOString() },
+    ],
+  });
+  const summary = await getByoUsageSummary(admin, "acct-1");
+  assert.equal(summary.totalCalls, 2);
+  assert.equal(summary.totalInputTokens, null);
+  assert.equal(summary.totalOutputTokens, null);
+  assert.equal(summary.avgDurationMs, null);
 });
 
 test("REQUIRED: cross-account isolation -- one account's events never leak into another's summary", async () => {
@@ -139,7 +202,7 @@ test("getByoUsageSummary never throws on a query error -- returns the empty summ
     typeof getByoUsageSummary
   >[0];
   const summary = await getByoUsageSummary(admin, "acct-1");
-  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [], byCommunity: [], byDeployment: [] });
+  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, totalInputTokens: null, totalOutputTokens: null, avgDurationMs: null, byAutomation: [], byCommunity: [], byDeployment: [] });
 });
 
 /* ------------------------------------------- getByoUsageSummary: byDeployment/byCommunity ---- */

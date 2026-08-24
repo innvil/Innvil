@@ -1,6 +1,6 @@
 import "server-only";
 
-import { aiComplete, deepseekChatterProvider } from "@/src/lib/ai/client";
+import { aiCompleteWithMeta, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
@@ -24,6 +24,22 @@ import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/w
 
 export type PresenceTransitionKind = "presence_started" | "presence_resumed" | "presence_ending";
 
+/** Real usage from the model call that actually produced this transition's
+ *  text -- present only when a real AI call succeeded (BYO or DeepSeek);
+ *  absent when generation fell through to the deterministic fallback pool
+ *  (no real call happened, or it failed), matching the same "never
+ *  fabricate usage for a call that didn't happen" discipline as
+ *  chatter-generate.ts's ChatterGenerationUsage. */
+export interface PresenceMessageUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number;
+}
+export interface PresenceMessageResult {
+  text: string;
+  usage?: PresenceMessageUsage;
+}
+
 const FALLBACK_TEMPLATES: Record<PresenceTransitionKind, string[]> = {
   presence_started: ["Morning! I'm around for a bit.", "Hey all, I'm here now.", "Popping in — around for a while."],
   presence_resumed: ["Back again!", "I'm back around.", "Here again for a bit."],
@@ -40,7 +56,7 @@ export async function generatePresenceMessage(
   persona: ModeratorPersona,
   kind: PresenceTransitionKind,
   aiRouting?: AccountAiRouting
-): Promise<string> {
+): Promise<PresenceMessageResult> {
   const intent =
     kind === "presence_started"
       ? "You are arriving/becoming active in this Telegram community for the first time in this rotation."
@@ -59,7 +75,7 @@ export async function generatePresenceMessage(
     const cred = aiRouting.credential;
     if (cred?.model) {
       try {
-        const raw = await aiComplete({
+        const result = await aiCompleteWithMeta({
           system,
           messages: [{ role: "user", content: "Write the message now." }],
           model: cred.model,
@@ -67,19 +83,19 @@ export async function generatePresenceMessage(
           maxTokens: 100,
           automation: "WATCHER_PRESENCE_BYO",
         });
-        const text = raw.trim();
-        if (text) return text.slice(0, 300);
+        const text = result.text.trim();
+        if (text) return { text: text.slice(0, 300), usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs: result.durationMs } };
       } catch {
         // fall through to the deterministic pool below
       }
     }
-    return fallbackFor(kind);
+    return { text: fallbackFor(kind) };
   }
 
   const deepseek = deepseekChatterProvider();
   if (deepseek) {
     try {
-      const raw = await aiComplete({
+      const result = await aiCompleteWithMeta({
         system,
         messages: [{ role: "user", content: "Write the message now." }],
         model: deepseek.model,
@@ -88,11 +104,11 @@ export async function generatePresenceMessage(
         maxTokens: 100,
         automation: "WATCHER_PRESENCE",
       });
-      const text = raw.trim();
-      if (text) return text.slice(0, 300);
+      const text = result.text.trim();
+      if (text) return { text: text.slice(0, 300), usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs: result.durationMs } };
     } catch {
       // fall through to the deterministic pool below
     }
   }
-  return fallbackFor(kind);
+  return { text: fallbackFor(kind) };
 }

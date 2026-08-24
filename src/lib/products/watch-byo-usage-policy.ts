@@ -30,11 +30,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * making; there is no "both" gate -- checking one kind never consumes or
  * blocks the other.
  *
- * UNIT: requests per period (never tokens -- aiComplete()'s current return
- * shape doesn't expose a real token count to every caller; fabricating one
- * would be dishonest, same reasoning already documented for
- * watch_byo_ai_usage_events). "Requests" here means successful
- * generations of the given kind specifically.
+ * UNIT: two independent, optional dimensions per (scope, kind, period) --
+ * REQUESTS (always required -- "successful generations of the given kind")
+ * and, as of 2026-08-25, real TOKENS (input + output combined, from the
+ * provider's own reported usage -- see client.ts's aiCompleteWithMeta(),
+ * which finally gave aiComplete() a real per-call token count to report,
+ * closing the "would be dishonest to fabricate one" gap this comment used
+ * to document). A customer may configure a token ceiling ALONGSIDE the
+ * always-required request ceiling for the same policy row; the gate blocks
+ * if EITHER configured limit is exhausted. A call whose provider response
+ * genuinely didn't report usage increments used_tokens by 0, never guessed.
  *
  * PERIOD: a plain UTC calendar day/month boundary (never an invented
  * per-community-timezone scheme) -- the same established, accepted
@@ -62,6 +67,9 @@ export interface WatchByoUsagePolicy {
   kind: UsagePolicyKind;
   period: UsagePolicyPeriod;
   requestLimit: number;
+  /** Optional real-token ceiling (input+output combined), independent of
+   *  requestLimit. Null = no token ceiling configured for this policy. */
+  tokenLimit: number | null;
 }
 
 const ACCOUNT_SCOPE_KEY = "account:__";
@@ -97,8 +105,11 @@ function toPolicy(row: Record<string, unknown>): WatchByoUsagePolicy {
     kind: (row.kind as UsagePolicyKind | undefined) ?? "reactive",
     period: row.period as UsagePolicyPeriod,
     requestLimit: row.request_limit as number,
+    tokenLimit: (row.token_limit as number | null | undefined) ?? null,
   };
 }
+
+const POLICY_COLUMNS = "id, account_id, community_id, deployment_id, kind, period, request_limit, token_limit";
 
 /** Every policy configured for this account -- every scope, both kinds.
  *  Used by both the owner-facing settings UI and the gate below (never a
@@ -106,7 +117,7 @@ function toPolicy(row: Record<string, unknown>): WatchByoUsagePolicy {
 export async function listByoUsagePolicies(admin: SupabaseClient, accountId: string): Promise<WatchByoUsagePolicy[]> {
   const { data } = await admin
     .from("watch_byo_usage_policies")
-    .select("id, account_id, community_id, deployment_id, kind, period, request_limit")
+    .select(POLICY_COLUMNS)
     .eq("account_id", accountId)
     .order("community_id", { ascending: true, nullsFirst: true })
     .order("deployment_id", { ascending: true, nullsFirst: true })
@@ -115,7 +126,7 @@ export async function listByoUsagePolicies(admin: SupabaseClient, accountId: str
 }
 
 async function loadPolicy(admin: SupabaseClient, accountId: string, scope: UsagePolicyScope, kind: UsagePolicyKind): Promise<WatchByoUsagePolicy | null> {
-  let query = admin.from("watch_byo_usage_policies").select("id, account_id, community_id, deployment_id, kind, period, request_limit").eq("account_id", accountId).eq("kind", kind);
+  let query = admin.from("watch_byo_usage_policies").select(POLICY_COLUMNS).eq("account_id", accountId).eq("kind", kind);
   if (scope.type === "account") query = query.is("community_id", null).is("deployment_id", null);
   else if (scope.type === "community") query = query.eq("community_id", scope.communityId).is("deployment_id", null);
   else query = query.eq("deployment_id", scope.deploymentId);
@@ -130,28 +141,42 @@ function onConflictFor(scope: UsagePolicyScope): string {
 }
 
 /** Sets (or replaces) the policy for one (scope, kind) pair. `requestLimit`
- *  must be a positive integer. Never touches any OTHER scope/kind's policy
- *  -- an account-wide, a Community, and a deployment policy for the SAME
- *  kind are all independent. */
+ *  must be a positive integer (always required -- unchanged). `tokenLimit`
+ *  is a genuinely optional THIRD state, not a boolean:
+ *    - omitted (undefined)  -> never included in the upsert payload, so an
+ *      existing token limit is left completely untouched on an update
+ *      (same "omit to preserve" idiom already used elsewhere in this
+ *      codebase, e.g. activateWatchEntitlement's enterpriseSlots), and a
+ *      brand-new row gets the column default (null, no token ceiling).
+ *    - explicit null         -> clears any previously-configured token limit.
+ *    - a positive number     -> validated + rounded, sets the ceiling.
+ *  Never touches any OTHER scope/kind's policy -- an account-wide, a
+ *  Community, and a deployment policy for the SAME kind are all
+ *  independent. */
 export async function setByoUsagePolicy(
   admin: SupabaseClient,
   accountId: string,
   scope: UsagePolicyScope,
   kind: UsagePolicyKind,
   period: UsagePolicyPeriod,
-  requestLimit: number
+  requestLimit: number,
+  tokenLimit?: number | null
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const limit = Math.round(requestLimit);
   if (!(limit > 0)) return { ok: false, error: "Request limit must be a positive number." };
-  const { error } = await admin.from("watch_byo_usage_policies").upsert(
-    {
-      account_id: accountId,
-      community_id: scope.type === "community" ? scope.communityId : null,
-      deployment_id: scope.type === "deployment" ? scope.deploymentId : null,
-      kind, period, request_limit: limit, updated_at: new Date().toISOString(),
-    },
-    { onConflict: onConflictFor(scope) }
-  );
+  let roundedTokenLimit: number | null | undefined = tokenLimit;
+  if (typeof tokenLimit === "number") {
+    roundedTokenLimit = Math.round(tokenLimit);
+    if (!(roundedTokenLimit > 0)) return { ok: false, error: "Token limit must be a positive number, or left blank." };
+  }
+  const payload: Record<string, unknown> = {
+    account_id: accountId,
+    community_id: scope.type === "community" ? scope.communityId : null,
+    deployment_id: scope.type === "deployment" ? scope.deploymentId : null,
+    kind, period, request_limit: limit, updated_at: new Date().toISOString(),
+  };
+  if (roundedTokenLimit !== undefined) payload.token_limit = roundedTokenLimit;
+  const { error } = await admin.from("watch_byo_usage_policies").upsert(payload, { onConflict: onConflictFor(scope) });
   if (error) return { ok: false, error: "Couldn't save the usage limit." };
   return { ok: true };
 }
@@ -164,9 +189,20 @@ export async function clearByoUsagePolicy(admin: SupabaseClient, accountId: stri
   await query;
 }
 
-async function readCounter(admin: SupabaseClient, accountId: string, scope: UsagePolicyScope, kind: UsagePolicyKind, key: string): Promise<number> {
-  const { data } = await admin.from("watch_byo_usage_counters").select("request_count").eq("account_id", accountId).eq("scope_key", scopeKeyFor(scope)).eq("kind", kind).eq("period_key", key).maybeSingle();
-  return (data?.request_count as number | undefined) ?? 0;
+interface CounterDetail { requestCount: number; usedTokens: number; }
+
+async function readCounter(admin: SupabaseClient, accountId: string, scope: UsagePolicyScope, kind: UsagePolicyKind, key: string): Promise<CounterDetail> {
+  const { data } = await admin.from("watch_byo_usage_counters").select("request_count, used_tokens").eq("account_id", accountId).eq("scope_key", scopeKeyFor(scope)).eq("kind", kind).eq("period_key", key).maybeSingle();
+  return { requestCount: (data?.request_count as number | undefined) ?? 0, usedTokens: (data?.used_tokens as number | undefined) ?? 0 };
+}
+
+/** True the instant EITHER of a policy's two independent, optional
+ *  dimensions is exhausted -- requestLimit is always present; tokenLimit
+ *  may or may not be configured. */
+function policyExhausted(policy: WatchByoUsagePolicy, counter: CounterDetail): "requests" | "tokens" | null {
+  if (counter.requestCount >= policy.requestLimit) return "requests";
+  if (policy.tokenLimit != null && counter.usedTokens >= policy.tokenLimit) return "tokens";
+  return null;
 }
 
 export interface ByoUsageGateResult {
@@ -177,13 +213,19 @@ export interface ByoUsageGateResult {
   /** Which scope's limit is the binding (tightest, currently-exhausted)
    *  one -- null when allowed or when `limited` is false. Diagnostic only. */
   blockedScope: "account" | "community" | "deployment" | null;
+  /** Which of that scope's two dimensions was the one actually exhausted --
+   *  null when allowed. Diagnostic only, lets the UI/logs say "you hit your
+   *  token ceiling" vs. "you hit your request ceiling" rather than a bare
+   *  "blocked." */
+  blockedBy: "requests" | "tokens" | null;
 }
 
 /** Evaluates every policy configured for this account AND KIND across all
  *  THREE applicable scopes -- account-wide, this Community (if given), and
  *  this specific deployment (if given) -- and blocks if ANY is exhausted
- *  for its own current period. The tightest configured ceiling always wins,
- *  regardless of which scope it's set at. A reactive-kind check never looks
+ *  (either its request ceiling OR its optional token ceiling) for its own
+ *  current period. The tightest configured ceiling always wins, regardless
+ *  of which scope/dimension it's set at. A reactive-kind check never looks
  *  at (or is blocked by) a proactive policy, and vice versa. Checked BEFORE
  *  a BYO-routed AI call is attempted (never after), same discipline as
  *  every other quota/pool gate in this codebase. */
@@ -195,21 +237,24 @@ export async function checkByoUsageAllowed(
     communityId ? loadPolicy(admin, accountId, { type: "community", communityId }, kind) : Promise.resolve(null),
     deploymentId ? loadPolicy(admin, accountId, { type: "deployment", deploymentId }, kind) : Promise.resolve(null),
   ]);
-  if (!accountPolicy && !communityPolicy && !deploymentPolicy) return { limited: false, allowed: true, blockedScope: null };
+  if (!accountPolicy && !communityPolicy && !deploymentPolicy) return { limited: false, allowed: true, blockedScope: null, blockedBy: null };
 
   if (accountPolicy) {
-    const used = await readCounter(admin, accountId, { type: "account" }, kind, periodKey(accountPolicy.period, now));
-    if (used >= accountPolicy.requestLimit) return { limited: true, allowed: false, blockedScope: "account" };
+    const counter = await readCounter(admin, accountId, { type: "account" }, kind, periodKey(accountPolicy.period, now));
+    const exhausted = policyExhausted(accountPolicy, counter);
+    if (exhausted) return { limited: true, allowed: false, blockedScope: "account", blockedBy: exhausted };
   }
   if (communityPolicy && communityId) {
-    const used = await readCounter(admin, accountId, { type: "community", communityId }, kind, periodKey(communityPolicy.period, now));
-    if (used >= communityPolicy.requestLimit) return { limited: true, allowed: false, blockedScope: "community" };
+    const counter = await readCounter(admin, accountId, { type: "community", communityId }, kind, periodKey(communityPolicy.period, now));
+    const exhausted = policyExhausted(communityPolicy, counter);
+    if (exhausted) return { limited: true, allowed: false, blockedScope: "community", blockedBy: exhausted };
   }
   if (deploymentPolicy && deploymentId) {
-    const used = await readCounter(admin, accountId, { type: "deployment", deploymentId }, kind, periodKey(deploymentPolicy.period, now));
-    if (used >= deploymentPolicy.requestLimit) return { limited: true, allowed: false, blockedScope: "deployment" };
+    const counter = await readCounter(admin, accountId, { type: "deployment", deploymentId }, kind, periodKey(deploymentPolicy.period, now));
+    const exhausted = policyExhausted(deploymentPolicy, counter);
+    if (exhausted) return { limited: true, allowed: false, blockedScope: "deployment", blockedBy: exhausted };
   }
-  return { limited: true, allowed: true, blockedScope: null };
+  return { limited: true, allowed: true, blockedScope: null, blockedBy: null };
 }
 
 /** Records ONE successful request of the given KIND against every scope
@@ -217,7 +262,13 @@ export async function checkByoUsageAllowed(
  *  this Community, and/or this deployment) -- re-resolved at increment
  *  time (never assumed from the gate check) so a policy added mid-period
  *  starts its counter fresh from 0. A scope with NO configured policy for
- *  this kind is never written to.
+ *  this kind is never written to. `tokens` (real, from the provider's own
+ *  reported usage -- see client.ts's aiCompleteWithMeta()) is added to
+ *  EVERY target's used_tokens counter regardless of whether that specific
+ *  scope has a token ceiling configured -- so a token limit added mid-
+ *  period after calls already happened still reflects real accrued usage,
+ *  not a fresh-from-zero undercount. Omitted/0 when the caller has no real
+ *  token count to report (e.g. a call site with no ok/error usage signal).
  *
  *  SCOPE OF WHAT COUNTS: `kind: "reactive"` is recorded only from a
  *  successful conversational reply generation (chatter ANSWER/CASUAL_CHAT,
@@ -230,7 +281,7 @@ export async function checkByoUsageAllowed(
  *  limit is reached, since that gate governs the shared BYO credential
  *  itself for a reactive-triggered event, not one specific call site. */
 export async function recordByoPolicyUsage(
-  admin: SupabaseClient, accountId: string, communityId: string | null, deploymentId: string | null = null, kind: UsagePolicyKind = "reactive", now: Date = new Date()
+  admin: SupabaseClient, accountId: string, communityId: string | null, deploymentId: string | null = null, kind: UsagePolicyKind = "reactive", tokens = 0, now: Date = new Date()
 ): Promise<void> {
   try {
     const [accountPolicy, communityPolicy, deploymentPolicy] = await Promise.all([
@@ -247,6 +298,7 @@ export async function recordByoPolicyUsage(
         admin.rpc("increment_watch_byo_usage", {
           p_account_id: accountId, p_scope_key: scopeKeyFor(scope), p_period_key: periodKey(policy.period, now), p_kind: kind,
           p_deployment_id: scope.type === "deployment" ? scope.deploymentId : null,
+          p_tokens: Math.max(0, Math.round(tokens || 0)),
         })
       )
     );
@@ -260,14 +312,15 @@ export async function recordByoPolicyUsage(
 
 /** Real observed usage for the Usage page's "BYO Usage Controls" section --
  *  every configured policy (every scope, both kinds), alongside its current
- *  period's real used count. Never fabricates a number for a scope/kind
- *  with no configured policy (those simply aren't returned). */
-export async function getByoUsageStatus(admin: SupabaseClient, accountId: string, now: Date = new Date()): Promise<Array<WatchByoUsagePolicy & { used: number }>> {
+ *  period's real used request count AND real used token count. Never
+ *  fabricates a number for a scope/kind with no configured policy (those
+ *  simply aren't returned). */
+export async function getByoUsageStatus(admin: SupabaseClient, accountId: string, now: Date = new Date()): Promise<Array<WatchByoUsagePolicy & { used: number; usedTokens: number }>> {
   const policies = await listByoUsagePolicies(admin, accountId);
   return Promise.all(
-    policies.map(async (p) => ({
-      ...p,
-      used: await readCounter(admin, accountId, p.scope, p.kind, periodKey(p.period, now)),
-    }))
+    policies.map(async (p) => {
+      const counter = await readCounter(admin, accountId, p.scope, p.kind, periodKey(p.period, now));
+      return { ...p, used: counter.requestCount, usedTokens: counter.usedTokens };
+    })
   );
 }

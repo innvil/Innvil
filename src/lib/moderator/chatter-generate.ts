@@ -1,6 +1,6 @@
 import "server-only";
 
-import { aiComplete, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
+import { aiComplete, aiCompleteWithMeta, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import type { KnowledgeContextEntry } from "./knowledge";
 import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
@@ -104,7 +104,23 @@ export interface GenerateChatterReplyInput {
   aiRouting?: AccountAiRouting;
 }
 
-export type ChatterGenerationResult = { ok: true; reply: string } | { ok: true; noReply: true } | { ok: false; error: string };
+/** Real usage from the ONE model call generateChatterReply makes -- present
+ *  on every `ok: true` outcome (reply or noReply alike, since a decline
+ *  still means a real call happened) regardless of whether this was a
+ *  Managed or BYO-routed generation. Consumed today only by BYO telemetry/
+ *  token-ceiling accounting (community-runtime.ts's recordByoCall) -- a
+ *  Managed generation's usage is simply never read by anything, harmless
+ *  either way. */
+export interface ChatterGenerationUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number;
+}
+
+export type ChatterGenerationResult =
+  | { ok: true; reply: string; usage: ChatterGenerationUsage }
+  | { ok: true; noReply: true; usage: ChatterGenerationUsage }
+  | { ok: false; error: string };
 
 const NO_REPLY_SENTINEL = "NO_REPLY";
 const MAX_REPLY_CHARS = 300;
@@ -466,7 +482,7 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
   ].join("\n\n");
 
   try {
-    const raw = await aiComplete({
+    const result = await aiCompleteWithMeta({
       system: buildSystemPrompt(input),
       messages: [{ role: "user", content: userContent }],
       model: route.model,
@@ -476,11 +492,12 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
       maxTokens: route.maxTokens,
       automation: route.automation,
     });
-    const text = raw.trim();
+    const usage: ChatterGenerationUsage = { inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs: result.durationMs };
+    const text = result.text.trim();
     if (!text || text.toUpperCase() === NO_REPLY_SENTINEL || text.toUpperCase().startsWith(NO_REPLY_SENTINEL)) {
-      return { ok: true, noReply: true };
+      return { ok: true, noReply: true, usage };
     }
-    return { ok: true, reply: text.slice(0, MAX_REPLY_CHARS) };
+    return { ok: true, reply: text.slice(0, MAX_REPLY_CHARS), usage };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "AI generation failed" };
   }
