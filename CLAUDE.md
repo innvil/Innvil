@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — BYO usage telemetry: deployment-level attribution — closes part of Phase 4.V.1's honest
+  deferred list (v1.47.55)
+- **Continuation of the same-day Watch documentation/status audit** ("all watch related done?") — while
+  correcting several stale roadmap headers (Phase 4.M's (C)–(F), Phase 4.Q, Phase 4.U, Phase 4.S all still said
+  "not built"/"NOTED" despite having shipped in earlier passes — fixed those headers to match reality, see the
+  `git log` for the doc-only commit), the one genuinely still-open, low-risk item from **Phase 4.V.1's own
+  itemized deferred list** was picked up and closed: *"there's still no Watcher/deployment-level attribution...
+  in the general usage SUMMARY (`getByoUsageSummary`), and no per-Community breakdown beyond what's already
+  recorded (the schema has `community_id` but nothing currently groups/displays by it)."*
+- **Migration `0102_watch_byo_usage_events_deployment.sql`** — additive/nullable `deployment_id` on
+  `watch_byo_ai_usage_events` (`references moderator_deployments(id) on delete set null` — a deleted deployment
+  must never cascade-delete real historical telemetry). Every call site that records a BYO usage event already
+  resolves a real `deploymentId` today, for the SEPARATE, already-shipped per-deployment usage-POLICY
+  accounting (Phase 4.V.1, item 2, v1.47.51) — this migration just lets that same value be recorded on the
+  telemetry ledger too. **Run migration `0102`.**
+- **`watch-byo-usage.ts`**: `ByoUsageEventInput` gained `deploymentId?`; `recordByoUsageEvent` now inserts it.
+  `getByoUsageSummary` gained `byCommunity`/`byDeployment` (alongside the existing `byAutomation`) — real
+  total/successful/failed counts grouped by RAW ids only (this module deliberately has no access to Watcher/
+  Community NAMES, staying a pure telemetry-read layer, consistent with its own stated architecture — no new
+  cross-module coupling to `listAccountCommunities` was introduced here). A pre-attribution event (a row
+  written before this migration, or genuinely community/deployment-less) is correctly OMITTED from both
+  breakdowns, never bucketed under a fabricated "unknown" id — `totalCalls` still counts it, only the
+  attribution breakdowns exclude it.
+- **`community-runtime.ts`'s `recordByoCall`** and **`presence-runtime.ts`'s `recordByoPresenceCall`** both now
+  thread the `deploymentId` they already resolve (for usage-policy accounting) into `recordByoUsageEvent` too —
+  a one-line addition at each of the two existing call sites, doc comments updated to reflect the new dual
+  purpose.
+- **Usage page**: the "BYO calls" card gained two new sections — **"By Watcher"** (always shown when any
+  attributed event exists) and **"By Community"** (shown only when the account has 2+ Communities with
+  attributed BYO calls — a single-Community account showing a 1-row "By Community" breakdown would be
+  redundant clutter, not new information). Both resolve raw ids to real, human-readable names using the SAME
+  `communities` data the page already fetches for other purposes (`watcherNameByDeployment`/
+  `communityTitleById` lookup maps, mirroring the exact pattern `getAccountSlotBreakdown`'s own callers already
+  use elsewhere) — no extra query. A deleted deployment/Community falls back to a plain "Deleted Watcher"/
+  "Deleted Community" label rather than crashing or showing a raw UUID.
+- New tests (`watch-byo-usage.test.ts`, +4, plus 2 existing tests corrected for the widened empty-summary
+  shape): `deploymentId` recorded on insert, `byDeployment`/`byCommunity` grouping with real worked counts, and
+  a dedicated proof that pre-attribution (null-community/null-deployment) rows are omitted from both
+  breakdowns without ever being bucketed under a fabricated `"null"`-string id. 1662 tests pass (up from 1658),
+  `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per standing instruction.**
+- **Phase 4.V.1's remaining honest deferred list, unchanged by this pass**: token-based ceilings (still blocked
+  on widening `aiComplete()`'s return shape across every existing caller); multi-credential provider/model
+  scoped ASSIGNMENT (still judged premature — a real, security-sensitive credential-storage rearchitecture for
+  a feature with zero live BYO customers today); the spec's own structured test/report checklist as a discrete
+  deliverable; a dedicated commercial-vs-BYO limit UX copy pass.
+
 ### 2026-08-25 — `innvil_bot_manager` proactive marketing campaigns — the deliberately-deferred Phase 4.Q half now
   ships (v1.47.54)
 - **Closes the last item explicitly deferred at v1.20.0** ("only the reactive-support half is built this pass...
@@ -8444,7 +8491,7 @@ win over this):**
 >   panel burns supply); keep adding SaaS sinks to drive utility + holders.
 > - Branding: platform currency is *anvil* now → *ANVIL* the coin later (logo = the mark).
 
-### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement ((A) DONE v1.1.84, (B) DONE v1.7.0, (C)–(F) NOTED)
+### Phase 4.M: Innvil Virtual Moderator — Natural Chatter & Community Moderation Refinement ((A) DONE v1.1.84, (B) DONE v1.7.0, (C)–(F) DONE v1.11.0 — ALL PARTS COMPLETE, see the v1.11.0 entry inline below for the full (C)–(F) implementation summary)
 
 > Telegram-based AI community moderator add-on. Foundation already built and live in
 > this branch: Managed Bot provisioning (BotFather-token fallback + Telegram Managed
@@ -10081,7 +10128,7 @@ win over this):**
 > - Only `INNVIL_MODERATOR`-classified senders (numeric bot ID + active deployment in
 >   the same community) participate — `EXTERNAL_BOT` never gets this treatment.
 
-### Phase 4.Q: `innvil_bot_manager` — Innvil's official product bot (reactive-support half DONE v1.20.0 — see the dated changelog entry above; the proactive marketing-campaign SEND path below is still NOT built — schema only)
+### Phase 4.Q: `innvil_bot_manager` — Innvil's official product bot (BOTH HALVES DONE — reactive-support half v1.20.0, proactive marketing-campaign send path v1.47.54 — see the dated changelog entries above for both)
 
 > **Explicit instruction: "Take note only, will implement this once the ai mods are
 > fully intact."** A new Innvil-owned, platform-wide (not per-panel/tenant) Telegram
@@ -10159,9 +10206,26 @@ Architecture direction for future implementation:
   gathering -> PR draft generation -> claim validation -> compliance review ->
   similarity review -> optional one-pass regeneration with reviewer feedback.
 
-### Phase 4.S: Future Enterprise BYO pricing + Media Moderation entitlement (NOTED, not built — documentation/planning only)
+### Phase 4.S: Future Enterprise BYO pricing + Media Moderation entitlement (STATUS MIXED — Media Moderation Unit entitlement/metering DONE across v1.47.29/33/40/47/48 for both self-serve and Enterprise; the "normal-tier pricing" sub-item below was SUPERSEDED, not implemented — see correction below)
 
-> **FUTURE PLAN — DO NOT IMPLEMENT YET.** Full verbatim spec (source of truth):
+> **STATUS CORRECTION, added 2026-08-25 (kept the original planning text verbatim below
+> as historical context — it no longer reflects current pricing).** This section was
+> originally written as a pure "do not implement yet" planning doc. Two things have
+> since happened: (1) **Media Moderation Unit accounting — the entitlement/metering
+> concept this section proposed — is now fully real and shipped**, both for self-serve
+> tiers (`watch-media-moderation-usage.ts`, v1.47.40) and for Enterprise
+> (`resolveEnterpriseMediaAddonKey`, v1.47.47/48), with real Usage-page visibility. (2)
+> The **"normal-tier pricing" price-INCREASE proposal below was never applied** — the
+> live prices instead moved the OPPOSITE direction (a price CUT: Bronze $29.99/Silver
+> $59.99/Gold $99.99/Platinum $199.00, per v1.47.27's "Self-serve Innvil Watch plan
+> prices cut" — see that changelog entry, not the numbers quoted below, for the real
+> current pricing). Only the **Enterprise BYO pricing** portion of this section (the
+> flat BYO 50/BYO Unlimited packages) is still a real, separate, later-superseding spec
+> — see Phase 4.V's `watch-enterprise.ts`/`WATCH_ENTERPRISE_BYO_TIERS`, which is what
+> actually shipped for BYO. The original planning text below is preserved verbatim for
+> historical/traceability reasons, not because it's still an accurate roadmap.
+>
+> Full verbatim spec (source of truth):
 > `docs/moderator/enterprise-byo-pricing-and-media-entitlement-plan.md`. Nothing in
 > `money.ts`, `moderator/plan.ts`, migrations, or Vercel env vars was changed to
 > produce this — it records intended future pricing/entitlement direction only.
@@ -10215,15 +10279,14 @@ Architecture direction for future implementation:
   pricing-economics rationale (Innvil still pays for hosting/queues/Telegram
   processing/storage/bandwidth/classification/monitoring/security even under BYO).
 
-### Phase 4.U: Watcher Presence Scheduling (NOTED, not built — sequenced after current testing)
+### Phase 4.U: Watcher Presence Scheduling (DONE v1.47.44 — see the dated changelog entry above for the full implementation summary)
 
-> **FUTURE PLAN — DO NOT IMPLEMENT YET.** Full verbatim spec (source of truth):
-> `docs/moderator/watcher-presence-scheduling-spec.md`. Sent in full during the
-> 2026-08-19 session alongside the Phase 4.V BYO refinement below — explicit
-> instruction: **implement only after current Telegram/moderation testing/debugging
-> is complete and confirmed stable**, and only the real usage-limit work (v1.47.16)
-> was authorized to proceed in that same session. Nothing in the schema, runtime, or
-> UI was changed to produce this note.
+> **STATUS UPDATE: implemented and shipped 2026-08-25 as v1.47.44** ("Watcher Presence
+> Scheduling — Phase 4.U implemented"), once current Telegram/moderation testing was
+> confirmed stable, per the standing instruction below (kept verbatim as historical
+> context — this whole block describes the ORIGINAL pre-implementation plan, not the
+> current state). Full verbatim spec (source of truth): `docs/moderator/
+> watcher-presence-scheduling-spec.md`.
 - **Ownership**: a Presence Schedule belongs to the DEPLOYMENT (Watcher ↔ Community
   assignment), never the Watcher Profile (which stays identity/persona-only, reusable
   across future multi-Community deployments) and never a Community-owned/shared
@@ -10360,7 +10423,7 @@ Architecture direction for future implementation:
   account_id / Deployment → Community → Project → account_id, no synthetic Panel,
   consistent with every other Watch table added this session.
 
-### Phase 4.V.1: BYO Enterprise — remaining refinement (NOTED, not built — the honest deferred list)
+### Phase 4.V.1: BYO Enterprise — remaining refinement (MOSTLY CLOSED — see the status note below for exactly what's left; the header title "the honest deferred list" is kept for continuity across passes)
 
 > **What actually shipped from Phase 4.V (real, live, tested):** credential storage
 > (`watch-byo.ts`, encrypted, self-serve entry via the customer's own Settings → AI
@@ -10384,8 +10447,15 @@ Architecture direction for future implementation:
 > `checkByoUsageAllowed`/`recordByoPolicyUsage`/`resolveAccountAiRouting` all take a
 > `kind` ("reactive"/"proactive") and now resolve/record against a real
 > `UsagePolicyScope` discriminated union (`{type:"account"}`/`{type:"community",...}`/
-> `{type:"deployment",...}`), tightest-wins across all three. The remaining items
-> below are unchanged.
+> `{type:"deployment",...}`), tightest-wins across all three.
+>
+> **Watcher/deployment-level attribution + per-Community usage breakdown CLOSED,
+> v1.47.55** (migration `0102`, `getByoUsageSummary`'s `byDeployment`/`byCommunity`,
+> surfaced on Usage) — the specific gap called out in "richer telemetry dimensions"
+> below. What genuinely remains open, itemized below: token-based ceilings,
+> multi-credential provider/model scoped ASSIGNMENT, call-latency in the usage
+> summary, the spec's own structured test/report checklist, and a dedicated
+> commercial-vs-BYO limit UX copy pass.
 >
 > **What's still missing from the full spec** (`docs/moderator/byo-enterprise-refinement-spec.md`),
 > itemized directly against the spec's own sections rather than summarized away:
@@ -10405,12 +10475,15 @@ Architecture direction for future implementation:
 >   currently has exactly one row per account by design), for a feature with zero
 >   live BYO customers today (confirmed via the live Supabase project) — judged
 >   premature relative to the lower-risk, more broadly useful items already closed.
-> - **Richer telemetry dimensions** — provider health (v1.47.52) added last-success/
->   last-error/7-day call volume, but there's still no Watcher/deployment-level
->   attribution or latency in the general usage SUMMARY (`getByoUsageSummary`), and no
->   per-Community breakdown beyond what's already recorded (the schema has
->   `community_id` but nothing currently groups/displays by it). Input/output tokens
->   remain correctly unrecorded (not reliably available), per the spec's own rule.
+> - **Richer telemetry dimensions — PARTIALLY CLOSED, v1.47.55.** Provider health
+>   (v1.47.52) added last-success/last-error/7-day call volume; **Watcher/deployment-
+>   level attribution AND per-Community breakdown are now real too** (migration `0102`,
+>   `getByoUsageSummary`'s new `byDeployment`/`byCommunity`, surfaced on the Usage
+>   page's "BYO calls" card). Still genuinely missing: **latency** in the usage summary
+>   (`aiComplete()` doesn't currently return call duration to its callers — same class
+>   of "would need to widen a return shape everywhere" limitation as the token-count
+>   gap below). Input/output tokens remain correctly unrecorded (not reliably
+>   available), per the spec's own rule.
 > - **The spec's own structured test/report checklist** — landing-page tests (BYO
 >   discoverability, CTA routing, no-duplicate-sections, mobile layout), the full BYO
 >   eligibility/secret/provider-config/policy/runtime-separation test categories, and

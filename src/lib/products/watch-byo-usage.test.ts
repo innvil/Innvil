@@ -80,12 +80,20 @@ test("REQUIRED: recordByoUsageEvent never throws even when .from() itself throws
   await assert.doesNotReject(recordByoUsageEvent(admin, { accountId: "acct-1", automation: "x", provider: "anthropic", model: "m", ok: true }));
 });
 
-test("communityId/error default to null when omitted", async () => {
+test("communityId/deploymentId/error default to null when omitted", async () => {
   const admin = fakeAdmin({});
   await recordByoUsageEvent(admin, { accountId: "acct-1", automation: "x", provider: "anthropic", model: "m", ok: true });
   const row = admin.__store.watch_byo_ai_usage_events[0];
   assert.equal(row.community_id, null);
+  assert.equal(row.deployment_id, null);
   assert.equal(row.error, null);
+});
+
+test("REQUIRED: recordByoUsageEvent records the given deploymentId (Phase 4.V.1 attribution)", async () => {
+  const admin = fakeAdmin({});
+  await recordByoUsageEvent(admin, { accountId: "acct-1", communityId: "comm-1", deploymentId: "dep-1", automation: "WATCHER_PRESENCE", provider: "anthropic", model: "m", ok: true });
+  const row = admin.__store.watch_byo_ai_usage_events[0];
+  assert.equal(row.deployment_id, "dep-1");
 });
 
 /* -------------------------------------------------------- getByoUsageSummary ---- */
@@ -115,7 +123,7 @@ test("REQUIRED: getByoUsageSummary computes real total/success/failure counts, g
 test("getByoUsageSummary returns the empty summary (never throws) for an account with nothing recorded", async () => {
   const admin = fakeAdmin({});
   const summary = await getByoUsageSummary(admin, "acct-empty");
-  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [] });
+  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [], byCommunity: [], byDeployment: [] });
 });
 
 test("REQUIRED: cross-account isolation -- one account's events never leak into another's summary", async () => {
@@ -131,7 +139,54 @@ test("getByoUsageSummary never throws on a query error -- returns the empty summ
     typeof getByoUsageSummary
   >[0];
   const summary = await getByoUsageSummary(admin, "acct-1");
-  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [] });
+  assert.deepEqual(summary, { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [], byCommunity: [], byDeployment: [] });
+});
+
+/* ------------------------------------------- getByoUsageSummary: byDeployment/byCommunity ---- */
+// Phase 4.V.1 -- deployment-level attribution, closing part of the honest
+// "still deferred" list (richer telemetry dimensions).
+
+const ROWS_WITH_ATTRIBUTION: Row[] = [
+  { account_id: "acct-1", automation: "NATURAL_CHATTER_ANSWER", community_id: "comm-1", deployment_id: "dep-1", ok: true, created_at: new Date().toISOString() },
+  { account_id: "acct-1", automation: "NATURAL_CHATTER_ANSWER", community_id: "comm-1", deployment_id: "dep-1", ok: false, created_at: new Date().toISOString() },
+  { account_id: "acct-1", automation: "WATCHER_PRESENCE", community_id: "comm-2", deployment_id: "dep-2", ok: true, created_at: new Date().toISOString() },
+  // A pre-attribution event (migration 0093-era row, before deployment_id existed) -- must never be
+  // bucketed under a fabricated "unknown" id, only omitted from byDeployment/byCommunity.
+  { account_id: "acct-1", automation: "NATURAL_CHATTER_CASUAL_CHAT", community_id: null, deployment_id: null, ok: true, created_at: new Date().toISOString() },
+];
+
+test("REQUIRED: byDeployment groups real total/success/failure counts per deployment id", async () => {
+  const admin = fakeAdmin({ watch_byo_ai_usage_events: ROWS_WITH_ATTRIBUTION });
+  const summary = await getByoUsageSummary(admin, "acct-1");
+  const dep1 = summary.byDeployment.find((d) => d.deploymentId === "dep-1");
+  assert.equal(dep1?.total, 2);
+  assert.equal(dep1?.successful, 1);
+  assert.equal(dep1?.failed, 1);
+  const dep2 = summary.byDeployment.find((d) => d.deploymentId === "dep-2");
+  assert.equal(dep2?.total, 1);
+  assert.equal(dep2?.successful, 1);
+});
+
+test("REQUIRED: byCommunity groups real total/success/failure counts per community id", async () => {
+  const admin = fakeAdmin({ watch_byo_ai_usage_events: ROWS_WITH_ATTRIBUTION });
+  const summary = await getByoUsageSummary(admin, "acct-1");
+  const comm1 = summary.byCommunity.find((c) => c.communityId === "comm-1");
+  assert.equal(comm1?.total, 2);
+  const comm2 = summary.byCommunity.find((c) => c.communityId === "comm-2");
+  assert.equal(comm2?.total, 1);
+});
+
+test("REQUIRED: events with no recorded deployment_id/community_id (pre-attribution) are omitted, never bucketed under a fabricated id", async () => {
+  const admin = fakeAdmin({ watch_byo_ai_usage_events: ROWS_WITH_ATTRIBUTION });
+  const summary = await getByoUsageSummary(admin, "acct-1");
+  // 4 total rows, but only 3 carry real deployment/community attribution.
+  assert.equal(summary.totalCalls, 4);
+  const deploymentTotal = summary.byDeployment.reduce((s, d) => s + d.total, 0);
+  const communityTotal = summary.byCommunity.reduce((s, c) => s + c.total, 0);
+  assert.equal(deploymentTotal, 3);
+  assert.equal(communityTotal, 3);
+  assert.ok(!summary.byDeployment.some((d) => d.deploymentId === "null"));
+  assert.ok(!summary.byCommunity.some((c) => c.communityId === "null"));
 });
 
 /* ----------------------------------------------------- getByoProviderHealth ---- */

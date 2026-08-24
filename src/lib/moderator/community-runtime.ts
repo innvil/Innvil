@@ -73,13 +73,16 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  `deploymentId` (Phase 4.V.1, item 2) threads the actual responding
  *  Watcher into `recordByoPolicyUsage`'s 3rd (deployment) scope, alongside
  *  the account/Community scopes -- a per-Watcher ceiling only ever
- *  increments from a genuinely successful call by THAT Watcher. */
+ *  increments from a genuinely successful call by THAT Watcher. It's also
+ *  recorded on the telemetry event itself (Phase 4.V.1, deployment-level
+ *  attribution), so the Usage page's BYO summary can report "which Watcher
+ *  actually made these calls," not just which automation/Community. */
 function recordByoCall(
   admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, deploymentId: string, automation: string, ok: boolean, error?: string
 ): void {
   if (!aiRouting.required || !accountId) return;
   void recordByoUsageEvent(admin, {
-    accountId, communityId, automation,
+    accountId, communityId, deploymentId, automation,
     provider: aiRouting.credential?.provider ?? "unconfigured",
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,

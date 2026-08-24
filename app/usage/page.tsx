@@ -64,6 +64,15 @@ export default async function UsagePage() {
   // Only queried for a BYO-flagged account, so a Managed/self-serve/trial
   // account never pays for this extra query.
   const byoUsage = capacity?.apiSourceMode === "byo" ? await getByoUsageSummary(admin, accountId) : null;
+  // Deployment-level attribution (Phase 4.V.1) -- resolves byoUsage's raw
+  // deployment/community ids to real, human-readable names using the SAME
+  // `communities` data already fetched above for other purposes -- no extra
+  // query, and the same lookup-map pattern getAccountSlotBreakdown's own
+  // callers already use elsewhere. A deleted deployment/community (or an
+  // event predating deployment attribution) falls back to a plain label
+  // rather than crashing or fabricating a name.
+  const watcherNameByDeployment = new Map(communities.flatMap((c) => c.watchers.map((w) => [w.deploymentId, w.watcherName] as const)));
+  const communityTitleById = new Map(communities.map((c) => [c.id, c.title ?? c.chatId] as const));
 
   // BYO usage-policy status (Phase 4.V) -- the customer's own configured
   // spend ceilings + real current-period usage against them. Same BYO-only
@@ -339,6 +348,33 @@ export default async function UsagePage() {
               </div>
             ) : (
               <p className="text-xs w-text-faint">No calls recorded yet.</p>
+            )}
+            {/* Deployment/Community-level attribution (Phase 4.V.1) -- "which
+                Watcher/Community is actually making these calls," resolved to
+                real names via the lookup maps above; omitted entirely when
+                there's nothing to attribute (e.g. only pre-attribution events
+                exist) rather than showing an empty section. */}
+            {byoUsage.byDeployment.length > 0 && (
+              <div className="mt-3 pt-3 border-t w-line-soft space-y-1.5">
+                <p className="text-[11px] uppercase tracking-wide w-text-faint font-semibold mb-1">By Watcher</p>
+                {byoUsage.byDeployment.map((d) => (
+                  <div key={d.deploymentId} className="flex items-center justify-between text-xs">
+                    <span className="w-text-dim">{watcherNameByDeployment.get(d.deploymentId) ?? "Deleted Watcher"}</span>
+                    <span className="w-text-faint">{d.successful}/{d.total} succeeded</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {byoUsage.byCommunity.length > 1 && (
+              <div className="mt-3 pt-3 border-t w-line-soft space-y-1.5">
+                <p className="text-[11px] uppercase tracking-wide w-text-faint font-semibold mb-1">By Community</p>
+                {byoUsage.byCommunity.map((c) => (
+                  <div key={c.communityId} className="flex items-center justify-between text-xs">
+                    <span className="w-text-dim">{communityTitleById.get(c.communityId) ?? "Deleted Community"}</span>
+                    <span className="w-text-faint">{c.successful}/{c.total} succeeded</span>
+                  </div>
+                ))}
+              </div>
             )}
             {!capacity.hasByoCredential && (
               <p className="text-xs w-amber mt-3">

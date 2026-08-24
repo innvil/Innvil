@@ -24,6 +24,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export interface ByoUsageEventInput {
   accountId: string;
   communityId?: string | null;
+  /** Phase 4.V.1 -- the specific Watcher deployment that made this call,
+   *  when known (every call site already resolves this for the separate
+   *  usage-POLICY accounting -- see recordByoCall/recordByoPresenceCall).
+   *  Omitted (never a fabricated id) for anything not attributable to one
+   *  specific deployment. */
+  deploymentId?: string | null;
   automation: string;
   provider: string;
   model: string;
@@ -40,6 +46,7 @@ export async function recordByoUsageEvent(admin: SupabaseClient, input: ByoUsage
     const { error } = await admin.from("watch_byo_ai_usage_events").insert({
       account_id: input.accountId,
       community_id: input.communityId ?? null,
+      deployment_id: input.deploymentId ?? null,
       automation: input.automation,
       provider: input.provider,
       model: input.model,
@@ -59,36 +66,70 @@ export interface ByoUsageAutomationCount {
   failed: number;
 }
 
+/** Raw ids only -- this module is a pure telemetry-read layer with no
+ *  access to Watcher/Community NAMES (it doesn't import
+ *  listAccountCommunities, deliberately, to avoid a new cross-module
+ *  coupling in a file whose whole job is "what does this one table say").
+ *  The caller (Usage page) already has the account's full Community/Watcher
+ *  data fetched for other purposes and resolves these ids to real names
+ *  from that, the same way getAccountSlotBreakdown's own callers already do. */
+export interface ByoUsageCommunityCount {
+  communityId: string;
+  total: number;
+  successful: number;
+  failed: number;
+}
+export interface ByoUsageDeploymentCount {
+  deploymentId: string;
+  total: number;
+  successful: number;
+  failed: number;
+}
+
 export interface ByoUsageSummary {
   totalCalls: number;
   successfulCalls: number;
   failedCalls: number;
   byAutomation: ByoUsageAutomationCount[];
+  byCommunity: ByoUsageCommunityCount[];
+  byDeployment: ByoUsageDeploymentCount[];
 }
 
-const EMPTY_SUMMARY: ByoUsageSummary = { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [] };
+const EMPTY_SUMMARY: ByoUsageSummary = { totalCalls: 0, successfulCalls: 0, failedCalls: 0, byAutomation: [], byCommunity: [], byDeployment: [] };
+
+function tallyBucket(map: Map<string, { total: number; successful: number; failed: number }>, key: string, ok: boolean): void {
+  const bucket = map.get(key) ?? { total: 0, successful: 0, failed: 0 };
+  bucket.total += 1;
+  if (ok) bucket.successful += 1; else bucket.failed += 1;
+  map.set(key, bucket);
+}
 
 /** Real, observed call/outcome counts for this account over the last
  *  `sinceDays` -- never a fabricated/estimated number. Returns the empty
  *  summary (never throws) when nothing has been recorded yet, a genuine,
- *  expected state for an account that hasn't made a BYO call recently. */
+ *  expected state for an account that hasn't made a BYO call recently.
+ *  byDeployment/byCommunity omit events with no recorded deployment_id/
+ *  community_id (e.g. events written before migration 0102 added deployment
+ *  attribution) -- never bucketed under a fabricated "unknown" id. */
 export async function getByoUsageSummary(admin: SupabaseClient, accountId: string, sinceDays = 30): Promise<ByoUsageSummary> {
   const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await admin
     .from("watch_byo_ai_usage_events")
-    .select("automation, ok")
+    .select("automation, community_id, deployment_id, ok")
     .eq("account_id", accountId)
     .gte("created_at", since);
   if (error || !data) return EMPTY_SUMMARY;
 
   const byAutomation = new Map<string, { total: number; successful: number; failed: number }>();
+  const byCommunity = new Map<string, { total: number; successful: number; failed: number }>();
+  const byDeployment = new Map<string, { total: number; successful: number; failed: number }>();
   let successfulCalls = 0;
   let failedCalls = 0;
-  for (const row of data as Array<{ automation: string; ok: boolean }>) {
-    const bucket = byAutomation.get(row.automation) ?? { total: 0, successful: 0, failed: 0 };
-    bucket.total += 1;
-    if (row.ok) { bucket.successful += 1; successfulCalls += 1; } else { bucket.failed += 1; failedCalls += 1; }
-    byAutomation.set(row.automation, bucket);
+  for (const row of data as Array<{ automation: string; community_id: string | null; deployment_id: string | null; ok: boolean }>) {
+    tallyBucket(byAutomation, row.automation, row.ok);
+    if (row.community_id) tallyBucket(byCommunity, row.community_id, row.ok);
+    if (row.deployment_id) tallyBucket(byDeployment, row.deployment_id, row.ok);
+    if (row.ok) successfulCalls += 1; else failedCalls += 1;
   }
 
   return {
@@ -97,6 +138,12 @@ export async function getByoUsageSummary(admin: SupabaseClient, accountId: strin
     failedCalls,
     byAutomation: Array.from(byAutomation.entries())
       .map(([automation, c]) => ({ automation, total: c.total, successful: c.successful, failed: c.failed }))
+      .sort((a, b) => b.total - a.total),
+    byCommunity: Array.from(byCommunity.entries())
+      .map(([communityId, c]) => ({ communityId, total: c.total, successful: c.successful, failed: c.failed }))
+      .sort((a, b) => b.total - a.total),
+    byDeployment: Array.from(byDeployment.entries())
+      .map(([deploymentId, c]) => ({ deploymentId, total: c.total, successful: c.successful, failed: c.failed }))
       .sort((a, b) => b.total - a.total),
   };
 }

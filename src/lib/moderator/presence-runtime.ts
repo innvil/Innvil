@@ -20,13 +20,14 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  `deploymentId` (Phase 4.V.1, item 2) is always known here -- unlike
  *  community-runtime.ts's chatter path, this sweep already iterates
  *  per-deployment, so the per-Watcher usage-policy scope increments
- *  directly, no separate re-check step needed. */
+ *  directly, no separate re-check step needed. Also recorded on the
+ *  telemetry event itself (Phase 4.V.1, deployment-level attribution). */
 function recordByoPresenceCall(
   admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string, communityId: string, deploymentId: string, ok: boolean, error?: string
 ): void {
   if (!aiRouting.required) return;
   void recordByoUsageEvent(admin, {
-    accountId, communityId, automation: "WATCHER_PRESENCE",
+    accountId, communityId, deploymentId, automation: "WATCHER_PRESENCE",
     provider: aiRouting.credential?.provider ?? "unconfigured",
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
