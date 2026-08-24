@@ -235,6 +235,17 @@ export const MANAGED_AI_ROUTING: AccountAiRouting = { required: false, credentia
  *  required-but-unusable handling covers this with zero changes needed at
  *  any generation call site.
  *
+ *  `deploymentId` (Phase 4.V.1, item 2, optional -- default null, every
+ *  pre-existing caller unaffected) additionally gates on a THIRD, tighter
+ *  usage-policy scope: one specific Watcher deployment's own configured
+ *  ceiling, independent of its Community's or the account's. Pass it when
+ *  the calling deployment is already known at the point of resolution
+ *  (presence-runtime.ts, resolved once per config row); when it isn't yet
+ *  known (community-runtime.ts's once-per-message resolution, before a
+ *  responder is chosen), omit it here and re-check deployment scope
+ *  separately once the responder IS known (see
+ *  community-runtime.ts's applyDeploymentUsagePolicy).
+ *
  *  `kind` (Phase 4.V.1, default "reactive" -- every pre-existing caller is
  *  unaffected) selects WHICH of the customer's two independent usage-policy
  *  ceilings governs this call: "reactive" for a real triggering human
@@ -244,16 +255,36 @@ export const MANAGED_AI_ROUTING: AccountAiRouting = { required: false, credentia
  *  today). The two ceilings are fully independent -- an exhausted reactive
  *  policy never blocks a proactive call, and vice versa. */
 export async function resolveAccountAiRouting(
-  admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null, kind: UsagePolicyKind = "reactive"
+  admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null, deploymentId: string | null = null, kind: UsagePolicyKind = "reactive"
 ): Promise<AccountAiRouting> {
   if (!accountId || !isEnterprise) return MANAGED_AI_ROUTING;
   const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
   if (!enterprise || enterprise.apiSourceMode !== "byo") return MANAGED_AI_ROUTING;
   const credential = await getAccountByoCredential(admin, accountId);
   if (!credential) return { required: true, credential: null };
-  const usage = await checkByoUsageAllowed(admin, accountId, communityId, kind);
+  const usage = await checkByoUsageAllowed(admin, accountId, communityId, deploymentId, kind);
   if (!usage.allowed) return { required: true, credential: null };
   return { required: true, credential };
+}
+
+/** Re-checks the DEPLOYMENT-scoped usage policy specifically, for a caller
+ *  that already has an `AccountAiRouting` resolved (community-runtime.ts's
+ *  once-per-message resolveAccountAiRouting call, before a responder is
+ *  chosen) and now knows exactly which Watcher deployment is about to
+ *  generate. Never re-fetches the credential/entitlement (already resolved,
+ *  a real object in `routing.credential` if usable) -- only re-runs
+ *  checkByoUsageAllowed with the deployment id filled in, so a per-Watcher
+ *  ceiling can gate a specific responder even though the initial resolution
+ *  didn't know which one would respond yet. A no-op (returns `routing`
+ *  unchanged) for a Managed account or an already-unusable routing -- there
+ *  is nothing meaningful to re-check in either case. */
+export async function applyDeploymentUsagePolicy(
+  admin: SupabaseClient, routing: AccountAiRouting, accountId: string | null, communityId: string, deploymentId: string, kind: UsagePolicyKind = "reactive"
+): Promise<AccountAiRouting> {
+  if (!routing.required || !routing.credential || !accountId) return routing;
+  const usage = await checkByoUsageAllowed(admin, accountId, communityId, deploymentId, kind);
+  if (!usage.allowed) return { required: true, credential: null };
+  return routing;
 }
 
 /** Shared `aiComplete` providerOverride shape for a BYO credential -- one

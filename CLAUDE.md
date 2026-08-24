@@ -127,6 +127,60 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — BYO usage policy: real per-Watcher-deployment scope (Phase 4.V.1, item 2) (v1.47.51)
+- **Closes item 2 off the Phase 4.V.1 deferred list, per direct instruction to finish the remaining Watch
+  specs before going live.** Extends yesterday's account+Community usage-policy hierarchy (v1.47.50) into the
+  real 3-level model the spec asked for: account → Community → Watcher deployment, tightest ceiling wins. A
+  customer can now cap one specific Watcher's own BYO spend independently of its Community or the whole account.
+- **`watch-byo-usage-policy.ts` rewritten around a discriminated `UsagePolicyScope`** (`{type:"account"}` /
+  `{type:"community",communityId}` / `{type:"deployment",deploymentId}`) instead of a bare nullable
+  `communityId` — self-documenting and structurally impossible to set two scopes on one row at once (the DB
+  also enforces this via a `check (community_id is null or deployment_id is null)` constraint). Every export
+  (`setByoUsagePolicy`/`clearByoUsagePolicy`/`checkByoUsageAllowed`/`recordByoPolicyUsage`/`getByoUsageStatus`)
+  now takes/returns the real scope shape; `checkByoUsageAllowed` evaluates all three applicable scopes
+  (account, this Community if given, this deployment if given) and blocks on whichever is tightest and
+  exhausted, exactly mirroring the existing account/Community precedent.
+- **Migration `0099_watch_byo_usage_policy_deployment_scope.sql`** — additive `deployment_id` on both
+  `watch_byo_usage_policies` and `watch_byo_usage_counters`, a new partial unique index
+  `(account_id, deployment_id, kind) where deployment_id is not null`, `increment_watch_byo_usage` gained a
+  `p_deployment_id default null` parameter (old 4-arg overload dropped). **Scope-key format also corrected**:
+  counters now key by an explicit `account:__`/`community:<id>`/`deployment:<id>` prefix instead of a bare id,
+  so a Community UUID and a deployment UUID can never collide in the shared `scope_key` column even in
+  principle — safe to change since this table has no real production usage yet (confirmed against the live
+  Supabase project before writing the migration).
+- **`resolveAccountAiRouting()` (`watch-runtime.ts`)** gained an optional `deploymentId` parameter (inserted
+  before `kind`, default `null`) threaded to `checkByoUsageAllowed`. `presence-runtime.ts`'s sweep — already
+  iterating per-deployment — passes the real `row.deployment_id` directly, resolving all three scopes in one
+  call. New exported `applyDeploymentUsagePolicy(admin, routing, accountId, communityId, deploymentId, kind)`
+  is the counterpart for `community-runtime.ts`'s once-per-message resolution, which happens BEFORE a
+  responder is chosen and so can't know the deployment id yet — `respondAsDeployment` calls it once the
+  responding Watcher is known, narrowing (never widening) an already-usable routing to unusable if that
+  Watcher's own ceiling is exhausted. Correctly scoped to the CASUAL_CHAT/ANSWER branch only (never SHORT_ACK,
+  which makes zero AI calls and consumes zero BYO spend) and gated on the credential ALREADY being usable
+  before the deployment check runs — an already-unusable credential (missing/unconfigured) still falls through
+  to the pre-existing `GENERATION_STARTED`→`GENERATION_FAILED` path unchanged, never intercepted as a new
+  SILENCE (a real regression caught and fixed by the test suite before this shipped, not after).
+- **`recordByoCall`/`recordByoPresenceCall`** both gained the deployment id, so a per-Watcher ceiling only
+  ever increments from a genuinely successful call by THAT Watcher — reactive from
+  `community-runtime.ts`'s chatter path, proactive from `presence-runtime.ts`'s presence sends.
+- **Deliberately NOT extended to link/media moderation's warning-text generation** — `runLinkModeration`/
+  `runMediaModeration` use a single arbitrary "enforcer" deployment (`deployments[0]`), not a per-responder
+  concept the way chatter/presence are; threading deployment-level gating through their signatures would be a
+  bigger, lower-value surface change for a secondary (warning-text-only) AI usage that already degrades
+  gracefully on any failure. Documented as a deliberate scope-down, not silently skipped.
+- **UI**: `ByoUsagePolicyCard.tsx`'s Scope dropdown now lists Whole account / every Community / every Watcher
+  deployment (grouped `<optgroup>`s), reusing the same per-Community `watchers` data the new Deployments page
+  reads — no new query. `watch-byo-usage-settings.ts`'s actions take the real `UsagePolicyScope` type directly.
+- New tests: `watch-byo-usage-policy.test.ts` rewritten end-to-end for the 3-scope model (+11 net — all three
+  scopes coexisting independently, the tightest-of-three-wins case, deployment-vs-different-deployment
+  isolation, deployment-vs-Community-of-that-deployment independence), `watch-runtime.test.ts` (+4 —
+  deployment-scoped `resolveAccountAiRouting`, cross-deployment isolation, `applyDeploymentUsagePolicy`'s
+  narrowing behavior and its Managed-account no-op), `community-runtime.test.ts` (+2 — a real end-to-end
+  exhausted-deployment-policy SILENCE before any model/RPC call, and a headroom case correctly NOT blocking).
+  1644 tests pass (up from 1636), `tsc --noEmit` clean, production build clean.
+- **Run migration `0099`** before this governs anything live. **Not deployed automatically, per standing
+  instruction.**
+
 ### 2026-08-25 — Real Operations → Deployments page (a genuine CRM record surface) + BYO reactive/proactive usage-ceiling split (v1.47.50)
 - **Two pieces this pass, per direct product direction.**
 - **(1) Operations → Deployments — the FIRST item off Phase 4.V.1's honest deferred list, unlocked by
@@ -10144,22 +10198,17 @@ Architecture direction for future implementation:
 > visibility; a devops grant tool that works in every environment (Enterprise has no
 > self-serve checkout, so this is the actual onboarding path).
 >
+> **Items 1 and 2 CLOSED, v1.47.50/v1.47.51.** The reactive/proactive ceiling split
+> (item 1, v1.47.50) and the real account→Community→Watcher-deployment 3-level
+> hierarchy (item 2, v1.47.51) are both now live — see those changelog entries.
+> `checkByoUsageAllowed`/`recordByoPolicyUsage`/`resolveAccountAiRouting` all take a
+> `kind` ("reactive"/"proactive") and now resolve/record against a real
+> `UsagePolicyScope` discriminated union (`{type:"account"}`/`{type:"community",...}`/
+> `{type:"deployment",...}`), tightest-wins across all three. The remaining items
+> below are unchanged.
+>
 > **What's still missing from the full spec** (`docs/moderator/byo-enterprise-refinement-spec.md`),
 > itemized directly against the spec's own sections rather than summarized away:
-> - **Per-Watcher/deployment-level usage-policy controls** — the hierarchy stops at
->   account → Community. The spec's own stated minimum ("if only account + Watcher is
->   justified initially, implement only that") was not met either way — what shipped
->   is account + Community, not account + Watcher. Extending to a real 3-level
->   hierarchy (account → Community → Watcher, tightest ceiling wins, inherited vs.
->   overridden values clearly distinguished) is real, scoped work — a new `deployment_id`
->   dimension on `watch_byo_usage_policies`/`watch_byo_usage_counters`, plus a 3-way
->   resolution in `checkByoUsageAllowed`/`recordByoPolicyUsage`.
-> - **Distinct reactive-message vs. proactive-message ceilings** — only ONE generic
->   "requests per period" counter exists. The spec explicitly wanted "maximum AI
->   responses/messages per hour/day/month" as a category separate from "maximum
->   proactive messages per hour/day." Today a customer can't cap proactive activity
->   (Presence Scheduling transitions, future Auto-Posting) independently of reactive
->   chatter — they're currently the same counter's the same limit.
 > - **Token-based ceilings** — deliberately still not built; `aiComplete()`'s return
 >   shape doesn't reliably expose a token count to every caller across providers, and
 >   fabricating one would violate this spec's own explicit "do not fabricate token

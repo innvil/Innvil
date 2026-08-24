@@ -349,7 +349,13 @@ export default async function UsagePage() {
         )}
 
         {capacity?.apiSourceMode === "byo" && byoPolicies && (
-          <ByoUsagePolicyCard initial={byoPolicies} communities={communities.map((c) => ({ id: c.id, title: c.title ?? c.chatId }))} />
+          <ByoUsagePolicyCard
+            initial={byoPolicies}
+            communities={communities.map((c) => ({ id: c.id, title: c.title ?? c.chatId }))}
+            deployments={communities.flatMap((c) =>
+              c.watchers.map((w) => ({ deploymentId: w.deploymentId, watcherName: w.watcherName, communityTitle: c.title ?? c.chatId }))
+            )}
+          />
         )}
 
         {/* Which Watcher/Community is actually consuming a slot is

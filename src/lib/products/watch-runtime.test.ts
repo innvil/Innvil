@@ -16,7 +16,7 @@ import {
   getAccountProjectDetail, getAccountCommunityDetail, getAccountWatcherDetail, listAccountAttentionItems,
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
-  resolveAccountEnterpriseEntitlement, resolveAccountAiRouting,
+  resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration } from "@/src/lib/moderator/plan";
@@ -1752,7 +1752,7 @@ test("REQUIRED: a real credential + an EXHAUSTED account-wide usage policy resol
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
     watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "reactive", period: "monthly", request_limit: 5 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "reactive", period_key: periodKey, request_count: 5 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "account:__", kind: "reactive", period_key: periodKey, request_count: 5 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1");
   assert.equal(routing.required, true);
@@ -1766,7 +1766,7 @@ test("a real credential + a Community-level policy that's exhausted for a DIFFER
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
     watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: "community-1", kind: "reactive", period: "daily", request_limit: 1 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "community-1", kind: "reactive", period_key: periodKey, request_count: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "community:community-1", kind: "reactive", period_key: periodKey, request_count: 1 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-2");
   assert.equal(routing.required, true);
@@ -1780,7 +1780,7 @@ test("resolveAccountAiRouting with no communityId given still respects an accoun
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
     watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "reactive", period: "monthly", request_limit: 1 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "reactive", period_key: periodKey, request_count: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "account:__", kind: "reactive", period_key: periodKey, request_count: 1 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true);
   assert.equal(routing.credential, null);
@@ -1794,8 +1794,8 @@ test("REQUIRED: resolveAccountAiRouting defaults to kind:'reactive' when omitted
   const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
-    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "proactive", period: "monthly", request_limit: 1 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "proactive", period_key: periodKey, request_count: 1 }],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, deployment_id: null, kind: "proactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "account:__", kind: "proactive", period_key: periodKey, request_count: 1 }],
   });
   const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1"); // kind omitted -> "reactive"
   assert.equal(routing.credential?.apiKey, "sk-real-byo-key", "the exhausted PROACTIVE policy must never gate a reactive call");
@@ -1807,11 +1807,59 @@ test("REQUIRED: an exhausted proactive policy DOES block a proactive-kind call, 
   const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
   const admin = fakeAdmin({
     products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
-    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, kind: "proactive", period: "monthly", request_limit: 1 }],
-    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "__account__", kind: "proactive", period_key: periodKey, request_count: 1 }],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, deployment_id: null, kind: "proactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "account:__", kind: "proactive", period_key: periodKey, request_count: 1 }],
   });
-  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1", "proactive");
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1", null, "proactive");
   assert.equal(routing.credential, null, "the exhausted proactive policy must gate a genuinely proactive call");
+});
+
+/* --------------------- per-Watcher-deployment usage-policy scope (Phase 4.V.1, item 2) ---- */
+
+test("REQUIRED: resolveAccountAiRouting respects a DEPLOYMENT-scoped policy passed directly (presence-runtime.ts's own resolution shape)", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, deployment_id: "deployment-1", kind: "proactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "deployment:deployment-1", kind: "proactive", period_key: periodKey, request_count: 1 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1", "deployment-1", "proactive");
+  assert.equal(routing.credential, null, "the exhausted deployment-scoped policy must gate this exact deployment's proactive call");
+});
+
+test("a deployment-scoped policy never blocks a DIFFERENT deployment's calls in resolveAccountAiRouting", async () => {
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [byo], watch_byo_provider_credentials: [BYO_CRED_ROW],
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, deployment_id: "deployment-1", kind: "reactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "deployment:deployment-1", kind: "reactive", period_key: periodKey, request_count: 1 }],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", true, "community-1", "deployment-2", "reactive");
+  assert.equal(routing.credential?.apiKey, "sk-real-byo-key", "deployment-1's exhausted policy must never gate deployment-2");
+});
+
+test("REQUIRED: applyDeploymentUsagePolicy narrows an already-usable routing to unusable once the deployment ceiling is exhausted", async () => {
+  const now = new Date();
+  const periodKey = `monthly:${now.toISOString().slice(0, 7)}`;
+  const admin = fakeAdmin({
+    watch_byo_usage_policies: [{ id: "pol-1", account_id: "acct-1", community_id: null, deployment_id: "deployment-1", kind: "reactive", period: "monthly", request_limit: 1 }],
+    watch_byo_usage_counters: [{ account_id: "acct-1", scope_key: "deployment:deployment-1", kind: "reactive", period_key: periodKey, request_count: 1 }],
+  });
+  const usableRouting = { required: true, credential: { provider: "anthropic" as const, apiKey: "sk-real", baseUrl: null, model: "claude-sonnet-5" } };
+  const narrowed = await applyDeploymentUsagePolicy(admin, usableRouting, "acct-1", "community-1", "deployment-1", "reactive");
+  assert.equal(narrowed.credential, null);
+  assert.equal(narrowed.required, true, "still required -- BYO, just unusable, never falls back to Managed");
+});
+
+test("applyDeploymentUsagePolicy is a no-op for a Managed (non-BYO) routing -- never touches Innvil's own accounts", async () => {
+  const admin = fakeAdmin({});
+  const managed = { required: false, credential: null };
+  const result = await applyDeploymentUsagePolicy(admin, managed, "acct-1", "community-1", "deployment-1", "reactive");
+  assert.deepEqual(result, managed);
 });
 
 /* ------------------------------- BYO Unlimited (enterprise_slots = null, 2026-08-25) ---- */

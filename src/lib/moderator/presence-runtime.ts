@@ -16,9 +16,13 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  recordByoCall (that one is exclusively reactive; this is exclusively
  *  proactive, per Phase 4.V.1's reactive/proactive ceiling split). Only
  *  ever called when aiRouting.required is true (a Managed account has
- *  nothing BYO-specific to record); never awaited, never throws. */
+ *  nothing BYO-specific to record); never awaited, never throws.
+ *  `deploymentId` (Phase 4.V.1, item 2) is always known here -- unlike
+ *  community-runtime.ts's chatter path, this sweep already iterates
+ *  per-deployment, so the per-Watcher usage-policy scope increments
+ *  directly, no separate re-check step needed. */
 function recordByoPresenceCall(
-  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string, communityId: string, ok: boolean, error?: string
+  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string, communityId: string, deploymentId: string, ok: boolean, error?: string
 ): void {
   if (!aiRouting.required) return;
   void recordByoUsageEvent(admin, {
@@ -27,7 +31,7 @@ function recordByoPresenceCall(
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
   });
-  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, "proactive");
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "proactive");
 }
 
 /**
@@ -252,19 +256,23 @@ export async function sweepPresenceSchedules(admin: SupabaseClient = createAdmin
       const bot = await loadModeratorBotToken(admin, row.deployment_id);
       if (bot) {
         const isEnterprise = capacity.tier === "enterprise";
-        // kind: "proactive" (Phase 4.V.1) -- this whole sweep is
+        // kind: "proactive" (Phase 4.V.1 item 1) -- this whole sweep is
         // scheduler-driven, never triggered by a real inbound message, so
         // it's governed by the customer's PROACTIVE usage-policy ceiling,
         // fully independent of the reactive one community-runtime.ts uses.
-        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId, "proactive");
+        // deploymentId (item 2) is passed directly -- this loop already
+        // knows exactly which Watcher is about to send, unlike chatter's
+        // once-per-message resolution, so the per-Watcher ceiling applies
+        // in the SAME resolution call, no separate re-check needed.
+        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId, row.deployment_id, "proactive");
         const text = await generatePresenceMessage(bot.moderatorName, bot.persona, kind, aiRouting);
         const sent = await telegramApiCall(bot.token, "sendMessage", { chat_id: bot.chatId, text });
         if (sent.ok) {
           sentText = text;
-          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, true);
+          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, row.deployment_id, true);
         } else {
           console.error(`[presence] send failed for deployment ${row.deployment_id}: ${JSON.stringify(sent)}`);
-          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, false, sent.error);
+          recordByoPresenceCall(admin, aiRouting, tenant.accountId, communityId, row.deployment_id, false, sent.error);
         }
       }
     }

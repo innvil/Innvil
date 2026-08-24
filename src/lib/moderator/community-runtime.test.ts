@@ -1442,3 +1442,70 @@ test("GENERATION_STARTED logs the ORIGINAL deepseek/anthropic values for a norma
   const started = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_STARTED");
   assert.equal((started!.meta as { provider?: string }).provider, "deepseek");
 });
+
+/* -------------------- per-Watcher-deployment BYO usage-policy gate (Phase 4.V.1, item 2) ---- */
+
+function fakeAdminForByoDeploymentGate(opts: { requestLimit: number; usedCount: number }) {
+  const activityLog: Record<string, unknown>[] = [];
+  const policyRow = { id: "pol-1", account_id: "acct-1", community_id: null, deployment_id: "dep-1", kind: "reactive", period: "monthly", request_limit: opts.requestLimit };
+  const now = new Date();
+  const periodKeyStr = `monthly:${now.toISOString().slice(0, 7)}`;
+  const counterRow = { account_id: "acct-1", scope_key: "deployment:dep-1", kind: "reactive", period_key: periodKeyStr, request_count: opts.usedCount };
+  return {
+    __activityLog: activityLog,
+    from(table: string) {
+      if (table === "moderator_activity_log") {
+        return { insert: async (row: Record<string, unknown>) => { activityLog.push(row); return { data: null, error: null }; } };
+      }
+      const filters: Array<(r: Record<string, unknown>) => boolean> = [];
+      const rows = table === "watch_byo_usage_policies" ? [policyRow] : table === "watch_byo_usage_counters" ? [counterRow] : [];
+      if (!["watch_byo_usage_policies", "watch_byo_usage_counters"].includes(table)) throw new Error(`unexpected table touch: ${table}`);
+      const builder: Record<string, unknown> = {
+        select() { return builder; },
+        eq(col: string, val: unknown) { filters.push((r) => r[col] === val); return builder; },
+        is(col: string, val: unknown) { filters.push((r) => (r[col] ?? null) === val); return builder; },
+        async maybeSingle() {
+          const match = rows.filter((r) => filters.every((f) => f(r)));
+          return { data: match[0] ?? null, error: null };
+        },
+      };
+      return builder;
+    },
+    rpc() { throw new Error("respondAsDeployment must not call the usage-increment RPC once the deployment policy already reads as exhausted"); },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+test("REQUIRED: an exhausted DEPLOYMENT-scoped BYO usage policy blocks generation with a real SILENCE, structurally before any model/RPC call", async () => {
+  const admin = fakeAdminForByoDeploymentGate({ requestLimit: 5, usedCount: 5 });
+  const result = await respondAsDeployment({
+    admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+    deployment: AI_GATE_DEPLOYMENT, actionType: "ANSWER", reasons: ["directed"], isTrialEntitlement: false,
+    accountId: "acct-1", paidTier: null, now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+    otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+    aiRouting: { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: "claude-sonnet-5" } },
+  });
+  assert.deepEqual(result, { replied: false });
+  assert.equal(admin.__activityLog.length, 1);
+  assert.equal(admin.__activityLog[0].decision, "SILENCE");
+  assert.equal(admin.__activityLog[0].reason_code, "byo_deployment_usage_policy_exhausted");
+});
+
+test("a deployment policy with real headroom does NOT block generation -- reaches GENERATION_STARTED normally", async () => {
+  const admin = fakeAdminForByoDeploymentGate({ requestLimit: 5, usedCount: 2 });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response("stubbed, no real network call", { status: 500 })) as typeof fetch;
+  try {
+    await respondAsDeployment({
+      admin, panelId: null, communityId: "community-1", chatId: "-1001", event: baseAiGateEvent(),
+      deployment: AI_GATE_DEPLOYMENT, actionType: "ANSWER", reasons: ["directed"], isTrialEntitlement: false,
+      accountId: "acct-1", paidTier: null, now: new Date(), recentContext: [], isDirectedAtBot: true, addressedWithTypo: false,
+      otherActiveModeratorNames: [], timer: createRequestTimer("integration-1"),
+      aiRouting: { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: "claude-sonnet-5" } },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const started = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_STARTED");
+  assert.ok(started, "a deployment policy with headroom must never block reaching GENERATION_STARTED");
+});

@@ -4,16 +4,17 @@ import { getAuthedAdmin } from "@/src/lib/auth";
 import { resolveAccountEnterpriseEntitlement } from "@/src/lib/products/watch-runtime";
 import {
   listByoUsagePolicies, setByoUsagePolicy, clearByoUsagePolicy, getByoUsageStatus,
-  type WatchByoUsagePolicy, type UsagePolicyPeriod, type UsagePolicyKind,
+  type WatchByoUsagePolicy, type UsagePolicyPeriod, type UsagePolicyKind, type UsagePolicyScope,
 } from "@/src/lib/products/watch-byo-usage-policy";
 
 /**
  * BYO Enterprise usage POLICY -- customer-owned, self-configured operational
- * ceilings (Phase 4.V), on top of the already-provisioned BYO credential.
- * Same gating discipline as watch-byo-settings.ts (credential management):
- * every export re-verifies the SIGNED-IN account's own real `apiSourceMode
- * === "byo"` entitlement server-side -- never trusts a client-supplied
- * account id or a UI-only gate.
+ * ceilings (Phase 4.V, extended in 4.V.1 with a reactive/proactive kind
+ * split and a real 3-level account/Community/deployment hierarchy), on top
+ * of the already-provisioned BYO credential. Same gating discipline as
+ * watch-byo-settings.ts (credential management): every export re-verifies
+ * the SIGNED-IN account's own real `apiSourceMode === "byo"` entitlement
+ * server-side -- never trusts a client-supplied account id or a UI-only gate.
  */
 
 type Result<T = null> = { ok: true; data: T } | { ok: false; error: string };
@@ -37,18 +38,18 @@ export async function getByoUsagePolicyStatus(): Promise<Result<ByoUsagePolicySt
   return { ok: true, data: rows };
 }
 
-export async function saveByoUsagePolicy(communityId: string | null, kind: UsagePolicyKind, period: UsagePolicyPeriod, requestLimit: number): Promise<Result> {
+export async function saveByoUsagePolicy(scope: UsagePolicyScope, kind: UsagePolicyKind, period: UsagePolicyPeriod, requestLimit: number): Promise<Result> {
   const ctx = await requireByoEnterprise();
   if (!ctx.ok) return ctx;
-  const res = await setByoUsagePolicy(ctx.admin, ctx.accountId, communityId, kind, period, requestLimit);
+  const res = await setByoUsagePolicy(ctx.admin, ctx.accountId, scope, kind, period, requestLimit);
   if (!res.ok) return res;
   return { ok: true, data: null };
 }
 
-export async function removeByoUsagePolicy(communityId: string | null, kind: UsagePolicyKind): Promise<Result> {
+export async function removeByoUsagePolicy(scope: UsagePolicyScope, kind: UsagePolicyKind): Promise<Result> {
   const ctx = await requireByoEnterprise();
   if (!ctx.ok) return ctx;
-  await clearByoUsagePolicy(ctx.admin, ctx.accountId, communityId, kind);
+  await clearByoUsagePolicy(ctx.admin, ctx.accountId, scope, kind);
   return { ok: true, data: null };
 }
 

@@ -43,7 +43,7 @@ import { generateMediaModerationWarning } from "./media-warning";
 import { checkChatMembership, type ChatMembershipResult } from "./manager";
 import {
   resolveStandaloneModeratorSettings, resolveWatcherAccountId, resolveAccountAiRouting, resolveAccountEnterpriseEntitlement,
-  MANAGED_AI_ROUTING, type AccountAiRouting,
+  applyDeploymentUsagePolicy, MANAGED_AI_ROUTING, type AccountAiRouting,
 } from "@/src/lib/products/watch-runtime";
 import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
 import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy";
@@ -69,9 +69,13 @@ import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy"
  *  ceiling, never an attempted-but-failed one. Always recorded as
  *  kind:"reactive" (Phase 4.V.1) -- this whole file's chatter-generation
  *  path is exclusively human-message-triggered; the proactive counterpart
- *  lives in presence-runtime.ts, its own genuinely scheduler-driven caller. */
+ *  lives in presence-runtime.ts, its own genuinely scheduler-driven caller.
+ *  `deploymentId` (Phase 4.V.1, item 2) threads the actual responding
+ *  Watcher into `recordByoPolicyUsage`'s 3rd (deployment) scope, alongside
+ *  the account/Community scopes -- a per-Watcher ceiling only ever
+ *  increments from a genuinely successful call by THAT Watcher. */
 function recordByoCall(
-  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, automation: string, ok: boolean, error?: string
+  admin: SupabaseClient, aiRouting: AccountAiRouting, accountId: string | null, communityId: string, deploymentId: string, automation: string, ok: boolean, error?: string
 ): void {
   if (!aiRouting.required || !accountId) return;
   void recordByoUsageEvent(admin, {
@@ -80,7 +84,7 @@ function recordByoCall(
     model: aiRouting.credential?.model ?? "unconfigured",
     ok, error,
   });
-  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, "reactive");
+  if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "reactive");
 }
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
@@ -2427,8 +2431,12 @@ export async function respondAsDeployment(params: {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, accountId, paidTier, now, recentContext,
     isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
-    aiRouting = MANAGED_AI_ROUTING,
+    aiRouting: initialAiRouting = MANAGED_AI_ROUTING,
   } = params;
+  // Phase 4.V.1 (item 2) -- reassignable (`let`), since the deployment-
+  // scoped usage-policy re-check below (SHORT_ACK-excluded -- see the
+  // `else` branch) may narrow it once the responding deployment is known.
+  let aiRouting = initialAiRouting;
 
   // Phase 4.M (B): trial-only, checked BEFORE any AI generation is attempted
   // (spec §17) -- SHORT_ACK/CASUAL_CHAT/ANSWER are all reactive conversational
@@ -2471,6 +2479,28 @@ export async function respondAsDeployment(params: {
           });
           return { replied: false };
         }
+      }
+    }
+    // Phase 4.V.1 (item 2) -- once the responding deployment is known
+    // (right here, unlike the once-per-message resolveAccountAiRouting
+    // call before this function even runs), re-check the DEPLOYMENT-scoped
+    // BYO usage policy specifically. Correctly scoped to CASUAL_CHAT/ANSWER
+    // only (this `else` branch) -- SHORT_ACK makes zero AI calls and
+    // consumes zero BYO spend, so it must never be gated by this. Gated on
+    // `aiRouting.credential` ALREADY being usable (matches
+    // applyDeploymentUsagePolicy's own no-op guard) -- an already-unusable
+    // credential (missing/unconfigured) must keep falling through to the
+    // EXISTING GENERATION_STARTED -> GENERATION_FAILED path unchanged, never
+    // intercepted here as a new SILENCE, which would be a real behavior
+    // regression for a case this gate was never meant to touch.
+    if (aiRouting.required && aiRouting.credential) {
+      aiRouting = await applyDeploymentUsagePolicy(admin, aiRouting, accountId, communityId, deployment.deploymentId, "reactive");
+      if (!aiRouting.credential) {
+        await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "SILENCE", "byo_deployment_usage_policy_exhausted", {
+          reasons: ["byo_deployment_usage_policy_exhausted"],
+          attemptedAction: actionType,
+        });
+        return { replied: false };
       }
     }
     // GENERATION_STARTED is written BEFORE the model call specifically so a
@@ -2526,7 +2556,7 @@ export async function respondAsDeployment(params: {
         reasons,
         budgetMs: CHATTER_TOTAL_BUDGET_MS,
       });
-      recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, false, "generation timed out");
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, false, "generation timed out");
       return { replied: false };
     }
     const generation = genRace.value;
@@ -2534,7 +2564,7 @@ export async function respondAsDeployment(params: {
     if (!generation.ok) {
       console.error("[telegram/community] chatter generation failed", generation.error);
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "GENERATION_FAILED", reasons.join(","), { reasons });
-      recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, false, generation.error);
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, false, generation.error);
       return { replied: false };
     }
     if ("noReply" in generation) {
@@ -2542,11 +2572,11 @@ export async function respondAsDeployment(params: {
       // A genuine successful BYO call -- the model responded, it just chose
       // not to reply. Real provider spend happened, so this counts as a
       // successful call for telemetry purposes, same as any real reply.
-      recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, true);
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true);
       return { replied: false, modelDeclined: true };
     }
     replyText = generation.reply;
-    recordByoCall(admin, aiRouting, accountId, communityId, `NATURAL_CHATTER_${actionType}`, true);
+    recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true);
 
     // 2026-08-22 counting-semantics change: an "AI Generation" is consumed
     // the moment the provider successfully produces a usable reply -- NOT
@@ -2755,7 +2785,11 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // inbound Telegram message, never a scheduler tick, so it's always
     // governed by the customer's reactive usage-policy ceiling, never the
     // proactive one (Watcher Presence Scheduling's own, separate ceiling).
-    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, "reactive");
+    // deploymentId is omitted (null) here -- no responder has been chosen
+    // yet at this point; respondAsDeployment re-checks the deployment-scoped
+    // ceiling once it knows which Watcher is actually about to generate
+    // (applyDeploymentUsagePolicy, Phase 4.V.1 item 2).
+    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, null, "reactive");
     // Enterprise Media Moderation + (migration 0097) -- same gating shape:
     // a real, explicit grant, resolved once here, only for an Enterprise
     // account (the self-serve tiers' own add-on is resolved separately,
