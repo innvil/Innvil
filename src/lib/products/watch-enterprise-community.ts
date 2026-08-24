@@ -29,6 +29,23 @@
 
 export type EnterpriseCommunityMode = "managed" | "byo50" | "byoUnlimited";
 
+/** The ONE canonical (apiSourceMode, slots) -> EnterpriseCommunityMode
+ *  mapping -- every surface that needs to know which Community-capacity
+ *  package table applies to a given account/grant (the devops grant UI, the
+ *  devops grant action's own validation, the entitlement-write layer in
+ *  ownership.ts, and resolveEnterpriseMediaAddonKey's equivalent mapping in
+ *  watch-enterprise.ts for the media add-on) must call THIS function, never
+ *  redefine the mapping inline -- three independent inline copies of this
+ *  exact three-line ternary is what let a real bug (the devops tool
+ *  validating/persisting every mode's Community capacity against Managed's
+ *  own rules) slip through review once already, 2026-08-25. `slots === null`
+ *  means BYO Unlimited (Managed has no "Unlimited" package -- callers must
+ *  never pass `apiSourceMode: "managed"` together with `slots: null`). */
+export function communityModeFor(apiSourceMode: "managed" | "byo", slots: number | null): EnterpriseCommunityMode {
+  if (apiSourceMode === "managed") return "managed";
+  return slots === null ? "byoUnlimited" : "byo50";
+}
+
 export interface EnterpriseCommunityPackageOption {
   /** The resulting TOTAL Community capacity if this package is selected. */
   capacity: number;

@@ -328,6 +328,33 @@ test("a renewal that omits enterpriseCommunityCapacity never clobbers a previous
   assert.equal(row?.enterprise_community_capacity, 25, "omitting the parameter on renewal must never reset an already-provisioned Community package");
 });
 
+test("REGRESSION: a real BYO Unlimited Community capacity BEYOND 25 is persisted, not silently dropped", async () => {
+  // The exact live bug (2026-08-25): this used to validate EVERY mode's
+  // submitted capacity against "managed" (max 25) regardless of the real
+  // apiSourceMode/slots being persisted in the SAME call -- BYO Unlimited's
+  // own uncapped +10-block continuation beyond 25 would fail that check and
+  // be silently dropped from the write, even though it's a real, valid
+  // capacity for that mode.
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", null, 35, "byo");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_community_capacity, 35, "35 is a real BYO Unlimited Community capacity (25 + one +10 block) -- must be persisted, not dropped");
+});
+
+test("REGRESSION: BYO 50's own Community capacity is validated against ITS table, not Managed's", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", 50, 15, "byo");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_community_capacity, 15, "15 is a real BYO 50 Community capacity package");
+});
+
+test("a BYO Unlimited capacity beyond 25 that isn't a real +10 block is still rejected (validated against the REAL mode, not accepted just because it's BYO)", async () => {
+  const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
+  await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", null, 40, "byo");
+  const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(row?.enterprise_community_capacity, undefined, "40 is not a real +10 block above 25 (25, 35, 45, ...) -- must be dropped, not persisted verbatim");
+});
+
 /* --------------------------------------- BYO Enterprise apiSourceMode (0092) ---- */
 
 test("REQUIRED: activateWatchEntitlement persists a real apiSourceMode value", async () => {

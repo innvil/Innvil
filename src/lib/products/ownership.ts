@@ -5,7 +5,7 @@ import { hasVirtualModerator } from "@/src/lib/moderator/plan";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasActiveWatchTrial } from "./watch-trial";
 import { computeRenewedPeriod, type WatchBillingInterval } from "./watch-billing-period";
-import { validateEnterpriseCommunityCapacity } from "./watch-enterprise-community";
+import { validateEnterpriseCommunityCapacity, communityModeFor } from "./watch-enterprise-community";
 
 /**
  * Neutral account-to-product ownership/entitlement resolution — the
@@ -145,14 +145,31 @@ export async function activateWatchEntitlement(
       // exactly this, never as a provisioning inconsistency.
       ...(enterpriseSlots !== undefined ? { enterprise_slots: enterpriseSlots } : {}),
       // Real, manually-provisioned Community capacity (migration 0088) --
-      // validated against the canonical Managed Enterprise package matrix
-      // BEFORE ever being persisted (never a client-supplied capacity taken
-      // as authority); an invalid value is silently dropped from the
-      // upsert (left as whatever it already was) rather than corrupting
-      // the entitlement row with a value the resolver would then reject
-      // anyway. Left OUT entirely when not given, for the same
-      // never-clobber-a-stray-value reason as enterpriseSlots above.
-      ...(enterpriseCommunityCapacity != null && validateEnterpriseCommunityCapacity("managed", enterpriseCommunityCapacity)
+      // validated against the REAL package matrix for the mode this
+      // entitlement is actually being granted under (derived from the SAME
+      // apiSourceMode/enterpriseSlots being persisted in this very call, via
+      // the one canonical communityModeFor mapping) -- never hardcoded to
+      // "managed" regardless of mode, which was a real bug (2026-08-25):
+      // it silently DROPPED any real BYO Unlimited capacity beyond 25 (a
+      // valid, uncapped block continuation for that mode, but invalid under
+      // Managed's own 25-max rules) rather than persisting it. `apiSourceMode`
+      // omitted defaults to "managed" for this derivation (mirrors the
+      // resolver's own default elsewhere); `enterpriseSlots` omitted is
+      // treated as `null` for this derivation ONLY (never for the actual
+      // enterprise_slots write below, which keeps its own separate
+      // never-clobber semantics) -- the least-restrictive assumption (BYO
+      // Unlimited's own package table), so a capacity that's valid under the
+      // real mode can never be incorrectly rejected merely because slots
+      // wasn't re-specified on this particular call. An invalid value is
+      // silently dropped from the upsert (left as whatever it already was)
+      // rather than corrupting the entitlement row with a value the resolver
+      // would then reject anyway. Left OUT entirely when not given, for the
+      // same never-clobber-a-stray-value reason as enterpriseSlots above.
+      ...(enterpriseCommunityCapacity != null
+        && validateEnterpriseCommunityCapacity(
+          communityModeFor(apiSourceMode ?? "managed", enterpriseSlots === undefined ? null : enterpriseSlots),
+          enterpriseCommunityCapacity
+        )
         ? { enterprise_community_capacity: enterpriseCommunityCapacity }
         : {}),
       // "managed" | "byo" (migration 0092) -- same never-clobber-a-stray-

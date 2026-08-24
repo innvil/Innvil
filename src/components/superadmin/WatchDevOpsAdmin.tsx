@@ -8,11 +8,14 @@ import {
   clearAccountDevOpsSubscription, clearAccountDevOpsByoCredential,
   type AccountDevOpsSubscriptionState, type DevOpsGrantableTier,
 } from "@/src/lib/actions/superadmin-watch-devops";
-import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 import {
-  getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, nextByoUnlimitedCapacityStep,
-  type EnterpriseCommunityMode,
+  MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS, managedEnterprisePrice, enterpriseMediaAddon, resolveEnterpriseMediaAddonKey,
+} from "@/src/lib/products/watch-enterprise";
+import {
+  getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, getEnterpriseCommunityExpansionPrice,
+  validateEnterpriseCommunityCapacity, communityModeFor, type EnterpriseCommunityMode,
 } from "@/src/lib/products/watch-enterprise-community";
+import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
@@ -22,19 +25,6 @@ const TIERS: Array<{ value: DevOpsGrantableTier; label: string }> = [
   { value: "pro", label: "Platinum (Pro)" },
   { value: "enterprise", label: "Enterprise" },
 ];
-
-/** The real Community-capacity package matrix is DIFFERENT per Enterprise
- *  mode (Managed base 8; BYO 50/BYO Unlimited both base 10 -- see
- *  watch-enterprise-community.ts's own table) -- this derives the actual
- *  mode from (apiSourceMode, slots), the SAME mapping
- *  resolveEnterpriseMediaAddonKey (watch-enterprise.ts) already uses for the
- *  media add-on, so the two can never disagree about which mode an account
- *  is actually in. `slots === null` only ever means BYO Unlimited (Managed
- *  has no Unlimited package, enforced server-side). */
-function communityModeFor(apiSourceMode: "managed" | "byo", slots: number | null): EnterpriseCommunityMode {
-  if (apiSourceMode === "managed") return "managed";
-  return slots === null ? "byoUnlimited" : "byo50";
-}
 
 /** Superadmin-only control for manually granting a Watch subscription/
  *  Enterprise entitlement to an account. Works in every real environment
@@ -54,12 +44,28 @@ export function WatchDevOpsAdmin() {
   const [enterpriseCapacity, setEnterpriseCapacity] = useState(String(getEnterpriseIncludedCommunities("managed")));
   const [apiSourceMode, setApiSourceMode] = useState<"managed" | "byo">("managed");
   const [mediaAddon, setMediaAddon] = useState(false);
+  const [billingInterval, setBillingInterval] = useState<WatchBillingInterval>("monthly");
   // The real Community-capacity mode for whatever's CURRENTLY selected in
   // the grant form -- drives the base/options shown in the select below, and
   // is recomputed on every apiSourceMode/byoTierId change.
   const formByoTier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.id === byoTierId)!;
   const formCommunityMode: EnterpriseCommunityMode = communityModeFor(apiSourceMode, apiSourceMode === "byo" ? formByoTier.maxSlots : null);
   const formCommunityBase = getEnterpriseIncludedCommunities(formCommunityMode);
+  const formCommunityCapacityNum = Number(enterpriseCapacity) || formCommunityBase;
+  const formCommunityCapacityValid = validateEnterpriseCommunityCapacity(formCommunityMode, formCommunityCapacityNum);
+  // Reference pricing only -- Enterprise is entirely manual/negotiated (no
+  // self-serve checkout exists for it anywhere), so this never drives an
+  // actual charge; it's purely informational for whoever's filling out this
+  // form. Annual = 12x the real computed monthly total, no discount claimed
+  // (no canonical Enterprise annual discount rate exists anywhere in this
+  // codebase, unlike the self-serve tiers' own real 5%/10% annual rates --
+  // inventing one here would be a fabricated number, not a reference).
+  const formManagedSlots = Number(enterpriseSlots) || MANAGED_ENTERPRISE_50.slots;
+  const formBasePrice = apiSourceMode === "byo" ? formByoTier.price : managedEnterprisePrice(formManagedSlots);
+  const formMediaAddonKey = resolveEnterpriseMediaAddonKey(apiSourceMode, apiSourceMode === "byo" ? formByoTier.maxSlots : formManagedSlots);
+  const formCommunityExpansionPrice = formCommunityCapacityValid ? (getEnterpriseCommunityExpansionPrice(formCommunityMode, formCommunityCapacityNum) ?? 0) : 0;
+  const formMonthlyTotal = formBasePrice + formCommunityExpansionPrice + (mediaAddon ? enterpriseMediaAddon(formMediaAddonKey).price : 0);
+  const formAnnualReference = Math.round(formMonthlyTotal * 12 * 100) / 100;
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
@@ -99,6 +105,7 @@ export function WatchDevOpsAdmin() {
       // have to first discover, then hand-retype, numbers already shown
       // right above in "Current entitlement".
       if (sub.data.tier) setTier(sub.data.tier);
+      setBillingInterval(sub.data.billingInterval);
       if (sub.data.tier === "enterprise") {
         setApiSourceMode(sub.data.apiSourceMode);
         if (sub.data.apiSourceMode === "byo") {
@@ -127,6 +134,10 @@ export function WatchDevOpsAdmin() {
 
   const grant = async () => {
     if (!account) return;
+    if (tier === "enterprise" && enterpriseCapacity.trim() && !formCommunityCapacityValid) {
+      setActionError(`${enterpriseCapacity} isn't a real Community capacity for ${formCommunityMode === "managed" ? "Managed Enterprise" : formCommunityMode === "byo50" ? "BYO Enterprise 50" : "BYO Enterprise Unlimited"} -- see the valid values note above the field.`);
+      return;
+    }
     setBusy(true);
     setActionError(null);
     setActionOk(null);
@@ -139,14 +150,15 @@ export function WatchDevOpsAdmin() {
             slots,
             enterpriseCapacity.trim() ? Number(enterpriseCapacity) : undefined,
             apiSourceMode,
-            mediaAddon
+            mediaAddon,
+            billingInterval
           )
         : await setAccountDevOpsSubscription(account.accountId, tier as ModeratorPlanTier);
     setBusy(false);
     if (!res.ok) { setActionError(res.error); return; }
     setActionOk(
       tier === "enterprise"
-        ? `Devops Enterprise entitlement set (${apiSourceMode === "byo" ? byoTier.label : `Managed, ${enterpriseSlots} slots`}, media +${mediaAddon ? " on" : " off"}).`
+        ? `Devops Enterprise entitlement set (${apiSourceMode === "byo" ? byoTier.label : `Managed, ${enterpriseSlots} slots`}, ${billingInterval}, media +${mediaAddon ? " on" : " off"}).`
         : `Devops ${tier} subscription set.`
     );
     await refreshState(account.accountId);
@@ -222,7 +234,7 @@ export function WatchDevOpsAdmin() {
                 <p className="text-[11px] fp-text-faint">
                   {state.apiSourceMode === "byo" ? (state.enterpriseSlots ?? "Unlimited") : (state.enterpriseSlots ?? "?")} slots ·{" "}
                   {state.enterpriseCommunityCapacity ?? getEnterpriseIncludedCommunities(communityModeFor(state.apiSourceMode, state.enterpriseSlots))} Communities ·{" "}
-                  {state.apiSourceMode === "byo" ? "BYO" : "Managed"} · Media +{state.mediaAddonActive ? " on" : " off"}
+                  {state.apiSourceMode === "byo" ? "BYO" : "Managed"} · {state.billingInterval} · Media +{state.mediaAddonActive ? " on" : " off"}
                   {state.apiSourceMode === "byo" && (
                     <span className={state.hasByoCredential ? "text-emerald-400" : "text-amber-400"}>
                       {" "}({state.hasByoCredential ? "credential stored" : "no credential stored"})
@@ -285,42 +297,63 @@ export function WatchDevOpsAdmin() {
                     className="w-28 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
                   />
                 )}
-                <select
-                  value={enterpriseCapacity}
-                  onChange={(e) => setEnterpriseCapacity(e.target.value)}
-                  className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
-                >
-                  <option value={formCommunityBase}>{formCommunityBase} Communities (base)</option>
-                  {getEnterpriseCommunityExpansionOptions(formCommunityMode).map((o) => (
-                    <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
-                  ))}
-                  {/* BYO Unlimited has no fixed ceiling above its 25-Community
-                      package -- if the currently-selected value is a real
-                      block continuation beyond 25 (not one of the fixed
-                      options/base above), a synthetic option keeps it
-                      correctly displayed/selected rather than showing blank. */}
-                  {formCommunityMode === "byoUnlimited" && Number(enterpriseCapacity) > 25 && (
-                    <option value={enterpriseCapacity}>{enterpriseCapacity} Communities (custom)</option>
-                  )}
-                </select>
-                {/* A real +10 STEP forward, never itself an <option> (an
-                    <option> that always relabels to "the next step" can never
-                    correctly display the value actually currently selected) --
-                    mirrors the customer-facing selector's own "+ Add 10
-                    Communities" button (EnterpriseModeCards.tsx). */}
-                {formCommunityMode === "byoUnlimited" && Number(enterpriseCapacity) >= 25 && (
-                  <button
-                    type="button"
-                    onClick={() => setEnterpriseCapacity(String(nextByoUnlimitedCapacityStep(Number(enterpriseCapacity))))}
-                    className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-xs fp-text-dim hover:fp-text"
+                {/* BYO Unlimited genuinely has NO fixed maximum -- it can add
+                    as many Communities as wanted, in real +10 blocks past its
+                    two starting packages (10 base, then 15, 25, 35, 45, ...).
+                    A closed <select> is the wrong control for an unbounded
+                    range, so it gets a real free-form number input instead --
+                    Managed and BYO 50 both have a real, small, fixed 4-value
+                    package menu (base/10 or 8/15/25), so a select stays
+                    correct for those two. */}
+                {formCommunityMode === "byoUnlimited" ? (
+                  <div className="flex flex-col gap-1">
+                    <input
+                      type="number"
+                      min={formCommunityBase}
+                      step={1}
+                      value={enterpriseCapacity}
+                      onChange={(e) => setEnterpriseCapacity(e.target.value)}
+                      placeholder="Communities"
+                      className={`w-32 fp-panel border rounded-lg px-3 py-2 text-sm fp-text outline-none ${formCommunityCapacityValid ? "fp-line-soft" : "border-red-500/60"}`}
+                    />
+                    <p className="text-[10px] fp-text-faint">
+                      No fixed max — {formCommunityBase} base, then 15, 25, then +10 per block (35, 45, 55…)
+                      {!formCommunityCapacityValid && enterpriseCapacity.trim() && <span className="text-red-400"> — not a valid value</span>}
+                    </p>
+                  </div>
+                ) : (
+                  <select
+                    value={enterpriseCapacity}
+                    onChange={(e) => setEnterpriseCapacity(e.target.value)}
+                    className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
                   >
-                    + Add 10 Communities
-                  </button>
+                    <option value={formCommunityBase}>{formCommunityBase} Communities (base)</option>
+                    {getEnterpriseCommunityExpansionOptions(formCommunityMode).map((o) => (
+                      <option key={o.capacity} value={o.capacity}>{o.capacity} Communities (+${o.price.toFixed(2)}/mo)</option>
+                    ))}
+                  </select>
                 )}
                 <label className="flex items-center gap-1.5 cursor-pointer text-sm fp-text">
                   <input type="checkbox" checked={mediaAddon} onChange={(e) => setMediaAddon(e.target.checked)} />
                   Media Moderation +
                 </label>
+                <div className="flex items-center gap-3 text-sm fp-text">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="billingInterval" checked={billingInterval === "monthly"} onChange={() => setBillingInterval("monthly")} />
+                    Monthly
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="billingInterval" checked={billingInterval === "annual"} onChange={() => setBillingInterval("annual")} />
+                    Annual
+                  </label>
+                </div>
+                {/* Reference only -- Enterprise billing is manual/negotiated
+                    outside this tool (no self-serve checkout exists for it),
+                    so nothing here is ever actually charged; this just shows
+                    what the currently-configured selection prices out to. */}
+                <p className="text-[11px] fp-text-faint w-full">
+                  Reference price: ${formMonthlyTotal.toFixed(2)}/mo{billingInterval === "annual" && <> · ${formAnnualReference.toFixed(2)}/year (12× monthly, no discount applied — finalized manually)</>}
+                </p>
               </>
             )}
             <button onClick={() => void grant()} disabled={busy} className="fp-btn-primary rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50">

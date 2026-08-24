@@ -38,9 +38,10 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { activateWatchEntitlement } from "@/src/lib/products/ownership";
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
-import { validateEnterpriseCommunityCapacity, type EnterpriseCommunityMode } from "@/src/lib/products/watch-enterprise-community";
+import { validateEnterpriseCommunityCapacity, communityModeFor } from "@/src/lib/products/watch-enterprise-community";
 import { hasByoCredential, clearAccountByoCredential } from "@/src/lib/products/watch-byo";
 import { WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
+import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
 type Result<T = null> = { ok: true; data: T } | { ok: false; error: string };
@@ -110,6 +111,10 @@ export interface AccountDevOpsSubscriptionState {
    *  Moderation + has been explicitly granted (migration 0097). False for
    *  every non-enterprise/no-entitlement account. */
   mediaAddonActive: boolean;
+  /** "monthly" | "annual" -- the account's REAL stored billing interval
+   *  (migration 0080), meaningful for every granted tier, not just
+   *  Enterprise. Defaults to "monthly" for a null/unset stored value. */
+  billingInterval: "monthly" | "annual";
 }
 
 /** Read-only -- NOT Preview-gated (see file header). */
@@ -124,13 +129,13 @@ export async function getAccountDevOpsSubscription(accountId: string): Promise<R
       ok: true,
       data: {
         tier: null, status: null, isDevOps: false, subscriptionRef: null, enterpriseSlots: null, enterpriseCommunityCapacity: null,
-        apiSourceMode: "managed", hasByoCredential: byoCredentialStored, mediaAddonActive: false,
+        apiSourceMode: "managed", hasByoCredential: byoCredentialStored, mediaAddonActive: false, billingInterval: "monthly",
       },
     };
   }
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("subscription_ref, status, enterprise_slots, enterprise_community_capacity, api_source_mode, enterprise_media_addon")
+    .select("subscription_ref, status, enterprise_slots, enterprise_community_capacity, api_source_mode, enterprise_media_addon, billing_interval")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -147,6 +152,7 @@ export async function getAccountDevOpsSubscription(accountId: string): Promise<R
       apiSourceMode: entitlement?.api_source_mode === "byo" ? "byo" : "managed",
       hasByoCredential: byoCredentialStored,
       mediaAddonActive: entitlement?.enterprise_media_addon === true,
+      billingInterval: entitlement?.billing_interval === "annual" ? "annual" : "monthly",
     },
   };
 }
@@ -215,9 +221,18 @@ export async function setAccountDevOpsSubscription(accountId: string, tier: Mode
  *  `mediaAddon` (optional, `undefined` = leave whatever was already
  *  provisioned untouched) explicitly grants/revokes Enterprise Media
  *  Moderation + -- see AccountEnterpriseEntitlement's own doc comment
- *  (watch-runtime.ts) for the grandfather-default rationale on existing rows. */
+ *  (watch-runtime.ts) for the grandfather-default rationale on existing rows.
+ *
+ *  `billingInterval` (default "monthly") -- Enterprise billing is entirely
+ *  manual/negotiated (there's no self-serve checkout for it anywhere in this
+ *  codebase), but the account's `product_entitlements.billing_interval` and
+ *  period length are still real, stored fields every other Watch surface
+ *  (Billing page, expiry checks) reads -- this just lets that reflect an
+ *  annual arrangement finalized outside the app, the same way it already
+ *  does for every self-serve tier. */
 export async function setAccountDevOpsEnterprise(
-  accountId: string, slots: number | null, communityCapacity?: number, apiSourceMode?: "managed" | "byo", mediaAddon?: boolean
+  accountId: string, slots: number | null, communityCapacity?: number, apiSourceMode?: "managed" | "byo", mediaAddon?: boolean,
+  billingInterval: WatchBillingInterval = "monthly"
 ): Promise<Result> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
@@ -232,28 +247,31 @@ export async function setAccountDevOpsEnterprise(
   }
   // The valid Community-capacity package matrix is different PER MODE (see
   // watch-enterprise-community.ts's own table: Managed base 8, BYO 50/BYO
-  // Unlimited both base 10, with BYO Unlimited's own +10-block continuation
-  // beyond 25) -- this used to always validate against "managed" regardless
-  // of the account actually being granted BYO, which both rejected valid BYO
-  // capacities (e.g. any BYO Unlimited block beyond 25) and silently
-  // accepted a capacity that only happened to coincide with a Managed
-  // package number. Derived the same (mode, slots) -> community-mode mapping
-  // resolveEnterpriseMediaAddonKey already uses for the media add-on, so the
-  // two can never disagree about which mode this account is actually in.
-  const communityMode: EnterpriseCommunityMode = mode === "managed" ? "managed" : (slots === null ? "byoUnlimited" : "byo50");
+  // Unlimited both base 10, with BYO Unlimited's own UNCAPPED +10-block
+  // continuation beyond 25 -- there is no fixed maximum for that mode) --
+  // this used to always validate against "managed" regardless of the account
+  // actually being granted BYO, which both rejected every valid BYO
+  // Unlimited capacity beyond 25 and silently accepted a capacity that only
+  // happened to coincide with a Managed package number. Uses the ONE
+  // canonical (mode, slots) -> community-mode mapping (communityModeFor,
+  // watch-enterprise-community.ts) -- the SAME function the grant UI and
+  // activateWatchEntitlement's own persistence-time re-validation now both
+  // use too, so all three can never disagree about which mode an account is
+  // actually being granted.
+  const communityMode = communityModeFor(mode, slots);
   if (communityCapacity != null && !validateEnterpriseCommunityCapacity(communityMode, communityCapacity)) {
     return { ok: false, error: `${communityCapacity} isn't a real ${communityMode === "managed" ? "Managed Enterprise" : communityMode === "byo50" ? "BYO Enterprise 50" : "BYO Enterprise Unlimited"} Community capacity package.` };
   }
 
   const admin = createAdminClient();
   const ref = `devops:${auth.userId}:${Date.now()}`;
-  await activateWatchEntitlement(admin, accountId, "enterprise", ref, "monthly", slots, communityCapacity, apiSourceMode, mediaAddon);
+  await activateWatchEntitlement(admin, accountId, "enterprise", ref, billingInterval, slots, communityCapacity, apiSourceMode, mediaAddon);
 
   await admin.from("audit_logs").insert({
     panel_id: null,
     actor_id: auth.userId,
     action: "superadmin.watch_devops_enterprise_set",
-    meta: { accountId, slots, communityCapacity: communityCapacity ?? null, apiSourceMode: mode, mediaAddon: mediaAddon ?? null, devops: true },
+    meta: { accountId, slots, communityCapacity: communityCapacity ?? null, apiSourceMode: mode, mediaAddon: mediaAddon ?? null, billingInterval, devops: true },
   });
   return { ok: true, data: null };
 }

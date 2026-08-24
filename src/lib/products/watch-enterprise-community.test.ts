@@ -3,8 +3,36 @@ import assert from "node:assert/strict";
 import {
   getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, getEnterpriseCommunityHardMax,
   validateEnterpriseCommunityCapacity, getEnterpriseCommunityExpansionPrice, nextByoUnlimitedCapacityStep,
-  BYO_UNLIMITED_BLOCK_PRICE, BYO_UNLIMITED_BLOCK_SIZE,
+  BYO_UNLIMITED_BLOCK_PRICE, BYO_UNLIMITED_BLOCK_SIZE, communityModeFor,
 } from "./watch-enterprise-community";
+
+/* ------------------------------------------------------ communityModeFor ---- */
+// The ONE canonical (apiSourceMode, slots) -> EnterpriseCommunityMode mapping
+// every consumer (devops grant UI, devops grant action, activateWatchEntitlement's
+// own persistence-time validation) must use -- REQUIRED so all three can
+// never independently drift and disagree about which mode an account is in
+// (a real bug, 2026-08-25, when this mapping was duplicated inline in two
+// places and never applied in a third).
+
+test("REQUIRED: communityModeFor resolves managed regardless of slots", () => {
+  assert.equal(communityModeFor("managed", 50), "managed");
+  assert.equal(communityModeFor("managed", 75), "managed");
+});
+
+test("REQUIRED: communityModeFor resolves byo50 for a real numeric BYO slot count", () => {
+  assert.equal(communityModeFor("byo", 50), "byo50");
+});
+
+test("REQUIRED: communityModeFor resolves byoUnlimited when slots is null", () => {
+  assert.equal(communityModeFor("byo", null), "byoUnlimited");
+});
+
+test("REQUIRED: every real EnterpriseCommunityMode is reachable via this mapping, and matches its own table", () => {
+  for (const [mode, slots] of [["managed", 50], ["byo", 50], ["byo", null]] as const) {
+    const resolved = communityModeFor(mode, slots);
+    assert.ok(getEnterpriseIncludedCommunities(resolved) > 0);
+  }
+});
 
 /* ------------------------------------------------ self-serve preservation ---- */
 // This module governs ENTERPRISE Community capacity only -- self-serve Gold/

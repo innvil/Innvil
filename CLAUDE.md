@@ -127,6 +127,62 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Fix, properly this time: BYO Unlimited Community capacity was still silently capped at 25 +
+  a devops-tool billing-interval gap for Enterprise's own manual billing (v1.47.59)
+- **Direct, correct call-out from the user on the previous pass's own fix**: "why are you deliberately ignoring
+  the rules I set... BYO UNLIMITED CAN ADD AS MANY COMMUNITIES IF THEY WANT... BYO UNLIMITED IS NOT LIMITED TO 25
+  ONLY." Investigated before touching anything — the v1.47.58 fix corrected the UI/action VALIDATION layer, but
+  missed a THIRD, deeper hardcoded `"managed"` at the actual PERSISTENCE layer (`activateWatchEntitlement`,
+  `ownership.ts`) — `enterpriseCommunityCapacity != null && validateEnterpriseCommunityCapacity("managed",
+  enterpriseCommunityCapacity)` validated EVERY mode's capacity against Managed's own 25-max rules unconditionally,
+  regardless of the real `apiSourceMode`/`enterpriseSlots` being persisted in that SAME call — so even after
+  `setAccountDevOpsEnterprise` correctly validated a real BYO Unlimited capacity like 35 against the right table,
+  this deeper gate would silently DROP it from the write anyway (35 fails Managed's own rules), leaving the
+  entitlement row unchanged as if the grant had never happened. This is the actual, concrete reason the previous
+  fix looked complete on inspection but didn't hold up live — a genuine miss, not "not doing so."
+- **Centralized the mapping instead of a third inline copy.** New canonical `communityModeFor(apiSourceMode,
+  slots)`, exported from `watch-enterprise-community.ts` itself (the module that owns `EnterpriseCommunityMode`) —
+  the SAME `(apiSourceMode, slots) → mode` logic `resolveEnterpriseMediaAddonKey` already uses for the media
+  add-on, now the ONE place this mapping is defined at all. `WatchDevOpsAdmin.tsx`'s and
+  `superadmin-watch-devops.ts`'s own previously-duplicated inline copies (from v1.47.58) were replaced with
+  imports of this single function — three independent copies of the same three-line ternary is exactly the kind
+  of duplication that let this bug slip through review once already. `activateWatchEntitlement` now derives the
+  real mode from the `apiSourceMode`/`enterpriseSlots` parameters being persisted in the SAME call (never
+  hardcoded), so validation and persistence can never disagree about which mode an account is actually in.
+- **BYO Unlimited's devops UI rebuilt: a real free-form number input, not a bounded select + repeated button
+  clicks.** The v1.47.58 "+ Add 10 Communities" button technically could reach any number eventually, but read
+  and behaved like it was still capped — a closed `<select>`/button-step UI is the wrong control for a genuinely
+  unbounded range. BYO Unlimited now gets a plain number input (min = its real base of 10) with an inline caption
+  stating the real valid-value pattern ("No fixed max — 10 base, then 15, 25, then +10 per block…") and live
+  inline validation (red border + error text for an invalid value, checked via the same `validateEnterpriseCommunityCapacity`
+  the server itself uses) — an admin can now type 155, 305, or any real +10-block value directly. Managed and
+  BYO 50 both genuinely DO have a small, fixed, real maximum (25) per the user's own table, so those two keep
+  the bounded select — this isn't "everything becomes free-form," only the mode that's actually unbounded.
+- **Also implemented, per explicit request: "this is a manual billing too. so also add a yearly in the manual
+  billing. but do keep the pricing in the manual billing as a reference."** `setAccountDevOpsEnterprise` gained a
+  `billingInterval` parameter (default `"monthly"`), threaded straight into `activateWatchEntitlement`'s existing
+  `billingInterval` parameter (already real infrastructure from the annual-billing work — no new period logic
+  needed). `AccountDevOpsSubscriptionState`/`getAccountDevOpsSubscription` gained a real `billingInterval` field
+  (read from `product_entitlements.billing_interval`), so the current-entitlement display and the grant form's
+  pre-fill both reflect the account's actual stored interval, same "pre-fill from real current state" convention
+  already established for slots/capacity/media-addon. New Monthly/Annual radio group in the grant form. **Kept
+  the pricing as a REFERENCE, per the explicit instruction** — a new computed "Reference price: $X/mo · $Y/year
+  (12× monthly, no discount applied — finalized manually)" line, using the real live-computed monthly total
+  (base + Community expansion + media add-on) already shown elsewhere in the form — 12× monthly with NO invented
+  discount rate (unlike the self-serve tiers' own real 5%/10% annual discounts, no canonical Enterprise annual
+  discount rate exists anywhere in this codebase, so fabricating one here would be dishonest) — since Enterprise
+  billing is entirely manual/negotiated (there's still no self-serve Enterprise checkout anywhere), this figure
+  never drives an actual charge, it's purely informational for whoever's filling out the form.
+- New tests: `watch-enterprise-community.test.ts` (+4 — `communityModeFor`'s full mapping incl. both real BYO
+  branches and the managed-regardless-of-slots case), `ownership.test.ts` (+3 — the EXACT regression: a real BYO
+  Unlimited capacity of 35 (beyond 25) is now genuinely persisted, not silently dropped; BYO 50's own capacity
+  validated against its own table; an invalid BYO Unlimited value — not a real +10 block — still correctly
+  rejected, proving this isn't "BYO always passes"). 1708 tests pass (up from 1701), `tsc --noEmit` clean,
+  production build clean. Swept the three touched files afterward for any remaining hardcoded `"managed"` tied to
+  community-capacity validation/mapping — none found; every remaining occurrence is a legitimate default/type/UI
+  seed, not a duplicated validation gate.
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-25 — Fix: the devops Enterprise grant tool showed Managed's Community-capacity numbers for
   every mode, and validated BYO capacities against Managed's own package matrix (v1.47.58)
 - **Live bug report, correctly flagged as a real regression against the explicit product table**: "from managed
