@@ -14,6 +14,16 @@ import { getLandingVideo } from "@/src/lib/actions/platform-settings";
 import { toVideoEmbed } from "@/src/lib/video";
 import { LANDING_FAQ } from "@/src/data/landing-faq";
 import type { TopupDiscountRule } from "@/src/lib/actions/platform-payments";
+import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
+import { MODERATOR_BASIC_PRICE } from "@/src/lib/money";
+
+/** The Watch subdomain is a separate host from wherever this landing is
+ *  served (this page is the main app-host marketing page — app/page.tsx
+ *  branches Watch to its own PublicLanding-equivalent) — so this is always
+ *  a real cross-domain <a>, never a Next <Link> (which only knows about
+ *  routes on the CURRENT host). Mirrors WatchLanding.tsx's own reciprocal
+ *  "← Innvil" link back to this domain. */
+const WATCH_URL = "https://watch.innvil.cloud";
 
 /* =========================================================
    INNVIL PUBLIC LANDING PAGE
@@ -40,6 +50,9 @@ function TopNav({ setWorld }: { world?: string; setWorld?: (w: string) => void }
           <a href="#pricing" className="hover:fp-text">Pricing</a>
           <Link href="/design-shop" className="hover:fp-text">Designs</Link>
           <Link href="/blog" className="hover:fp-text">Guides</Link>
+          <a href="#watch" className="hover:fp-text flex items-center gap-1" style={{ color: "#2DD4BF" }}>
+            <Bot size={13} /> Watch
+          </a>
         </nav>
         <div className="flex items-center gap-3">
           <Link href="/login" className="text-sm fp-text-dim">Log in</Link>
@@ -256,6 +269,52 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
         </div>
       </section>
 
+      {/* Cross-promo: Innvil Watch — a separate, standalone product on the
+          SAME Innvil account, deliberately styled with Watch's own teal
+          accent (not fp-gold) so it reads as a different product living
+          inside the same ecosystem, not another Panel feature. */}
+      <section id="watch" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
+        <div className="fp-panel border rounded-2xl p-8 md:p-10" style={{ borderColor: "rgba(45, 212, 191, 0.35)" }}>
+          <div className="grid md:grid-cols-2 gap-10 items-center">
+            <div>
+              <p className="fp-mono text-xs uppercase tracking-[0.14em] mb-3 flex items-center gap-1.5" style={{ color: "#2DD4BF" }}>
+                <Bot size={13} /> Also from Innvil
+              </p>
+              <h2 className="fp-display text-3xl mb-4">Running a Telegram community? Meet Innvil Watch.</h2>
+              <p className="fp-text-dim text-sm leading-relaxed mb-6 max-w-md">
+                Watch is a standalone Innvil product — AI-powered Virtual Moderators (&quot;Watchers&quot;) you deploy
+                into your Telegram groups, supergroups, and channels. Same Innvil account, its own dashboard, its
+                own pricing — no SMM panel required.
+              </p>
+              <a
+                href={WATCH_URL}
+                className="font-semibold px-6 py-3 rounded-lg flex items-center gap-2 w-fit"
+                style={{ background: "#2DD4BF", color: "#0A0B0F" }}
+              >
+                Explore Innvil Watch <ArrowRight size={16} />
+              </a>
+              <p className="fp-text-faint text-xs fp-mono mt-4">
+                {TRIAL_DURATION_DAYS}-day free trial · no payment required · plans from ${MODERATOR_BASIC_PRICE.toFixed(2)}/mo
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { icon: ShieldCheck, t: "Spam & scam moderation", d: "Graduated enforcement — warn first, escalate on repeat offenses." },
+                { icon: MessageSquare, t: "Natural conversation", d: "Watchers chat and answer questions in their own persona, not a bot script." },
+                { icon: Zap, t: "Minutes to deploy", d: "Connect a Telegram bot and go live — no code, no setup." },
+                { icon: Gift, t: `${TRIAL_CAPACITY.maxCommunities} Community, ${TRIAL_CAPACITY.maxActiveSlots} Watcher — free`, d: `Try the full ${TRIAL_DURATION_DAYS}-day trial before you pay anything.` },
+              ].map((f) => (
+                <div key={f.t} className="fp-panel-raised border fp-line-soft rounded-xl p-4">
+                  <f.icon size={16} style={{ color: "#2DD4BF" }} className="mb-2" />
+                  <p className="text-sm font-medium mb-1 leading-snug">{f.t}</p>
+                  <p className="fp-text-faint text-xs leading-snug">{f.d}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="floor" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
         <div className="grid md:grid-cols-2 gap-14 items-center">
           <div>
@@ -287,7 +346,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
             { icon: Wifi, t: "Bring your own provider", d: "We never resell SMM services or mark up your provider. You keep 95% of every order and your margin is yours.", lead: false },
             { icon: Globe, t: "No domain lock-in", d: "Disconnect your custom domain anytime and the storefront reverts to your included subdomain. You're never held hostage.", lead: false },
             { icon: Lock, t: "Real customer-privacy boundary", d: "You can't log into customer accounts or reset their passwords — only adjust balances. A trust guarantee legacy panels don't give.", lead: false },
-            { icon: LayoutGrid, t: "A business OS, not just a panel", d: "Wallet, tickets, receipts, duplicate tooling and a full Design Shop today; the Automator and Analytics land as opt-in add-ons next.", lead: false },
+            { icon: LayoutGrid, t: "A business OS, not just a panel", d: "Wallet, tickets, receipts, duplicate tooling, Campaign Automation, and a full Design Shop today — plus Innvil Watch, a standalone AI Telegram moderation product on the same account.", lead: false },
             { icon: Gift, t: "ANVIL rewards — coming soon", d: "Earn rewards on every top-up and unlock discounts on paid features as the platform grows.", lead: false },
           ].map((f) => (
             <div key={f.t} className={`fp-panel border rounded-2xl p-6 ${f.lead ? "fp-gold-border" : "fp-line"}`}>
@@ -427,6 +486,7 @@ export function PublicLanding({ setWorld, topupTiers = [] }: { setWorld?: (w: st
           <div className="flex items-center gap-5">
             <a href="/terms" className="hover:fp-text">Terms</a>
             <a href="/privacy" className="hover:fp-text">Privacy</a>
+            <a href={WATCH_URL} className="hover:fp-text" style={{ color: "#2DD4BF" }}>Innvil Watch →</a>
             <span className="fp-mono fp-text-faint">5% commission · no rent</span>
           </div>
         </div>

@@ -127,6 +127,41 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Main landing now cross-promotes Innvil Watch (v1.47.60)
+- **Missing piece flagged by the user directly**: the main Innvil (SMM panel builder) landing had zero mention of
+  Innvil Watch anywhere — no way for a visitor to discover the standalone Telegram-moderation product exists,
+  even though `WatchLanding.tsx` already links back to the main site ("← Innvil" nav, "Part of the Innvil
+  ecosystem" footer). This was a one-directional gap, not a from-scratch feature — added the missing reciprocal
+  direction.
+- **New dedicated promo section** (`id="watch"`, `PublicLanding.tsx`), placed right after the big Panel-feature
+  grid (`#platform`) and before `#floor` — deliberately styled with Watch's own real teal accent (`#2DD4BF`,
+  matched from `--w-teal` in `globals.css`) instead of this page's `fp-gold` palette, so it visually reads as "a
+  different product on the same account," not another Panel feature card. States real, canonical facts only —
+  imports `TRIAL_DURATION_DAYS`/`TRIAL_CAPACITY` (`moderator/plan.ts`) and `MODERATOR_BASIC_PRICE` (`money.ts`)
+  directly rather than hardcoding "7 days"/"$29.99" as a second, driftable copy — 4 short feature bullets (spam/
+  scam moderation, natural conversation, minutes-to-deploy, the real trial capacity), and a CTA button linking to
+  `https://watch.innvil.cloud` (a genuine cross-domain `<a>`, never a Next `<Link>`, matching how `WatchLanding.tsx`
+  already links back to `innvil.cloud` the same way — this page and Watch's are served on different hosts).
+- **Also added**: a "Watch" nav item (teal-accented, anchors to the new section), a "Innvil Watch →" footer link,
+  and a new FAQ entry ("Does Innvil have anything for Telegram communities?") — appended to the SHARED
+  `landing-faq.ts` module, so it's picked up by both the visible accordion and the page's FAQPage JSON-LD
+  structured data for free, no separate wiring needed.
+- **Fixed a real stale claim found while touching this area**: the `#why` section's "A business OS, not just a
+  panel" bullet still said "the Automator and Analytics land as opt-in add-ons next" — Campaign Automation
+  (the Automator) has been a live, shipped, always-visible storefront feature since v1.1.14, not an upcoming
+  add-on; corrected to state it's live today, alongside Watch, and left Analytics unclaimed since that add-on is
+  still genuinely NOTED-not-built (Phase 4.y) — didn't overclaim it.
+- No migration, no new deps. 1708 tests pass (unchanged — no new pure logic, this is landing copy/composition),
+  `tsc --noEmit` clean, production build clean. **Verified live** via the local dev server: the new section,
+  nav item, footer link, and FAQ entry all render with the exact intended copy; confirmed via direct DOM
+  inspection that all three Watch links resolve to the real `https://watch.innvil.cloud/` (not a relative/broken
+  path).
+- **Deployed to Production** (this + the previous two passes — v1.47.58's initial devops fix, v1.47.59's deeper
+  BYO Unlimited/persistence-layer fix, and this landing-page addition — all shipped together via
+  `vercel deploy --prod`, per explicit instruction: "push to prod - I will test everything in prod before
+  starting campaigns"). Verified live on the real domains (`innvil.cloud`/`www.innvil.cloud`/`watch.innvil.cloud`)
+  before and will re-verify after this specific commit deploys.
+
 ### 2026-08-25 — Fix, properly this time: BYO Unlimited Community capacity was still silently capped at 25 +
   a devops-tool billing-interval gap for Enterprise's own manual billing (v1.47.59)
 - **Direct, correct call-out from the user on the previous pass's own fix**: "why are you deliberately ignoring
