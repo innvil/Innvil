@@ -135,3 +135,16 @@ export { moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, M
 export function presenceSchedulingEligible(tier: ModeratorPlanTier | "trial" | "enterprise" | null): boolean {
   return tier === "standard" || tier === "premium" || tier === "pro" || tier === "enterprise";
 }
+
+/** Auto-Posting (Phase 4.N part B, extended to standalone accounts in
+ *  4.N.1) -- any active PAID tier (Basic/Bronze and up) or Enterprise; the
+ *  trial explicitly stays excluded, mirroring moderator/plan.ts's
+ *  virtualModContentGeneration exactly (the SAME entitlement rule, just
+ *  read from the account-scoped AccountCapacity.tier instead of a
+ *  panels.settings-shaped object -- the runtime sweep itself still calls
+ *  virtualModContentGeneration directly via resolveStandaloneModeratorSettings,
+ *  never this function, so the two can never drift apart in practice; this
+ *  is purely for UI/action-layer gating that only has a tier in hand). */
+export function autoPostingEligible(tier: ModeratorPlanTier | "trial" | "enterprise" | null): boolean {
+  return tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro" || tier === "enterprise";
+}

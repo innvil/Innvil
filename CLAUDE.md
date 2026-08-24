@@ -127,6 +127,64 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — AI Telegram Auto-Posting now works for standalone (Panel-less) Watch accounts (Phase 4.N.1) (v1.47.53)
+- **Closes a real, previously-documented product gap, per direct instruction to finish the remaining Watch
+  specs before going live.** The Watch landing page itself advertises Auto-Posting ("Schedule per-Watcher
+  posting windows so your community stays active") as a real capability — but until this pass, Auto-Posting was
+  entirely Panel-distributed-only (`auto_post_windows.panel_id NOT NULL` since migration 0055,
+  `actions/autopost.ts` hard `panels.owner_id`-scoped throughout). A direct/standalone Watch account — this
+  product's actual primary customer — could never use a feature its own landing page advertised. Flagged as a
+  "structurally Panel-only" limitation in several earlier passes (BYO Phase 2, v1.47.43; Presence Scheduling,
+  v1.47.44) without being fixed until now.
+- **Migration `0100_watch_autopost_standalone.sql`** — `alter table auto_post_windows alter column panel_id
+  drop not null`, mirroring the exact same nullable-ownership pattern already established for
+  `moderator_deployments`/`communities`/`telegram_bot_integrations` (migration 0069). No other schema change —
+  `community_id`/`moderator_deployment_id` are already the real ownership anchors for a standalone window.
+- **`autopost-runtime.ts` (the cron sweep) now resolves entitlement via TWO branches**, both reachable from the
+  same `enabled=true` window scan: a Panel-distributed window (`panel_id` set) resolves via the existing
+  `panels.settings` map, byte-identical to before this pass; a standalone window (`panel_id` null) resolves via
+  the SAME `resolveStandaloneModeratorSettings()` the live Telegram Q&A/moderation runtime already uses
+  (`community-runtime.ts`) — reused verbatim, never a second/duplicated entitlement model — keyed by the
+  window's assigned deployment's own moderator id. `virtualModContentGeneration()` itself is completely
+  unchanged either way, so the real "trial excluded, any paid tier or Enterprise included" rule (spec §26)
+  applies identically regardless of which ownership shape a window has. `loadKnowledgeForWindow`'s
+  ORGANIZATION-scope query is now skipped entirely for a standalone window (`panelId: null`), mirroring the
+  exact fix already made for the live Q&A retrieval path — a standalone window was never able to have
+  panel-wide knowledge to begin with, so this is a correctness fix, not a new restriction.
+- **New `src/lib/actions/watch-autopost.ts`** — a genuinely separate account-scoped action file (never widened
+  in place on the legacy `actions/autopost.ts`, matching this codebase's established one-file-per-ownership-
+  model convention — `watch-moderator.ts` vs `actions/moderator.ts`, `watch-presence.ts`, etc.). Ownership
+  resolved via `listAccountCommunities` (the same canonical, cross-account-isolated Community list every other
+  Watch action reuses); entitlement via a new `autoPostingEligible(tier)` pure helper (`watch-plans.ts`,
+  mirrors `presenceSchedulingEligible`'s exact shape — any paid tier including Bronze, or Enterprise; trial
+  excluded). Every window is inserted with `panel_id: null`. Deployment options and moderator-name lookups are
+  read straight from the already-resolved community summary — no second query needed, unlike the legacy
+  version's `virtual_moderators` embed workaround.
+- **New "Auto-Posting" tab on the Community detail page** (`app/communities/[id]/page.tsx`, alongside the
+  existing Presence tab — same conditional-tab pattern, gated on the `AUTO_POSTING_ENABLED` master switch),
+  `AutoPostScheduleCard.tsx` (timezone setting, window creation, window list with enable/disable/delete, a
+  compact recent-posts status list) — mirrors the legacy owner-facing `AutoPostingCard` in `AdminTabs.tsx`
+  closely (same UX shape, Watch-styled), scoped to the single Community the tab lives on (no community
+  selector needed, unlike the legacy multi-community owner surface). Shows a real "not on your current plan"
+  upsell instead of a broken control when the account's tier isn't eligible — never a dead/silently-failing
+  form.
+- **`WatchShell.tsx`'s stale doc comments corrected** — Auto-Posting is no longer described as having "no
+  account-scoped backend," now correctly documented as Community-scoped (a tab, like Presence), which is why
+  it still has no global sidebar item.
+- New tests: `autopost-runtime.test.ts` (+3 — a standalone window's ORGANIZATION-scope query is proven never
+  queried/never surfaced, the Panel-set branch proven to delegate verbatim to `virtualModContentGeneration`
+  rather than a second decision, a standalone window whose deployment resolves to no known moderator fails
+  safe with provably ZERO DB calls), `watch-plans.test.ts` (+1 — `autoPostingEligible`'s full tier matrix incl.
+  Bronze-is-eligible, unlike Presence Scheduling which starts at Silver). 1653 tests pass (up from 1649), `tsc
+  --noEmit` clean, production build clean. Verified live via the dev server that an unauthenticated request to
+  a Community detail route redirects cleanly (no crash); the new tab itself requires an authenticated session
+  with a real entitlement to click-test, consistent with this session's established limitation for
+  comparably complex Watch dashboard pages.
+- **Master switch still OFF in production** (`AUTO_POSTING_ENABLED`/`NEXT_PUBLIC_AUTO_POSTING_ENABLED`) —
+  unchanged by this pass; flipping it on is a separate, explicit decision once the whole pipeline (Panel AND
+  standalone) is live-verified. **Run migration `0100`** before this governs anything live. **Not deployed
+  automatically, per standing instruction.**
+
 ### 2026-08-25 — BYO provider health/observability + a real landing-page "Managed vs. BYO" section (v1.47.52)
 - **Closes two more items off the Phase 4.V.1 deferred list, per direct instruction to finish the remaining
   Watch specs before going live.**

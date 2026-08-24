@@ -11,6 +11,7 @@ import {
 } from "./autopost";
 import { generateAutoPostContent } from "./autopost-generate";
 import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource, type KnowledgeScopeType } from "./knowledge";
+import { resolveStandaloneModeratorSettings } from "@/src/lib/products/watch-runtime";
 
 /* =========================================================
    AI Telegram Auto-Posting — the cron-driven sweep (Phase 4.N part B). Each
@@ -30,11 +31,38 @@ const SPACING_MIN_GAP_MINUTES = 10;
 
 interface WindowRow {
   id: string;
-  panel_id: string;
+  panel_id: string | null;
   community_id: string;
   moderator_deployment_id: string;
   start_local_time: string;
   end_local_time: string;
+}
+
+/** Entitlement resolution branches on the window's own `panel_id` (Phase
+ *  4.N.1, standalone Auto-Posting) -- a Panel-distributed window (panel_id
+ *  set) resolves via the existing `panels.settings` lookup, byte-identical
+ *  to before this pass. A standalone (Panel-less, panel_id null) window
+ *  resolves via the SAME `resolveStandaloneModeratorSettings` the live
+ *  Telegram runtime already uses (community-runtime.ts) -- reused verbatim,
+ *  never a second/duplicated entitlement model -- keyed by the window's
+ *  assigned deployment's own moderator id. `virtualModContentGeneration`
+ *  itself is completely unchanged either way: it already correctly excludes
+ *  trial for both shapes (buildStandaloneModeratorSettings never sets
+ *  trial.active, buildStandaloneTrialModeratorSettings is never returned by
+ *  resolveStandaloneModeratorSettings once a paid/enterprise entitlement
+ *  exists -- and even if it were, virtualModContentGeneration's own
+ *  moderatorTier()-only check already excludes a trial-shaped settings
+ *  object, since trial never sets `addons.moderator.tier`). */
+export async function resolveWindowContentGenerationEntitlement(
+  admin: SupabaseClient, w: WindowRow, moderatorIdByDeployment: Map<string, string>, settingsByPanel: Map<string, unknown>, panelByCommunity: Map<string, string | null>
+): Promise<boolean> {
+  if (w.panel_id) {
+    return virtualModContentGeneration(settingsByPanel.get(panelByCommunity.get(w.community_id) ?? w.panel_id));
+  }
+  const moderatorId = moderatorIdByDeployment.get(w.moderator_deployment_id);
+  if (!moderatorId) return false;
+  const settings = await resolveStandaloneModeratorSettings(admin, moderatorId);
+  return virtualModContentGeneration(settings);
 }
 
 async function claimStatus(admin: SupabaseClient, table: string, id: string, from: AutoPostOccurrenceStatus, to: AutoPostOccurrenceStatus, patch: Record<string, unknown> = {}): Promise<boolean> {
@@ -53,22 +81,27 @@ async function ensureTodaysOccurrences(admin: SupabaseClient, now: Date) {
   // Communities + their timezone, batched.
   const communityIds = Array.from(new Set(windows.map((w: WindowRow) => w.community_id)));
   const { data: communities } = await admin.from("communities").select("id, timezone, panel_id").in("id", communityIds);
-  const timezoneByCommunity = new Map((communities ?? []).map((c: { id: string; timezone: string; panel_id: string }) => [c.id, c.timezone || "UTC"]));
-  const panelByCommunity = new Map((communities ?? []).map((c: { id: string; timezone: string; panel_id: string }) => [c.id, c.panel_id]));
+  const timezoneByCommunity = new Map((communities ?? []).map((c: { id: string; timezone: string; panel_id: string | null }) => [c.id, c.timezone || "UTC"]));
+  const panelByCommunity = new Map((communities ?? []).map((c: { id: string; timezone: string; panel_id: string | null }) => [c.id, c.panel_id]));
 
-  // Panel entitlement, batched.
-  const panelIds = Array.from(new Set(windows.map((w: WindowRow) => w.panel_id)));
-  const { data: panels } = await admin.from("panels").select("id, settings").in("id", panelIds);
+  // Panel entitlement, batched -- only for windows that ARE Panel-distributed
+  // (panel_id set). A standalone window's entitlement is resolved per-window
+  // below instead (resolveWindowContentGenerationEntitlement), since it needs
+  // a real per-account DB lookup, not a simple map lookup.
+  const panelIds = Array.from(new Set(windows.map((w: WindowRow) => w.panel_id).filter((id): id is string => id != null)));
+  const { data: panels } = panelIds.length ? await admin.from("panels").select("id, settings").in("id", panelIds) : { data: [] };
   const settingsByPanel = new Map((panels ?? []).map((p: { id: string; settings: unknown }) => [p.id, p.settings]));
 
-  // Deployment must still be active.
+  // Deployment must still be active -- also carries moderator_id, needed to
+  // resolve a standalone window's entitlement.
   const deploymentIds = Array.from(new Set(windows.map((w: WindowRow) => w.moderator_deployment_id)));
-  const { data: deployments } = await admin.from("moderator_deployments").select("id, enabled").in("id", deploymentIds);
+  const { data: deployments } = await admin.from("moderator_deployments").select("id, enabled, moderator_id").in("id", deploymentIds);
   const activeDeployment = new Map((deployments ?? []).map((d: { id: string; enabled: boolean }) => [d.id, d.enabled]));
+  const moderatorIdByDeployment = new Map((deployments ?? []).map((d: { id: string; moderator_id: string }) => [d.id, d.moderator_id]));
 
   for (const w of windows as WindowRow[]) {
     if (!activeDeployment.get(w.moderator_deployment_id)) continue; // spec §19 -- deployment must be active
-    if (!virtualModContentGeneration(settingsByPanel.get(panelByCommunity.get(w.community_id) ?? w.panel_id))) continue; // spec §26/§27 -- entitlement gate
+    if (!(await resolveWindowContentGenerationEntitlement(admin, w, moderatorIdByDeployment, settingsByPanel, panelByCommunity))) continue; // spec §26/§27 -- entitlement gate
     const timezone = timezoneByCommunity.get(w.community_id) ?? "UTC";
     const localDate = localDateKeyInTimezone(now, timezone);
 
@@ -98,7 +131,7 @@ async function ensureTodaysOccurrences(admin: SupabaseClient, now: Date) {
  *  knowledge > community context > legacy organization knowledge. Contact
  *  presets are NEVER included here -- they're for routing a human's
  *  question to a person, not post-topic inspiration for generated content. */
-export async function loadKnowledgeForWindow(admin: SupabaseClient, panelId: string, communityId: string): Promise<{ scope: KnowledgeScopeType; title: string; content: string }[]> {
+export async function loadKnowledgeForWindow(admin: SupabaseClient, panelId: string | null, communityId: string): Promise<{ scope: KnowledgeScopeType; title: string; content: string }[]> {
   const { data: communityRow } = await admin.from("communities").select("project_id").eq("id", communityId).maybeSingle();
   const projectId = communityRow?.project_id ?? null;
 
@@ -107,7 +140,14 @@ export async function loadKnowledgeForWindow(admin: SupabaseClient, panelId: str
     projectId
       ? admin.from("knowledge_sources").select("id, panel_id, scope_type, project_id, community_id, kind, title, content, active").eq("project_id", projectId).eq("scope_type", "PROJECT").eq("active", true)
       : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
-    admin.from("knowledge_sources").select("id, panel_id, scope_type, project_id, community_id, kind, title, content, active").eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true),
+    // ORGANIZATION scope is panel-wide by definition -- a standalone
+    // (Panel-less) window has no organization scope to read, matching the
+    // exact fix already made for the live Q&A runtime (community-runtime.ts's
+    // loadRelevantKnowledge, "ORGANIZATION-scope query now skips entirely
+    // when panelId is null").
+    panelId
+      ? admin.from("knowledge_sources").select("id, panel_id, scope_type, project_id, community_id, kind, title, content, active").eq("panel_id", panelId).eq("scope_type", "ORGANIZATION").eq("active", true)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
     projectId
       ? admin.from("projects").select("name, overview, website, docs_url").eq("id", projectId).maybeSingle()
       : Promise.resolve({ data: null as { name?: string; overview?: string; website?: string; docs_url?: string } | null, error: null }),

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions, watchAccessLabel, formatSlotLimit } from "./watch-plans";
+import { watchPlanDisplayName, watchTierFromDisplayName, watchPlanOptions, watchAccessLabel, formatSlotLimit, autoPostingEligible } from "./watch-plans";
 import { moderatorPlanPrice, MODERATOR_COMMUNITY_CAPACITY } from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
 import { TRIAL_CAPACITY } from "./watch-trial";
@@ -152,4 +152,16 @@ test("REQUIRED: every plan option's slots/communitiesIncluded/communitiesMax are
 test("REQUIRED: the Free Trial's real capacity (1 Watcher slot, 1 Community) is a canonical constant, the same one the runtime entitlement resolver enforces -- never a value hand-typed into the Plans UI", () => {
   assert.equal(TRIAL_CAPACITY.maxActiveSlots, 1);
   assert.equal(TRIAL_CAPACITY.maxCommunities, 1);
+});
+
+/* ------------------------------------------------ autoPostingEligible ---- */
+
+test("REQUIRED: autoPostingEligible mirrors moderator/plan.ts's virtualModContentGeneration exactly -- any paid tier (incl. Basic/Bronze) or enterprise, trial and no-entitlement excluded", () => {
+  assert.equal(autoPostingEligible("basic"), true, "Bronze IS eligible (unlike Presence Scheduling, which starts at Silver)");
+  assert.equal(autoPostingEligible("standard"), true);
+  assert.equal(autoPostingEligible("premium"), true);
+  assert.equal(autoPostingEligible("pro"), true);
+  assert.equal(autoPostingEligible("enterprise"), true);
+  assert.equal(autoPostingEligible("trial"), false, "trial explicitly excluded, per Phase 4.N part B's own spec §26");
+  assert.equal(autoPostingEligible(null), false, "no entitlement at all is never eligible");
 });

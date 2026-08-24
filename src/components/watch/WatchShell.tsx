@@ -33,10 +33,10 @@ const WORKSPACE_NAV: NavItem[] = [
 // Knowledge is real, but it's PROJECT-scoped (a tab inside each Project's own
 // detail page, see app/projects/[id]/page.tsx), never a single global
 // destination -- there's nothing meaningful for a top-level "Knowledge" link
-// to point at. Auto-Posting has no account-scoped (Panel-less) backend at
-// all yet (actions/autopost.ts is still hard Panel-owner-scoped) -- omitted
-// entirely rather than left as a disabled placeholder, per the standing
-// "no disabled-looking navigation" rule. See CLAUDE.md's "REMAINING GAPS".
+// to point at. Auto-Posting is real for standalone accounts too now (Phase
+// 4.N.1, watch-autopost.ts) but is Community-scoped, not a global
+// destination either -- it lives as a tab on each Community's detail page
+// (app/communities/[id]/page.tsx), same as Presence.
 //
 // Deployments (app/deployments/page.tsx) is the real operational surface for
 // "what is deployed, where, and why it's consuming Watcher slots" -- a
@@ -157,9 +157,10 @@ function SidebarContent({ active, capacity, isSuper, onNavigate }: { active: str
  *  real dedicated route with its own data (see app/projects, app/communities,
  *  app/watchers, app/activity, app/usage, app/billing, app/settings).
  *  Knowledge is real too, but Project-scoped (a tab inside each Project's own
- *  detail page) rather than a global destination. Auto-Posting has no
- *  account-scoped backend yet and is omitted entirely from the sidebar
- *  rather than shown disabled — see CLAUDE.md's "REMAINING GAPS". */
+ *  detail page) rather than a global destination. Auto-Posting is real for
+ *  standalone accounts too (Phase 4.N.1) but is Community-scoped -- a tab on
+ *  each Community's detail page, same as Presence -- so it's also omitted
+ *  from this sidebar, not because it's unbuilt. */
 export function WatchShell({
   active, capacity, primaryAction, attentionCount = 0, children,
 }: {

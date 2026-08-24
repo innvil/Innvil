@@ -12,6 +12,9 @@ import { DeploymentToggle } from "@/src/components/watch/DeploymentToggle";
 import { CommunityModerationFilters } from "@/src/components/watch/CommunityModerationFilters";
 import { PresenceScheduleCard } from "@/src/components/watch/PresenceScheduleCard";
 import { getCommunityPresenceSchedule } from "@/src/lib/actions/watch-presence";
+import { AutoPostScheduleCard } from "@/src/components/watch/AutoPostScheduleCard";
+import { getAutoPostingEligibility } from "@/src/lib/actions/watch-autopost";
+import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
 
 export const metadata: Metadata = { title: "Community — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -39,6 +42,7 @@ export default async function CommunityDetailPage({
   const status = communityOperationalStatus(community);
   const watchersForFilter = community.watchers.map((w) => ({ id: w.watcherId, name: w.watcherName }));
   const presenceResult = await getCommunityPresenceSchedule(id);
+  const autoPostEligibility = AUTO_POSTING_ENABLED ? await getAutoPostingEligibility(id) : null;
 
   const watchersTab = (
     <div className="w-card p-5">
@@ -115,6 +119,12 @@ export default async function CommunityDetailPage({
     { id: "watchers", label: "Watchers", content: watchersTab },
     ...(presenceResult.ok
       ? [{ id: "presence", label: "Presence", content: <PresenceScheduleCard communityId={id} initial={presenceResult.data} /> } as WatchTab]
+      : []),
+    ...(autoPostEligibility?.ok
+      ? [{
+          id: "autopost", label: "Auto-Posting",
+          content: <AutoPostScheduleCard communityId={id} deployableCount={community.watchers.filter((w) => w.enabled).length} eligible={autoPostEligibility.data.eligible} />,
+        } as WatchTab]
       : []),
     {
       id: "moderation",
