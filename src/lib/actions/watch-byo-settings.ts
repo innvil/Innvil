@@ -5,6 +5,7 @@ import { resolveAccountEnterpriseEntitlement } from "@/src/lib/products/watch-ru
 import {
   hasByoCredential, getAccountByoCredential, setAccountByoCredential, clearAccountByoCredential, type WatchByoProvider,
 } from "@/src/lib/products/watch-byo";
+import { getByoProviderHealth, type ByoProviderHealth } from "@/src/lib/products/watch-byo-usage";
 
 /**
  * BYO Enterprise -- Phase 2 (2026-08-24) self-serve credential management.
@@ -64,6 +65,17 @@ export async function clearWatchByoCredential(): Promise<Result> {
   if (!ctx.ok) return ctx;
   await clearAccountByoCredential(ctx.admin, ctx.accountId);
   return { ok: true, data: null };
+}
+
+/** Provider health/observability (Phase 4.V.1) -- "is my provider actually
+ *  working?" Real last-success/last-error/recent-volume, built entirely
+ *  from already-recorded telemetry (watch-byo-usage.ts's
+ *  getByoProviderHealth) -- never fabricates a status. */
+export async function getWatchByoProviderHealth(): Promise<Result<ByoProviderHealth>> {
+  const ctx = await requireByoEnterprise();
+  if (!ctx.ok) return ctx;
+  const health = await getByoProviderHealth(ctx.admin, ctx.accountId);
+  return { ok: true, data: health };
 }
 
 /** Cheap existence-only check, for gating the Settings tab's visibility

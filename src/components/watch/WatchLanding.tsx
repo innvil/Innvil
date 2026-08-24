@@ -2,12 +2,13 @@ import React from "react";
 import Link from "next/link";
 import {
   ShieldCheck, MessageSquare, Gauge, Bot, ArrowRight, ScrollText, Activity,
-  Radio, Zap, Users, Clock, Rocket,
+  Radio, Zap, Users, Clock, Rocket, Server, KeyRound,
 } from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
 import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
 import { WatchLogoutButton } from "./WatchLogoutButton";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
+import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 // Client-safe canonical trial constants -- watch-trial.ts itself is
 // server-only (full of DB functions); moderator/plan.ts is the plain,
 // client-safe module those constants actually originate from, and is
@@ -330,6 +331,12 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
         </div>
       </section>
 
+      <div className="max-w-4xl mx-auto px-6 pb-10 text-center">
+        <a href="#enterprise" className="inline-flex items-center gap-1.5 text-sm w-teal hover:underline">
+          Running your own AI stack? Explore BYO Enterprise <ArrowRight size={13} />
+        </a>
+      </div>
+
       <section className="max-w-4xl mx-auto px-6 pb-16">
         <h2 className="w-display text-xl text-center mb-8">Who is Watch for?</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
@@ -375,6 +382,40 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
       </section>
 
       <WatchOnboardingGuide />
+
+      <section id="enterprise" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
+        <p className="text-xs w-mono uppercase w-teal tracking-wider text-center mb-2">Enterprise</p>
+        <h2 className="w-display text-2xl text-center mb-3">Two broad ways to run Watch at scale.</h2>
+        <p className="w-text-dim text-center max-w-lg mx-auto mb-10">
+          Both are the same Innvil Watch product and dashboard — the difference is who pays for the AI provider calls.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div className="w-card p-6">
+            <Server size={20} className="w-teal mb-3" />
+            <p className="w-display text-lg mb-1">Managed</p>
+            <p className="text-sm w-text-dim mb-3">Innvil runs everything, including your AI provider usage — one flat monthly price.</p>
+            <p className="w-display text-xl">from ${MANAGED_ENTERPRISE_50.price.toFixed(0)}<span className="text-sm w-text-faint font-normal">/mo</span></p>
+          </div>
+          <div className="w-card p-6">
+            <KeyRound size={20} className="w-teal mb-3" />
+            <p className="w-display text-lg mb-1">Bring Your Own (BYO)</p>
+            <p className="text-sm w-text-dim mb-3">
+              Connect your own AI provider credential and pay less for the Innvil platform fee — your own
+              provider usage is billed separately by your provider, not covered by Innvil.
+            </p>
+            <p className="w-display text-xl">from ${WATCH_ENTERPRISE_BYO_TIERS[0].price.toFixed(0)}<span className="text-sm w-text-faint font-normal">/mo</span></p>
+          </div>
+        </div>
+        <p className="text-xs w-text-faint text-center max-w-xl mx-auto mt-6">
+          Neither option guarantees lower total spend — BYO only lowers the Innvil platform fee itself.
+          Provisioning for either mode is completed with our team.
+        </p>
+        <div className="text-center mt-6">
+          <Link href="/plans#enterprise" className="text-sm px-4 py-2 rounded-lg border w-line-soft w-surface inline-block hover:w-text">
+            Compare Managed vs. BYO in detail
+          </Link>
+        </div>
+      </section>
 
       <WatchPricingSection options={options} authenticated={authenticated} />
 

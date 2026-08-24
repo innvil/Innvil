@@ -127,6 +127,43 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — BYO provider health/observability + a real landing-page "Managed vs. BYO" section (v1.47.52)
+- **Closes two more items off the Phase 4.V.1 deferred list, per direct instruction to finish the remaining
+  Watch specs before going live.**
+- **(1) Provider health/observability** — new `getByoProviderHealth(admin, accountId)` (`watch-byo-usage.ts`)
+  reports real, observed `lastSuccessAt`/`lastErrorAt`/`lastError`/`callsLast7Days`, built entirely from
+  `watch_byo_ai_usage_events`' already-recorded `ok`/`error`/`created_at` columns — no new schema, no fabricated
+  status. New action `getWatchByoProviderHealth()` (`watch-byo-settings.ts`, same server-side BYO-entitlement
+  gate as every other export in that file). `ByoCredentialSettingsCard.tsx` (Settings → AI Provider tab) gained
+  a "Provider health" row right below the existing "Stored credential" row — real relative-time last-success/
+  last-error, and a 7-day call count — shown only once a credential is actually stored, never a fake "healthy"
+  placeholder while unconfigured.
+- **(2) Landing-page "two broad ways to run Watch" section** — the previous pass (v1.47.43) only upgraded the
+  existing Enterprise pricing CARD; the spec wanted a real dedicated section plus an earlier secondary CTA.
+  `WatchLanding.tsx` gained a new `id="enterprise"` section ("Two broad ways to run Watch at scale") right
+  before pricing, with real Managed ($399/mo) vs. BYO ($299/mo) cards sourced from the same
+  `MANAGED_ENTERPRISE_50`/`WATCH_ENTERPRISE_BYO_TIERS` constants the pricing card already uses (never a
+  duplicated number), an explicit "neither guarantees lower total spend" disclosure (matching the honesty bar
+  set by `compareEnterpriseModesAtSlots`), and a link into `/plans#enterprise`'s existing full configurator. A
+  smaller secondary CTA ("Running your own AI stack? Explore BYO Enterprise →") was added right after the
+  Features section — genuinely earlier on the page, not just at the bottom. Deliberately did NOT add a new
+  top-nav item for it, matching this codebase's own established anti-nav-bloat convention (the CTA + the
+  in-section "Compare Managed vs. BYO in detail" link are two real discovery paths already).
+- New tests: `watch-byo-usage.test.ts` (+5 — real last-success/last-error timestamps, the empty/unknown state
+  for an account with nothing recorded, `callsLast7Days` counting both successes AND failures but excluding
+  calls outside the window, cross-account isolation, never-throws-on-query-error). Fake DB test harness in that
+  file extended to support `.order()`/`.limit()`/`.maybeSingle()`/`{count,head:true}` for the new query shape.
+  1649 tests pass (up from 1644), `tsc --noEmit` clean, production build clean. Landing-page section verified
+  live via the dev server on the Watch host (`watch.localhost:3000`) — confirmed the new section renders the
+  real $399/$299 figures and the secondary CTA appears after Features, before "Who is Watch for?".
+- **No migration** (reuses existing `watch_byo_ai_usage_events` table verbatim). **Not deployed automatically,
+  per standing instruction.**
+- **Deliberately still not built** (see Phase 4.V.1's updated remaining list): token-based ceilings,
+  multi-credential provider/model scoped ASSIGNMENT (account-default/Community-override/Watcher-override
+  credentials — a real, larger, more security-sensitive rearchitecture, judged premature for a feature with
+  zero live BYO customers today), Watcher/deployment-level attribution or latency in the general usage summary,
+  and the spec's own structured test/report checklist as a discrete deliverable.
+
 ### 2026-08-25 — BYO usage policy: real per-Watcher-deployment scope (Phase 4.V.1, item 2) (v1.47.51)
 - **Closes item 2 off the Phase 4.V.1 deferred list, per direct instruction to finish the remaining Watch
   specs before going live.** Extends yesterday's account+Community usage-policy hierarchy (v1.47.50) into the
@@ -10198,9 +10235,11 @@ Architecture direction for future implementation:
 > visibility; a devops grant tool that works in every environment (Enterprise has no
 > self-serve checkout, so this is the actual onboarding path).
 >
-> **Items 1 and 2 CLOSED, v1.47.50/v1.47.51.** The reactive/proactive ceiling split
-> (item 1, v1.47.50) and the real account→Community→Watcher-deployment 3-level
-> hierarchy (item 2, v1.47.51) are both now live — see those changelog entries.
+> **Items 1, 2, provider health, and the landing-page section CLOSED, v1.47.50-52.**
+> The reactive/proactive ceiling split (item 1, v1.47.50), the real account→Community→
+> Watcher-deployment 3-level hierarchy (item 2, v1.47.51), real provider health/
+> observability (v1.47.52), and the full landing-page "two broad ways to run Watch"
+> section + secondary CTA (v1.47.52) are all now live — see those changelog entries.
 > `checkByoUsageAllowed`/`recordByoPolicyUsage`/`resolveAccountAiRouting` all take a
 > `kind` ("reactive"/"proactive") and now resolve/record against a real
 > `UsagePolicyScope` discriminated union (`{type:"account"}`/`{type:"community",...}`/
@@ -10214,28 +10253,23 @@ Architecture direction for future implementation:
 >   fabricating one would violate this spec's own explicit "do not fabricate token
 >   counts" rule. Would need widening `aiComplete`'s return contract first — a
 >   separate, larger change touching every existing caller.
-> - **Provider/model POLICY** (as opposed to provider/model CONFIGURATION) — a
->   customer can store exactly one credential+model; there's no separate "which
->   providers/models am I authorizing Innvil to use" restriction layered on top, and
->   no account-default/Community-override/Watcher-override provider ASSIGNMENT (the
->   spec's "Provider/Model Assignment" section) — routing is single-credential,
->   account-wide only, unchanged from Phase 1.
-> - **Provider health/observability** — no "Configured / Not configured / last
->   successful request / last provider error / recent request volume" status view
->   exists anywhere. The Usage page's BYO telemetry card shows aggregate counts only,
->   never a health/freshness signal. Would reuse `watch_byo_ai_usage_events`'s already-
->   recorded `ok`/`error`/`created_at` columns (the data exists — a `MAX(created_at)
->   WHERE ok`/`MAX(created_at) WHERE NOT ok` query away), just never surfaced.
-> - **Richer telemetry dimensions** — no Watcher/deployment-level attribution, no
->   latency, no per-Community breakdown beyond what's already recorded (the schema has
+> - **Provider/model POLICY — multi-credential scoped ASSIGNMENT specifically**
+>   (as opposed to provider/model CONFIGURATION, and as opposed to the usage-policy
+>   3-level scope built in item 2) — a customer can still store exactly one
+>   credential+model account-wide; there's no account-default/Community-override/
+>   Watcher-override provider ASSIGNMENT (the spec's "Provider/Model Assignment"
+>   section, i.e. different Watchers using different stored credentials/models).
+>   Deliberately deferred: this means real multi-credential encrypted storage (a
+>   genuinely larger, more security-sensitive rearchitecture of `watch-byo.ts`, which
+>   currently has exactly one row per account by design), for a feature with zero
+>   live BYO customers today (confirmed via the live Supabase project) — judged
+>   premature relative to the lower-risk, more broadly useful items already closed.
+> - **Richer telemetry dimensions** — provider health (v1.47.52) added last-success/
+>   last-error/7-day call volume, but there's still no Watcher/deployment-level
+>   attribution or latency in the general usage SUMMARY (`getByoUsageSummary`), and no
+>   per-Community breakdown beyond what's already recorded (the schema has
 >   `community_id` but nothing currently groups/displays by it). Input/output tokens
 >   remain correctly unrecorded (not reliably available), per the spec's own rule.
-> - **Full landing-page "primary offer" treatment** — what shipped (v1.47.43) upgraded
->   the existing Enterprise pricing card with real numbers and a link to
->   `/plans#enterprise`. The spec wanted a dedicated first-class section framing "two
->   broad ways to use Watch" (Managed vs. BYO) plus a smaller secondary CTA earlier on
->   the page ("Running your own AI stack? Explore BYO Enterprise →"). That fuller
->   treatment was never built.
 > - **The spec's own structured test/report checklist** — landing-page tests (BYO
 >   discoverability, CTA routing, no-duplicate-sections, mobile layout), the full BYO
 >   eligibility/secret/provider-config/policy/runtime-separation test categories, and

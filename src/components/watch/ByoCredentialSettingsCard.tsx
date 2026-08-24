@@ -1,9 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { getWatchByoCredentialState, setWatchByoCredential, clearWatchByoCredential, type WatchByoCredentialState } from "@/src/lib/actions/watch-byo-settings";
+import React, { useEffect, useState } from "react";
+import {
+  getWatchByoCredentialState, setWatchByoCredential, clearWatchByoCredential, getWatchByoProviderHealth,
+  type WatchByoCredentialState,
+} from "@/src/lib/actions/watch-byo-settings";
 import type { WatchByoProvider } from "@/src/lib/products/watch-byo";
+import type { ByoProviderHealth } from "@/src/lib/products/watch-byo-usage";
 import { SettingsRow } from "./SettingsRow";
+import { relTime } from "./WatchUI";
 
 /** Self-serve BYO Enterprise credential management (Phase 2, 2026-08-24) --
  *  lets an already-provisioned BYO account manage its OWN stored AI
@@ -28,6 +33,18 @@ export function ByoCredentialSettingsCard({ initial }: { initial: WatchByoCreden
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Provider health/observability (Phase 4.V.1) -- real last-success/last-
+  // error/recent-volume, fetched once alongside the credential state. Never
+  // fabricates a status; a fetch failure just leaves it null (rendered as
+  // "No data yet" below), never a fake "healthy".
+  const [health, setHealth] = useState<ByoProviderHealth | null>(null);
+  useEffect(() => {
+    if (!state.hasCredential) return;
+    let cancelled = false;
+    getWatchByoProviderHealth().then((res) => { if (!cancelled && res.ok) setHealth(res.data); });
+    return () => { cancelled = true; };
+  }, [state.hasCredential]);
 
   const refresh = async () => {
     const res = await getWatchByoCredentialState();
@@ -80,6 +97,23 @@ export function ByoCredentialSettingsCard({ initial }: { initial: WatchByoCreden
             <span className="text-xs w-amber">Not configured</span>
           )}
         </SettingsRow>
+        {state.hasCredential && (
+          <SettingsRow label="Provider health" description="Real observed activity for your stored credential — never a guess.">
+            {health ? (
+              <div className="text-xs w-text-dim text-right space-y-0.5">
+                <p>
+                  Last success: {health.lastSuccessAt ? <span className="w-green">{relTime(health.lastSuccessAt)}</span> : <span className="w-text-faint">none yet</span>}
+                </p>
+                <p>
+                  Last error: {health.lastErrorAt ? <span className="w-amber" title={health.lastError ?? undefined}>{relTime(health.lastErrorAt)}</span> : <span className="w-text-faint">none</span>}
+                </p>
+                <p className="w-text-faint">{health.callsLast7Days.toLocaleString()} call{health.callsLast7Days === 1 ? "" : "s"} in the last 7 days</p>
+              </div>
+            ) : (
+              <span className="text-xs w-text-faint">Loading…</span>
+            )}
+          </SettingsRow>
+        )}
       </div>
 
       {!editing && state.hasCredential && (

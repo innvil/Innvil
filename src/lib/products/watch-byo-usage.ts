@@ -100,3 +100,46 @@ export async function getByoUsageSummary(admin: SupabaseClient, accountId: strin
       .sort((a, b) => b.total - a.total),
   };
 }
+
+/**
+ * Phase 4.V.1 (provider health/observability) -- "is my BYO provider
+ * actually working?" A real status view built entirely from data this
+ * module already records (watch_byo_ai_usage_events' own ok/error/
+ * created_at columns) -- no new schema, no fabricated freshness signal.
+ * Never invents a "healthy"/"unhealthy" verdict -- only reports the real
+ * last-success/last-error timestamps and a real 7-day call volume; the
+ * caller (UI) decides how to present that, this module only observes.
+ */
+export interface ByoProviderHealth {
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  lastError: string | null;
+  callsLast7Days: number;
+}
+
+const EMPTY_HEALTH: ByoProviderHealth = { lastSuccessAt: null, lastErrorAt: null, lastError: null, callsLast7Days: 0 };
+
+/** Real, observed provider health for this account -- never throws (a read
+ *  failure degrades to the empty/unknown state, same discipline as
+ *  getByoUsageSummary). `callsLast7Days` counts EVERY recorded call
+ *  (success + failure), matching the "recent request volume" the spec asks
+ *  for -- not just successes. */
+export async function getByoProviderHealth(admin: SupabaseClient, accountId: string): Promise<ByoProviderHealth> {
+  try {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const [lastSuccess, lastError, recent] = await Promise.all([
+      admin.from("watch_byo_ai_usage_events").select("created_at").eq("account_id", accountId).eq("ok", true).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      admin.from("watch_byo_ai_usage_events").select("created_at, error").eq("account_id", accountId).eq("ok", false).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      admin.from("watch_byo_ai_usage_events").select("id", { count: "exact", head: true }).eq("account_id", accountId).gte("created_at", since),
+    ]);
+    return {
+      lastSuccessAt: (lastSuccess.data?.created_at as string | undefined) ?? null,
+      lastErrorAt: (lastError.data?.created_at as string | undefined) ?? null,
+      lastError: (lastError.data?.error as string | undefined) ?? null,
+      callsLast7Days: recent.count ?? 0,
+    };
+  } catch (err) {
+    console.error("[watch-byo-usage] getByoProviderHealth failed", accountId, err instanceof Error ? err.message : err);
+    return EMPTY_HEALTH;
+  }
+}
