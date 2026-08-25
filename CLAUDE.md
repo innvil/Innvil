@@ -127,6 +127,20 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — innvil_bot_manager's Watch knowledge brought current too (v1.47.67)
+- **Follow-up to v1.47.66, per direct request.** `bot-manager-knowledge.ts` (the reactive Telegram support
+  bot's OWN static knowledge base — a separate system from the blog writer's `PRODUCT_FACTS`) had the identical
+  gap: accurate core pricing/trial facts, but no mention of Community Expansion, Media Moderation +, annual
+  billing/Innvil Credit, Presence Scheduling, or Project Knowledge. Added five new entries, each real content
+  traced against the same live constants as the blog fix — never a second, independently-drifting copy of the
+  numbers.
+- **Same Auto-Posting guard applied**: added a new required test asserting no entry anywhere mentions
+  "auto-posting" — this bot must never tell a real customer a feature exists that's still gated off.
+- New tests (`bot-manager-knowledge.test.ts`, +6): retrieval for each new entry against a real natural-language
+  question, exact dollar/percentage figures pinned, and the Auto-Posting exclusion guard. 1755 tests pass (up
+  from 1749), `tsc --noEmit` clean, production build clean.
+- **Deployed to Production** (same domains as v1.47.66 — verified live).
+
 ### 2026-08-25 — AI blog writer's Watch knowledge brought current (v1.47.66)
 - **Checked, not assumed.** `PRODUCT_FACTS` in `src/lib/ai/blog-writer.ts` (the fact set the AI blog writer is
   hard-constrained to, "do not contradict or go beyond these") already had CORRECT core numbers — Bronze/Silver/

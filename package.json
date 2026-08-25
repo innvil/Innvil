@@ -1,6 +1,6 @@
 {
   "name": "innvil",
-  "version": "1.47.66",
+  "version": "1.47.67",
   "private": true,
   "scripts": {
     "dev": "next dev",

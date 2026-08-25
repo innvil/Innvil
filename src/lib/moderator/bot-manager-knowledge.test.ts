@@ -52,6 +52,47 @@ test("REQUIRED: no entry anywhere still describes Watch as an 'add-on' bundled i
   }
 });
 
+/* ------------------------- REQUIRED: newer Watch feature coverage (v1.47.66-follow-up) ---- */
+// Same coverage gap as the AI blog writer's PRODUCT_FACTS -- core pricing was
+// accurate but several real, shipped features were never mentioned at all.
+
+test("REQUIRED: retrieveProductKnowledge finds Community Expansion for a Gold/Platinum capacity question", () => {
+  const results = retrieveProductKnowledge("can I expand community capacity on the gold plan?");
+  const hit = results.find((r) => r.id === "innvil-watch-community-expansion");
+  assert.ok(hit, "must retrieve the Community Expansion entry");
+  assert.match(hit!.content, /\$9\.99/);
+  assert.match(hit!.content, /\$14\.99/);
+});
+
+test("REQUIRED: retrieveProductKnowledge finds Media Moderation + for a photo/video safety question", () => {
+  const results = retrieveProductKnowledge("does watch moderate unsafe photo and video content?");
+  assert.ok(results.some((r) => r.id === "innvil-watch-media-moderation-addon"));
+});
+
+test("REQUIRED: retrieveProductKnowledge finds annual billing / Innvil Credit for a discount question", () => {
+  const results = retrieveProductKnowledge("is there a discount for annual billing with innvil credit?");
+  const hit = results.find((r) => r.id === "innvil-watch-annual-billing-credit");
+  assert.ok(hit, "must retrieve the annual billing / Innvil Credit entry");
+  assert.match(hit!.content, /5%/);
+  assert.match(hit!.content, /10%/);
+});
+
+test("REQUIRED: retrieveProductKnowledge finds Presence Scheduling for a Watcher-rotation question", () => {
+  const results = retrieveProductKnowledge("can multiple watchers rotate their presence in a community?");
+  assert.ok(results.some((r) => r.id === "innvil-watch-presence-scheduling"));
+});
+
+test("REQUIRED: retrieveProductKnowledge finds Project Knowledge for a website-grounding question", () => {
+  const results = retrieveProductKnowledge("can a watcher learn from our project website?");
+  assert.ok(results.some((r) => r.id === "innvil-watch-project-knowledge"));
+});
+
+test("REQUIRED: no entry claims AI Telegram Auto-Posting is a live customer feature", () => {
+  for (const entry of INNVIL_PRODUCT_KNOWLEDGE) {
+    assert.doesNotMatch(entry.content, /auto-posting/i);
+  }
+});
+
 test("retrieveProductKnowledge returns empty for a query with no overlap -- never falls back to the whole KB", () => {
   const results = retrieveProductKnowledge("xyzzy quantum banana zephyr");
   assert.deepEqual(results, []);
