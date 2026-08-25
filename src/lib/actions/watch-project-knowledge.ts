@@ -116,14 +116,72 @@ export async function addAccountProjectTextKnowledge(
   return { ok: true, data: null };
 }
 
+export type ProjectAdminClient = Awaited<ReturnType<typeof getAuthedAdmin>>["admin"];
+
+export interface UrlIngestOutcome {
+  ok: boolean;
+  error?: string;
+  chunkCount?: number;
+  ingestionId: string;
+}
+
+/** The ONE real ingestion core (validate -> fetch under SSRF-guarded
+ *  conditions -> extract -> chunk -> persist N rows sharing one
+ *  ingestion_id) -- reused verbatim by both the general "Add URL" Knowledge
+ *  Source flow below AND the Project Profile's Website/Documentation
+ *  fields (`watch-project-profile.ts`), so there is exactly one ingestion
+ *  pipeline in this codebase, never two independently-maintained copies.
+ *  Failure never fabricates content: it always persists a real single
+ *  'failed' row (chunk_index 0) with a short error message, so a failed
+ *  ingestion stays visibly, persistently failed rather than a one-off
+ *  toast the owner has no way to see again. */
+export async function ingestUrlIntoProject(admin: ProjectAdminClient, projectId: string, title: string, url: string): Promise<UrlIngestOutcome> {
+  const ingestionId = randomUUID();
+  const insertFailure = (error: string) =>
+    admin.from("knowledge_sources").insert({
+      panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link", title, content: "",
+      active: true, source_type: "url", source_url: url.trim(), status: "failed", error: error.slice(0, 300),
+      ingestion_id: ingestionId, chunk_index: 0, fetched_at: new Date().toISOString(),
+    });
+
+  const validated = validateIngestUrl(url);
+  if (!validated.ok) {
+    const error = validated.error ?? "Invalid URL.";
+    await insertFailure(error);
+    return { ok: false, error, ingestionId };
+  }
+
+  const fetched = await fetchAndExtractUrl(url);
+  if (!fetched.ok || !fetched.text) {
+    const error = fetched.error ?? "Couldn't fetch that URL.";
+    await insertFailure(error);
+    return { ok: false, error, ingestionId };
+  }
+
+  const chunks = chunkText(fetched.text);
+  if (chunks.length === 0) {
+    const error = "No readable content was found on that page.";
+    await insertFailure(error);
+    return { ok: false, error, ingestionId };
+  }
+
+  const contentHash = createHash("sha256").update(fetched.text).digest("hex");
+  const fetchedAt = new Date().toISOString();
+  const rows = chunks.map((c) => ({
+    panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link",
+    title: chunks.length > 1 ? `${title} (part ${c.index + 1}/${chunks.length})` : title,
+    content: c.content, active: true, source_type: "url", source_url: url.trim(), storage_path: null,
+    status: "ready", error: null, content_hash: contentHash, fetched_at: fetchedAt, ingestion_id: ingestionId, chunk_index: c.index,
+  }));
+  const { error } = await admin.from("knowledge_sources").insert(rows);
+  if (error) return { ok: false, error: "Fetched the page, but couldn't save it.", ingestionId };
+  return { ok: true, chunkCount: chunks.length, ingestionId };
+}
+
 /** Real URL ingestion (spec §4/§5, the actual product correction this pass
- *  implements): validates, fetches server-side under SSRF-guarded
- *  conditions, extracts readable text, chunks it, and persists N rows
- *  sharing one ingestion_id -- a real, retrievable fact base, never a bare
- *  stored string. Failure never fabricates content: a failed fetch leaves
- *  a single 'failed' row (or none, on the very first attempt) with a real
- *  short error message, never a row claiming success with empty/guessed
- *  content. */
+ *  implements) -- a thin wrapper over `ingestUrlIntoProject` above with the
+ *  auth/ownership check and the manual-title-fallback this flow's own
+ *  "Add URL" form needs. */
 export async function addAccountProjectUrlKnowledge(projectId: string, title: string, url: string): Promise<Result<{ key: string; chunkCount: number }>> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
@@ -133,39 +191,10 @@ export async function addAccountProjectUrlKnowledge(projectId: string, title: st
   const validated = validateIngestUrl(url);
   if (!validated.ok) return { ok: false, error: validated.error ?? "Invalid URL." };
   const trimmedTitle = title.trim().slice(0, 200) || url.trim().slice(0, 200);
-  const ingestionId = randomUUID();
 
-  const fetched = await fetchAndExtractUrl(url);
-  if (!fetched.ok || !fetched.text) {
-    await admin.from("knowledge_sources").insert({
-      panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link", title: trimmedTitle, content: "",
-      active: true, source_type: "url", source_url: url.trim(), status: "failed", error: (fetched.error ?? "Ingestion failed.").slice(0, 300),
-      ingestion_id: ingestionId, chunk_index: 0, fetched_at: new Date().toISOString(),
-    });
-    return { ok: false, error: fetched.error ?? "Couldn't fetch that URL." };
-  }
-
-  const chunks = chunkText(fetched.text);
-  if (chunks.length === 0) {
-    await admin.from("knowledge_sources").insert({
-      panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link", title: trimmedTitle, content: "",
-      active: true, source_type: "url", source_url: url.trim(), status: "failed", error: "No readable content was found on that page.",
-      ingestion_id: ingestionId, chunk_index: 0, fetched_at: new Date().toISOString(),
-    });
-    return { ok: false, error: "No readable content was found on that page." };
-  }
-
-  const contentHash = createHash("sha256").update(fetched.text).digest("hex");
-  const fetchedAt = new Date().toISOString();
-  const rows = chunks.map((c) => ({
-    panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link",
-    title: chunks.length > 1 ? `${trimmedTitle} (part ${c.index + 1}/${chunks.length})` : trimmedTitle,
-    content: c.content, active: true, source_type: "url", source_url: url.trim(), storage_path: null,
-    status: "ready", error: null, content_hash: contentHash, fetched_at: fetchedAt, ingestion_id: ingestionId, chunk_index: c.index,
-  }));
-  const { error } = await admin.from("knowledge_sources").insert(rows);
-  if (error) return { ok: false, error: "Fetched the page, but couldn't save it." };
-  return { ok: true, data: { key: `ing:${ingestionId}`, chunkCount: chunks.length } };
+  const outcome = await ingestUrlIntoProject(admin, projectId, trimmedTitle, url);
+  if (!outcome.ok) return { ok: false, error: outcome.error ?? "Couldn't ingest that URL." };
+  return { ok: true, data: { key: `ing:${outcome.ingestionId}`, chunkCount: outcome.chunkCount ?? 0 } };
 }
 
 /** Re-fetches a URL source's live content. If the extracted content is

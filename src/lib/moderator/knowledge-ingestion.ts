@@ -21,6 +21,17 @@ export interface UrlValidationResult {
   error?: string;
 }
 
+/** A "Website"/"Documentation" field is normally typed WITHOUT a scheme
+ *  ("innvil.cloud", not "https://innvil.cloud") -- unlike the explicit
+ *  "Add URL" Knowledge Source flow, where a full URL is expected. Prepends
+ *  https:// when no scheme is present so a plain domain is still a valid,
+ *  fetchable ingestion target rather than failing validation outright. */
+export function normalizeProfileUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 /** Scheme/shape validation only — no DNS resolution here (that happens at
  *  fetch time in knowledge-fetch.ts, since only there do we have the actual
  *  resolved IP to check against the private/reserved blocklist). Rejects

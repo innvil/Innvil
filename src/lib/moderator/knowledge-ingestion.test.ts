@@ -1,6 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateIngestUrl, isPrivateOrReservedIpv4, isPrivateOrReservedIpv6, isPrivateOrReservedIp, extractReadableText, chunkText } from "./knowledge-ingestion";
+import { validateIngestUrl, isPrivateOrReservedIpv4, isPrivateOrReservedIpv6, isPrivateOrReservedIp, extractReadableText, chunkText, normalizeProfileUrl } from "./knowledge-ingestion";
+
+test("REQUIRED: normalizeProfileUrl prepends https:// to a bare domain (Website/Documentation fields have no scheme prefix)", () => {
+  assert.equal(normalizeProfileUrl("innvil.cloud"), "https://innvil.cloud");
+  assert.equal(normalizeProfileUrl("  innvil.cloud  "), "https://innvil.cloud");
+  assert.equal(normalizeProfileUrl("docs.innvil.cloud/guide"), "https://docs.innvil.cloud/guide");
+});
+
+test("normalizeProfileUrl leaves an already-schemed URL untouched", () => {
+  assert.equal(normalizeProfileUrl("https://innvil.cloud"), "https://innvil.cloud");
+  assert.equal(normalizeProfileUrl("http://innvil.cloud"), "http://innvil.cloud");
+  assert.equal(normalizeProfileUrl("HTTPS://innvil.cloud"), "HTTPS://innvil.cloud");
+});
+
+test("normalizeProfileUrl returns an empty string for empty/whitespace input, never a bare https://", () => {
+  assert.equal(normalizeProfileUrl(""), "");
+  assert.equal(normalizeProfileUrl("   "), "");
+});
+
+test("REQUIRED: a normalized bare domain then passes validateIngestUrl (the actual live-bug repro)", () => {
+  const normalized = normalizeProfileUrl("innvil.cloud");
+  assert.equal(validateIngestUrl(normalized).ok, true);
+});
 
 /* -------------------------------------------------------- URL validation ---- */
 

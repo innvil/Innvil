@@ -2,19 +2,21 @@
 
 import React, { useEffect, useState } from "react";
 import { Loader2, CheckCircle2, AlertTriangle, RefreshCw, Trash2, Globe, FileText, Link as LinkIcon } from "lucide-react";
-import { updateAccountProjectProfile, setAccountProjectContact } from "@/src/lib/actions/watch-project-profile";
+import { updateAccountProjectProfile, setAccountProjectContact, type ProfileFieldIngestion } from "@/src/lib/actions/watch-project-profile";
 import { CONTACT_KINDS, CONTACT_LABELS, type ProjectProfile, type ContactKind } from "@/src/lib/moderator/project-profile";
 import {
   listAccountProjectKnowledgeSources, addAccountProjectTextKnowledge, addAccountProjectUrlKnowledge,
   refreshAccountProjectKnowledgeSource, deleteAccountProjectKnowledgeSource, type ProjectKnowledgeSourceSummary,
 } from "@/src/lib/actions/watch-project-knowledge";
 
-/** Real Project intelligence editor — reads/writes the SAME `projects
- *  .description/website/docs_url/overview/contacts` columns the live
- *  Telegram runtime already grounds a Watcher's Q&A answers with
- *  (community-runtime.ts's loadProjectProfileRow, unchanged, no runtime
- *  wiring needed). Saving here takes effect on the next real Telegram
- *  message a deployed Watcher answers. */
+/** Real Project intelligence editor. Description/Overview/Contacts write
+ *  plain `projects` columns the live Telegram runtime reads directly
+ *  (community-runtime.ts's loadProjectProfileRow) -- no further wiring
+ *  needed for those. Website/Documentation are DIFFERENT: they're only a
+ *  starting URL -- saving one triggers real server-side ingestion (fetch,
+ *  extract, chunk) into the SAME retrievable Knowledge Sources a Watcher's
+ *  Q&A answers draw from, via `updateAccountProjectProfile`'s returned
+ *  ingestion status shown inline below each field, never a silent no-op. */
 export function ProjectKnowledgeTab({ projectId, profile }: { projectId: string; profile: ProjectProfile }) {
   const [description, setDescription] = useState(profile.description);
   const [website, setWebsite] = useState(profile.website);
@@ -24,6 +26,8 @@ export function ProjectKnowledgeTab({ projectId, profile }: { projectId: string;
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [websiteIngestion, setWebsiteIngestion] = useState<ProfileFieldIngestion | null>(null);
+  const [docsIngestion, setDocsIngestion] = useState<ProfileFieldIngestion | null>(null);
 
   const saveProfile = async () => {
     setSaving(true);
@@ -32,6 +36,8 @@ export function ProjectKnowledgeTab({ projectId, profile }: { projectId: string;
     setSaving(false);
     if (!res.ok) { setError(res.error); return; }
     setSavedAt(Date.now());
+    setWebsiteIngestion(res.data.websiteIngestion ?? null);
+    setDocsIngestion(res.data.docsIngestion ?? null);
   };
 
   const saveContact = async (kind: ContactKind, value: string) => {
@@ -54,13 +60,16 @@ export function ProjectKnowledgeTab({ projectId, profile }: { projectId: string;
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="text-xs w-text-dim block mb-1">Website</label>
-            <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://…" className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border" />
+            <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="yourproject.com" className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border" />
+            <IngestionStatus result={websiteIngestion} />
           </div>
           <div>
             <label className="text-xs w-text-dim block mb-1">Documentation</label>
-            <input value={docsUrl} onChange={(e) => setDocsUrl(e.target.value)} placeholder="https://…" className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border" />
+            <input value={docsUrl} onChange={(e) => setDocsUrl(e.target.value)} placeholder="docs.yourproject.com" className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border" />
+            <IngestionStatus result={docsIngestion} />
           </div>
         </div>
+        <p className="text-[11px] w-text-faint -mt-2">Saving a Website/Documentation URL fetches and indexes its content for real -- Watchers can then answer questions from what's actually on the page, not just the link itself.</p>
         <div>
           <label className="text-xs w-text-dim block mb-1">Project overview</label>
           <p className="text-[11px] w-text-faint mb-1.5">The main fact base your Watchers draw from when answering questions in a Community.</p>
@@ -102,6 +111,17 @@ export function ProjectKnowledgeTab({ projectId, profile }: { projectId: string;
       <KnowledgeSourcesCard projectId={projectId} />
     </div>
   );
+}
+
+/** Inline feedback right under the Website/Documentation fields -- real
+ *  ingestion outcome from the most recent save, never a fabricated
+ *  success. `cleared`/`unchanged` render nothing (a no-op isn't news). */
+function IngestionStatus({ result }: { result: ProfileFieldIngestion | null }) {
+  if (!result || result.status === "cleared" || result.status === "unchanged") return null;
+  if (result.status === "ready") {
+    return <p className="text-[11px] w-teal flex items-center gap-1 mt-1"><CheckCircle2 size={11} /> Content fetched and indexed</p>;
+  }
+  return <p className="text-[11px] text-red-400 flex items-center gap-1 mt-1"><AlertTriangle size={11} /> Couldn't fetch: {result.error ?? "unknown error"}</p>;
 }
 
 const STATUS_LABEL: Record<ProjectKnowledgeSourceSummary["status"], string> = { pending: "Processing", ready: "Ready", failed: "Failed" };

@@ -10,6 +10,7 @@
 
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { CONTACT_KINDS, type ContactKind, type ProjectContacts, type ProjectProfile } from "@/src/lib/moderator/project-profile";
+import { syncProfileUrlKnowledge, type ProfileUpdateOutcome } from "@/src/lib/actions/watch-project-profile";
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -51,7 +52,7 @@ export async function updateProjectProfile(
   panelId: string,
   projectId: string,
   input: { name?: string; description?: string; website?: string; docsUrl?: string; overview?: string }
-): Promise<Result<null>> {
+): Promise<Result<ProfileUpdateOutcome>> {
   const ctx = await ownedProject(panelId, projectId);
   if (!ctx) return { ok: false, error: "Not authorized." };
   const patch: Record<string, unknown> = {};
@@ -64,10 +65,18 @@ export async function updateProjectProfile(
   if (input.website !== undefined) patch.website = input.website.trim().slice(0, 300);
   if (input.docsUrl !== undefined) patch.docs_url = input.docsUrl.trim().slice(0, 300);
   if (input.overview !== undefined) patch.overview = input.overview.trim().slice(0, 6000);
-  if (Object.keys(patch).length === 0) return { ok: true, data: null };
-  const { error } = await ctx.admin.from("projects").update(patch).eq("id", projectId).eq("panel_id", panelId);
-  if (error) return { ok: false, error: "Couldn't update the project profile." };
-  return { ok: true, data: null };
+  if (Object.keys(patch).length > 0) {
+    const { error } = await ctx.admin.from("projects").update(patch).eq("id", projectId).eq("panel_id", panelId);
+    if (error) return { ok: false, error: "Couldn't update the project profile." };
+  }
+
+  // Same real ingestion as the standalone Watch flow (watch-project-profile.ts)
+  // -- Website/Documentation are a starting URL, not just stored text; a
+  // matching real fact base is fetched/extracted/chunked on every save.
+  const outcome: ProfileUpdateOutcome = {};
+  if (input.website !== undefined) outcome.websiteIngestion = await syncProfileUrlKnowledge(ctx.admin, projectId, "website", input.website);
+  if (input.docsUrl !== undefined) outcome.docsIngestion = await syncProfileUrlKnowledge(ctx.admin, projectId, "docs_url", input.docsUrl);
+  return { ok: true, data: outcome };
 }
 
 export async function setProjectContact(panelId: string, projectId: string, kind: ContactKind, value: string): Promise<Result<null>> {

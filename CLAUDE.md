@@ -127,6 +127,36 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Fix: filling Website/Documentation gave Watchers no knowledge at all (v1.47.63)
+- **Live bug, caught testing v1.47.62**: the user filled "Website" (`innvil.cloud`) in the Knowledge tab, then
+  asked a deployed Watcher live in Telegram for the project link — the Watcher had zero knowledge of it
+  ("still nothing loaded up on the project details"). Root cause: `website`/`docs_url` are plain metadata
+  columns on `projects`, but `loadProjectProfileRow` (`community-runtime.ts`, the function that grounds a
+  Watcher's answers) has ONLY ever read `overview`/`contacts` from that row — never `website`/`docs_url`, from
+  before this session even started touching this area. My own earlier v1.47.61 doc comment claiming "whatever's
+  saved here is already grounding a deployed Watcher's answers" was simply wrong for those two fields — checked,
+  found, and fixed rather than left standing.
+- **Fix, not a doc correction: Website/Documentation now trigger REAL ingestion**, reusing the exact same
+  fetch/extract/chunk pipeline built for the "Add URL" Knowledge Source flow — extracted into a shared
+  `ingestUrlIntoProject()` core (`watch-project-knowledge.ts`) so there's exactly one ingestion pipeline, not
+  two independently-maintained copies. `updateAccountProjectProfile`/the legacy owner-facing `updateProjectProfile`
+  both now call a new `syncProfileUrlKnowledge()` on every save — self-healing (checks whether a real, matching,
+  `ready` knowledge row already exists for the current field value, not just "did this specific save change the
+  text") so an EXISTING project whose Website was saved before this fix gets ingested on its very next save, not
+  only a future edit.
+- **New `normalizeProfileUrl()`** (`knowledge-ingestion.ts`) — a Website field is normally typed without a
+  scheme ("innvil.cloud", not "https://innvil.cloud"), unlike the explicit "Add URL" flow; prepends `https://`
+  before validation/fetch so a bare domain is a real, fetchable target instead of failing outright.
+- **UI**: the Knowledge tab now shows real inline feedback right under each field after saving — "Content
+  fetched and indexed" or "Couldn't fetch: <real reason>" — never a silent no-op. Placeholder text corrected
+  from "https://…" to a bare-domain example, matching what actually works now.
+- **Same fix applied to the legacy Panel-owner Project Profile** (`actions/project-profile.ts`) — confirmed it
+  had the identical gap; reuses the exact same `syncProfileUrlKnowledge` rather than a second copy.
+- New tests (`knowledge-ingestion.test.ts`, +5): `normalizeProfileUrl`'s bare-domain/already-schemed/empty
+  cases, and the exact live-bug repro (`innvil.cloud` → normalized → passes `validateIngestUrl`). 1738 tests
+  pass (up from 1734), `tsc --noEmit` clean, production build clean.
+- **Deployed to Production** (same domains as v1.47.62 — verified live).
+
 ### 2026-08-25 — Fix: Project Knowledge tab had no "Add Community" action (v1.47.62)
 - **Live report, correctly flagged as a real spec violation, not a nitpick**: the required sequence is
   **Project → Add Community → Add Watcher** (v1.47.61's PART B), but the Communities tab only ever showed a
