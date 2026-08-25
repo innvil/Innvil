@@ -1,6 +1,6 @@
 {
   "name": "innvil",
-  "version": "1.47.63",
+  "version": "1.47.64",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -12,6 +12,7 @@
     "moderator:rewebhook": "node --env-file=.env.local ./node_modules/tsx/dist/cli.mjs --conditions=react-server scripts/reregister-telegram-webhooks.ts",
     "moderator:comp": "node --env-file=.env.local ./node_modules/tsx/dist/cli.mjs --conditions=react-server scripts/comp-moderator-tier.ts",
     "moderator:send": "node --env-file=.env.local ./node_modules/tsx/dist/cli.mjs --conditions=react-server scripts/send-as-moderator.ts",
+    "backfill:project-website-knowledge": "node --env-file=.env.local ./node_modules/tsx/dist/cli.mjs --conditions=react-server scripts/backfill-project-website-knowledge.ts",
     "seed:admin": "node --env-file=.env.local scripts/seed-admin.mjs",
     "rotate:env": "node scripts/rotate-env-secrets.mjs"
   },

@@ -127,6 +127,21 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Backfill: existing Website/Documentation URLs weren't retroactively ingested (v1.47.64)
+- **Follow-up to v1.47.63, live-caught again immediately**: the fix only runs ingestion on a NEW profile save —
+  an already-saved Website value (like the test project's `innvil.cloud`, saved before v1.47.63 shipped) had no
+  reason to trigger a re-save from the owner's perspective (the field already visibly showed the correct value),
+  so it stayed un-ingested indefinitely. Confirmed via a direct read-only query against production: 0
+  `knowledge_sources` rows existed for the test Project despite `website: "innvil.cloud"` being stored.
+- **New `scripts/backfill-project-website-knowledge.ts`** (`npm run backfill:project-website-knowledge`) — runs
+  the exact same `syncProfileUrlKnowledge` every future save already uses, once, for every existing project with
+  a non-empty Website/Documentation URL. **Run against production**: fetched and chunked the real `innvil.cloud`
+  landing page into 10 real, retrievable knowledge rows for the test project — confirmed via direct query, real
+  extracted page content, not a placeholder.
+- No future project needs this — `syncProfileUrlKnowledge` self-heals on every ordinary save going forward; this
+  script only existed to catch up projects saved before v1.47.63.
+- 1738 tests pass (unchanged, no logic changed), `tsc --noEmit` clean.
+
 ### 2026-08-25 — Fix: filling Website/Documentation gave Watchers no knowledge at all (v1.47.63)
 - **Live bug, caught testing v1.47.62**: the user filled "Website" (`innvil.cloud`) in the Knowledge tab, then
   asked a deployed Watcher live in Telegram for the project link — the Watcher had zero knowledge of it
