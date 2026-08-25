@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateIngestUrl, isPrivateOrReservedIpv4, isPrivateOrReservedIpv6, isPrivateOrReservedIp, extractReadableText, chunkText, normalizeProfileUrl } from "./knowledge-ingestion";
+import { validateIngestUrl, isPrivateOrReservedIpv4, isPrivateOrReservedIpv6, isPrivateOrReservedIp, extractReadableText, chunkText, normalizeProfileUrl, extractSameOriginLinks } from "./knowledge-ingestion";
 
 test("REQUIRED: normalizeProfileUrl prepends https:// to a bare domain (Website/Documentation fields have no scheme prefix)", () => {
   assert.equal(normalizeProfileUrl("innvil.cloud"), "https://innvil.cloud");
@@ -164,4 +164,49 @@ test("a single paragraph longer than the chunk cap is split on sentence boundari
   const rejoined = chunks.map((c) => c.content).join(" ");
   assert.ok(rejoined.includes("sentence one"));
   assert.ok(rejoined.includes("sentence three"));
+});
+
+test("REQUIRED: extractSameOriginLinks finds and resolves same-origin hrefs", () => {
+  const html = `<a href="/docs">Docs</a><a href="https://example.com/features">Features</a>`;
+  const links = extractSameOriginLinks(html, "https://example.com/");
+  assert.deepEqual(links.sort(), ["https://example.com/docs", "https://example.com/features"].sort());
+});
+
+test("extractSameOriginLinks excludes cross-origin links", () => {
+  const html = `<a href="/same-origin">Same</a><a href="https://other-site.com/page">Other</a>`;
+  const links = extractSameOriginLinks(html, "https://example.com/");
+  assert.deepEqual(links, ["https://example.com/same-origin"]);
+});
+
+test("extractSameOriginLinks excludes fragment-only, mailto:, tel:, and javascript: links", () => {
+  const html = `
+    <a href="#section">Jump</a>
+    <a href="mailto:hi@example.com">Email</a>
+    <a href="tel:+1234567890">Call</a>
+    <a href="javascript:void(0)">JS</a>
+    <a href="/real-page">Real</a>
+  `;
+  const links = extractSameOriginLinks(html, "https://example.com/");
+  assert.deepEqual(links, ["https://example.com/real-page"]);
+});
+
+test("extractSameOriginLinks strips fragments from otherwise-valid links and dedupes", () => {
+  const html = `<a href="/page#a">A</a><a href="/page#b">B</a><a href="/page">C</a>`;
+  const links = extractSameOriginLinks(html, "https://example.com/");
+  assert.deepEqual(links, ["https://example.com/page"]);
+});
+
+test("extractSameOriginLinks respects the maxLinks cap", () => {
+  const html = Array.from({ length: 30 }, (_, i) => `<a href="/page-${i}">Page ${i}</a>`).join("");
+  const links = extractSameOriginLinks(html, "https://example.com/", 5);
+  assert.equal(links.length, 5);
+});
+
+test("extractSameOriginLinks never throws on malformed hrefs or a malformed base URL", () => {
+  assert.doesNotThrow(() => extractSameOriginLinks(`<a href="not a url at all \x00">X</a>`, "https://example.com/"));
+  assert.deepEqual(extractSameOriginLinks("<a href='/page'>X</a>", "not-a-valid-base"), []);
+});
+
+test("extractSameOriginLinks returns an empty array for HTML with no links", () => {
+  assert.deepEqual(extractSameOriginLinks("<p>No links here.</p>", "https://example.com/"), []);
 });

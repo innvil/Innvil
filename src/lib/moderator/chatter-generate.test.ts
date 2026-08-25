@@ -1033,6 +1033,35 @@ test("REQUIRED: projectKnowledge is NOT wired into CASUAL_CHAT -- casual chatter
   assert.doesNotMatch(prompt, /Q3 launch of feature X\./);
 });
 
+// Live-bug regression: a question with ZERO matching Project Knowledge
+// (projectKnowledgeContextLines -> null) used to leave the ANSWER prompt
+// with no signal at all that no project-specific facts were available --
+// the model then invented a plausible-sounding but entirely fabricated
+// answer (e.g. "monitoring hub of what?" -> a confident, made-up
+// explanation of a feature that was never in any retrieved knowledge).
+test("REQUIRED: when nothing is retrieved, the ANSWER prompt explicitly states no project-specific knowledge is available -- never a silent omission", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined }));
+  assert.match(prompt, /No Project Knowledge was found/i);
+  assert.match(prompt, /zero project-specific facts/i);
+  assert.match(prompt, /do not invent|do not.*guess|never.*invent/i);
+});
+
+test("REQUIRED: the no-knowledge fallback also fires for an explicitly empty projectKnowledge array", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [] }));
+  assert.match(prompt, /No Project Knowledge was found/i);
+});
+
+test("the no-knowledge fallback line is REPLACED (not both present) once real knowledge IS retrieved", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [{ scope: "PROJECT", title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+  assert.match(prompt, /Q3 launch of feature X\./);
+});
+
+test("the no-knowledge fallback is CASUAL_CHAT-exempt, same as the real knowledge block -- casual chatter never gets grounding instructions at all", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: undefined }));
+  assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+});
+
 test("multiple retrieved entries all appear in the prompt, each on its own line", () => {
   const prompt = buildSystemPrompt(
     baseInput({

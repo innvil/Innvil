@@ -179,3 +179,42 @@ export function chunkText(text: string, maxChunkChars = DEFAULT_MAX_CHUNK_CHARS,
   if (current) chunks.push(current);
   return chunks.slice(0, maxChunks).map((content, index) => ({ index, content }));
 }
+
+/** Extracts same-origin http(s) hrefs from a raw HTML document, resolved
+ *  against `baseUrl`, deduplicated, capped at `maxLinks` -- the frontier
+ *  builder for a bounded multi-page crawl (knowledge-fetch.ts's
+ *  `crawlAndIngestSite`). Plain regex-based, not a full HTML parser --
+ *  this only needs to be a best-effort discoverer; a missed/malformed link
+ *  just means fewer pages found, never a security concern, since every
+ *  discovered link still goes through the SAME per-page SSRF/content-type/
+ *  size-bounded fetch as any other ingestion target, never trusted as-is.
+ *  Fragment-only links, cross-origin links, and non-http(s) schemes
+ *  (mailto:, tel:, javascript:) are all excluded. */
+export function extractSameOriginLinks(html: string, baseUrl: string, maxLinks = 25): string[] {
+  let origin: string;
+  try {
+    origin = new URL(baseUrl).origin;
+  } catch {
+    return [];
+  }
+  const hrefRe = /<a\s[^>]*href\s*=\s*["']([^"'#][^"']*)["']/gi;
+  const found: string[] = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = hrefRe.exec(html)) && found.length < maxLinks) {
+    let resolved: URL;
+    try {
+      resolved = new URL(match[1], baseUrl);
+    } catch {
+      continue;
+    }
+    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") continue;
+    if (resolved.origin !== origin) continue;
+    resolved.hash = "";
+    const normalized = resolved.toString();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    found.push(normalized);
+  }
+  return found;
+}

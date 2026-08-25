@@ -1,6 +1,6 @@
 import "server-only";
 import { promises as dns } from "node:dns";
-import { validateIngestUrl, isPrivateOrReservedIp, extractReadableText } from "./knowledge-ingestion";
+import { validateIngestUrl, isPrivateOrReservedIp, extractReadableText, extractSameOriginLinks } from "./knowledge-ingestion";
 
 /**
  * The I/O half of Project Knowledge URL ingestion — server-only, SSRF-
@@ -41,6 +41,10 @@ const ACCEPTED_CONTENT_TYPES = ["text/html", "text/plain", "application/xhtml+xm
 export interface IngestFetchResult {
   ok: boolean;
   text?: string;
+  /** Raw HTML body, present only for a successful HTML fetch -- used
+   *  solely to discover same-origin links for a bounded crawl
+   *  (`crawlAndIngestSite` below); never persisted or sent to the model. */
+  html?: string;
   finalUrl?: string;
   error?: string;
 }
@@ -148,7 +152,82 @@ export async function fetchAndExtractUrl(rawUrl: string): Promise<IngestFetchRes
 
     const text = extractReadableText(body.text);
     if (!text) return { ok: false, error: "Couldn't find any readable text on that page." };
-    return { ok: true, text, finalUrl: currentUrl.toString() };
+    return { ok: true, text, html: body.text, finalUrl: currentUrl.toString() };
   }
   return { ok: false, error: "Too many redirects." };
+}
+
+const MAX_CRAWL_PAGES = 8;
+const MAX_CRAWL_DEPTH = 2;
+const CRAWL_TIME_BUDGET_MS = 30_000;
+const MAX_QUEUE_SIZE = MAX_CRAWL_PAGES * 4;
+
+export interface CrawledPage {
+  url: string;
+  text: string;
+}
+
+export interface CrawlResult {
+  ok: boolean;
+  pages: CrawledPage[];
+  error?: string;
+}
+
+/** Bounded, same-origin multi-page crawl starting from `rootUrl` -- so a
+ *  Project owner submitting just a homepage URL gets more than that one
+ *  page's text (the real, live-reported gap: a Watcher answering "digs
+ *  deep into the project" questions needs more than the landing page
+ *  alone). Every discovered page goes through the SAME SSRF/content-type/
+ *  size-bounded `fetchAndExtractUrl` as a single-URL ingestion -- crawling
+ *  never bypasses or weakens any of those per-page guards, it only decides
+ *  WHICH same-origin URLs get fetched next.
+ *
+ *  Bounded on three independent axes, whichever is hit first:
+ *   - MAX_CRAWL_PAGES (8) successfully-fetched pages total
+ *   - MAX_CRAWL_DEPTH (2) link-hops from the root
+ *   - CRAWL_TIME_BUDGET_MS (30s) total wall-clock, checked before starting
+ *     each additional page so a slow site can't run unbounded
+ *  A failed/slow individual page is skipped, never fatal to the whole
+ *  crawl -- returns whatever pages succeeded so far. Only fails outright
+ *  when the ROOT page itself couldn't be fetched at all.
+ *
+ *  Deliberately does NOT follow links to a different origin/subdomain, and
+ *  does NOT fetch non-HTML resources discovered mid-crawl (e.g. a linked
+ *  PDF whitepaper) -- both are honest, documented v1 limitations, not
+ *  silently dropped: linking a PDF directly as its own Knowledge Source
+ *  still works via the existing single-URL ingestion path. */
+export async function crawlAndIngestSite(rootUrl: string): Promise<CrawlResult> {
+  const started = Date.now();
+  const visited = new Set<string>();
+  const pages: CrawledPage[] = [];
+  const queue: Array<{ url: string; depth: number }> = [{ url: rootUrl, depth: 0 }];
+  let rootError: string | undefined;
+
+  while (queue.length > 0 && pages.length < MAX_CRAWL_PAGES) {
+    if (Date.now() - started > CRAWL_TIME_BUDGET_MS) break;
+    const next = queue.shift();
+    if (!next) break;
+    const key = next.url.replace(/#.*$/, "");
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const fetched = await fetchAndExtractUrl(next.url);
+    if (!fetched.ok || !fetched.text) {
+      if (next.depth === 0) rootError = fetched.error;
+      continue;
+    }
+    pages.push({ url: fetched.finalUrl ?? next.url, text: fetched.text });
+
+    if (next.depth < MAX_CRAWL_DEPTH && fetched.html) {
+      const links = extractSameOriginLinks(fetched.html, fetched.finalUrl ?? next.url);
+      for (const link of links) {
+        if (queue.length >= MAX_QUEUE_SIZE) break;
+        const linkKey = link.replace(/#.*$/, "");
+        if (!visited.has(linkKey)) queue.push({ url: link, depth: next.depth + 1 });
+      }
+    }
+  }
+
+  if (pages.length === 0) return { ok: false, pages: [], error: rootError ?? "Couldn't fetch that URL." };
+  return { ok: true, pages };
 }

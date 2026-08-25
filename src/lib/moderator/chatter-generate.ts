@@ -290,6 +290,18 @@ function projectKnowledgeContextLines(input: GenerateChatterReplyInput): string 
   return `Knowledge (the ONLY source of factual claims you may make — never state a fact beyond what's here; a "Configured contact" entry is authoritative and must be used exactly as given, never overridden by a differently-worded fact elsewhere; otherwise, if an earlier entry conflicts with a later one, the earlier one is more specific and takes precedence; if the question isn't covered at all, say you don't have that information rather than guessing):\n${lines}`;
 }
 
+/** Fills the gap `projectKnowledgeContextLines` leaves when it returns
+ *  null (nothing relevant retrieved): without this, the ANSWER prompt
+ *  simply OMITTED the knowledge block, and nothing explicitly told the
+ *  model it currently has zero project-specific facts to draw on -- a
+ *  real, live-reported bug where a question with no matching knowledge
+ *  still got a confident, plausible-sounding, entirely invented answer.
+ *  This makes "I have no project-specific information right now" an
+ *  explicit fact the model is told, not something it has to infer from a
+ *  missing section. */
+const NO_PROJECT_KNOWLEDGE_LINE =
+  "No Project Knowledge was found relevant to this question -- you currently have ZERO project-specific facts, features, or details to draw on for it. Do not invent, guess, or improvise plausible-sounding specifics about what the project does, how any feature works, or anything else project-related. If the question needs specific project information you don't actually have, say so honestly (e.g. \"not sure on the specifics there\") instead of making something up -- you may still speak generally/socially if the question doesn't actually require project-specific facts.";
+
 /** Distinct-contribution rule for a multi-target exchange (only present for
  *  an ADDITIONAL, non-primary responder — see priorResponsesToThisMessage's
  *  doc comment). Grounds the "did another moderator already cover this?"
@@ -328,7 +340,7 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
       typoLine(input),
       obligationContextLines(input),
       collabContactLine(input),
-      projectKnowledgeContextLines(input),
+      projectKnowledgeContextLines(input) ?? NO_PROJECT_KNOWLEDGE_LINE,
       `Be concise and natural for Telegram — not a formal support ticket reply. Use relevant knowledge you actually have; do not fabricate facts, features, prices, or policies.`,
       ...SHARED_RULES,
       STYLE_HIERARCHY_PREFACE,

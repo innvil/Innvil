@@ -127,6 +127,47 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Real bounded multi-page crawl + fixed a live fabrication bug (v1.47.65)
+- **Two real problems from the same live test.** A Watcher asked a question with no matching Project Knowledge
+  fabricated a confident, plausible-sounding answer instead of admitting it didn't know. Separately, ingestion
+  only ever fetched the ONE submitted URL — a homepage link never told the Watcher anything about the rest of
+  the site (features, docs, pricing pages), which the user correctly flagged as insufficient for real projects
+  that expect the bot to "dig deep," including linked whitepapers/roadmaps for crypto projects.
+- **(1) Fabrication fix, confirmed via direct retrieval trace, not guessed.** Ran the actual retrieval scorer
+  against the exact live question ("monitoring hub of what?") — it returned ZERO matches. `projectKnowledge
+  ContextLines()` correctly returns `null` when nothing is retrieved, but the caller then just OMITTED the
+  knowledge block from the prompt entirely — nothing told the model it currently had no project-specific facts,
+  so it fell back to inventing a plausible one. New `NO_PROJECT_KNOWLEDGE_LINE` (`chatter-generate.ts`) fills
+  that gap for ANSWER specifically (never CASUAL_CHAT, which never used knowledge to begin with): "you currently
+  have ZERO project-specific facts... do not invent, guess, or improvise... say so honestly instead."
+- **(2) Real bounded multi-page crawl, not just a single fetch.** New `crawlAndIngestSite()`
+  (`knowledge-fetch.ts`) — starting from a submitted root URL, discovers and follows SAME-ORIGIN links up to
+  **8 pages, 2 link-hops, 30s total wall-clock** (whichever limit hits first), reusing the EXACT SAME per-page
+  SSRF/content-type/size guards as a single-URL ingestion for every discovered page — crawling only decides
+  which same-origin URLs to fetch next, it never weakens any existing guard. New pure
+  `extractSameOriginLinks()` (`knowledge-ingestion.ts`, regex-based, no DOM parser needed) resolves/filters/
+  dedupes hrefs from raw HTML (cross-origin, fragment-only, mailto:/tel:/javascript: links all excluded).
+  `ingestUrlIntoProject`/`refreshAccountProjectKnowledgeSource` (`watch-project-knowledge.ts`) both now chunk
+  EACH crawled page independently (a chunk never spans two pages) and flatten into one ingestion, prefixing
+  each chunk with its real source page once more than one page was crawled.
+- **Verified live against the real test project**: force-recrawled `innvil.cloud` — went from 10 chunks off one
+  page to **44 chunks across 8 real distinct pages** (homepage, design-shop, blog, login, signup, terms,
+  privacy), confirmed via direct query of the stored `[Source page: ...]` markers.
+- **Honest scope limits, not silently deferred**: same-origin only (a linked third-party doc/whitepaper site
+  isn't followed); a linked PDF discovered mid-crawl is skipped, not fetched (submitting it directly as its own
+  "Add URL"/Website source still works — `source_type: 'pdf'` already exists in the schema from migration 0106,
+  but PDF extraction itself is still not built, unchanged from that migration's own documented deferral). Real
+  PDF/whitepaper ingestion (via direct submission, not crawl-discovery) is the natural next step if needed.
+- New tests: `knowledge-ingestion.test.ts` (+7 — `extractSameOriginLinks`' same-origin resolution, cross-origin
+  exclusion, fragment/mailto/tel/javascript exclusion, dedup, the maxLinks cap, malformed-input safety, no-links
+  case), `chatter-generate.test.ts` (+4 — the exact live fabrication bug as a regression test, the empty-array
+  case, the fallback being replaced not duplicated once real knowledge exists, CASUAL_CHAT exemption). No
+  dedicated test for `crawlAndIngestSite` itself (real network/DNS I/O — consistent with this codebase's
+  established convention for `knowledge-fetch.ts`, which has never had a dedicated test file; verified instead
+  via the live production trace above). 1749 tests pass (up from 1738), `tsc --noEmit` clean, production build
+  clean.
+- **Deployed to Production** (same domains as v1.47.64 — verified live).
+
 ### 2026-08-25 — Backfill: existing Website/Documentation URLs weren't retroactively ingested (v1.47.64)
 - **Follow-up to v1.47.63, live-caught again immediately**: the fix only runs ingestion on a NEW profile save —
   an already-saved Website value (like the test project's `innvil.cloud`, saved before v1.47.63 shipped) had no

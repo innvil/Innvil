@@ -21,7 +21,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { KNOWLEDGE_KINDS, type KnowledgeSourceKind } from "@/src/lib/moderator/knowledge";
 import { validateIngestUrl, chunkText } from "@/src/lib/moderator/knowledge-ingestion";
-import { fetchAndExtractUrl } from "@/src/lib/moderator/knowledge-fetch";
+import { crawlAndIngestSite, type CrawledPage } from "@/src/lib/moderator/knowledge-fetch";
 
 type Result<T = null> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -122,19 +122,38 @@ export interface UrlIngestOutcome {
   ok: boolean;
   error?: string;
   chunkCount?: number;
+  pageCount?: number;
   ingestionId: string;
 }
 
-/** The ONE real ingestion core (validate -> fetch under SSRF-guarded
- *  conditions -> extract -> chunk -> persist N rows sharing one
+/** Chunks EACH crawled page independently (a chunk never spans two
+ *  different pages) and flattens into one globally-ordered list -- a
+ *  multi-page source, sharing one `ingestion_id`, prefixes each page's
+ *  chunks with which page they came from once there's more than one page,
+ *  so the model gets real page-level provenance without a schema change. */
+function chunkCrawledPages(pages: CrawledPage[]): string[] {
+  const out: string[] = [];
+  for (const page of pages) {
+    const pageChunks = chunkText(page.text);
+    const prefix = pages.length > 1 ? `[Source page: ${page.url}]\n` : "";
+    for (const c of pageChunks) out.push(`${prefix}${c.content}`);
+  }
+  return out;
+}
+
+/** The ONE real ingestion core (validate -> bounded same-origin crawl,
+ *  starting from `url` -> chunk each page -> persist N rows sharing one
  *  ingestion_id) -- reused verbatim by both the general "Add URL" Knowledge
  *  Source flow below AND the Project Profile's Website/Documentation
  *  fields (`watch-project-profile.ts`), so there is exactly one ingestion
  *  pipeline in this codebase, never two independently-maintained copies.
- *  Failure never fabricates content: it always persists a real single
- *  'failed' row (chunk_index 0) with a short error message, so a failed
- *  ingestion stays visibly, persistently failed rather than a one-off
- *  toast the owner has no way to see again. */
+ *  A single root URL now yields more than just that one page's text
+ *  (`crawlAndIngestSite`, knowledge-fetch.ts) -- a live-reported gap where
+ *  a Watcher only ever knew the submitted page itself, never anything
+ *  linked from it. Failure never fabricates content: it always persists a
+ *  real single 'failed' row (chunk_index 0) with a short error message, so
+ *  a failed ingestion stays visibly, persistently failed rather than a
+ *  one-off toast the owner has no way to see again. */
 export async function ingestUrlIntoProject(admin: ProjectAdminClient, projectId: string, title: string, url: string): Promise<UrlIngestOutcome> {
   const ingestionId = randomUUID();
   const insertFailure = (error: string) =>
@@ -151,31 +170,31 @@ export async function ingestUrlIntoProject(admin: ProjectAdminClient, projectId:
     return { ok: false, error, ingestionId };
   }
 
-  const fetched = await fetchAndExtractUrl(url);
-  if (!fetched.ok || !fetched.text) {
-    const error = fetched.error ?? "Couldn't fetch that URL.";
+  const crawled = await crawlAndIngestSite(url);
+  if (!crawled.ok || crawled.pages.length === 0) {
+    const error = crawled.error ?? "Couldn't fetch that URL.";
     await insertFailure(error);
     return { ok: false, error, ingestionId };
   }
 
-  const chunks = chunkText(fetched.text);
+  const chunks = chunkCrawledPages(crawled.pages);
   if (chunks.length === 0) {
     const error = "No readable content was found on that page.";
     await insertFailure(error);
     return { ok: false, error, ingestionId };
   }
 
-  const contentHash = createHash("sha256").update(fetched.text).digest("hex");
+  const contentHash = createHash("sha256").update(crawled.pages.map((p) => p.text).join("\n\n")).digest("hex");
   const fetchedAt = new Date().toISOString();
-  const rows = chunks.map((c) => ({
+  const rows = chunks.map((content, i) => ({
     panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link",
-    title: chunks.length > 1 ? `${title} (part ${c.index + 1}/${chunks.length})` : title,
-    content: c.content, active: true, source_type: "url", source_url: url.trim(), storage_path: null,
-    status: "ready", error: null, content_hash: contentHash, fetched_at: fetchedAt, ingestion_id: ingestionId, chunk_index: c.index,
+    title: chunks.length > 1 ? `${title} (part ${i + 1}/${chunks.length})` : title,
+    content, active: true, source_type: "url", source_url: url.trim(), storage_path: null,
+    status: "ready", error: null, content_hash: contentHash, fetched_at: fetchedAt, ingestion_id: ingestionId, chunk_index: i,
   }));
   const { error } = await admin.from("knowledge_sources").insert(rows);
-  if (error) return { ok: false, error: "Fetched the page, but couldn't save it.", ingestionId };
-  return { ok: true, chunkCount: chunks.length, ingestionId };
+  if (error) return { ok: false, error: "Fetched the site, but couldn't save it.", ingestionId };
+  return { ok: true, chunkCount: chunks.length, ingestionId, pageCount: crawled.pages.length };
 }
 
 /** Real URL ingestion (spec §4/§5, the actual product correction this pass
@@ -221,26 +240,27 @@ export async function refreshAccountProjectKnowledgeSource(projectId: string, ke
   if (!first || first.source_type !== "url" || !first.source_url) return { ok: false, error: "Source not found." };
 
   const baseTitle = (first.title as string).replace(/\s*\(part \d+\/\d+\)$/, "");
-  const fetched = await fetchAndExtractUrl(first.source_url as string);
-  if (!fetched.ok || !fetched.text) {
-    await admin.from("knowledge_sources").update({ status: "failed", error: (fetched.error ?? "Refresh failed.").slice(0, 300), fetched_at: new Date().toISOString() }).eq("project_id", projectId).eq("ingestion_id", ingestionId).eq("chunk_index", 0);
-    return { ok: false, error: fetched.error ?? "Couldn't refresh that URL." };
+  const crawled = await crawlAndIngestSite(first.source_url as string);
+  if (!crawled.ok || crawled.pages.length === 0) {
+    const error = crawled.error ?? "Refresh failed.";
+    await admin.from("knowledge_sources").update({ status: "failed", error: error.slice(0, 300), fetched_at: new Date().toISOString() }).eq("project_id", projectId).eq("ingestion_id", ingestionId).eq("chunk_index", 0);
+    return { ok: false, error };
   }
 
-  const contentHash = createHash("sha256").update(fetched.text).digest("hex");
+  const contentHash = createHash("sha256").update(crawled.pages.map((p) => p.text).join("\n\n")).digest("hex");
   if (contentHash === (first.content_hash as string | null)) {
     await admin.from("knowledge_sources").update({ fetched_at: new Date().toISOString() }).eq("project_id", projectId).eq("ingestion_id", ingestionId);
     return { ok: true, data: null };
   }
 
-  const chunks = chunkText(fetched.text);
+  const chunks = chunkCrawledPages(crawled.pages);
   const fetchedAt = new Date().toISOString();
   await admin.from("knowledge_sources").delete().eq("project_id", projectId).eq("ingestion_id", ingestionId);
-  const rows = chunks.map((c) => ({
+  const rows = chunks.map((content, i) => ({
     panel_id: null, scope_type: "PROJECT", project_id: projectId, kind: "link",
-    title: chunks.length > 1 ? `${baseTitle} (part ${c.index + 1}/${chunks.length})` : baseTitle,
-    content: c.content, active: true, source_type: "url", source_url: first.source_url, storage_path: null,
-    status: "ready", error: null, content_hash: contentHash, fetched_at: fetchedAt, ingestion_id: ingestionId, chunk_index: c.index,
+    title: chunks.length > 1 ? `${baseTitle} (part ${i + 1}/${chunks.length})` : baseTitle,
+    content, active: true, source_type: "url", source_url: first.source_url, storage_path: null,
+    status: "ready", error: null, content_hash: contentHash, fetched_at: fetchedAt, ingestion_id: ingestionId, chunk_index: i,
   }));
   if (rows.length) await admin.from("knowledge_sources").insert(rows);
   return { ok: true, data: null };
