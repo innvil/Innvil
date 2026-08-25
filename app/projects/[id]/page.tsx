@@ -11,6 +11,7 @@ import { Breadcrumbs, StatusDot, EmptyRow, SectionHeader, OperationalStatusBadge
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { ProjectKnowledgeTab } from "@/src/components/watch/ProjectKnowledgeTab";
 import { ProjectAddWatcherCta } from "@/src/components/watch/ProjectAddWatcherCta";
+import { ProjectAddCommunityCta } from "@/src/components/watch/ProjectAddCommunityCta";
 
 export const metadata: Metadata = { title: "Project — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -128,13 +129,13 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         <div className="w-card p-5">
           <div className="flex items-center justify-between mb-3">
             <SectionHeader icon={Users} title="Communities" />
-            <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={projectCommunityOptions} />
+            <ProjectAddCommunityCta projectId={detail.id} deployableWatchers={deployableWatchers} />
           </div>
           {detail.communities.length === 0 ? (
             <div className="text-center py-8">
               <EmptyRow text="No Communities connected to this Project yet." />
               <p className="text-xs w-text-faint">
-                Use Add Watcher above to connect one directly to this Project.
+                Use Add Community above to connect one to this Project.
               </p>
             </div>
           ) : (
@@ -171,9 +172,16 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         <div className="w-card p-5">
           <div className="flex items-center justify-between mb-3">
             <SectionHeader icon={Bot} title="Watchers deployed in this Project" />
-            <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={projectCommunityOptions} />
+            {detail.communities.length > 0 && (
+              <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={projectCommunityOptions} />
+            )}
           </div>
-          {watchersInProject.length === 0 ? (
+          {detail.communities.length === 0 ? (
+            <div className="text-center py-8">
+              <EmptyRow text="No Watchers assigned to a Community in this Project yet." />
+              <p className="text-xs w-text-faint">Add a Community first (Communities tab), then deploy a Watcher to it here.</p>
+            </div>
+          ) : watchersInProject.length === 0 ? (
             <EmptyRow text="No Watchers assigned to a Community in this Project yet." />
           ) : (
             <div className="overflow-x-auto -mx-1">

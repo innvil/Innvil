@@ -127,6 +127,30 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Fix: Project Knowledge tab had no "Add Community" action (v1.47.62)
+- **Live report, correctly flagged as a real spec violation, not a nitpick**: the required sequence is
+  **Project → Add Community → Add Watcher** (v1.47.61's PART B), but the Communities tab only ever showed a
+  "+ Add Watcher" button — connecting a brand-new Telegram chat was technically possible (folded into that same
+  modal as a "New Community" radio option), but never surfaced as its own discoverable step, so the two-step
+  sequence effectively didn't exist in the UI.
+- **New `ProjectAddCommunityCta`/`ProjectAddCommunityModal`** — a dedicated "+ Add Community" button on the
+  Communities tab. Picks a bot-ready Watcher (needed only to verify real Telegram membership — there's no
+  anonymous "does this chat exist" check), takes the chat ID/@handle, and connects it to this fixed Project via
+  the same `connectAccountCommunity` action as before — now genuinely its own labeled action instead of a mode
+  switch inside "Add Watcher".
+- **`ProjectDeployWatcherModal` narrowed** to exactly one job: deploy an existing, already-bot-ready Watcher into
+  a Community already in this Project. Dropped the old "New Community" fallback entirely — that path is Add
+  Community's now.
+- **Watchers tab enforces the sequence**: "+ Add Watcher" only renders once the Project has at least one
+  Community; with zero Communities it shows "Add a Community first" instead of a button that would otherwise
+  let the sequence be skipped.
+- `tsc --noEmit` clean, all 1734 tests pass (unaffected — pure UI-composition change), production build clean.
+- **Confirmed end-to-end (not just stored)**: a Project Knowledge URL is fetched server-side (SSRF-guarded),
+  extracted, chunked, and stored as real `knowledge_sources` rows (`scope_type: "PROJECT"`); `loadRelevantKnowledge`
+  in `community-runtime.ts` retrieves from the SAME `project_id`-filtered query for every ANSWER-type message a
+  deployed Watcher generates — real, retrievable knowledge, not a bare stored URL string. **Still requires
+  migration `0106` to be run against production first** (adds the columns this whole feature writes to).
+
 ### 2026-08-25 — Real Project Knowledge URL ingestion + Project-centric Community/Watcher deployment (v1.47.61)
 - **Two related product corrections, per an explicit engineering brief.** (A) Project Knowledge URLs were
   previously stored as bare text — the Watcher knew a URL existed but never read what was on the page. (B) A
