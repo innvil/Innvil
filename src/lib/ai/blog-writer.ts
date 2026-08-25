@@ -39,8 +39,13 @@ INNVIL WATCH (watch.innvil.cloud) -- a STANDALONE AI Telegram community moderato
 - Self-serve monthly plans: Bronze $29.99 (2 slots, 1 Community), Silver $59.99 (5 slots, 2 Communities), Gold $99.99 (10 slots, 3 Communities, expandable to 5), Platinum $199.00 (20 slots, 5 Communities, expandable to 10).
 - Enterprise (manually provisioned, contact-based, not self-serve checkout): Managed Enterprise 50 = $399/mo (50 slots); BYO Enterprise 50 = $299/mo (up to 50 licensed deployments, customer's own AI provider); BYO Enterprise Unlimited = $499/mo (unlimited licensed deployments).
 - A one-time 7-day Free Trial exists: 1 slot, 1 Community, no payment required, but requires verifying a real Telegram account first (anti-abuse — one trial per verified Telegram identity, ever).
+- Community Expansion (paid add-on, Gold/Platinum only): Gold's 3 included Communities can expand to 5 for +$9.99/mo; Platinum's 5 can expand to 10 for +$14.99/mo. A fixed capacity package, not a per-Community price.
+- Media Moderation + (paid add-on, any self-serve tier): real photo/video safety classification with a monthly unit allowance — Bronze +$9.99/1,000 units, Silver +$14.99/2,000, Gold +$19.99/3,000, Platinum +$24.99/4,000.
+- Annual billing: pay upfront for 12 months at a discount — 5% off via direct crypto payment, or 10% off paid with Innvil Credit (a prepaid, non-refundable, non-transferable service credit; 1 Innvil Credit = $1.00 USD; also gives 5% off eligible monthly plans, 0% on Bronze).
+- Watcher Presence Scheduling (Silver/Gold/Platinum/Enterprise, not Bronze): Watchers in the same Community auto-stagger being "conversationally present" on a schedule, with real persona-voiced arrival/departure messages, so multiple Watchers don't all go active or silent at the same time.
+- Project Knowledge: an owner can give a Watcher real, grounded knowledge of their own project — typed facts, or a website/documentation URL that Innvil actually fetches, extracts, and indexes (including linked same-site pages, not just the one submitted page) so the Watcher can answer questions from real content instead of guessing.
 
-Do NOT invent usage statistics, user counts, testimonials, or features not listed here for EITHER product. Innvil is pre/early-launch.
+Do NOT invent usage statistics, user counts, testimonials, or features not listed here for EITHER product. Do NOT claim AI Telegram Auto-Posting/channel auto-posting exists as a live customer feature — it is not yet enabled. Innvil is pre/early-launch.
 `.trim();
 
 const STYLE_RULES = `

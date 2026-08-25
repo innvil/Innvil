@@ -127,6 +127,36 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — AI blog writer's Watch knowledge brought current (v1.47.66)
+- **Checked, not assumed.** `PRODUCT_FACTS` in `src/lib/ai/blog-writer.ts` (the fact set the AI blog writer is
+  hard-constrained to, "do not contradict or go beyond these") already had CORRECT core numbers — Bronze/Silver/
+  Gold/Platinum pricing and Managed/BYO Enterprise pricing both traced against the live `money.ts`/
+  `watch-enterprise.ts` constants and matched exactly. What was missing was coverage: several real, shipped
+  Watch capabilities were never mentioned at all, so the writer could accurately describe the base plans but
+  had no grounding to write about anything newer.
+- **Added, each verified against the real canonical constant, not guessed**: Community Expansion (Gold 3→5
+  +$9.99/mo, Platinum 5→10 +$14.99/mo), Media Moderation + (per-tier add-on pricing/unit allowances), Annual
+  billing (5% direct / 10% via Innvil Credit, Innvil Credit's own 1:1 USD + 5% monthly discount semantics),
+  Watcher Presence Scheduling (Silver+/Enterprise), and Project Knowledge (the real website-ingestion + multi-
+  page-crawl system from v1.47.63-65 — a genuine differentiator worth the writer knowing about).
+- **Explicitly excluded AI Auto-Posting**, and added a new hard rule: "Do NOT claim AI Telegram Auto-Posting/
+  channel auto-posting exists as a live customer feature — it is not yet enabled." Confirmed via a real
+  production env pull that `NEXT_PUBLIC_AUTO_POSTING_ENABLED` is unset (feature is built but gated off) while
+  `MEDIA_MODERATION_ENABLED=true` (genuinely live) — the fact list must never advertise a capability customers
+  can't actually reach yet.
+- **Could not locally generate a live sample draft to visually confirm output quality** — no AI provider key
+  (`ANTHROPIC_API_KEY`/`AI_API_KEY`/`AI_FALLBACK_API_KEY`) is configured in this sandbox, consistent with every
+  other AI-touching pass this session. Verified via direct fact-accuracy tracing against the real constants
+  instead (same rigor as the earlier ingestion work), not a live generation. Trigger a real "Generate now" from
+  the Blog admin tab in production to see actual output.
+- 1749 tests pass (unchanged — `blog-writer.ts` has no dedicated test file, consistent with this codebase's
+  established convention for AI-provider-orchestrating modules), `tsc --noEmit` clean, production build clean.
+- **Deliberately not touched this pass**: `bot-manager-knowledge.ts` (the SEPARATE `innvil_bot_manager` reactive-
+  support knowledge base) has the identical coverage gap — core pricing/trial facts confirmed accurate, same
+  missing newer-feature coverage. Not updated here since only the blog was asked about; flagged as a real,
+  quick follow-up if wanted.
+- **Deployed to Production** (same domains as v1.47.65 — verified live).
+
 ### 2026-08-25 — Real bounded multi-page crawl + fixed a live fabrication bug (v1.47.65)
 - **Two real problems from the same live test.** A Watcher asked a question with no matching Project Knowledge
   fabricated a confident, plausible-sounding answer instead of admitting it didn't know. Separately, ingestion
