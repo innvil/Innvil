@@ -127,6 +127,24 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — New Watch landing hero + 10 prioritized blog topics queued (v1.47.68)
+- **Landing hero copy**: `WatchLanding.tsx`'s H1 changed from "AI Virtual Moderators for your Communities." to
+  **"AI Watchers for Telegram — moderation that actually talks."** — picked from a set of headline options as
+  the one that names the product category plainly, keeps the safety angle, and leads with the genuinely
+  differentiated capability (natural conversation, not just spam filtering) in one line. `WATCH_TITLE`
+  (SEO/OG metadata, `watch-metadata.ts`) intentionally left unchanged — a page `<title>` and a hero headline
+  don't need to be the same string, and the metadata already has its own dedicated test coverage.
+- **10 real Watch blog topics queued at `priority: 10`** (via `blog_topics`, direct against production) — checked
+  the live queue first: 971 pending topics, ALL Forge/SMM-panel content at priority 0, genuinely zero real Watch
+  topics anywhere. The new topics (AI Telegram moderator basics, spam/scam link detection, natural-chat
+  differentiation, Watcher slot capacity, Project Knowledge/website grounding, Presence Scheduling, Free Trial
+  vs paid, Media Moderation +, crypto/Web3 communities, Community Expansion) now sort strictly ahead of every
+  existing priority-0 topic (`runScheduledGeneration`'s own `ORDER BY priority DESC, created_at ASC`), confirmed
+  via a live query. No duplicate-topic risk — checked against every existing topic string before inserting.
+- 1755 tests pass (unaffected — pure landing copy change, no logic touched), `tsc --noEmit` clean, production
+  build clean.
+- **Deployed to Production** (same domains as v1.47.67 — verified live).
+
 ### 2026-08-25 — innvil_bot_manager's Watch knowledge brought current too (v1.47.67)
 - **Follow-up to v1.47.66, per direct request.** `bot-manager-knowledge.ts` (the reactive Telegram support
   bot's OWN static knowledge base — a separate system from the blog writer's `PRODUCT_FACTS`) had the identical

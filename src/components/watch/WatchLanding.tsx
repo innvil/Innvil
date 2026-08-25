@@ -252,7 +252,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
             <Zap size={12} /> Innvil Watch
           </span>
           <h1 className="w-display text-4xl sm:text-5xl leading-[1.08] mb-6">
-            AI Virtual Moderators<br />for your Communities.
+            AI Watchers for Telegram —<br />moderation that actually talks.
           </h1>
           <p className="w-text-dim text-lg mb-4 max-w-md">
             Deploy <strong className="w-text font-semibold">Watchers</strong> — AI-powered Virtual Moderators —
