@@ -42,7 +42,7 @@
    by this function or by prompting alone — this module never receives rows
    outside the scope it was asked to score. */
 
-export type KnowledgeSourceKind = "overview" | "faq" | "fact" | "link" | "note";
+export type KnowledgeSourceKind = "overview" | "faq" | "fact" | "link" | "note" | "document";
 export type KnowledgeScopeType = "ORGANIZATION" | "PROJECT" | "COMMUNITY";
 
 export interface KnowledgeSource {
@@ -57,7 +57,7 @@ export interface KnowledgeSource {
   active: boolean;
 }
 
-export const KNOWLEDGE_KINDS: KnowledgeSourceKind[] = ["overview", "faq", "fact", "link", "note"];
+export const KNOWLEDGE_KINDS: KnowledgeSourceKind[] = ["overview", "faq", "fact", "link", "note", "document"];
 
 function tokenize(text: string): string[] {
   return text

@@ -3,23 +3,26 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Users, Bot, Radio, ArrowRight, LayoutGrid, Settings as SettingsIcon } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountProjectDetail, listAccountActivity, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
+import { getAccountProjectDetail, listAccountActivity, listAccountWatchers, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
+import { DEPLOYABLE_PROVISIONING_STATUSES } from "@/src/lib/products/watch-status";
 import { getAccountProjectProfile } from "@/src/lib/actions/watch-project-profile";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { Breadcrumbs, StatusDot, EmptyRow, SectionHeader, OperationalStatusBadge, relTime } from "@/src/components/watch/WatchUI";
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { ProjectKnowledgeTab } from "@/src/components/watch/ProjectKnowledgeTab";
+import { ProjectAddWatcherCta } from "@/src/components/watch/ProjectAddWatcherCta";
 
 export const metadata: Metadata = { title: "Project — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { accountId, admin } = await requireWatchPage();
-  const [detail, profileResult, activity, shell] = await Promise.all([
+  const [detail, profileResult, activity, shell, allWatchers] = await Promise.all([
     getAccountProjectDetail(admin, accountId, id),
     getAccountProjectProfile(id),
     listAccountActivity(admin, accountId, { projectId: id, limit: 20 }),
     getWatchShellContext(admin, accountId),
+    listAccountWatchers(admin, accountId),
   ]);
   if (!detail) notFound();
 
@@ -27,6 +30,14 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const watchersInProject = Array.from(
     new Map(detail.communities.flatMap((c) => c.watchers.map((w) => [w.watcherId, w]))).values()
   );
+  // Only Watchers whose Telegram bot is already connected are offered for
+  // Project-centric deployment (deployExistingWatcherToCommunity/
+  // connectAccountCommunity both require this) -- a not-yet-connected
+  // Watcher is still created/connected from Watchers first, never a second
+  // bot-provisioning flow duplicated here (see ProjectDeployWatcherModal's
+  // own doc comment).
+  const deployableWatchers = allWatchers.filter((w) => DEPLOYABLE_PROVISIONING_STATUSES.has(w.provisioningStatus));
+  const projectCommunityOptions = detail.communities.map((c) => ({ id: c.id, title: c.title, chatId: c.chatId }));
 
   const profileComplete = profileResult.ok && (profileResult.data.overview.trim().length > 0 || profileResult.data.description.trim().length > 0);
   // Same canonical distinction as Overview/Usage/Billing -- a Watcher PROFILE
@@ -115,11 +126,15 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       label: "Communities",
       content: (
         <div className="w-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <SectionHeader icon={Users} title="Communities" />
+            <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={projectCommunityOptions} />
+          </div>
           {detail.communities.length === 0 ? (
             <div className="text-center py-8">
               <EmptyRow text="No Communities connected to this Project yet." />
               <p className="text-xs w-text-faint">
-                Connect one from a deployable Watcher on the <Link href="/watchers" className="w-teal hover:underline">Watchers page</Link>.
+                Use Add Watcher above to connect one directly to this Project.
               </p>
             </div>
           ) : (
@@ -154,6 +169,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       label: "Watchers",
       content: (
         <div className="w-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <SectionHeader icon={Bot} title="Watchers deployed in this Project" />
+            <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={projectCommunityOptions} />
+          </div>
           {watchersInProject.length === 0 ? (
             <EmptyRow text="No Watchers assigned to a Community in this Project yet." />
           ) : (

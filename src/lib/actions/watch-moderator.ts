@@ -9,6 +9,7 @@ import {
 } from "@/src/lib/moderator/manager";
 import { telegramApiCall } from "@/src/lib/moderator/telegram-client";
 import { createAccountCommunity, deployAccountWatcher, nextProvisioningStatusAfterConnect, type AccountCommunityRow } from "@/src/lib/products/watch-runtime";
+import { DEPLOYABLE_PROVISIONING_STATUSES } from "@/src/lib/products/watch-status";
 
 /**
  * Self-serve Telegram provisioning for DIRECT (Panel-less) Watch accounts —
@@ -29,7 +30,6 @@ import { createAccountCommunity, deployAccountWatcher, nextProvisioningStatusAft
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
 const PROVISIONING_ATTEMPT_TTL_MINUTES = 10;
-const DEPLOYABLE_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
 const RETRIABLE_PROVISIONING_STATUSES = new Set([
   "draft", "requires_retry", "cancelled", "username_unavailable", "telegram_creation_failed", "credential_setup_failed", "expired",
 ]);
@@ -294,6 +294,40 @@ export async function setCustomerDeploymentEnabled(moderatorId: string, deployme
   const { error } = await c.admin.from("moderator_deployments").update({ enabled: false }).eq("id", deploymentId).eq("moderator_id", moderatorId);
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: null };
+}
+
+/** Project-centric deployment: attach an ALREADY-CONNECTED (bot-ready)
+ *  Watcher Profile to a Community that's already part of THIS account's own
+ *  Project -- no new Telegram verification needed (that already happened
+ *  when the Community was first connected), just a new/re-enabled
+ *  `moderator_deployments` row. This is the fast path the Project detail
+ *  page offers once a Project already has at least one Community: pick an
+ *  existing Watcher, pick one of THIS Project's own Communities, deploy.
+ *
+ *  `deployAccountWatcher` (watch-runtime.ts) is the SAME canonical
+ *  deployment-creation function `connectAccountCommunity` above already
+ *  calls -- reused verbatim, never a second deployment-creation path -- and
+ *  already enforces every relevant check (Watcher belongs to this account,
+ *  Community belongs to a Project this account owns via `loadOwnedProject`,
+ *  slot-cap/per-Community-cap via `checkDeploymentSlotCaps`). This action
+ *  adds only the ctxModerator() session/ownership gate + the deployable-
+ *  status precondition on top of that. */
+export async function deployExistingWatcherToCommunity(moderatorId: string, communityId: string): Promise<Result<AccountCommunityDeploymentRow>> {
+  const c = await ctxModerator(moderatorId);
+  if (!c) return { ok: false, error: "Watcher not found." };
+  if (!DEPLOYABLE_PROVISIONING_STATUSES.has(c.moderator.provisioning_status)) {
+    return { ok: false, error: "Connect this Watcher's Telegram bot before deploying it." };
+  }
+
+  const { data: community } = await c.admin.from("communities").select("id, chat_id, title").eq("id", communityId).maybeSingle();
+  if (!community) return { ok: false, error: "Community not found." };
+
+  const deployResult = await deployAccountWatcher(c.admin, c.accountId, moderatorId, communityId);
+  if (!deployResult.ok) return deployResult;
+
+  await c.admin.from("virtual_moderators").update({ provisioning_status: "active" }).eq("id", moderatorId);
+
+  return { ok: true, data: { deploymentId: deployResult.data.id, communityId: community.id as string, chatId: community.chat_id as string, title: (community.title as string | null) } };
 }
 
 /* ===============================================================

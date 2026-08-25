@@ -127,6 +127,90 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-25 — Real Project Knowledge URL ingestion + Project-centric Community/Watcher deployment (v1.47.61)
+- **Two related product corrections, per an explicit engineering brief.** (A) Project Knowledge URLs were
+  previously stored as bare text — the Watcher knew a URL existed but never read what was on the page. (B) A
+  Community/Watcher deployment initiated from `/watchers` silently defaulted to `projects[0]` (first-created
+  Project) whenever the account had more than one Project, with the selector HIDDEN entirely when there was
+  exactly one — a real, live ambiguity risk once an account holds multiple Projects. Investigated the actual
+  schema/actions/runtime/UI before touching anything (per the brief's own explicit process).
+- **PART A — real ingestion, not a bigger text box.** New migration `0106_knowledge_ingestion.sql`:
+  `knowledge_sources.panel_id` made nullable (the SAME zero-Panel fix already applied to every other Watch
+  table in migration 0069 — this table was simply never revisited); a new `'document'` kind; and real
+  ingestion-state columns (`source_type`, `source_url`, `storage_path`, `status`, `error`, `content_hash`,
+  `fetched_at`, `ingestion_id`, `chunk_index`). A long URL source becomes **N chunk rows sharing one
+  `ingestion_id`** — the EXISTING per-row relevance scorer (`retrieveRelevantKnowledge`, `knowledge.ts`,
+  completely unmodified) already ranks/retrieves individual rows, so chunking needed zero retrieval-layer
+  changes; a chunk is indistinguishable from an ordinary Fact/Link row at retrieval time.
+- **New `src/lib/moderator/knowledge-ingestion.ts`** (pure, no I/O — fully unit-tested): `validateIngestUrl`
+  (http/https only, rejects embedded credentials), `isPrivateOrReservedIpv4`/`Ipv6` (real SSRF blocklist —
+  RFC1918, loopback, link-local, CGNAT, multicast/reserved, IPv4-mapped IPv6, malformed input fails CLOSED),
+  `extractReadableText` (via `sanitize-html`'s `nonTextTags` — script/style/nav/header/footer content is
+  dropped entirely, not just unwrapped), `chunkText` (paragraph-aware, sentence-boundary fallback, bounded
+  chunk count — never splits mid-word, never endlessly chunks a huge document).
+- **New `src/lib/moderator/knowledge-fetch.ts`** (server-only, the actual network I/O): `fetchAndExtractUrl` —
+  DNS-resolves and rejects private/reserved targets BEFORE connecting, a bounded manual redirect loop
+  (`redirect:"manual"`, max 3 hops, **re-validates every hop** rather than trusting fetch's own automatic
+  redirect-following), a response read bounded by a running byte counter (never trusts `Content-Length` alone),
+  a content-type allowlist (web pages only), and a 12s timeout. Honestly documented residual limitation: this
+  doesn't fully close a DNS-rebinding race between the check and the connect — a reasonable, disclosed v1
+  mitigation, not a claim of complete protection.
+- **New `src/lib/actions/watch-project-knowledge.ts`** (account-scoped, mirrors `watch-project-profile.ts`'s
+  exact `projects.account_id === user.id` ownership check, never Panel-scoped): `listAccountProjectKnowledgeSources`
+  (groups chunk rows back into one summary card per logical source), `addAccountProjectTextKnowledge` (unchanged
+  plain-text path), `addAccountProjectUrlKnowledge` (the real ingestion — a failed fetch persists a real `status:
+  'failed'` + short error message, never fabricated content), `refreshAccountProjectKnowledgeSource` (re-fetches;
+  a content-hash match is a no-op that only bumps `fetched_at`, never duplicating chunk rows for an unchanged
+  source; a real change atomically replaces every old chunk under the same `ingestion_id`),
+  `deleteAccountProjectKnowledgeSource` (deletes every chunk sharing the source's key, always project-scoped).
+- **Trust boundary preserved, explicitly verified via `git diff`/grep**: `link-moderation.ts`/`link-classify.ts`
+  (Telegram chat-link moderation) have zero `fetch()` calls and zero import of either new ingestion module — a
+  link posted in chat is still judged from message text/context alone, completely unrelated to this feature.
+- **UI**: `ProjectKnowledgeTab.tsx` gained a real "Knowledge sources" card — add a plain-text entry or a
+  website/docs URL, real per-source status (Ready/Processing/Failed) with a visible short error on failure,
+  chunk count, Refresh (URL sources only) and Remove — never a raw internal storage key rendered anywhere.
+- **PART B — Project-centric deployment, no silent Project guessing.** `WatcherConnectModal.tsx`'s Project
+  selector is now ALWAYS shown (was hidden whenever the account had exactly one Project, silently defaulting to
+  `projects[0]` either way) — relabeled "Deploying into Project" so the choice is explicit even for a
+  single-Project account. New `deployExistingWatcherToCommunity` (`watch-moderator.ts`) — the fast path for
+  attaching an already-bot-ready Watcher to a Community already inside a given Project, reusing the existing
+  canonical `deployAccountWatcher` verbatim (no second deployment-creation path). New
+  `ProjectDeployWatcherModal.tsx`/`ProjectAddWatcherCta.tsx` — a real "Add Watcher" action on the Project
+  detail page's Communities/Watchers tabs, with `projectId` FIXED from page context (never re-asked, never
+  guessed) — picks an existing, already-connected Watcher Profile (deliberately does NOT duplicate Watcher
+  bot-provisioning here; an account with none yet is pointed at `/watchers`), then either deploys straight into
+  an existing Community in this Project or connects a new one via the same Telegram-verified flow.
+- **Confirmed, not assumed: `createAccountCommunity`/`deployAccountWatcher`/`resolveDeploymentTenant`
+  (`watch-runtime.ts`) already required an explicit `projectId` and already derived a deployment's Project
+  strictly through its Community — the ambiguity was entirely in the CALLING UI defaulting/hiding the selector,
+  not in the underlying ownership functions, which needed zero logic changes.**
+- **Real build-time catch, fixed before it shipped**: an early version of this pass exported a plain `Set`
+  constant from `watch-moderator.ts` (a `"use server"` file) — the exact class of mistake that already broke
+  this codebase's whole server-actions bundle once before (v1.23.4). Caught by `npm run build`, not shipped —
+  moved the constant to `watch-status.ts` (the established client-safe extraction point, since a `"use client"`
+  consumer also needed it and importing it from `watch-runtime.ts` directly would have pulled that file's whole
+  `server-only` module graph into the browser bundle).
+- New tests: `knowledge-ingestion.test.ts` (+19, new file — every SSRF IP-range case incl. the 172.16/12
+  boundary and IPv4-mapped IPv6, HTML extraction dropping nav/header/footer/script/style, chunking incl. the
+  bounded-count and never-mid-word guarantees), `community-runtime.test.ts` (+4 — a URL-ingested chunk's REAL
+  extracted content is retrieved rather than a bare URL string, a long multi-chunk source retrieves only the
+  relevant chunk not the whole document, a standalone zero-Panel account's ingested knowledge is retrievable,
+  a failed ingestion's empty content never surfaces as an answer), `watch-runtime.test.ts` (+3 — the critical
+  multi-Project regression: the SAME Watcher Profile deployed under two DIFFERENT Projects produces two
+  independent deployments/slots with each deployment's Project correctly deriving through its OWN Community,
+  reconnecting an already-Project-A-connected chat under Project B is rejected, cross-account deployment onto
+  another account's Project is rejected). 1734 tests pass (up from 1701), `tsc --noEmit` clean, production
+  build clean.
+- **Deliberately NOT built this pass, honestly flagged rather than rushed**: PDF upload (Part A's second
+  required input type) — real Supabase Storage bucket/policy setup + server-side PDF text extraction is a
+  genuinely separate, larger body of work on top of an already-large URL-ingestion pass; the schema
+  (`source_type` already includes `'pdf'`, `storage_path` already exists) is ready for it, but no upload
+  action/UI was built. Auto-Posting was untouched (confirmed via `git diff` — out of scope, not the reason for
+  this Knowledge work, per the brief's own explicit instruction).
+- **Run migration `0106`** before Project Knowledge URL ingestion governs anything live — until then, every URL
+  add attempt will fail at the DB insert (`source_type`/`status`/etc. don't exist yet). **Not deployed, per
+  explicit instruction — committed and pushed only.**
+
 ### 2026-08-25 — Main landing now cross-promotes Innvil Watch (v1.47.60)
 - **Missing piece flagged by the user directly**: the main Innvil (SMM panel builder) landing had zero mention of
   Innvil Watch anywhere — no way for a visitor to discover the standalone Telegram-moderation product exists,

@@ -612,7 +612,7 @@ test("a HUMAN sender with no Telegram username at all has username: null, never 
 // knowledge.test.ts.
 
 interface FakeKnowledgeRow {
-  id: string; panel_id: string; scope_type: "ORGANIZATION" | "PROJECT" | "COMMUNITY";
+  id: string; panel_id: string | null; scope_type: "ORGANIZATION" | "PROJECT" | "COMMUNITY";
   project_id: string | null; community_id: string | null; kind: string; title: string; content: string; active: boolean;
 }
 
@@ -701,6 +701,61 @@ test("REQUIRED (spec test 1 shape): a question retrieves this community's own pr
   const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "what chains do you support?");
   assert.ok(result);
   assert.equal(result![0].title, "Supported chains");
+});
+
+test("REQUIRED (Project Knowledge ingestion): a URL-ingested chunk's REAL extracted content is retrieved -- never the bare URL string", async () => {
+  // Simulates exactly what watch-project-knowledge.ts's addAccountProjectUrlKnowledge
+  // actually persists: a PROJECT-scope row whose `content` is the real
+  // fetched/extracted page text (never the URL itself, which lives only in
+  // `source_url` -- a column loadRelevantKnowledge's own KNOWLEDGE_SELECT
+  // never even reads, proving retrieval works from ordinary row content
+  // with zero special-casing for source_type).
+  const admin = fakeAdminForKnowledge(
+    [{ id: "ing-1", panel_id: null, scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "link", title: "Docs (part 1/1)", content: "Litho supports Ethereum, Polygon, and Arbitrum for cross-chain swaps.", active: true }],
+    { "community-1": "project-litho" }
+  );
+  const result = await loadRelevantKnowledge(admin, null, "community-1", "which chains does Litho support?");
+  assert.ok(result);
+  assert.equal(result!.some((r) => r.content.includes("Ethereum")), true, "the REAL extracted page content must be retrievable");
+  assert.equal(result!.some((r) => r.content.startsWith("http")), false, "must never retrieve a bare URL string as the 'knowledge'");
+});
+
+test("REQUIRED (Project Knowledge ingestion): a long ingested source split into multiple chunks -- only the RELEVANT chunk is retrieved, not the whole document", async () => {
+  const admin = fakeAdminForKnowledge(
+    [
+      { id: "ing-1", panel_id: null, scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "link", title: "Whitepaper (part 1/3)", content: "Litho's mission is to simplify cross-chain trading for everyone.", active: true },
+      { id: "ing-2", panel_id: null, scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "link", title: "Whitepaper (part 2/3)", content: "Tokenomics: total supply 100M, 40% community rewards, 20% team, 40% treasury.", active: true },
+      { id: "ing-3", panel_id: null, scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "link", title: "Whitepaper (part 3/3)", content: "Roadmap: Q1 mainnet launch, Q2 mobile app, Q3 governance module.", active: true },
+    ],
+    { "community-1": "project-litho" }
+  );
+  const result = await loadRelevantKnowledge(admin, null, "community-1", "what's the total token supply?");
+  assert.ok(result);
+  assert.equal(result!.some((r) => r.content.includes("total supply 100M")), true, "the relevant chunk must be retrieved");
+  assert.equal(result!.some((r) => r.content.includes("mainnet launch")), false, "an irrelevant chunk from the SAME source must not be force-injected");
+});
+
+test("REQUIRED (Project Knowledge ingestion): a standalone (zero-Panel) account's ingested Project Knowledge is retrievable with panelId: null", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "ing-1", panel_id: null, scope_type: "PROJECT", project_id: "project-standalone", community_id: null, kind: "link", title: "Website", content: "InnvilWatch.example is an AI Telegram moderation product.", active: true }],
+    { "community-1": "project-standalone" }
+  );
+  const result = await loadRelevantKnowledge(admin, null, "community-1", "what is this product?");
+  assert.ok(result, "a zero-Panel account's own ingested knowledge must still be retrievable");
+  assert.equal(result![0].content.includes("AI Telegram moderation"), true);
+});
+
+test("REQUIRED (Project Knowledge ingestion): a FAILED ingestion (empty content) never fabricates retrievable knowledge", async () => {
+  // watch-project-knowledge.ts persists status:'failed', content:'' on a
+  // fetch failure -- this proves that shape can never surface as a
+  // real-looking answer (an empty-content row scores 0 relevance for any
+  // real query and is filtered out by retrieveRelevantKnowledge itself).
+  const admin = fakeAdminForKnowledge(
+    [{ id: "ing-1", panel_id: null, scope_type: "PROJECT", project_id: "project-litho", community_id: null, kind: "link", title: "Docs", content: "", active: true }],
+    { "community-1": "project-litho" }
+  );
+  const result = await loadRelevantKnowledge(admin, null, "community-1", "what does the documentation say?");
+  assert.equal(result, undefined, "an empty-content (failed-ingestion) row must never be surfaced as an answer");
 });
 
 test("REQUIRED (spec test 4/§8): community 1 knowledge never appears when answering inside community 2", async () => {

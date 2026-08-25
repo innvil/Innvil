@@ -8,6 +8,18 @@
  * (Overview, Community Health tables, badges).
  */
 
+/** A Watcher whose Telegram bot credential is already connected -- eligible
+ *  to be selected for deployment (from Watchers, or from a Project's own
+ *  "Add Watcher" flow) without walking through bot creation again. Lives
+ *  here (client-safe, no I/O) rather than in watch-runtime.ts specifically
+ *  so client components (WatcherConnectModal.tsx) can import it without
+ *  pulling that file's whole server-only module graph into the browser
+ *  bundle -- and never in a `"use server"` action file, since exporting a
+ *  plain Set from one silently breaks the ENTIRE server-actions bundle at
+ *  build time (the exact incident this codebase has already hit twice; see
+ *  CLAUDE.md's v1.23.4 entry). */
+export const DEPLOYABLE_PROVISIONING_STATUSES = new Set(["bot_ready", "community_setup_required", "active"]);
+
 export type CommunityOperationalStatus = "healthy" | "needs_attention" | "paused";
 
 export interface CommunityWatcherLike {

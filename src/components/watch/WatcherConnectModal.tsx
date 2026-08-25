@@ -7,10 +7,11 @@ import {
   connectCustomerBotToken, connectAccountCommunity,
 } from "@/src/lib/actions/watch-moderator";
 import type { AccountWatcherRow } from "@/src/lib/products/watch-runtime";
+import { DEPLOYABLE_PROVISIONING_STATUSES } from "@/src/lib/products/watch-status";
 import type { AccountProjectRow } from "@/src/lib/products/ownership";
 
 const RETRIABLE = new Set(["draft", "requires_retry", "cancelled", "username_unavailable", "telegram_creation_failed", "credential_setup_failed", "expired"]);
-const DEPLOYABLE = new Set(["bot_ready", "community_setup_required", "active"]);
+const DEPLOYABLE = DEPLOYABLE_PROVISIONING_STATUSES;
 
 /** Self-serve Telegram connection flow for a single Watcher — mirrors the
  *  existing owner/storefront-customer UX shape (username → deep link →
@@ -104,14 +105,17 @@ export function WatcherConnectModal({
         ) : DEPLOYABLE.has(status) ? (
           <div>
             <p className="text-sm w-text-dim mb-3">Your bot is connected to Telegram. Add it to a Telegram group/channel, then enter its chat ID or @handle here.</p>
-            {projects.length > 1 && (
-              <>
-                <label className="text-xs w-text-dim block mb-1">Project</label>
-                <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border mb-3">
-                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </>
-            )}
+            {/* ALWAYS shown, even with exactly one Project -- an account can
+                hold multiple Projects, and silently defaulting to
+                `projects[0]` (whichever a prior version of this modal hid
+                the selector for) is exactly the ambiguous "which Project
+                does this deployment belong to?" guess the CRM must never
+                make. A single-Project account still sees, explicitly, which
+                Project the new deployment is going into. */}
+            <label className="text-xs w-text-dim block mb-1">Deploying into Project</label>
+            <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border mb-3">
+              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
             <label className="text-xs w-text-dim block mb-1">Telegram chat ID or @handle</label>
             <input
               value={chatInput}

@@ -644,6 +644,77 @@ test("REQUIRED: the SAME Watcher deployed to two Communities consumes TWO slots,
   assert.deepEqual(breakdown.byCommunity.map((c) => c.slots).sort(), [1, 1]);
 });
 
+/* ---------------------- Project-centric deployment (PART B) ---- */
+// The critical multi-Project regression case per the product task
+// (2026-08-25): a reusable Watcher Profile deployed to Communities under
+// TWO DIFFERENT Projects must produce two independent deployments/slots,
+// and EVERY deployment's Project must derive strictly through its own
+// Community -- never a stored/guessed Project on the Watcher Profile
+// itself (Watcher Profiles have no project_id column at all).
+
+test("REQUIRED: the SAME Watcher deployed under two DIFFERENT Projects -- two deployments, two slots, correct Project per deployment", async () => {
+  const projectB = { id: "proj-2", account_id: "acct-1", panel_id: null, name: "Thanos Wallet" };
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-1" }],
+    projects: [DASH_PROJECT, projectB],
+    virtual_moderators: [{ id: "m1", account_id: "acct-1", name: "Aegis" }],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "Community A1" },
+      { id: "c2", panel_id: null, project_id: "proj-2", platform: "telegram", chat_id: "-2002", title: "Community B1" },
+    ],
+  });
+
+  const d1 = await deployAccountWatcher(admin, "acct-1", "m1", "c1");
+  const d2 = await deployAccountWatcher(admin, "acct-1", "m1", "c2");
+  assert.equal(d1.ok, true);
+  assert.equal(d2.ok, true);
+  assert.notEqual((d1 as { ok: true; data: { id: string } }).data.id, (d2 as { ok: true; data: { id: string } }).data.id, "two genuinely separate deployment rows");
+
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.watcherProfileCount, 1, "still ONE reusable Watcher Profile");
+  assert.equal(capacity?.activeDeploymentCount, 2, "TWO independent deployments/slots -- one per Community, regardless of Project");
+
+  // Each deployment's Project derives strictly through ITS OWN Community --
+  // never a Watcher-Profile-level "remembered" Project.
+  const tenant1 = await resolveDeploymentTenant(admin, (d1 as { ok: true; data: { id: string } }).data.id);
+  const tenant2 = await resolveDeploymentTenant(admin, (d2 as { ok: true; data: { id: string } }).data.id);
+  assert.equal(tenant1?.projectId, "proj-1");
+  assert.equal(tenant2?.projectId, "proj-2");
+  assert.equal(tenant1?.moderatorId, "m1");
+  assert.equal(tenant2?.moderatorId, "m1", "the SAME reusable Watcher Profile in both -- never mutated into a one-Project-only object");
+  assert.equal(tenant1?.accountId, "acct-1");
+  assert.equal(tenant2?.accountId, "acct-1");
+});
+
+test("REQUIRED: connecting the SAME Telegram chat under a DIFFERENT Project than it's already connected to is rejected -- no silent Project reassignment", async () => {
+  const projectB = { id: "proj-2", account_id: "acct-1", panel_id: null, name: "Thanos Wallet" };
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-1" }],
+    projects: [DASH_PROJECT, projectB],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", title: "Community A1" }],
+  });
+  const res = await createAccountCommunity(admin, "acct-1", "proj-2", { platform: "telegram", chatId: "-1001" });
+  assert.equal(res.ok, false, "the same chat is already connected to Project A -- reconnecting it under Project B must never silently move it");
+});
+
+test("REQUIRED: a Community under Project A cannot be attached to Project B's account via cross-account deployment", async () => {
+  const otherAccountProject = { id: "proj-x", account_id: "acct-2", panel_id: null, name: "Someone Else's Project" };
+  const admin = fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [
+      { id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-1" },
+      { id: "e2", account_id: "acct-2", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-2" },
+    ],
+    projects: [DASH_PROJECT, otherAccountProject],
+    virtual_moderators: [{ id: "m1", account_id: "acct-1", name: "Aegis" }],
+    communities: [{ id: "c-x", panel_id: null, project_id: "proj-x", platform: "telegram", chat_id: "-9999", title: "Someone else's Community" }],
+  });
+  const res = await deployAccountWatcher(admin, "acct-1", "m1", "c-x");
+  assert.equal(res.ok, false, "acct-1's Watcher must never be deployable into a Community owned by acct-2's Project");
+});
+
 test("REQUIRED: TWO different Watchers in the SAME Community also consume two slots (profiles = 2, slots = 2)", async () => {
   const admin = fakeAdmin({
     products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],

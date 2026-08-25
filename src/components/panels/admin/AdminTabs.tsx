@@ -4154,7 +4154,7 @@ function ModeratorTabContent({ panelId, panelName }: { panelId: string; panelNam
 }
 
 const KNOWLEDGE_KIND_LABELS: Record<KnowledgeSourceKind, string> = {
-  overview: "Overview", faq: "FAQ", fact: "Fact", link: "Link", note: "Note",
+  overview: "Overview", faq: "FAQ", fact: "Fact", link: "Link", note: "Note", document: "Document",
 };
 
 /** Shared read-only render for a list of knowledge entries — used by all
