@@ -107,7 +107,7 @@ import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-mod
 import {
   getWatchMediaModerationUsage, incrementWatchMediaModerationUsage, hasMediaModerationUnitsRemaining,
 } from "@/src/lib/products/watch-media-moderation-usage";
-import { ENTERPRISE_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
+import { ENTERPRISE_MEDIA_ADDON, MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
 import { resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
 
 /**
@@ -1914,7 +1914,13 @@ async function runMediaModeration(
   accountId: string | null = null,
   paidTier: ModeratorPlanTier | null = null,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  enterpriseMediaAddon: { active: boolean; units: number } | null = null
+  // Renamed from enterpriseMediaAddon (2026-08-25) -- now also carries
+  // byo20's always-active BUNDLED 3,000-unit allowance (never a purchase,
+  // unlike the self-serve Media Moderation + add-on), resolved by the
+  // caller alongside the real Enterprise grant. This gating block's own
+  // logic needs zero changes either way -- it already does exactly the
+  // right thing for any always-active, non-purchase-gated allowance.
+  bundledMediaAddon: { active: boolean; units: number } | null = null
 ): Promise<{ handled: boolean }> {
   if (!virtualModMediaModeration(settings) || !deployments.length) return { handled: false };
 
@@ -1960,15 +1966,15 @@ async function runMediaModeration(
   // reclassified once the add-on is purchased/granted or the period rolls
   // over.
   let mediaUsagePeriod: Awaited<ReturnType<typeof resolveAccountBillingPeriod>> = null;
-  if (enterpriseMediaAddon) {
-    if (!enterpriseMediaAddon.active) {
+  if (bundledMediaAddon) {
+    if (!bundledMediaAddon.active) {
       await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_addon_required", { mediaKind: media.kind });
       return { handled: false };
     }
     mediaUsagePeriod = accountId ? await resolveAccountBillingPeriod(admin, accountId) : null;
     if (mediaUsagePeriod && accountId) {
       const used = await getWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod.start);
-      if (!hasMediaModerationUnitsRemaining(used, enterpriseMediaAddon.units)) {
+      if (!hasMediaModerationUnitsRemaining(used, bundledMediaAddon.units)) {
         await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_allowance_exhausted", { mediaKind: media.kind });
         return { handled: false };
       }
@@ -2093,7 +2099,7 @@ async function handleHumanMessage(
   accountId: string | null = null,
   paidTier: ModeratorPlanTier | null = null,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  enterpriseMediaAddon: { active: boolean; units: number } | null = null
+  bundledMediaAddon: { active: boolean; units: number } | null = null
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
@@ -2108,7 +2114,7 @@ async function handleHumanMessage(
   // (see watch-byo.ts's own scope note).
   const chatId = String(message.chat.id);
   const mediaModeration = await runMediaModeration(
-    admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier, aiRouting, enterpriseMediaAddon
+    admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier, aiRouting, bundledMediaAddon
   );
   timer.mark("media_moderation_check", { handled: mediaModeration.handled });
   if (mediaModeration.handled) return;
@@ -2790,8 +2796,12 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // isn't consumption-enforced anywhere yet), not a regression introduced
     // by this fix.
     const accountId = integration.panel_id ? null : await resolveWatcherAccountId(admin, integration.virtual_moderator_id);
+    // byo20 (2026-08-25) is excluded here too, for the exact same reason as
+    // Enterprise -- it always routes through the customer's own AI
+    // provider credential (never Innvil's), so it must never consume or be
+    // capped against this self-serve Innvil-Managed pool at all.
     const paidTier: ModeratorPlanTier | null =
-      !integration.panel_id && entitlementSource && entitlementSource !== "trial" && entitlementSource !== "enterprise" ? entitlementSource : null;
+      !integration.panel_id && entitlementSource && entitlementSource !== "trial" && entitlementSource !== "enterprise" && entitlementSource !== "byo20" ? entitlementSource : null;
     // BYO Enterprise (Phase 2, 2026-08-24) -- resolved ONCE per message,
     // gated on entitlementSource === "enterprise" so a self-serve/trial
     // account (the overwhelming majority of traffic) never pays for the
@@ -2805,7 +2815,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // yet at this point; respondAsDeployment re-checks the deployment-scoped
     // ceiling once it knows which Watcher is actually about to generate
     // (applyDeploymentUsagePolicy, Phase 4.V.1 item 2).
-    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, null, "reactive");
+    const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, null, "reactive", entitlementSource === "byo20");
     // Enterprise Media Moderation + (migration 0097) -- same gating shape:
     // a real, explicit grant, resolved once here, only for an Enterprise
     // account (the self-serve tiers' own add-on is resolved separately,
@@ -2818,11 +2828,18 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // resolver the Usage page reads, so consumption enforcement and display
     // can never disagree about which package's allowance applies).
     const enterpriseEntitlement = entitlementSource === "enterprise" && accountId ? await resolveAccountEnterpriseEntitlement(admin, accountId) : null;
-    const enterpriseMediaAddon: { active: boolean; units: number } | null = enterpriseEntitlement
+    // byo20's 3,000 units are ALWAYS active/bundled (never a purchase, and
+    // never gated on entitlementSource === "enterprise") -- resolved here
+    // alongside the real Enterprise grant so both flow through the SAME
+    // "always-active allowance" shape into runMediaModeration, which needs
+    // zero changes to its own gating logic either way.
+    const bundledMediaAddon: { active: boolean; units: number } | null = enterpriseEntitlement
       ? { active: enterpriseEntitlement.mediaAddonActive, units: ENTERPRISE_MEDIA_ADDON[resolveEnterpriseMediaAddonKey(enterpriseEntitlement.apiSourceMode, enterpriseEntitlement.slots)].units }
-      : null;
+      : entitlementSource === "byo20" && accountId
+        ? { active: true, units: MODERATOR_MEDIA_ADDON.byo20.units }
+        : null;
     await handleHumanMessage(
-      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, enterpriseMediaAddon
+      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, bundledMediaAddon
     );
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;

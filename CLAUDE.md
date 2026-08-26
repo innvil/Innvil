@@ -127,6 +127,133 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — New self-serve tier: BYO 20 ($199.99/mo), Platinum cut to $149.99 (v1.47.69)
+- **New 5th self-serve Watch tier — "BYO 20"** — self-serve, checkout-purchasable (unlike Enterprise's
+  manual/devops-only BYO tiers), $199.99/mo, always requires the customer's own AI provider credential (never
+  falls back to Innvil's key), 20 Watcher slots, **10 Communities fixed with no expansion path at all** (the
+  first self-serve tier structurally excluded from Community Expansion by design, not by accident), and
+  **3,000 Media Moderation units bundled into the base price** — never a separate purchase, unlike every other
+  tier's optional Media Moderation + add-on. Same Innvil Credit (5% monthly) / annual (10% Credit / 5% direct)
+  discount treatment as Silver/Gold/Platinum. Marketed as the flagship best-value tier: a real "Best value" pill
+  + teal border on its plan card, and a plain-stated "includes everything" positioning (20 slots, 10
+  Communities, 3,000 Media Moderation units, all bundled) — since BYO shifts AI compute cost off Innvil's own
+  books, it can bundle more included capacity for a similar-or-higher self-serve price than Managed Platinum.
+- **Alongside it, Platinum drops from $199.00 to $149.99/mo** — the Gold→Platinum price jump was too large
+  ($99.99 → $199.00), and the cut also makes BYO 20 read as "pay a bit more, get more, bring your own AI"
+  rather than cannibalizing Platinum. Silver/Gold ($59.99/$99.99) and Bronze ($29.99) are unchanged. Since
+  `moderatorEnterpriseSlotPrice()` (the Enterprise CUSTOM-quote-above-50-slots formula) derives its base
+  directly from `MODERATOR_PRO_PRICE`, its own worked examples shifted too — 50 slots: $649.00 → **$599.99**;
+  75 slots: $974.00 → **$924.99** (the FIXED $399/$299/$499 Managed/BYO 50/BYO Unlimited Enterprise packages
+  are flat constants, never derived from this formula, and are completely unaffected).
+- **Architecture decision, made explicitly rather than defaulted to**: investigated the alternative of a
+  separate parallel entitlement source (mirroring how `"enterprise"`/`"trial"` sit OUTSIDE `ModeratorPlanTier`
+  in `ModeratorEntitlementSource`) before choosing to make `byo20` a genuine **5th literal value of
+  `ModeratorPlanTier`** instead (`"basic" | "standard" | "premium" | "pro" | "byo20"`). Enterprise/Trial are
+  separate specifically because neither has a self-serve checkout and neither flows through
+  `watchPlanOptions()`/`createDirectWatchCheckout`/`purchaseWatchWithCredit`/`BillingPlanPicker.tsx` — BYO 20 is
+  the opposite, it genuinely IS a self-serve checkout tier, just with different downstream characteristics once
+  active. Making it a 5th tier literal means it reuses ALL existing self-serve machinery (checkout, renewal,
+  plan-switch, billing period, capacity display) for free, and TypeScript's own exhaustiveness checking on
+  every `Record<ModeratorPlanTier, X>` map in `money.ts` forced an explicit, compile-time-verified decision for
+  byo20 at every single one of those maps — caught several real spots this way, including
+  `AiModeratorSurface.tsx`'s legacy Panel-reseller tier-label map (added a type-completeness entry there,
+  confirmed the separate render array structurally never actually offers it through that legacy channel).
+- **Pricing/capacity foundation (`money.ts`)**: `MODERATOR_PRO_PRICE = 149.99` (was `199.0`); new
+  `MODERATOR_BYO20_PRICE = 199.99` wired into `moderatorPlanPrice()`;
+  `MODERATOR_COMMUNITY_CAPACITY.byo20 = { included: 10, maxWithAddons: 10 }` (hard-capped, `included ===
+  maxWithAddons` — the same existing convention Bronze/Silver already use for "no expansion possible");
+  `COMMUNITY_EXPANSION_ELIGIBLE_TIERS` deliberately left `["premium", "pro"]` unchanged — NOT adding byo20 is
+  exactly what excludes it from Community Expansion both in the UI (`isCommunityExpansionEligibleTier`) and at
+  compile time; `MODERATOR_AI_GENERATION_POOL.byo20 = 0` (N/A by design — byo20 always routes through the
+  customer's own credential, so `paidTier` is forced to `null` for it the same way it already is for
+  Enterprise, and this value is a required-by-the-type placeholder, never actually read);
+  `MODERATOR_MEDIA_ADDON.byo20 = { price: 0, units: 3000 }` (`price: 0` documents "already bundled, never
+  separately charged"). `src/lib/moderator/plan.ts`: `CAPACITY.byo20 = { maxCommunities: 10, maxActiveSlots:
+  20 }`. `watch-plans.ts`: `presenceSchedulingEligible`/`autoPostingEligible` both gained `tier === "byo20"` —
+  a flagship tier gets every self-serve capability Platinum gets.
+- **Entitlement parsing** (`watch-runtime.ts`): `parseEntitlementTier()` gained the `"byo20"` literal check, so
+  `resolveAccountWatchTier`/`getAccountPaidPlan` recognize it from `subscription_ref` the same way every other
+  self-serve tier already does.
+- **Checkout/billing** (`watch-plans.ts`, `innvil-credit-pricing.ts`): `WatchPlanDisplayName` gained `"BYO 20"`;
+  `TIER_TO_DISPLAY.byo20 = "BYO 20"`; `DISPLAY_TO_TIER["BYO 20"] = "byo20"`; `watchPlanOptions()`'s `tiers` array
+  gained `"byo20"` at the end, so it renders as a genuine 5th card via the SAME existing `.map()` loop in
+  `BillingPlanPicker.tsx` — no new render path. `createDirectWatchCheckout`/`purchaseWatchWithCredit` needed
+  ZERO code changes — both already resolve price via `watchPlanOptions().find(...)`/`moderatorPlanPrice(tier)`,
+  and the existing tier-change guard (blocks a plan switch when current Community count exceeds the new tier's
+  `CAPACITY[tier].maxCommunities`) already works correctly for byo20's fixed 10-Community cap for free.
+  `INNVIL_CREDIT_DISCOUNT.byo20 = 0.05` (same 5% as Silver/Gold/Platinum); `ANNUAL_ELIGIBLE_TIERS` gained
+  `"byo20"`.
+- **AI routing invariant** (`resolveAccountAiRouting`, `watch-runtime.ts`) — widened additively with a new
+  optional 7th parameter, `isByo20 = false` (every existing call site/test unaffected by the default). Inside:
+  when `isByo20` is true, the function skips the Enterprise-entitlement-table lookup entirely (byo20 is BYO by
+  TIER DEFINITION, never by a checked `apiSourceMode` column on an Enterprise-shaped row) and goes straight to
+  credential resolution via `getAccountByoCredential`/`checkByoUsageAllowed` — reusing the SAME
+  `watch_byo_provider_credentials` table (already `account_id`-primary-keyed, one credential per account, zero
+  schema change needed). Both real call sites (`community-runtime.ts`, `presence-runtime.ts`) updated to pass
+  `entitlementSource === "byo20"` as the new argument. The `paidTier` derivation right above the
+  `community-runtime.ts` call site (which already excludes `"trial"`/`"enterprise"` from the self-serve
+  AI-Generations-pool gate) now also excludes `"byo20"` — mirroring the exact same "this tier has its own
+  separate/no pool, gating it here would incorrectly cap it against a pool it never consumes" reasoning already
+  documented for Enterprise.
+- **Media Moderation bundling** (`community-runtime.ts`) — rather than adding a third branch to
+  `runMediaModeration`'s existing two-branch gate (Enterprise-media-addon / self-serve-purchased-addon), the
+  FIRST branch's resolved input (`bundledMediaAddon`, renamed from the Enterprise-only `enterpriseMediaAddon`
+  for clarity since it's no longer Enterprise-exclusive) was extended at the `handleCommunityUpdate` call site
+  to also cover byo20's always-active, always-3,000-unit allowance:
+  `enterpriseEntitlement ? {...} : entitlementSource === "byo20" && accountId ? { active: true, units:
+  MODERATOR_MEDIA_ADDON.byo20.units } : null`. The gating block's existing logic (checks `.active`, tracks usage
+  via the same `watch_media_moderation_usage`/`resolveAccountBillingPeriod` pipeline) needed ZERO changes — it
+  already does exactly the right thing for a bundled, always-active allowance. `getAccountCapacity()` never
+  queries `watch_subscription_addons` for byo20's media-moderation state at all (bundled, never purchased) —
+  `mediaModerationAddonActive`/`mediaModerationUnitAllowance` are both derived directly from the canonical
+  `MODERATOR_MEDIA_ADDON.byo20` constant instead, so a stray purchase-addon row for the account (which can't
+  realistically exist for this tier, but is defensively tested) is never even read.
+- **Self-serve BYO credential UX** (`watch-byo-settings.ts`, `app/settings/page.tsx`) — `requireByoEnterprise()`
+  renamed/widened to `requireByoAccount()`, now accepting EITHER a real BYO-flagged Enterprise entitlement OR
+  `resolveAccountWatchTier(...) === "byo20"`; `app/settings/page.tsx`'s `isByoAccount` gate widened the same
+  way, reusing the EXACT SAME `ByoCredentialSettingsCard`/"AI Provider" Settings tab unchanged — a byo20
+  subscriber manages their own credential without emailing support, from day one of the tier's existence.
+  New **HIGH-severity "Needs Attention" item** for `capacity.tier === "byo20" && !capacity.hasByoCredential` —
+  `id: "byo20-credential-missing"`, linking to `/settings?section=ai-provider` — reusing the existing
+  `listAccountAttentionItems()` worklist pattern rather than a bespoke banner component, so a byo20 purchase
+  with no credential yet configured surfaces exactly where every other real operational gap already does.
+- **Display/marketing** (`BillingPlanPicker.tsx`) — a real "Best value" pill + teal-bordered card for byo20; its
+  AI Generations row shows "Your own AI provider" + an inline note ("Requires your own AI provider credential
+  (Anthropic or OpenAI-compatible) — add it in Settings after subscribing.") instead of a numeric pool value;
+  its Media Moderation block is a plain "Included" statement (bundled, no CTA, no purchase control) rather than
+  the other 4 tiers' optional-add-on card — `MediaModerationAddonCard` is structurally never rendered for
+  byo20, confirmed via a dedicated ternary at its one mount site. The Community-Expansion upsell block needed
+  no explicit byo20 guard at all — `expandable = communitiesMax > communitiesIncluded` is naturally `false` for
+  byo20 (both are 10), so it's excluded by the same existing condition every other non-expandable tier already
+  relies on.
+- **`watchAccessLabel`** needed no new branch either — a `byo20` tier falls through its existing
+  `watchPlanDisplayName(tier)` fallback, which already resolves correctly via the new `TIER_TO_DISPLAY` entry.
+- New tests: `money.test.ts` (+6 — BYO 20's fixed 10-Community hard cap, Community-Expansion-ineligibility,
+  the bundled 3,000-unit media allowance at zero incremental price, the N/A-by-design AI-Generations-pool
+  value, plus the repriced canonical-price/Enterprise-custom-quote assertions), `plan.test.ts` (+1 —
+  `CAPACITY.byo20` matches the canonical 20-slot/10-community table exactly), `watch-plans.test.ts` (updated —
+  `watchPlanOptions`/plan-entitlement/Community-expansion-ceiling assertions now cover all 5 tiers, byo20
+  correctly last/most-expensive with a fixed non-expandable Community cap), `watch-onboarding.test.ts`
+  (updated — `watchPlanCapacityTable` now asserts 5 tiers), `innvil-credit-pricing.test.ts` (updated — every
+  Platinum-derived credit/annual-credit/annual-direct price recalculated off the new $149.99 base;
+  `ANNUAL_ELIGIBLE_TIERS` now asserts 5 tiers including byo20), `innvil-credit.test.ts` (updated — 3
+  plan-change/renewal tests recalculated for Platinum's new $142.49 credit price), `watch-runtime.test.ts`
+  (+11 — `resolveAccountAiRouting`'s new `isByo20` branch incl. never touching the Enterprise-table check path
+  and never being fooled by a stray non-`"byo"` `api_source_mode` value on the same row, plus a full
+  `getAccountCapacity` coverage block: the bundled media allowance always active regardless of any stray
+  purchase-addon row, the fixed 20-slot/10-community capacity, Community-Expansion structurally excluded even
+  with a stray active expansion-addon row, and `apiSourceMode`/`hasByoCredential` resolving correctly with and
+  without a stored credential). 1769 tests pass (up from 1755), `tsc --noEmit` clean, production build clean.
+- **Verification review performed, per the approved plan's own explicit checklist**: confirmed `byo20` never
+  appears in `COMMUNITY_EXPANSION_ELIGIBLE_TIERS` (still exactly `["premium", "pro"]`); confirmed `paidTier`
+  and `resolveAccountAiRouting`'s `isByo20` argument both correctly exclude/include byo20 at their exact
+  `community-runtime.ts` call sites (grepped both); confirmed the decrypted BYO credential is never logged
+  anywhere (`watch-byo.ts`'s one error log includes only `accountId`/`error.message`, never the key material);
+  confirmed `MediaModerationAddonCard` is structurally excluded from ever rendering for byo20 at its one mount
+  site; confirmed the Enterprise custom-quote formula's new worked examples ($599.99/$924.99 at 50/75 slots)
+  are correct and directly tested.
+- **Not deployed automatically, per standing instruction.**
+
 ### 2026-08-25 — New Watch landing hero + 10 prioritized blog topics queued (v1.47.68)
 - **Landing hero copy**: `WatchLanding.tsx`'s H1 changed from "AI Virtual Moderators for your Communities." to
   **"AI Watchers for Telegram — moderation that actually talks."** — picked from a set of headline options as

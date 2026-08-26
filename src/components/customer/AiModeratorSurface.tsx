@@ -222,7 +222,12 @@ function ModeratorTelegramCard({ panelId, moderator, onChanged }: { panelId: str
   );
 }
 
-const TIER_LABELS: Record<ModeratorPlanTier, string> = { basic: "Basic", standard: "Standard", premium: "Premium", pro: "Pro" };
+// byo20 (2026-08-25) is a standalone-Watch-only self-serve tier -- it is
+// deliberately NEVER added to the `TIERS` array below, so it can never be
+// offered/purchased through this legacy Panel-distributed reseller
+// surface. This entry exists only because Record<ModeratorPlanTier, string>
+// requires one; it is never actually looked up in practice.
+const TIER_LABELS: Record<ModeratorPlanTier, string> = { basic: "Basic", standard: "Standard", premium: "Premium", pro: "Pro", byo20: "BYO 20" };
 
 // Derived from the canonical source (money.ts + moderator/plan.ts) rather than
 // duplicated literals -- a pricing/capacity change only has to happen there.

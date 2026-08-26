@@ -183,6 +183,7 @@ export const CAPACITY: Record<ModeratorPlanTier, ModeratorCapacity> = {
   standard: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.standard.included, maxActiveSlots: 5 },
   premium: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.premium.included, maxActiveSlots: 10 },
   pro: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.pro.included, maxActiveSlots: 20 },
+  byo20: { maxCommunities: MODERATOR_COMMUNITY_CAPACITY.byo20.included, maxActiveSlots: 20 },
 };
 
 /** §37/§50: trial capacity is fixed and separate from any paid tier's table. */

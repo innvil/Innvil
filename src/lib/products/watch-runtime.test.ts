@@ -20,6 +20,7 @@ import {
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration } from "@/src/lib/moderator/plan";
+import { MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 
 /**
  * Proves the CRITICAL INTEGRATION scenario end to end: an account with a
@@ -1580,6 +1581,65 @@ test("trial and enterprise never report an active Media Moderation + add-on, eve
   assert.equal(trialCapacity?.mediaModerationUnitAllowance, null);
 });
 
+/* -------------------------------------------- BYO 20 self-serve tier (2026-08-26) ---- */
+// The 5th self-serve tier -- always BYO, fixed 10-Community cap (no
+// expansion), and a bundled (never purchased) 3,000-unit Media Moderation
+// allowance. getAccountCapacity must never query watch_subscription_addons
+// for it (bundled, not purchased) and must never surface a fabricated
+// Community Expansion offer.
+
+const ENTITLED_BYO20_CAP = { id: "e-byo20-cap", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "byo20:dep-1" };
+
+test("REQUIRED: a byo20 account's Media Moderation allowance is ALWAYS active with the real bundled 3,000-unit allowance -- no purchase, no add-on row needed", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.tier, "byo20");
+  assert.equal(capacity?.mediaModerationAddonActive, true);
+  assert.equal(capacity?.mediaModerationUnitAllowance, MODERATOR_MEDIA_ADDON.byo20.units);
+  assert.equal(capacity?.mediaModerationUnitAllowance, 3000);
+});
+
+test("REQUIRED: a stray active Media Moderation purchase row is irrelevant for byo20 -- its allowance is never sourced from watch_subscription_addons", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP],
+    watch_subscription_addons: [{ id: "stray", account_id: "acct-1", addon_type: "media_moderation", status: "active", cancel_at_period_end: false }],
+  });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.mediaModerationAddonActive, true);
+  assert.equal(capacity?.mediaModerationUnitAllowance, 3000, "still the fixed bundled allowance, not the addon row's own units");
+});
+
+test("REQUIRED: byo20's real fixed 20-slot / 10-community capacity, never Community-Expansion-eligible", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.slotsTotal, 20);
+  assert.equal(capacity?.communitiesTotal, 10);
+  assert.equal(capacity?.communityExpansionEligible, false);
+  assert.equal(capacity?.communityExpansionActive, false);
+});
+
+test("REQUIRED: byo20's apiSourceMode always reports 'byo', and hasByoCredential reflects a real stored credential", async () => {
+  const withoutCred = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP] }), "acct-1");
+  assert.equal(withoutCred?.apiSourceMode, "byo");
+  assert.equal(withoutCred?.hasByoCredential, false);
+  const withCred = await getAccountCapacity(
+    fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP], watch_byo_provider_credentials: [{ account_id: "acct-1", provider: "anthropic", _plainKey: "sk-key", base_url: null, model: "claude-sonnet-5" }] }),
+    "acct-1",
+  );
+  assert.equal(withCred?.apiSourceMode, "byo");
+  assert.equal(withCred?.hasByoCredential, true);
+});
+
+test("a Community Expansion add-on row is never resolved as active for byo20, even if one somehow existed", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP],
+    watch_subscription_addons: [{ id: "stray-exp", account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+  });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, false, "byo20 is structurally excluded from Community Expansion eligibility");
+  assert.equal(capacity?.communitiesTotal, 10, "the fixed cap is never expanded past 10 for byo20");
+});
+
 /* ---------------------------------- fresh zero-Panel account -- shell fixture ---- */
 // REQUIRED (standalone-Watch-access fix): "Account A" from the report --
 // authenticated, zero Panels, zero Projects, zero Communities, zero
@@ -1800,6 +1860,45 @@ test("a different account's stored BYO credential is never resolved for this acc
   const routing = await resolveAccountAiRouting(admin, "acct-1", true);
   assert.equal(routing.required, true);
   assert.equal(routing.credential, null, "acct-1 never sees acct-2's stored credential");
+});
+
+/* ------------------------------------------ BYO 20 self-serve tier: AI routing ---- */
+// BYO 20 is BYO by TIER DEFINITION, never by a checked Enterprise entitlement
+// row -- resolveAccountAiRouting's isByo20 branch skips the enterprise-table
+// lookup entirely and goes straight to credential resolution.
+
+const ENTITLED_BYO20 = { id: "e-byo20", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "byo20:dep-1" };
+
+test("REQUIRED: resolveAccountAiRouting requires BYO for a byo20 account even with isEnterprise:false -- it's BYO by tier definition, not by an Enterprise apiSourceMode row", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20], watch_byo_provider_credentials: [BYO_CRED_ROW] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", false, null, null, "reactive", true);
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential?.apiKey, "sk-real-byo-key");
+});
+
+test("REQUIRED: a byo20 account with no stored credential resolves required:true with a null credential -- never falls back to Innvil's own key", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", false, null, null, "reactive", true);
+  assert.equal(routing.required, true);
+  assert.equal(routing.credential, null);
+});
+
+test("isByo20 defaults to false -- a plain self-serve account is never treated as BYO by accident", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD] });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", false);
+  assert.equal(routing.required, false);
+  assert.equal(routing.credential, null);
+});
+
+test("a byo20 account with an api_source_mode of 'managed' (irrelevant to this tier) still correctly requires BYO -- the isByo20 flag alone decides, never an Enterprise-only column on the same row", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW],
+    product_entitlements: [{ ...ENTITLED_BYO20, api_source_mode: "managed" }],
+    watch_byo_provider_credentials: [BYO_CRED_ROW],
+  });
+  const routing = await resolveAccountAiRouting(admin, "acct-1", false, null, null, "reactive", true);
+  assert.equal(routing.required, true, "byo20 requires BYO by tier definition, regardless of any stray api_source_mode value");
+  assert.equal(routing.credential?.provider, "anthropic");
 });
 
 /* -------------- resolveAccountAiRouting + BYO usage POLICY (Phase 4.V) ---- */

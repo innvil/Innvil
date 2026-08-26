@@ -54,7 +54,12 @@ export default async function UsagePage() {
   // deliberately excluded from THIS pool too -- BYO's own AI provider spend
   // isn't Innvil's pool to meter; see the real call/outcome telemetry
   // (getByoUsageSummary) below instead.
-  const paidTier: ModeratorPlanTier | null = capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" ? capacity.tier : null;
+  // byo20 is excluded here for the same reason BYO Enterprise already is
+  // (see isEnterprise below) -- it never consumes Innvil's pooled AI
+  // Generations at all, since it always routes through the customer's own
+  // AI provider credential.
+  const paidTier: ModeratorPlanTier | null =
+    capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" && capacity.tier !== "byo20" ? capacity.tier : null;
   const isEnterprise = capacity?.tier === "enterprise" && capacity.apiSourceMode !== "byo";
   const aiUsageLimit = paidTier ? aiGenerationPoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
   const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiGenerationUsage(admin, accountId, aiPeriod.start) : null;

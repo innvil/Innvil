@@ -457,7 +457,7 @@ test("a renewal of a DIFFERENT tier (plan change) does not fold in the add-on pr
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 18905, "only Platinum's own credit price -- no addon fold on a tier change");
+  assert.equal(result.balanceCents, 100000 - 14249, "only Platinum's own credit price -- no addon fold on a tier change");
 });
 
 test("REQUIRED (renewal): a removal-pending add-on is NOT charged on the next renewal, and is finalized (removed) by it", async () => {
@@ -543,7 +543,7 @@ test("REQUIRED (plan change): Gold+expansion -> Platinum finalizes (removes) the
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 18905, "only Platinum's own base price -- the Gold-priced add-on is never carried over/re-charged");
+  assert.equal(result.balanceCents, 100000 - 14249, "only Platinum's own base price -- the Gold-priced add-on is never carried over/re-charged");
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communityExpansionActive, false, "the add-on must be finalized (removed) on the tier change");
   assert.equal(capacity?.communitiesTotal, 5, "Platinum's own included cap -- no expansion carried over");
@@ -606,7 +606,7 @@ test("a plan change with NO active add-on at all is completely unaffected by any
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 18905);
+  assert.equal(result.balanceCents, 100000 - 14249);
 });
 
 test("REQUIRED: un-cancelling a removal-pending add-on via a fresh purchase call never re-charges the customer", async () => {

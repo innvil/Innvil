@@ -2,7 +2,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ModeratorPlanTier } from "@/src/lib/money";
-import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier } from "@/src/lib/money";
+import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 import { validateEnterpriseCommunityCapacity, getEnterpriseIncludedCommunities } from "./watch-enterprise-community";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
 import { hasActiveCommunityExpansion } from "./watch-community-expansion";
@@ -67,7 +67,7 @@ export type AccountWatchContextResult = AccountWatchContext | { ok: false; error
 
 function parseEntitlementTier(subscriptionRef: string | null): ModeratorPlanTier | null {
   const tier = (subscriptionRef ?? "").split(":")[0];
-  if (tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro") return tier;
+  if (tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro" || tier === "byo20") return tier;
   return null;
 }
 
@@ -253,13 +253,25 @@ export const MANAGED_AI_ROUTING: AccountAiRouting = { required: false, credentia
  *  scheduler-driven generation (Watcher Presence Scheduling's transition
  *  messages, presence-runtime.ts -- the only real proactive BYO call site
  *  today). The two ceilings are fully independent -- an exhausted reactive
- *  policy never blocks a proactive call, and vice versa. */
+ *  policy never blocks a proactive call, and vice versa.
+ *
+ *  `isByo20` (2026-08-25, default false -- every pre-existing caller/test
+ *  unaffected) covers the NEW self-serve BYO 20 tier, which is BYO by tier
+ *  definition -- unlike Enterprise, there's no separate entitlement-table
+ *  flag to check (`resolveAccountEnterpriseEntitlement` reads Enterprise-
+ *  only fields a byo20 account's plain self-serve entitlement row never
+ *  has), so this skips straight to the credential/usage-policy checks
+ *  below, which are identical either way (same `watch_byo_provider_
+ *  credentials` table, same `checkByoUsageAllowed`, never a second BYO
+ *  mechanism). */
 export async function resolveAccountAiRouting(
-  admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null, deploymentId: string | null = null, kind: UsagePolicyKind = "reactive"
+  admin: SupabaseClient, accountId: string | null, isEnterprise: boolean, communityId: string | null = null, deploymentId: string | null = null, kind: UsagePolicyKind = "reactive", isByo20 = false
 ): Promise<AccountAiRouting> {
-  if (!accountId || !isEnterprise) return MANAGED_AI_ROUTING;
-  const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
-  if (!enterprise || enterprise.apiSourceMode !== "byo") return MANAGED_AI_ROUTING;
+  if (!accountId || (!isEnterprise && !isByo20)) return MANAGED_AI_ROUTING;
+  if (!isByo20) {
+    const enterprise = await resolveAccountEnterpriseEntitlement(admin, accountId);
+    if (!enterprise || enterprise.apiSourceMode !== "byo") return MANAGED_AI_ROUTING;
+  }
   const credential = await getAccountByoCredential(admin, accountId);
   if (!credential) return { required: true, credential: null };
   const usage = await checkByoUsageAllowed(admin, accountId, communityId, deploymentId, kind);
@@ -952,12 +964,16 @@ export interface AccountCapacity {
   /** The real unit allowance while the add-on is active, else null -- never
    *  a fabricated number for an inactive/ineligible account. */
   mediaModerationUnitAllowance: number | null;
-  /** "managed" | "byo" only when tier === "enterprise" -- null for every
-   *  other tier (there's no Managed/BYO distinction outside Enterprise). */
+  /** "managed" | "byo" for tier === "enterprise" (the account's real
+   *  provisioned mode); always "byo" for tier === "byo20" (BYO by tier
+   *  definition, no Managed/BYO choice); null for every other tier (there's
+   *  no Managed/BYO distinction outside Enterprise/byo20). */
   apiSourceMode: "managed" | "byo" | null;
   /** True only when a BYO credential is actually stored -- independent of
    *  apiSourceMode (an admin may flag an account "byo" before a credential
-   *  is ever stored, a real, representable, and honestly-surfaced state). */
+   *  is ever stored, a real, representable, and honestly-surfaced state;
+   *  a byo20 account is real and purchased but simply hasn't configured
+   *  its credential yet). */
   hasByoCredential: boolean;
   /** The REAL provisioned Enterprise slot ceiling -- `null` for BYO
    *  Unlimited (a genuine, meaningful value, matches `slotsTotal ===
@@ -992,17 +1008,23 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     // know it's "enterprise", but not the real period/billing-interval/
     // apiSourceMode detail, which only this richer resolver carries.
     ctx.tier === "enterprise" ? resolveAccountEnterpriseEntitlement(admin, accountId) : Promise.resolve(null),
-    // All 4 self-serve tiers are Media Moderation + eligible (no tier
-    // restriction, unlike Community Expansion) -- never queried for
-    // trial/enterprise, neither of which has a representable self-serve
-    // add-on row for this addon_type. (Inline narrow, not `isSelfServeTier`
-    // -- TS can't narrow ctx.tier through a separately-stored boolean.)
-    ctx.tier !== "trial" && ctx.tier !== "enterprise" ? getMediaModerationAddonState(admin, accountId, ctx.tier) : Promise.resolve(null),
+    // All 4 Managed self-serve tiers are Media Moderation + eligible (no
+    // tier restriction, unlike Community Expansion) -- never queried for
+    // trial/enterprise (neither has a representable self-serve add-on row)
+    // NOR byo20 (whose 3,000 units are always bundled/active, never a
+    // purchased row -- see the direct assignment below instead). (Inline
+    // narrow, not `isSelfServeTier` -- TS can't narrow ctx.tier through a
+    // separately-stored boolean.)
+    ctx.tier !== "trial" && ctx.tier !== "enterprise" && ctx.tier !== "byo20" ? getMediaModerationAddonState(admin, accountId, ctx.tier) : Promise.resolve(null),
   ]);
-  // A second, cheap existence-only query -- gated on the enterprise value
-  // already fetched above, so a Managed Enterprise (or non-Enterprise)
-  // account never pays for it.
-  const byoCredentialStored = ctx.tier === "enterprise" && enterprise?.apiSourceMode === "byo" ? await hasByoCredential(admin, accountId) : false;
+  // A second, cheap existence-only query -- gated on either BYO path
+  // already resolved above (Enterprise-BYO, or the byo20 tier itself,
+  // which is BYO by definition) -- a Managed/non-BYO account never pays
+  // for it.
+  const byoCredentialStored =
+    (ctx.tier === "enterprise" && enterprise?.apiSourceMode === "byo") || ctx.tier === "byo20"
+      ? await hasByoCredential(admin, accountId)
+      : false;
   // Community Expansion is a self-serve Gold/Platinum add-on ONLY --
   // structurally excluded for both trial and enterprise (isCommunity
   // ExpansionEligibleTier only accepts a real ModeratorPlanTier, so this
@@ -1029,9 +1051,13 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     communitiesTotal: ctx.maxCommunities,
     communityExpansionActive,
     communityExpansionEligible: eligible,
-    mediaModerationAddonActive: mediaAddon != null,
-    mediaModerationUnitAllowance: mediaAddon?.units ?? null,
-    apiSourceMode: ctx.tier === "enterprise" ? (enterprise?.apiSourceMode ?? "managed") : null,
+    // byo20's Media Moderation is always-active/bundled (never a purchase)
+    // -- reported directly from the canonical allowance table rather than
+    // the purchased-addon state (which is never queried for this tier, see
+    // above).
+    mediaModerationAddonActive: ctx.tier === "byo20" ? true : mediaAddon != null,
+    mediaModerationUnitAllowance: ctx.tier === "byo20" ? MODERATOR_MEDIA_ADDON.byo20.units : (mediaAddon?.units ?? null),
+    apiSourceMode: ctx.tier === "enterprise" ? (enterprise?.apiSourceMode ?? "managed") : ctx.tier === "byo20" ? "byo" : null,
     hasByoCredential: byoCredentialStored,
     enterpriseSlots: ctx.tier === "enterprise" ? (enterprise?.slots ?? null) : null,
     enterpriseMediaAddonActive: ctx.tier === "enterprise" && (enterprise?.mediaAddonActive ?? false),
@@ -1433,6 +1459,20 @@ export async function listAccountAttentionItems(admin: SupabaseClient, accountId
   }
 
   if (capacity) {
+    // byo20 (2026-08-25) always requires the customer's OWN AI provider
+    // credential to actually respond -- a real, purchased, but not-yet-
+    // usable account is exactly a HIGH-severity condition (nothing is
+    // moderating/chatting, same urgency as a Community with no active
+    // Watcher above), never a silent "just doesn't work yet".
+    if (capacity.tier === "byo20" && !capacity.hasByoCredential) {
+      items.push({
+        id: "byo20-credential-missing",
+        severity: "high",
+        text: "Add your AI provider credential to activate your Watchers",
+        href: "/settings?section=ai-provider",
+        actionLabel: "Add credential",
+      });
+    }
     if (capacityExceedsLimit(capacity.activeDeploymentCount, capacity.slotsTotal)) {
       items.push({
         id: "capacity-watchers",

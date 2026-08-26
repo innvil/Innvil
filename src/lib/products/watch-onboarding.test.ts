@@ -27,9 +27,9 @@ test("REQUIRED: watchPlanCapacityTable's community counts match MODERATOR_COMMUN
   }
 });
 
-test("watchPlanCapacityTable has exactly the 4 self-serve tiers, Bronze through Platinum, ascending price", () => {
+test("watchPlanCapacityTable has exactly the 5 self-serve tiers, Bronze through BYO 20, ascending price", () => {
   const table = watchPlanCapacityTable();
-  assert.deepEqual(table.map((t) => t.displayName), ["Bronze", "Silver", "Gold", "Platinum"]);
+  assert.deepEqual(table.map((t) => t.displayName), ["Bronze", "Silver", "Gold", "Platinum", "BYO 20"]);
   for (let i = 1; i < table.length; i++) assert.ok(table[i].price > table[i - 1].price);
 });
 

@@ -14,13 +14,14 @@
 
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
-/** Bronze gets no Innvil Credit discount; Silver/Gold/Platinum get 5% off
- *  when paying with Innvil Credit instead of a direct crypto payment. */
+/** Bronze gets no Innvil Credit discount; Silver/Gold/Platinum/BYO 20 get 5%
+ *  off when paying with Innvil Credit instead of a direct crypto payment. */
 export const INNVIL_CREDIT_DISCOUNT: Record<ModeratorPlanTier, number> = {
   basic: 0,
   standard: 0.05,
   premium: 0.05,
   pro: 0.05,
+  byo20: 0.05,
 };
 
 /** Converts a canonical USD plan price into integer cents -- the ONE place
@@ -64,7 +65,7 @@ export const ANNUAL_CREDIT_DISCOUNT_BPS = 1000; // 10%, basis points (avoids a b
  *  discount is 0%, but annual still applies the 10% annual discount
  *  (explicit, intentional per product decision: the two discounts are
  *  independent commercial rules, not "annual = monthly discount + more"). */
-export const ANNUAL_ELIGIBLE_TIERS: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro"];
+export const ANNUAL_ELIGIBLE_TIERS: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro", "byo20"];
 
 function annualBaseCents(monthlyRegularPriceUsd: number): number {
   return toCents(monthlyRegularPriceUsd) * 12;

@@ -39,10 +39,10 @@ test("watchPlanOptions reads live prices straight from money.ts, never a hardcod
   }
 });
 
-test("watchPlanOptions returns exactly the 4 self-serve tiers, in ascending order, Enterprise excluded", () => {
+test("watchPlanOptions returns exactly the 5 self-serve tiers, in ascending order, Enterprise excluded", () => {
   const options = watchPlanOptions();
-  assert.deepEqual(options.map((o) => o.displayName), ["Bronze", "Silver", "Gold", "Platinum"]);
-  for (let i = 1; i < options.length; i++) assert.ok(options[i].price > options[i - 1].price, "prices should ascend Bronze -> Platinum");
+  assert.deepEqual(options.map((o) => o.displayName), ["Bronze", "Silver", "Gold", "Platinum", "BYO 20"]);
+  for (let i = 1; i < options.length; i++) assert.ok(options[i].price > options[i - 1].price, "prices should ascend Bronze -> BYO 20");
 });
 
 test("REQUIRED: each plan option's Watcher slot allowance and Community allowance read from the SAME canonical CAPACITY table enforcement itself checks", () => {
@@ -53,20 +53,23 @@ test("REQUIRED: each plan option's Watcher slot allowance and Community allowanc
   }
 });
 
-test("REQUIRED: real plan entitlements -- Bronze 2/1, Silver 5/2, Gold 10/3, Platinum 20/5 (slots/communities included)", () => {
+test("REQUIRED: real plan entitlements -- Bronze 2/1, Silver 5/2, Gold 10/3, Platinum 20/5, BYO 20 20/10 (slots/communities included)", () => {
   const bySlot = Object.fromEntries(watchPlanOptions().map((o) => [o.displayName, { slots: o.slots, communities: o.communitiesIncluded }]));
   assert.deepEqual(bySlot.Bronze, { slots: 2, communities: 1 });
   assert.deepEqual(bySlot.Silver, { slots: 5, communities: 2 });
   assert.deepEqual(bySlot.Gold, { slots: 10, communities: 3 });
   assert.deepEqual(bySlot.Platinum, { slots: 20, communities: 5 });
+  assert.deepEqual(bySlot["BYO 20"], { slots: 20, communities: 10 });
 });
 
-test("REQUIRED: Gold and Platinum expose real Community expansion ceilings -- Gold up to 5, Platinum up to 10", () => {
+test("REQUIRED: Gold and Platinum expose real Community expansion ceilings -- Gold up to 5, Platinum up to 10; BYO 20 is fixed at 10 with no expansion at all", () => {
   const byName = Object.fromEntries(watchPlanOptions().map((o) => [o.displayName, o]));
   assert.equal(byName.Gold.communitiesIncluded, 3);
   assert.equal(byName.Gold.communitiesMax, 5);
   assert.equal(byName.Platinum.communitiesIncluded, 5);
   assert.equal(byName.Platinum.communitiesMax, 10);
+  assert.equal(byName["BYO 20"].communitiesIncluded, 10);
+  assert.equal(byName["BYO 20"].communitiesMax, 10, "included equals max -- no expansion possible");
 });
 
 test("REQUIRED: Bronze and Silver are hard-capped -- max never exceeds included, so no expansion is ever claimed for them", () => {

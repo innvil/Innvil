@@ -266,6 +266,7 @@ export async function sweepPresenceSchedules(admin: SupabaseClient = createAdmin
       const bot = await loadModeratorBotToken(admin, row.deployment_id);
       if (bot) {
         const isEnterprise = capacity.tier === "enterprise";
+        const isByo20 = capacity.tier === "byo20";
         // kind: "proactive" (Phase 4.V.1 item 1) -- this whole sweep is
         // scheduler-driven, never triggered by a real inbound message, so
         // it's governed by the customer's PROACTIVE usage-policy ceiling,
@@ -274,7 +275,7 @@ export async function sweepPresenceSchedules(admin: SupabaseClient = createAdmin
         // knows exactly which Watcher is about to send, unlike chatter's
         // once-per-message resolution, so the per-Watcher ceiling applies
         // in the SAME resolution call, no separate re-check needed.
-        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId, row.deployment_id, "proactive");
+        const aiRouting = await resolveAccountAiRouting(admin, tenant.accountId, isEnterprise, communityId, row.deployment_id, "proactive", isByo20);
         const generated = await generatePresenceMessage(bot.moderatorName, bot.persona, kind, aiRouting);
         const text = generated.text;
         const sent = await telegramApiCall(bot.token, "sendMessage", { chat_id: bot.chatId, text });

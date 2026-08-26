@@ -37,7 +37,7 @@ test("REQUIRED: moderatorPlanTotalWithMediaAddon matches the exact worked totals
   assert.equal(moderatorPlanTotalWithMediaAddon("basic"), 39.98);
   assert.equal(moderatorPlanTotalWithMediaAddon("standard"), 74.98);
   assert.equal(moderatorPlanTotalWithMediaAddon("premium"), 119.98);
-  assert.equal(moderatorPlanTotalWithMediaAddon("pro"), 223.99);
+  assert.equal(moderatorPlanTotalWithMediaAddon("pro"), 174.98);
 });
 
 /* --------------------------------------------------------- entitlement ---- */

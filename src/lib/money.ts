@@ -41,13 +41,27 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
  *  $129.99->$59.99, Premium/Gold $219.99->$99.99, Pro/Platinum $379.99->$199.00)
  *  as part of the same repricing that introduced the fixed Enterprise packages
  *  above -- Enterprise's fixed $399/$299/$499 packages are flat constants and
- *  are NOT derived from MODERATOR_PRO_PRICE, so this change doesn't move them;
- *  only a CUSTOM Managed quote above 50 slots (moderatorEnterpriseSlotPrice)
- *  still derives its base from MODERATOR_PRO_PRICE and moves with it. */
+ *  are NOT derived from MODERATOR_PRO_PRICE, so this change doesn't move them.
+ *  Repriced AGAIN 2026-08-25 (Pro/Platinum $199.00->$149.99 -- the Gold->Platinum
+ *  jump was too large) alongside the new BYO 20 tier below -- a CUSTOM Managed
+ *  quote above 50 slots (moderatorEnterpriseSlotPrice) still derives its base
+ *  from MODERATOR_PRO_PRICE and moves with it (see its own updated worked
+ *  examples further down); the fixed Enterprise packages remain unaffected. */
 export const MODERATOR_BASIC_PRICE = 29.99;
 export const MODERATOR_STANDARD_PRICE = 59.99;
 export const MODERATOR_PREMIUM_PRICE = 99.99;
-export const MODERATOR_PRO_PRICE = 199.0;
+export const MODERATOR_PRO_PRICE = 149.99;
+/** BYO 20 (2026-08-25) -- a 5th self-serve, checkout-purchasable tier where
+ *  the customer supplies their OWN AI provider credential from day one
+ *  (never Innvil's) -- 20 Watcher slots, 10 Communities FIXED (never
+ *  expandable, unlike Gold/Platinum), and 3,000 Media Moderation units
+ *  BUNDLED into the base price (never a separate purchase, unlike the other
+ *  4 tiers' optional Media Moderation + add-on). Priced above Platinum,
+ *  deliberately: since BYO shifts AI compute cost off Innvil's books,
+ *  Innvil can bundle strictly more included capacity for a similar-or-
+ *  higher headline price without it reading as "why would anyone pick
+ *  Platinum" -- marketed as the best-value flagship tier. */
+export const MODERATOR_BYO20_PRICE = 199.99;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
 
 /** Direct/resell mode ONLY (see ModeratorCommercialMode in moderator/plan.ts):
@@ -74,8 +88,14 @@ export const MODERATOR_ENTERPRISE_BAND_1_PRICE_PER_SLOT = 15;
 /** Slots 51+. */
 export const MODERATOR_ENTERPRISE_BAND_2_PRICE_PER_SLOT = 13;
 
-export type ModeratorPlanTier = "basic" | "standard" | "premium" | "pro";
+/** "byo20" is a 5th self-serve tier (2026-08-25) -- a genuine checkout tier
+ *  like the other 4, not a variant of Enterprise (which has no self-serve
+ *  checkout at all). Making it a real ModeratorPlanTier member means every
+ *  Record<ModeratorPlanTier, X> map below is compile-time-forced to have an
+ *  explicit entry for it -- deliberate, so nothing gets silently missed. */
+export type ModeratorPlanTier = "basic" | "standard" | "premium" | "pro" | "byo20";
 export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
+  if (tier === "byo20") return MODERATOR_BYO20_PRICE;
   if (tier === "pro") return MODERATOR_PRO_PRICE;
   if (tier === "premium") return MODERATOR_PREMIUM_PRICE;
   if (tier === "standard") return MODERATOR_STANDARD_PRICE;
@@ -89,8 +109,8 @@ export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
  *  constant NOT derived from this formula). Direct-contact/direct-Innvil
  *  sale only -- Enterprise revenue is 100% Innvil's, no panel-owner
  *  commission/rental split ever applies to it.
- *  Worked examples (at the current MODERATOR_PRO_PRICE = $199.00): 50 slots
- *  -> 199.00 + 30*15 = 649.00; 75 slots -> 199.00 + 30*15 + 25*13 = 974.00. */
+ *  Worked examples (at the current MODERATOR_PRO_PRICE = $149.99): 50 slots
+ *  -> 149.99 + 30*15 = 599.99; 75 slots -> 149.99 + 30*15 + 25*13 = 924.99. */
 export function moderatorEnterpriseSlotPrice(totalSlots: number): number {
   const slots = Math.max(MODERATOR_ENTERPRISE_MIN_SLOTS, Math.round(totalSlots));
   const extra = slots - MODERATOR_ENTERPRISE_BASE_SLOTS;
@@ -195,6 +215,12 @@ export const MODERATOR_COMMUNITY_CAPACITY: Record<ModeratorPlanTier, ModeratorCo
   standard: { included: 2, maxWithAddons: 2 },
   premium: { included: 3, maxWithAddons: 5 },
   pro: { included: 5, maxWithAddons: 10 },
+  // byo20's 10 Communities are FIXED forever, by explicit product decision
+  // -- included === maxWithAddons is the same hard-cap convention Basic/
+  // Standard already use, which is also what correctly keeps it OUT of
+  // Community Expansion eligibility (isCommunityExpansionEligibleTier only
+  // reads COMMUNITY_EXPANSION_ELIGIBLE_TIERS below, never this table).
+  byo20: { included: 10, maxWithAddons: 10 },
 };
 
 /** Additional-community pricing (non-Enterprise tiers, within maxWithAddons
@@ -266,6 +292,13 @@ export const MODERATOR_AI_GENERATION_POOL: Record<ModeratorPlanTier, number> = {
   standard: 5000,
   premium: 10000,
   pro: 20000,
+  // N/A by design, never actually read in practice: byo20 always routes
+  // through the customer's own AI provider credential (never Innvil's), so
+  // it never draws from this pool at all -- watch-runtime.ts's paidTier
+  // derivation excludes "byo20" from this gate the same way it already
+  // excludes "enterprise". 0 exists here only because Record<ModeratorPlanTier,
+  // number> requires every tier to have a value.
+  byo20: 0,
 };
 
 /** Self-serve "Media Moderation +" add-on (2026-08-22) -- an OPTIONAL layer
@@ -280,13 +313,20 @@ export const MODERATOR_AI_GENERATION_POOL: Record<ModeratorPlanTier, number> = {
  *  photo or 1 sampled video frame = 1 unit; never Sightengine-specific
  *  terminology/economics exposed to the customer. Worked totals (base +
  *  add-on): Bronze+ $29.99+$9.99=$39.98, Silver+ $59.99+$14.99=$74.98,
- *  Gold+ $99.99+$19.99=$119.98, Platinum+ $199.00+$24.99=$223.99. */
+ *  Gold+ $99.99+$19.99=$119.98, Platinum+ $149.99+$24.99=$174.98.
+ *  byo20 is the one EXCEPTION to "optional add-on, never bundled" -- its
+ *  3,000 units are baked into the $199.99 base price by explicit product
+ *  decision (the flagship "everything included" tier), never a separate
+ *  purchase; `price: 0` documents that (never actually charged -- the
+ *  purchase UI for this addon is hidden entirely for byo20, see
+ *  MediaModerationAddonCard.tsx). */
 export interface MediaModerationAddonPricing { price: number; units: number; }
 export const MODERATOR_MEDIA_ADDON: Record<ModeratorPlanTier, MediaModerationAddonPricing> = {
   basic: { price: 9.99, units: 1000 },
   standard: { price: 14.99, units: 2000 },
   premium: { price: 19.99, units: 3000 },
   pro: { price: 24.99, units: 4000 },
+  byo20: { price: 0, units: 3000 },
 };
 
 /** Total monthly price for a tier with Media Moderation + enabled -- plain

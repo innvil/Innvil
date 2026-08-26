@@ -25,14 +25,14 @@ test("REQUIRED: repriced Silver $59.99 -> $56.99 with Innvil Credit (5% discount
 test("REQUIRED: repriced Gold $99.99 -> $94.99 with Innvil Credit (5% discount)", () => {
   assert.equal(creditPriceUsd(MODERATOR_PREMIUM_PRICE, "premium"), 94.99);
 });
-test("REQUIRED: repriced Platinum $199.00 -> $189.05 with Innvil Credit (5% discount)", () => {
-  assert.equal(creditPriceUsd(MODERATOR_PRO_PRICE, "pro"), 189.05);
+test("REQUIRED: repriced Platinum $149.99 -> $142.49 with Innvil Credit (5% discount)", () => {
+  assert.equal(creditPriceUsd(MODERATOR_PRO_PRICE, "pro"), 142.49);
 });
 test("REQUIRED: repriced annual prices -- 10% off 12x the new monthly regular price, never stacked with the monthly discount", () => {
   assert.equal(annualCreditPriceUsd(MODERATOR_BASIC_PRICE), 323.89);
   assert.equal(annualCreditPriceUsd(MODERATOR_STANDARD_PRICE), 647.89);
   assert.equal(annualCreditPriceUsd(MODERATOR_PREMIUM_PRICE), 1079.89);
-  assert.equal(annualCreditPriceUsd(MODERATOR_PRO_PRICE), 2149.2);
+  assert.equal(annualCreditPriceUsd(MODERATOR_PRO_PRICE), 1619.89);
 });
 
 /* --------------------------------------------------------------- discount ---- */
@@ -88,8 +88,8 @@ test("REQUIRED: annual discount is exactly 10%", () => {
   assert.equal(ANNUAL_CREDIT_DISCOUNT_BPS, 1000);
 });
 
-test("REQUIRED: all four self-serve tiers, including Bronze, are annual-eligible", () => {
-  assert.deepEqual(ANNUAL_ELIGIBLE_TIERS.sort(), ["basic", "premium", "pro", "standard"]);
+test("REQUIRED: all five self-serve tiers, including Bronze and BYO 20, are annual-eligible", () => {
+  assert.deepEqual(ANNUAL_ELIGIBLE_TIERS.slice().sort(), ["basic", "byo20", "premium", "pro", "standard"]);
 });
 
 test("REQUIRED (test 1): Bronze annual credit price = 10% off 12 x canonical monthly price -- $539.89", () => {
@@ -143,11 +143,11 @@ test("REQUIRED: annual DIRECT discount is exactly 5%, always half the Innvil Cre
   assert.equal(ANNUAL_DIRECT_DISCOUNT_BPS, ANNUAL_CREDIT_DISCOUNT_BPS / 2);
 });
 
-test("REQUIRED: real current canonical annual-direct prices for all four self-serve tiers", () => {
+test("REQUIRED: real current canonical annual-direct prices for the four Innvil-Managed self-serve tiers", () => {
   assert.equal(annualDirectPriceUsd(MODERATOR_BASIC_PRICE), 341.89);
   assert.equal(annualDirectPriceUsd(MODERATOR_STANDARD_PRICE), 683.89);
   assert.equal(annualDirectPriceUsd(MODERATOR_PREMIUM_PRICE), 1139.89);
-  assert.equal(annualDirectPriceUsd(MODERATOR_PRO_PRICE), 2268.6);
+  assert.equal(annualDirectPriceUsd(MODERATOR_PRO_PRICE), 1709.89);
 });
 
 test("REQUIRED: annualDirectPriceUsd is always MORE than annualCreditPriceUsd for the same tier -- Credit is always the bigger incentive", () => {

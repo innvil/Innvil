@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage, moderatorEntitlementSource, virtualModProactiveMode, virtualModAdvancedModeration, virtualModCommunityMemory, virtualModCustomPersonality, virtualModModeration } from "./plan";
+import { virtualModBotAcknowledgement, hasVirtualModerator, moderatorCapacity, moderatorMaxSavedModerators, moderatorCommunityExpansionCeiling, virtualModContentGeneration, virtualModMediaModeration, virtualModVideoModeration, TRIAL_CAPACITY, TRIAL_MAX_SAVED_MODERATORS, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage, moderatorEntitlementSource, virtualModProactiveMode, virtualModAdvancedModeration, virtualModCommunityMemory, virtualModCustomPersonality, virtualModModeration, CAPACITY } from "./plan";
 
 /* Case 15: bot-to-bot capability disabled -> bot acknowledgement unavailable,
  * but nothing else about Virtual Moderator entitlements is affected. The
@@ -266,4 +266,8 @@ test("REQUIRED: the legacy capacity functions never crash on an enterprise-sourc
 test("plain settings with no enterprise flag are completely unaffected by this change", () => {
   assert.equal(moderatorEntitlementSource({ addons: { moderator: { tier: "pro" } } }), "pro");
   assert.equal(moderatorEntitlementSource({}), null);
+});
+
+test("REQUIRED: BYO 20's real capacity is 20 Watcher slots / 10 Communities, matching the canonical pricing table exactly", () => {
+  assert.deepEqual(CAPACITY.byo20, { maxCommunities: 10, maxActiveSlots: 20 });
 });

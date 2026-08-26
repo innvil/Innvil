@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MODERATOR_BASIC_PRICE, MODERATOR_STANDARD_PRICE, MODERATOR_PREMIUM_PRICE, MODERATOR_PRO_PRICE,
+  MODERATOR_BASIC_PRICE, MODERATOR_STANDARD_PRICE, MODERATOR_PREMIUM_PRICE, MODERATOR_PRO_PRICE, MODERATOR_BYO20_PRICE,
   MODERATOR_ENTERPRISE_MIN_SLOTS, MODERATOR_COMMISSION_SHARE, MODERATOR_RENTAL_DISCOUNT,
   MODERATOR_COMMUNITY_CAPACITY, MODERATOR_ADDITIONAL_COMMUNITY_PRICE, MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE,
   MODERATOR_AUTOPOST_INCLUDED_PER_DAY, MODERATOR_AUTOPOST_MAX_PER_DAY, MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE,
@@ -18,11 +18,12 @@ import { CAPACITY, TRIAL_CAPACITY } from "./moderator/plan";
 // files" the update was explicit about avoiding -- everything should read
 // through these constants, never redeclare the numbers.
 
-test("REQUIRED: canonical AI Moderator prices match the 2026-08-22 repriced table", () => {
+test("REQUIRED: canonical AI Moderator prices match the 2026-08-25 repriced table (Platinum cut, BYO 20 added)", () => {
   assert.equal(MODERATOR_BASIC_PRICE, 29.99);
   assert.equal(MODERATOR_STANDARD_PRICE, 59.99);
   assert.equal(MODERATOR_PREMIUM_PRICE, 99.99);
-  assert.equal(MODERATOR_PRO_PRICE, 199.0);
+  assert.equal(MODERATOR_PRO_PRICE, 149.99);
+  assert.equal(MODERATOR_BYO20_PRICE, 199.99);
 });
 
 test("moderatorPlanPrice resolves each tier to its canonical price", () => {
@@ -30,7 +31,8 @@ test("moderatorPlanPrice resolves each tier to its canonical price", () => {
     ["basic", 29.99],
     ["standard", 59.99],
     ["premium", 99.99],
-    ["pro", 199.0],
+    ["pro", 149.99],
+    ["byo20", 199.99],
   ];
   for (const [tier, price] of cases) assert.equal(moderatorPlanPrice(tier), price);
 });
@@ -62,12 +64,12 @@ test("REQUIRED: Enterprise's minimum slot count (21) is one $15 slot above the P
 // constant in watch-enterprise.ts, NOT derived from this formula) -- see
 // the 2026-08-22 CLAUDE.md entry. These worked examples now reflect the
 // repriced $199.00 Pro base, not the pre-repricing $379.99.
-test("REQUIRED: custom-quote worked example -- 50 total slots = 199.00 + 30*15 = 649.00/mo", () => {
-  assert.equal(moderatorEnterpriseSlotPrice(50), 649.0);
+test("REQUIRED: custom-quote worked example -- 50 total slots = 149.99 + 30*15 = 599.99/mo (Platinum repriced 2026-08-25)", () => {
+  assert.equal(moderatorEnterpriseSlotPrice(50), 599.99);
 });
 
-test("REQUIRED: custom-quote worked example -- 75 total slots = 199.00 + 30*15 + 25*13 = 974.00/mo", () => {
-  assert.equal(moderatorEnterpriseSlotPrice(75), 974.0);
+test("REQUIRED: custom-quote worked example -- 75 total slots = 149.99 + 30*15 + 25*13 = 924.99/mo (Platinum repriced 2026-08-25)", () => {
+  assert.equal(moderatorEnterpriseSlotPrice(75), 924.99);
 });
 
 test("Enterprise band boundary: 51st slot switches from $15/slot to $13/slot", () => {
@@ -214,6 +216,31 @@ test("REQUIRED: canonical AI Generations allowances match the plan cards (Bronze
   assert.equal(MODERATOR_AI_GENERATION_POOL.standard, 5000);
   assert.equal(MODERATOR_AI_GENERATION_POOL.premium, 10000);
   assert.equal(MODERATOR_AI_GENERATION_POOL.pro, 20000);
+});
+
+/* --------------------------------------------------------------- BYO 20 ---- */
+// The 5th self-serve tier -- $199.99/mo, 20 slots, 10 Communities (fixed, no
+// expansion ever), 3,000 Media Moderation units BUNDLED into the base price
+// (never a separate purchase), always requires the customer's own AI
+// provider credential -- reuses the self-serve checkout/renewal/plan-switch
+// machinery as a 5th ModeratorPlanTier literal, never a parallel system.
+
+test("REQUIRED: BYO 20 has a fixed 10-Community cap -- included equals the expansion ceiling, exactly like Bronze/Silver (no expansion possible)", () => {
+  assert.equal(MODERATOR_COMMUNITY_CAPACITY.byo20.included, 10);
+  assert.equal(MODERATOR_COMMUNITY_CAPACITY.byo20.maxWithAddons, 10);
+});
+
+test("REQUIRED: BYO 20 is never Community-Expansion-eligible -- it already includes the maximum fixed cap", () => {
+  assert.equal(isCommunityExpansionEligibleTier("byo20"), false);
+  assert.ok(!(COMMUNITY_EXPANSION_ELIGIBLE_TIERS as readonly string[]).includes("byo20"));
+});
+
+test("REQUIRED: BYO 20's 3,000 Media Moderation units are bundled at zero incremental price -- never a separate paid add-on", () => {
+  assert.deepEqual(MODERATOR_MEDIA_ADDON.byo20, { price: 0, units: 3000 });
+});
+
+test("REQUIRED: BYO 20's AI Generations pool is N/A (0) by design -- it always routes through the customer's own credential, never Innvil's pool", () => {
+  assert.equal(MODERATOR_AI_GENERATION_POOL.byo20, 0);
 });
 
 test("REQUIRED: Community Expansion capacity ceilings are the SAME MODERATOR_COMMUNITY_CAPACITY.maxWithAddons already shown on Plans -- never a duplicated number", () => {

@@ -38,11 +38,13 @@ export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: 
 // longer applies to anything. The old table (`watch_moderation_defaults`) is
 // left in place, unread by any code path -- not dropped in this pass.
 //
-// AI Provider (BYO Enterprise, Phase 2, 2026-08-24) is the newest real
-// section -- shown ONLY for an account whose real, current Enterprise
-// entitlement is explicitly flagged apiSourceMode === "byo" (never a
-// client-side/UI-only gate; the underlying actions re-verify this
-// server-side themselves regardless of whether this tab is even rendered).
+// AI Provider (BYO Enterprise, Phase 2, 2026-08-24; widened 2026-08-25 for
+// the self-serve BYO 20 tier) is the newest real section -- shown for an
+// account whose real, current Enterprise entitlement is explicitly flagged
+// apiSourceMode === "byo", OR whose tier is "byo20" (BYO by tier
+// definition). Never a client-side/UI-only gate; the underlying actions
+// re-verify this server-side themselves regardless of whether this tab is
+// even rendered.
 export default async function SettingsPage() {
   const { accountId, admin } = await requireWatchPage();
   const [shell, notificationPrefs, generalPrefs, userRes, capacity] = await Promise.all([
@@ -57,8 +59,8 @@ export default async function SettingsPage() {
     notificationPrefs.noActiveWatcherEnabled, notificationPrefs.capacityWarningEnabled, notificationPrefs.watcherStatusEnabled,
   ].filter(Boolean).length;
   const emailVerified = Boolean(userRes.data.user?.email_confirmed_at);
-  const isByoEnterprise = capacity?.tier === "enterprise" && capacity.apiSourceMode === "byo";
-  const byoCredentialState = isByoEnterprise ? await getWatchByoCredentialState() : null;
+  const isByoAccount = (capacity?.tier === "enterprise" && capacity.apiSourceMode === "byo") || capacity?.tier === "byo20";
+  const byoCredentialState = isByoAccount ? await getWatchByoCredentialState() : null;
 
   const tabs: WatchTab[] = [
     {
@@ -96,7 +98,7 @@ export default async function SettingsPage() {
     },
   ];
 
-  if (isByoEnterprise && byoCredentialState?.ok) {
+  if (isByoAccount && byoCredentialState?.ok) {
     tabs.push({
       id: "ai-provider",
       label: "AI Provider",
@@ -104,7 +106,7 @@ export default async function SettingsPage() {
         <div className="w-card p-5">
           <SectionHeader icon={KeyRound} title="AI Provider" />
           <p className="text-xs w-text-faint -mt-2 mb-4">
-            Your BYO Enterprise plan runs on your own AI provider credential — manage it here instead of contacting support.
+            Your plan runs on your own AI provider credential — manage it here instead of contacting support.
           </p>
           <ByoCredentialSettingsCard initial={byoCredentialState.data} />
         </div>

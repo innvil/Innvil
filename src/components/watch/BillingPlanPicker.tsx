@@ -92,8 +92,11 @@ export function BillingPlanPicker({
           const isCurrent = isCurrentPlan && billingInterval === currentBillingInterval;
           const expandable = o.communitiesMax > o.communitiesIncluded;
           return (
-            <div key={o.tier} className={`w-card p-4 flex flex-col ${isCurrent ? "border w-teal-border" : ""}`}>
-              <p className="w-display text-sm mb-1">{o.displayName}</p>
+            <div key={o.tier} className={`w-card p-4 flex flex-col ${isCurrent ? "border w-teal-border" : o.tier === "byo20" ? "border w-teal-border" : ""}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <p className="w-display text-sm">{o.displayName}</p>
+                {o.tier === "byo20" && <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Best value</span>}
+              </div>
               {billingInterval === "monthly" ? (
                 <>
                   <p className="w-display text-xl w-teal mb-0.5">${o.price.toFixed(2)}<span className="text-xs w-text-faint font-normal">/mo</span></p>
@@ -162,8 +165,17 @@ export function BillingPlanPicker({
                 <div className="space-y-1.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="w-text-dim">AI Generations</span>
-                    <span className="w-text font-semibold">{MODERATOR_AI_GENERATION_POOL[o.tier].toLocaleString()}/mo</span>
+                    {o.tier === "byo20" ? (
+                      <span className="w-text font-semibold">Your own AI provider</span>
+                    ) : (
+                      <span className="w-text font-semibold">{MODERATOR_AI_GENERATION_POOL[o.tier].toLocaleString()}/mo</span>
+                    )}
                   </div>
+                  {o.tier === "byo20" && (
+                    <p className="text-[10px] w-text-faint leading-tight">
+                      Requires your own AI provider credential (Anthropic or OpenAI-compatible) — add it in Settings after subscribing.
+                    </p>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="w-text-dim">Link & spam moderation</span>
                     <span className="w-text font-semibold">Included</span>
@@ -184,14 +196,20 @@ export function BillingPlanPicker({
                 </div>
               </div>
 
-              {/* Media Moderation + -- a REAL, directly purchasable self-serve add-on
-                  (Innvil Credit), not a request/inquiry product. Only the CURRENT
-                  plan's card can offer the real Add/Manage action (purchasing
-                  requires an active subscription on that exact tier already);
-                  other cards show the same price/units informationally, with no
-                  CTA that would lead nowhere -- subscribing via this card's own
-                  bottom button is the real first step for those. */}
-              {isCurrentPlan && mediaAddon ? (
+              {/* byo20's Media Moderation is BUNDLED into the base price -- never
+                  a separate purchase, unlike the other 4 tiers' optional add-on.
+                  No CTA at all here, just a plain "included" statement. */}
+              {o.tier === "byo20" ? (
+                <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="w-display text-xs w-teal">Media Moderation +</p>
+                    <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Included</span>
+                  </div>
+                  <p className="text-[11px] w-text-faint">
+                    Photo & video media safety — {MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} Media Moderation Units/mo, bundled at no extra cost.
+                  </p>
+                </div>
+              ) : isCurrentPlan && mediaAddon ? (
                 <div className="mb-4">
                   <MediaModerationAddonCard
                     tier={o.tier}

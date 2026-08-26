@@ -16,6 +16,7 @@ const PLAN_BLURBS: Record<Plan, string> = {
   Silver: "For growing communities that need more coverage.",
   Gold: "For established projects running multiple communities.",
   Platinum: "For teams running Watch at scale.",
+  "BYO 20": "Everything included, bring your own AI provider — best value.",
 };
 
 // Subtle rank accent per tier — never literal metallic gradients, just a
@@ -25,6 +26,7 @@ const RANK_ACCENT: Record<Plan, string> = {
   Silver: "#B8C2CC",
   Gold: "#D9B44A",
   Platinum: "#8FE3D6",
+  "BYO 20": "#A3E635",
 };
 
 export function WatchPricingSection({ options, authenticated }: { options: WatchPlanOption[]; authenticated: boolean }) {

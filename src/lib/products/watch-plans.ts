@@ -1,17 +1,17 @@
 /**
  * Customer-facing Innvil Watch plan display names — Bronze/Silver/Gold/
- * Platinum, Enterprise unchanged. This is a DISPLAY-NAME layer only: the
- * stable internal plan identity (`ModeratorPlanTier` — "basic"/"standard"/
- * "premium"/"pro") and every entitlement/pricing constant in `money.ts` are
- * completely UNCHANGED. Ownership must never key off a display name — this
- * file has no bearing on entitlement resolution, it only maps an internal
- * tier to what a customer sees.
+ * Platinum/BYO 20, Enterprise unchanged. This is a DISPLAY-NAME layer only:
+ * the stable internal plan identity (`ModeratorPlanTier` — "basic"/
+ * "standard"/"premium"/"pro"/"byo20") and every entitlement/pricing constant
+ * in `money.ts` are completely UNCHANGED. Ownership must never key off a
+ * display name — this file has no bearing on entitlement resolution, it
+ * only maps an internal tier to what a customer sees.
  *
  * PRICING: prices are read directly from `money.ts` (the authoritative
- * source), never duplicated here — as of the 2026-08-22 repricing:
+ * source), never duplicated here — as of the 2026-08-25 repricing:
  * Basic/Bronze $29.99, Standard/Silver $59.99, Premium/Gold $99.99,
- * Pro/Platinum $199.00. An explicit, separate billing decision — see the
- * dated changelog entry for when this was approved.
+ * Pro/Platinum $149.99, BYO 20 $199.99. An explicit, separate billing
+ * decision — see the dated changelog entry for when this was approved.
  */
 
 import {
@@ -20,13 +20,14 @@ import {
 } from "@/src/lib/money";
 import { CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 
-export type WatchPlanDisplayName = "Bronze" | "Silver" | "Gold" | "Platinum" | "Enterprise";
+export type WatchPlanDisplayName = "Bronze" | "Silver" | "Gold" | "Platinum" | "BYO 20" | "Enterprise";
 
 const TIER_TO_DISPLAY: Record<ModeratorPlanTier, WatchPlanDisplayName> = {
   basic: "Bronze",
   standard: "Silver",
   premium: "Gold",
   pro: "Platinum",
+  byo20: "BYO 20",
 };
 
 const DISPLAY_TO_TIER: Record<Exclude<WatchPlanDisplayName, "Enterprise">, ModeratorPlanTier> = {
@@ -34,6 +35,7 @@ const DISPLAY_TO_TIER: Record<Exclude<WatchPlanDisplayName, "Enterprise">, Moder
   Silver: "standard",
   Gold: "premium",
   Platinum: "pro",
+  "BYO 20": "byo20",
 };
 
 /** Stable internal tier -> the name a Watch customer actually sees. */
@@ -114,7 +116,7 @@ export interface WatchPlanOption {
  *  plan, not implemented) -- deliberately not included here rather than
  *  showing a fabricated number. */
 export function watchPlanOptions(): WatchPlanOption[] {
-  const tiers: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro"];
+  const tiers: ModeratorPlanTier[] = ["basic", "standard", "premium", "pro", "byo20"];
   return tiers.map((tier) => ({
     tier,
     displayName: watchPlanDisplayName(tier),
@@ -133,7 +135,7 @@ export { moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, M
  *  gate (show the tab / show an upsell note) and the cron sweep's own
  *  server-side re-check -- the two can never disagree about eligibility. */
 export function presenceSchedulingEligible(tier: ModeratorPlanTier | "trial" | "enterprise" | null): boolean {
-  return tier === "standard" || tier === "premium" || tier === "pro" || tier === "enterprise";
+  return tier === "standard" || tier === "premium" || tier === "pro" || tier === "byo20" || tier === "enterprise";
 }
 
 /** Auto-Posting (Phase 4.N part B, extended to standalone accounts in
@@ -146,5 +148,5 @@ export function presenceSchedulingEligible(tier: ModeratorPlanTier | "trial" | "
  *  never this function, so the two can never drift apart in practice; this
  *  is purely for UI/action-layer gating that only has a tier in hand). */
 export function autoPostingEligible(tier: ModeratorPlanTier | "trial" | "enterprise" | null): boolean {
-  return tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro" || tier === "enterprise";
+  return tier === "basic" || tier === "standard" || tier === "premium" || tier === "pro" || tier === "byo20" || tier === "enterprise";
 }
