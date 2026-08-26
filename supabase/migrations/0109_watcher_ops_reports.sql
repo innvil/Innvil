@@ -19,9 +19,17 @@ begin;
 -- media-moderation.ts's decideMediaEnforcement now produces DELETE_KICK
 -- (never DELETE_BAN) for a confirmed explicit result -- widen the dedup
 -- table's own check constraint to match, so the real enforcement kind can
--- actually be cached.
-alter table moderator_media_dedup drop constraint if exists moderator_media_dedup_enforcement_kind_check;
-alter table moderator_media_dedup add constraint moderator_media_dedup_enforcement_kind_check
+-- actually be cached. `if exists` (same convention already used by
+-- migration 0070 for this same table) makes this a no-op rather than a
+-- hard failure on a database where migration 0059_media_moderation.sql
+-- (the one that CREATES moderator_media_dedup) hasn't been applied yet --
+-- widening a constraint on a table that doesn't exist is meaningless, not
+-- something worth blocking this whole migration over. If 0059 is applied
+-- LATER, it creates the table with its own (narrower, pre-DELETE_KICK)
+-- constraint -- run migration 0059 BEFORE 0109 to get the widened
+-- constraint in one pass, or re-run just this ALTER block manually after.
+alter table if exists moderator_media_dedup drop constraint if exists moderator_media_dedup_enforcement_kind_check;
+alter table if exists moderator_media_dedup add constraint moderator_media_dedup_enforcement_kind_check
   check (enforcement_kind in ('ALLOW', 'DELETE_WARN', 'DELETE_KICK', 'DELETE_BAN'));
 
 create table if not exists watch_moderation_reports (

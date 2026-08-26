@@ -127,6 +127,27 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Fix: migration 0109 failed on a database where 0059 was never applied (v1.47.81)
+- **Live report**: running migration `0109_watcher_ops_reports.sql` failed with `42P01: relation
+  "moderator_media_dedup" does not exist`. That table is created by `0059_media_moderation.sql` (the original
+  photo/video moderation feature) — its absence means that migration hasn't been applied to this database yet.
+- **Impact, stated accurately (checked, not assumed)**: `loadMediaDedup`/`recordMediaDedup`
+  (`community-runtime.ts`) both destructure only `{ data }` from their Supabase calls, discarding `error` — so
+  a missing table degrades SOFTLY, not as a crash: media classification/enforcement (delete/warn/mute/kick/
+  purge) still runs correctly end-to-end, only the cost-saving dedup CACHE silently never persists, meaning a
+  duplicate file repost gets reclassified from scratch instead of reusing a cached verdict. Not a moderation-
+  safety gap — a cost-efficiency one, contingent on running `0059`.
+- **Fix**: `0109`'s constraint-widening step now uses `alter table if exists` (the same pattern migration
+  `0070` already used for this exact table) instead of a bare `alter table` — it's a safe no-op when
+  `moderator_media_dedup` doesn't exist yet, rather than a hard failure blocking the rest of the migration
+  (the new `watch_moderation_reports` table, unrelated to this table, still gets created either way).
+- **Action needed**: check whether `0059_media_moderation.sql` (and any other migrations before it) have
+  actually been applied to this database — if not, run `0059` first to get real media-moderation dedup
+  caching, then re-run `0109` (or just the now-safe constraint block) to pick up the widened `DELETE_KICK`
+  check once the table exists.
+- No test/code changes — pure SQL-migration fix, nothing to typecheck/test beyond the full existing suite
+  (unaffected, still 1859 passing).
+
 ### 2026-08-27 — Plans & Billing docs: comparison table first, details second (v1.47.80)
 - **Explicit "do not redesign the documentation portal" scope — additive only.** Every other Help Center
   article (30+) keeps rendering exactly as before, via the plain `body.map(p => <p>)` loop; only the
