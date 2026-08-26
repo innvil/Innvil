@@ -18,12 +18,12 @@ import { CAPACITY, TRIAL_CAPACITY } from "./moderator/plan";
 // files" the update was explicit about avoiding -- everything should read
 // through these constants, never redeclare the numbers.
 
-test("REQUIRED: canonical AI Moderator prices match the 2026-08-25 repriced table (Platinum cut, BYO 20 added)", () => {
+test("REQUIRED: canonical AI Moderator prices match the current repriced table (Platinum cut, BYO 20 added then repriced 2026-08-26)", () => {
   assert.equal(MODERATOR_BASIC_PRICE, 29.99);
   assert.equal(MODERATOR_STANDARD_PRICE, 59.99);
   assert.equal(MODERATOR_PREMIUM_PRICE, 99.99);
   assert.equal(MODERATOR_PRO_PRICE, 149.99);
-  assert.equal(MODERATOR_BYO20_PRICE, 199.99);
+  assert.equal(MODERATOR_BYO20_PRICE, 169.99);
 });
 
 test("moderatorPlanPrice resolves each tier to its canonical price", () => {
@@ -32,9 +32,18 @@ test("moderatorPlanPrice resolves each tier to its canonical price", () => {
     ["standard", 59.99],
     ["premium", 99.99],
     ["pro", 149.99],
-    ["byo20", 199.99],
+    ["byo20", 169.99],
   ];
   for (const [tier, price] of cases) assert.equal(moderatorPlanPrice(tier), price);
+});
+
+test("REQUIRED: BYO 20 is genuinely cheaper than assembling the equivalent capacity out of Platinum + Community Expansion + Media Moderation + -- the whole point of bringing your own AI credential", () => {
+  const fullyLoadedPlatinum = MODERATOR_PRO_PRICE + COMMUNITY_EXPANSION_MONTHLY_PRICE.pro + MODERATOR_MEDIA_ADDON.pro.price;
+  assert.ok(MODERATOR_BYO20_PRICE < fullyLoadedPlatinum, `BYO 20 ($${MODERATOR_BYO20_PRICE}) must be cheaper than fully-loaded Platinum ($${fullyLoadedPlatinum})`);
+  // Never revert to a price that's more than fully-loaded Platinum, or even
+  // just bare Platinum -- both would contradict BYO's entire value
+  // proposition (Innvil funds zero AI Generation pool for this tier).
+  assert.ok(MODERATOR_BYO20_PRICE > MODERATOR_PRO_PRICE, "BYO 20 should still cost more than bare Platinum -- it includes double the Communities and a bundled media allowance");
 });
 
 test("REQUIRED: Direct-mode owner commission share is 5%, never the old 20%", () => {
@@ -219,7 +228,7 @@ test("REQUIRED: canonical AI Generations allowances match the plan cards (Bronze
 });
 
 /* --------------------------------------------------------------- BYO 20 ---- */
-// The 5th self-serve tier -- $199.99/mo, 20 slots, 10 Communities (fixed, no
+// The 5th self-serve tier -- $169.99/mo, 20 slots, 10 Communities (fixed, no
 // expansion ever), 3,000 Media Moderation units BUNDLED into the base price
 // (never a separate purchase), always requires the customer's own AI
 // provider credential -- reuses the self-serve checkout/renewal/plan-switch

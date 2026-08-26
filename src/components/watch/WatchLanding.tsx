@@ -40,15 +40,10 @@ function WatchNav({ authenticated }: { authenticated: boolean }) {
           </div>
         </a>
         <nav className="hidden md:flex items-center gap-6 text-sm w-text-dim">
-          <a href="#what-is-a-watcher" className="hover:w-text">What&apos;s a Watcher?</a>
+          <a href="#what-is-a-watcher" className="hover:w-text">Watchers</a>
           <Link href="/why-watchers" className="hover:w-text">Why Watchers?</Link>
           <a href="#features" className="hover:w-text">Features</a>
-          <a href="#byo20" className="w-teal font-semibold hover:underline">BYO 20 ★</a>
-          <a href="#how" className="hover:w-text">How it works</a>
           <a href="#pricing" className="hover:w-text">Pricing</a>
-          <a href="#free-trial" className="hover:w-text">Free Trial</a>
-          <a href="#faq" className="hover:w-text">FAQ</a>
-          <a href="https://innvil.cloud" className="hover:w-text flex items-center gap-1">← Innvil</a>
         </nav>
         {authenticated ? (
           <WatchLogoutButton />

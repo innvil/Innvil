@@ -51,17 +51,25 @@ export const MODERATOR_BASIC_PRICE = 29.99;
 export const MODERATOR_STANDARD_PRICE = 59.99;
 export const MODERATOR_PREMIUM_PRICE = 99.99;
 export const MODERATOR_PRO_PRICE = 149.99;
-/** BYO 20 (2026-08-25) -- a 5th self-serve, checkout-purchasable tier where
- *  the customer supplies their OWN AI provider credential from day one
- *  (never Innvil's) -- 20 Watcher slots, 10 Communities FIXED (never
- *  expandable, unlike Gold/Platinum), and 3,000 Media Moderation units
- *  BUNDLED into the base price (never a separate purchase, unlike the other
- *  4 tiers' optional Media Moderation + add-on). Priced above Platinum,
- *  deliberately: since BYO shifts AI compute cost off Innvil's books,
- *  Innvil can bundle strictly more included capacity for a similar-or-
- *  higher headline price without it reading as "why would anyone pick
- *  Platinum" -- marketed as the best-value flagship tier. */
-export const MODERATOR_BYO20_PRICE = 199.99;
+/** BYO 20 (2026-08-25, repriced 2026-08-26) -- a 5th self-serve, checkout-
+ *  purchasable tier where the customer supplies their OWN AI provider
+ *  credential from day one (never Innvil's) -- 20 Watcher slots, 10
+ *  Communities FIXED (never expandable, unlike Gold/Platinum), and 3,000
+ *  Media Moderation units BUNDLED into the base price (never a separate
+ *  purchase, unlike the other 4 tiers' optional Media Moderation + add-on).
+ *
+ *  Originally launched at $199.99 -- but that priced it ABOVE the real cost
+ *  of assembling the equivalent capacity out of Platinum + Community
+ *  Expansion + Media Moderation + ($149.99 + $14.99 + $24.99 = $189.97),
+ *  which structurally contradicts the whole point of BYO: the customer
+ *  supplies their own AI credential, so Innvil funds ZERO AI Generation
+ *  pool for this tier (MODERATOR_AI_GENERATION_POOL.byo20 = 0), unlike
+ *  Platinum's real, Innvil-funded 20,000/mo pool. Repriced to $169.99 --
+ *  roughly $20/mo cheaper than that fully-loaded Platinum comparison, so
+ *  "bring your own AI" reads as genuinely cheaper (Innvil's biggest
+ *  variable cost removed), matching its "best value" flagship marketing
+ *  instead of contradicting it. */
+export const MODERATOR_BYO20_PRICE = 169.99;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
 
 /** Direct/resell mode ONLY (see ModeratorCommercialMode in moderator/plan.ts):

@@ -127,6 +127,35 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — BYO 20 repriced to $169.99 (was $199.99) + simplified Watch landing header (v1.47.76)
+- **Pricing correction, per direct user feedback with the actual numbers checked first.** BYO 20 was priced
+  ABOVE the cost of assembling its own equivalent capacity out of Platinum + Community Expansion + Media
+  Moderation + ($149.99 + $14.99 + $24.99 = $189.97) — BYO 20 cost $199.99 for the SAME 20 slots/10 Communities
+  and FEWER bundled media units (3,000 vs. 4,000), which structurally contradicts BYO's whole point: Innvil
+  funds ZERO AI Generation pool for this tier (`MODERATOR_AI_GENERATION_POOL.byo20 = 0`), unlike Platinum's
+  real, Innvil-funded 20,000/mo pool — bringing your own AI credential should cost less, not more.
+- **`MODERATOR_BYO20_PRICE` (`src/lib/money.ts`): $199.99 → $169.99** — presented two options (own
+  recommendation $169.99 vs. a more conservative $179.99) with the exact dollar-for-dollar comparison; user
+  confirmed $169.99 via AskUserQuestion. Now ~$20/mo cheaper than the fully-loaded Platinum comparison, and
+  still ~$20/mo above bare Platinum (reflecting the doubled Community allowance + bundled media allowance BYO
+  20 still includes). Single source of truth — every consumer (`watchPlanOptions()`, `BillingPlanPicker.tsx`,
+  the Watch landing's BYO 20 promo section, `innvil-credit-pricing.ts`'s 5% discount calculation) reads this
+  one constant, so nothing needed a second edit; only two doc-comment references (`money.ts`, `watch-plans.ts`)
+  and the pinned test values needed updating.
+- New test (`money.test.ts`, +1): `MODERATOR_BYO20_PRICE` is proven cheaper than the fully-loaded Platinum
+  comparison AND still more expensive than bare Platinum — a real guardrail against either regressing back to
+  the contradictory pricing or accidentally underpricing it below bare Platinum. 1828 tests pass (up from
+  1827), `tsc --noEmit` clean, production build clean. Live-verified on `watch.localhost` — the landing's BYO
+  20 promo section and pricing card both render `$169.99/mo`.
+- **Watch landing header simplified, per direct instruction**: "Watchers | Why Watchers? | Features | Pricing |
+  Log in | Start Free Trial" — answers What is this? → Why should I care? → What does it do? → How much? → Try
+  it. Removed from the nav (not from the page — every section still exists, just reached by scrolling or via
+  the footer instead of a dedicated top-nav link, now that the footer carries Documentation/FAQ/Pricing/etc.):
+  "BYO 20 ★", "How it works", "Free Trial", "FAQ", and "← Innvil" (still reachable via the footer's Company
+  column). "What's a Watcher?" relabeled "Watchers" to match the new 4-word set exactly. Live-verified: the
+  nav now reads exactly `["Watchers", "Why Watchers?", "Features", "Pricing"]`.
+- **Not deployed automatically** — same standing discipline as every other change; deploy is a separate step.
+
 ### 2026-08-26 — Public docs + a real multi-column footer + a "Why Watchers?" page (v1.47.75)
 - **The Help Center is now public, per explicit product decision** ("docs should be accessible even outside
   Innvil Watch"). `/support`, `/support/[category]`, `/support/[category]/[slug]` no longer require sign-in —

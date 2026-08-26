@@ -8,9 +8,9 @@
  * only maps an internal tier to what a customer sees.
  *
  * PRICING: prices are read directly from `money.ts` (the authoritative
- * source), never duplicated here — as of the 2026-08-25 repricing:
+ * source), never duplicated here — as of the 2026-08-26 repricing:
  * Basic/Bronze $29.99, Standard/Silver $59.99, Premium/Gold $99.99,
- * Pro/Platinum $149.99, BYO 20 $199.99. An explicit, separate billing
+ * Pro/Platinum $149.99, BYO 20 $169.99. An explicit, separate billing
  * decision — see the dated changelog entry for when this was approved.
  */
 
