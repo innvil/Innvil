@@ -127,6 +127,70 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — Telegram Leads: a directory-based lead-research tool for marketing outreach (v1.47.72)
+- **Explicit scope, confirmed via AskUserQuestion before building anything**: scraping Telegram itself or
+  mass-messaging communities was ruled out up front (Telegram's ToS bans unsolicited bulk messaging, real
+  accounts doing it get banned fast, and API-level scraping of groups you're not in is largely blocked by
+  Telegram's own privacy model — attempting it risks Innvil's own bot credentials/IP). The user picked the
+  **directory-based lead list**: pull PUBLIC community listings from a site that already publishes them,
+  into a structured database (name, link, member count, topic) for the team's own manual outreach. **No
+  auto-messaging exists anywhere in this feature — it is lead collection only.**
+- **Investigated real, fetchable sources before writing a single line of scraper code** — `tgstat.com` (403,
+  bot-blocked), `combot.org/telegram/groups` (404, wrong URL shape), `telegramindex.info` (doesn't resolve).
+  **`tlgrm.eu`** confirmed real and working: its category index (`/channels`) and per-category listing pages
+  (`/channels/<slug>`, e.g. `/channels/crypto`) are genuinely server-rendered public HTML — fetched the actual
+  raw markup via `curl` and inspected it directly (not guessed) before writing the parser. Confirmed real
+  pagination (`?page=N`, with the true last-page count exposed in a `data-last-page` attribute) and confirmed
+  the site marks its own paid/sponsored placements with a distinct `channel-card__promo-label` class, letting
+  those be excluded from organic results.
+- **New pure parser** `src/lib/marketing/telegram-directory.ts` (no I/O, directly unit-tested) —
+  `parseTlgrmDirectoryHtml` (regex-based per-card extraction, the same lightweight approach already used for
+  `extractSameOriginLinks` in the Project Knowledge crawler — no new DOM-parser dependency), `parseTlgrmLastPage`,
+  `tlgrmCategoryUrl`, and `TLGRM_CATEGORIES`/`isKnownTlgrmCategory` — an explicit allowlist that **structurally
+  excludes "adult"** (never offered as a scrape target anywhere upstream, at the type level, not just a runtime
+  check — confirmed by a `tsc` error when a redundant runtime `!== "adult"` filter was left in, since the type
+  guard already makes that comparison impossible). A promo/sponsored card is always skipped (not a genuine
+  organic ranking, and — per the live 18+ dating-bot example found while inspecting the real page — may not
+  even match the category being browsed). Entity decoding fixed mid-build after live-verifying against the
+  real page: `&#039;` (zero-padded numeric apostrophe) wasn't decoded by the original `&#39;`-only rule; widened
+  to a `&#0*39;` pattern and reordered so `&amp;` decodes last (avoids re-corrupting an already-decoded entity).
+- **New server-only fetch orchestrator** `src/lib/marketing/telegram-directory-fetch.ts` — bounded on every
+  axis so a single run can never hammer the third-party site: a 12s per-request timeout, a hard 5-page-per-
+  category cap (capped again against the site's own real `data-last-page`, whichever is smaller), a 600ms
+  delay between requests, and categories are always scraped in sequence, never in parallel. A failed page fetch
+  stops that category's walk cleanly (never retry-loops) — whatever was already collected is still kept.
+- **New migration `0107_telegram_leads.sql`** — `telegram_leads` (source/category/name/username/
+  subscriber_count/description/status/notes/contacted_at, `unique(username)` since a Telegram username is
+  globally unique, service-role + super-admin-only RLS, mirroring `blog_topics`' exact policy pattern). **Run
+  migration `0107`.**
+- **New action file `src/lib/actions/telegram-leads.ts`** — `listTelegramLeads`/`runTelegramLeadScrape`/
+  `setTelegramLeadStatus`/`setTelegramLeadNotes`/`deleteTelegramLead`/`importTelegramLeadsCsv`, every export
+  independently re-verifying `role === 'super_admin'` (same `requireSuperAdmin()` pattern as `blog-admin.ts`,
+  not a shared helper — matches this codebase's established convention for admin-action files). A re-scrape
+  **upserts by username**: updates subscriber_count/description/category/source on an already-known lead, but
+  NEVER touches its `status`/`notes`/`contacted_at` — so re-running the scraper can never clobber manual
+  outreach progress already recorded against a lead. `importTelegramLeadsCsv` is a manual fallback (paste
+  `Name, @username, subscribers, category, description` lines) mirroring `addTopicsBulk`'s exact skip-blanks/
+  skip-duplicates shape, for leads researched from elsewhere.
+- **New UI** `src/components/superadmin/TelegramLeadsAdmin.tsx` — category checkboxes (adult never offered as
+  an option at all) + max-pages input + "Run scrape" with a per-category result summary; a manual paste-import
+  textarea; and a leads table (name/@username linking to `t.me/<username>`, subscriber count, category, a
+  status dropdown + colored `Pill`, inline-editable notes, delete) with status/category/search filters and a
+  client-side CSV export. Dual-mounted per this codebase's established convention: a new **"Telegram Leads"**
+  tab on the `/superadmin` route, and a new **"Telegram Leads"** section in the owner-app super-admin sidebar
+  (super-admin accounts only).
+- New tests: `telegram-directory.test.ts` (+15, new file — promo-card exclusion, real name/username/subscriber/
+  description extraction against a fixture mirroring the ACTUAL live markup, HTML-entity decoding incl. the
+  live-caught `&#039;` regression, malformed/empty-HTML safety, `parseTlgrmLastPage`'s real-attribute parsing
+  and its never-0/negative/non-finite guards, `tlgrmCategoryUrl`'s page-1-vs-N shape and URL-encoding, and the
+  "adult" structural-exclusion guard). 1785 tests pass (up from 1770), `tsc --noEmit` clean, production build
+  clean. Also manually re-verified the parser against the real, live-fetched `tlgrm.eu/channels/crypto` HTML
+  (24 real organic entries extracted correctly out of 25 total cards, 1 promo correctly excluded, real last-page
+  count of 2) via a throwaway script, removed after confirming correctness — not part of the permanent suite,
+  since it depends on a live external page rather than a stable fixture.
+- **Not deployed automatically — run migration `0107` first**, since every scrape/import write targets a table
+  that doesn't exist until then.
+
 ### 2026-08-26 — BYO 20 marketed hard on the Watch landing page (v1.47.71)
 - **Per explicit instruction to market BYO 20 hard on the public landing.** Prior state: BYO 20 only appeared
   as one more card in the pricing grid at the bottom of the page, visually equal-weight with Bronze/Silver/

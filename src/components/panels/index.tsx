@@ -36,6 +36,7 @@ import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdm
 import { ProductsAdmin } from "@/src/components/superadmin/ProductsAdmin";
 import { WatchDevOpsAdmin } from "@/src/components/superadmin/WatchDevOpsAdmin";
 import { BotManagerCampaignsAdmin } from "@/src/components/superadmin/BotManagerCampaignsAdmin";
+import { TelegramLeadsAdmin } from "@/src/components/superadmin/TelegramLeadsAdmin";
 import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
@@ -240,6 +241,7 @@ function navItemsFor(isSuper: boolean) {
     ...(isSuper ? [{ k: "products", label: "Products", icon: Boxes }] : []),
     ...(isSuper ? [{ k: "watch-devops", label: "Watch devops", icon: Wrench }] : []),
     ...(isSuper ? [{ k: "bot-manager-campaigns", label: "Bot manager campaigns", icon: Bot }] : []),
+    ...(isSuper ? [{ k: "telegram-leads", label: "Telegram Leads", icon: Users }] : []),
     { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
 }
@@ -1490,6 +1492,15 @@ export function InnvilApp({ setWorld, initialSection }: {
               <p className="fp-text-dim text-sm mt-1">innvil_bot_manager&apos;s proactive marketing sends — approved-campaign-only.</p>
             </div>
             <BotManagerCampaignsAdmin />
+          </div>
+        )}
+        {section === "telegram-leads" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Telegram Leads</h1>
+              <p className="fp-text-dim text-sm mt-1">Research real, publicly-listed Telegram communities for manual outreach — no automated messaging.</p>
+            </div>
+            <TelegramLeadsAdmin />
           </div>
         )}
       </div>

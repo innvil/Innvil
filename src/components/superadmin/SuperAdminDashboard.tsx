@@ -5,10 +5,11 @@ import Link from "next/link";
 import {
   ShieldCheck, LayoutGrid, CreditCard, CheckCircle2, AlertTriangle, Lock, ArrowLeft, Wallet,
   PlayCircle, Trash2, LifeBuoy, Newspaper, PenLine, Plus, Eye, EyeOff, RefreshCw, ExternalLink, Tag, Megaphone, Boxes,
-  Wrench,
+  Wrench, Users,
 } from "lucide-react";
 import { WatchDevOpsAdmin } from "./WatchDevOpsAdmin";
 import { BotManagerCampaignsAdmin } from "./BotManagerCampaignsAdmin";
+import { TelegramLeadsAdmin } from "./TelegramLeadsAdmin";
 import { Card, StatCard, Pill } from "@/src/components/ui";
 import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
@@ -1539,6 +1540,7 @@ const TABS = [
   { k: "support", label: "Support", icon: LifeBuoy },
   { k: "watch-devops", label: "Watch devops", icon: Wrench },
   { k: "bot-manager-campaigns", label: "Bot manager campaigns", icon: Megaphone },
+  { k: "telegram-leads", label: "Telegram Leads", icon: Users },
 ];
 
 export function SuperAdminDashboard() {
@@ -1595,6 +1597,7 @@ export function SuperAdminDashboard() {
         {tab === "support" && <SupportTab />}
         {tab === "watch-devops" && <WatchDevOpsAdmin />}
         {tab === "bot-manager-campaigns" && <BotManagerCampaignsAdmin />}
+        {tab === "telegram-leads" && <TelegramLeadsAdmin />}
       </div>
     </div>
   );
