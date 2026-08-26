@@ -140,6 +140,25 @@ function isPositiveClosing(text: string): boolean {
 // signaled the conversation is done.
 const CLOSING_ACK_RE = /^(i\s+see,?\s*)?(ok(ay)?|alright|got\s*it|makes\s*sense|fair\s*enough|understood|noted|cool|sounds\s*good)[.!]*$/i;
 
+// A dismissive "nothing much"-style reply to a rhetorical/greeting question
+// ("what's up?", "how's it going?") is a closing signal, not a fresh
+// conversational opener and not a substantive statement — "nothing"/"not
+// much"/"nm"/"nada", optionally followed by "just checking/looking/
+// browsing/scrolling/lurking (in/around)", carry no new content worth a
+// full reply. Live bug: after "hey K! what's up?" -> "nothing, just
+// checking" got answered with ANOTHER fresh greeting ("hey K! good to see
+// you 👋") as if the conversation were starting over, instead of the light
+// acknowledgement/reaction a human would actually give here.
+//
+// Fully ANCHORED (^...$) and enumerates the allowed trailing continuation
+// explicitly, rather than a loose bounded-length tail -- a loose tail would
+// also swallow a genuine complaint that happens to start the same way
+// ("nothing works", "nothing loads anymore") as a false "closing". Anything
+// not matching this precise shape (including "nothing works") simply falls
+// through to ordinary SUBSTANTIVE classification, same as today.
+const DISMISSIVE_CLOSING_RE =
+  /^(?:nothing(?:\s+much)?|not\s+much|nada|nm)(?:\s*[,.]?\s*(?:just\s+(?:checking|looking|browsing|scrolling|lurking)(?:\s+(?:in|around))?|around|here))?[.!]*$/i;
+
 // ---------------------------------------------------------------------
 // Broader closing/acknowledgement detection. LENGTH IS NOT A VALID SIGNAL
 // for "does this introduce a new conversational obligation" -- a live bug
@@ -620,7 +639,7 @@ function classifyMessageKind(trimmed: string): MessageKind {
   if (COMMUNITY_CHECK_IN_RE.test(trimmed)) return "COMMUNITY_OPENER";
   if (isLikelyQuestion(trimmed)) return "QUESTION";
   if (hasProblemWord(tokenize(trimmed)) || NOT_WORKING_RE.test(trimmed)) return "SUBSTANTIVE";
-  if (CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed)) return "TRIVIAL";
+  if (CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed) || DISMISSIVE_CLOSING_RE.test(trimmed)) return "TRIVIAL";
   if (isConversationalOpener(trimmed)) return "COMMUNITY_OPENER";
   return "SUBSTANTIVE";
 }
@@ -634,7 +653,7 @@ function classifyMessageKind(trimmed: string): MessageKind {
  *  classifier, just named for its call site. */
 export function isSimpleClosingAcknowledgement(text: string): boolean {
   const trimmed = text.trim();
-  return CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed);
+  return CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed) || DISMISSIVE_CLOSING_RE.test(trimmed);
 }
 
 export interface ChatterCandidate {
@@ -786,6 +805,17 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
       const picked = pickCandidate(eligible);
       if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
       return { type: "REACT", deploymentId: picked.deploymentId, emoji: positiveReactionFor(trimmed), reasons: ["positive_closing_acknowledged"] };
+    }
+    // A dismissive "nothing much"/"just checking" reply to a rhetorical
+    // question ("what's up?") gets a light reaction, not a spoken
+    // acknowledgement ("Got it!") and never a fresh reply as if the
+    // conversation were starting over -- checked BEFORE the directed/
+    // ambient split below, since this applies the same way whether or not
+    // the reply happens to be a Telegram reply-to/mention.
+    if (DISMISSIVE_CLOSING_RE.test(trimmed)) {
+      const picked = eligible.find((c) => c.isDirectedAtBot) ?? pickRelevantReactor(eligible);
+      if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
+      return { type: "REACT", deploymentId: picked.deploymentId, emoji: "👍", reasons: ["dismissive_closing_acknowledged"] };
     }
     const directed = eligible.find((c) => c.isDirectedAtBot);
     if (!directed) {

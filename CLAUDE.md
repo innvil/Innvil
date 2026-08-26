@@ -127,6 +127,36 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Fix: a dismissive "nothing, just checking" reply got re-greeted as if the chat were new (v1.47.78)
+- **Live bug, reported with a screenshot**: after Ms VP asked "hey K! 👋 what's up?", K replied "nothing, just
+  checking" (a Telegram reply to that message) and got ANOTHER fresh greeting back ("hey K! good to see you
+  👋") — reading as if the conversation had never happened. Root cause: `isAcknowledgementOnly()` requires at
+  least one recognized ACK_TOKENS/laugh/resolved-ack word to fire, and "nothing"/"checking" aren't in that
+  vocabulary — so the message fell through every TRIVIAL check to plain `SUBSTANTIVE` → `CASUAL_CHAT`, with
+  nothing telling the (cheap, DeepSeek-routed) generation that a greeting had JUST happened one turn ago.
+- **New `DISMISSIVE_CLOSING_RE`** (`chatter-coordinator.ts`) — a fully anchored (`^...$`) pattern recognizing
+  the specific "nothing (much)"/"not much"/"nm"/"nada", optionally followed by "just checking/looking/
+  browsing/scrolling/lurking (in/around)" idiom — the classic reply shape to a rhetorical "what's up?"/"how's
+  it going?". Deliberately NOT a loose bounded-length tail (which would also swallow a real complaint that
+  happens to start the same way, e.g. "nothing works anymore") — the trailing continuation is enumerated
+  explicitly, so anything not matching this precise shape (including "nothing works") falls through to
+  ordinary `SUBSTANTIVE` unchanged. Folded into `classifyMessageKind`'s `TRIVIAL` branch alongside the existing
+  `CLOSING_ACK_RE`/`isPositiveClosing`/`isAcknowledgementOnly` checks, and into the exported
+  `isSimpleClosingAcknowledgement` (used by the bot-ack `COMMUNITY_HANDOFF` decision) for consistency.
+- **Resolves to REACT, never `SHORT_ACK` or a fresh reply** — checked in `selectChatterAction`'s `TRIVIAL`
+  branch right after the existing `POSITIVE_WORD_RE` check (before the directed/ambient split), so it applies
+  whether or not the message happens to be a Telegram reply/mention: a directed dismissive reply reacts with
+  👍 to whichever moderator is addressed; an ambient one reacts only if a genuinely relevant candidate exists
+  (`pickRelevantReactor` — `wasLastSpeaker`/`recentlyParticipated`), and stays a real `SILENCE` when nothing is
+  relevant (a contextless "nothing much" out of nowhere still doesn't force a reaction). A message ending in
+  `?` is still routed to a real answer (question-detection already runs first in `classifyMessageKind`'s
+  ordering) — "nothing much, what about you?" is never swallowed by this check.
+- New tests (`chatter-coordinator.test.ts`, +7): the exact live-bug repro (directed → REACT 👍, reason
+  `dismissive_closing_acknowledged`), bare "nothing"/"nm"/"nada" alone, the ambient-relevant-candidate and
+  ambient-no-candidate cases, two false-positive guards ("nothing works anymore", a longer message merely
+  starting with "nothing"), and the question-ending exception. 1835 tests pass (up from 1828), `tsc --noEmit`
+  clean. No migration — pure classification-logic change, no schema/backend involved.
+
 ### 2026-08-27 — Watch landing repositioned: "Virtual Moderators for Telegram," not a moderation bot (v1.47.77)
 - **Explicit product-positioning pass, per direct instruction: "Do not rebuild or redefine existing moderation
   logic... surface [existing capabilities] properly in the marketing."** Zero backend/moderation-logic changes

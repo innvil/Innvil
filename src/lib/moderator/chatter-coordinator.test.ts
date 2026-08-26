@@ -1361,3 +1361,52 @@ test("REQUIRED (no generation waste, structural): every ambient-reaction outcome
     assert.notEqual(r.type, "ANSWER");
   }
 });
+
+/* --------------------------------------------- dismissive-closing ("nothing much") ---- */
+// Live bug: after Ms VP asked "hey K! what's up?", K replied "nothing, just
+// checking" (a Telegram reply to Ms VP's message) and got ANOTHER fresh
+// greeting back ("hey K! good to see you 👋") as if the conversation were
+// starting over. The correct response to a dismissive "nothing much"-style
+// answer is a light reaction, never a spoken re-greeting.
+
+test("REQUIRED (live bug repro): a directed dismissive reply to a greeting question -> REACT, never a fresh CASUAL_CHAT/opener reply", () => {
+  const result = single({ text: "nothing, just checking", isDirectedAtBot: true, wasLastSpeaker: true });
+  assert.equal(result.type, "REACT");
+  if (result.type === "REACT") {
+    assert.equal(result.emoji, "👍");
+    assert.deepEqual(result.reasons, ["dismissive_closing_acknowledged"]);
+  }
+});
+
+test("bare 'nothing', 'nm', or 'nada' alone also resolves to REACT when directed", () => {
+  assert.equal(single({ text: "nothing", isDirectedAtBot: true }).type, "REACT");
+  assert.equal(single({ text: "nm", isDirectedAtBot: true }).type, "REACT");
+  assert.equal(single({ text: "nada", isDirectedAtBot: true }).type, "REACT");
+});
+
+test("an ambient (not directly addressed) dismissive reply from a recently-participating candidate also gets a REACT, not silence", () => {
+  const result = single({ text: "not much, just looking", recentlyParticipated: true });
+  assert.equal(result.type, "REACT");
+});
+
+test("a genuinely contextless ambient dismissive reply (no relevant candidate) stays SILENCE, not a forced reaction", () => {
+  const result = single({ text: "nothing much" });
+  assert.equal(result.type, "SILENCE");
+});
+
+test("REQUIRED (false-positive guard): 'nothing works' is a real complaint, not a dismissive closing -- must stay SUBSTANTIVE (a real reply), never REACT", () => {
+  const result = single({ text: "nothing works anymore", isDirectedAtBot: true });
+  assert.notEqual(result.type, "REACT");
+  assert.notEqual(result.type, "SILENCE");
+});
+
+test("REQUIRED (false-positive guard): a longer message that merely starts with 'nothing' is never swallowed as a closing", () => {
+  const result = single({ text: "nothing new to report, still waiting on the team for an update", isDirectedAtBot: true });
+  assert.notEqual(result.type, "REACT");
+  assert.notEqual(result.type, "SILENCE");
+});
+
+test("a dismissive reply that ends in '?' is still handled as a real question, not swallowed by the closing check", () => {
+  const result = single({ text: "nothing much, what about you?", isDirectedAtBot: true });
+  assert.equal(result.type, "ANSWER");
+});
