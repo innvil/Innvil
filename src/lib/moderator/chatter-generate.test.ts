@@ -5,7 +5,7 @@ import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
-const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine, projectKnowledgeContextLines } = __testables;
+const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine, projectKnowledgeContextLines, knowledgeOrEscalationLine } = __testables;
 
 /**
  * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
@@ -1106,4 +1106,72 @@ test("an organization-wide entry is never labeled as project knowledge", () => {
   const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "ORGANIZATION", title: "Legal", content: "KaJ Labs Inc." }] }));
   assert.doesNotMatch(line!, /\[Project knowledge/);
   assert.match(line!, /\[Organization knowledge/);
+});
+
+/* ==================================== Shared Escalation Group (Phase 1) ====
+   Confidence-gated escalation: when Project Knowledge has NOTHING relevant to
+   a question, and the project has a real escalation group configured, the
+   model may respond with the ESCALATE_REQUIRED sentinel instead of guessing.
+   Without a configured group, behavior stays byte-identical to before this
+   feature (the plain "no information" line only). An honest "not yet
+   announced/decided" answer (real retrieved knowledge) must NEVER escalate --
+   that's a genuine answer, not a knowledge gap. */
+
+test("knowledgeOrEscalationLine: with no escalation group configured, behavior is byte-identical to the plain no-knowledge line -- never mentions ESCALATE_REQUIRED", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: false }));
+  assert.doesNotMatch(line, /ESCALATE_REQUIRED/);
+  assert.match(line, /No Project Knowledge was found/i);
+  assert.match(line, /zero project-specific facts/i);
+});
+
+test("knowledgeOrEscalationLine: escalationConfigured undefined behaves the same as false (never escalates by accident)", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: undefined }));
+  assert.doesNotMatch(line, /ESCALATE_REQUIRED/);
+});
+
+test("REQUIRED: with a real escalation group configured AND zero relevant knowledge, the ESCALATE_REQUIRED sentinel is offered", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: true }));
+  assert.match(line, /ESCALATE_REQUIRED/);
+  assert.match(line, /never guess|never improvise/i);
+});
+
+test("REQUIRED: real retrieved knowledge always wins over escalation, even when a group IS configured -- an honest 'not yet announced' answer must never escalate", () => {
+  const line = knowledgeOrEscalationLine(
+    baseInput({ escalationConfigured: true, projectKnowledge: [{ scope: "PROJECT", title: "Launch date", content: "Not yet announced or decided." }] })
+  );
+  assert.doesNotMatch(line, /ESCALATE_REQUIRED/);
+  assert.match(line, /Not yet announced or decided\./);
+});
+
+test("REQUIRED: escalationConfigured is wired into the ANSWER prompt's closing decision line", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined, escalationConfigured: true }));
+  assert.match(prompt, /ESCALATE_REQUIRED/);
+  assert.match(prompt, /No Project Knowledge was found/i);
+});
+
+test("without escalationConfigured, the ANSWER prompt's closing decision line never mentions ESCALATE_REQUIRED", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined, escalationConfigured: false }));
+  assert.doesNotMatch(prompt, /ESCALATE_REQUIRED/);
+});
+
+test("REQUIRED: escalationConfigured never leaks into CASUAL_CHAT -- only ANSWER may ever escalate", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: undefined, escalationConfigured: true }));
+  assert.doesNotMatch(prompt, /ESCALATE_REQUIRED/);
+});
+
+// NOTE: the closing decision line (buildSystemPrompt's last ANSWER line) is a
+// PROJECT-level standing instruction -- it mentions ESCALATE_REQUIRED as a
+// general fallback option whenever escalationConfigured is true, regardless
+// of whether THIS specific question happened to find matching knowledge.
+// What must actually change per-question is the knowledge block itself
+// (knowledgeOrEscalationLine, already directly tested above): real retrieved
+// knowledge replaces the "no knowledge / you may escalate" language entirely,
+// so the model is told to use the given facts rather than being pointed at
+// escalation for a question that's already answerable.
+test("escalationConfigured with real knowledge present: the knowledge block itself never says knowledge is missing -- the real facts replace it entirely", () => {
+  const prompt = buildSystemPrompt(
+    baseInput({ action: "ANSWER", escalationConfigured: true, projectKnowledge: [{ scope: "PROJECT", title: "Chains", content: "Ethereum and Polygon." }] })
+  );
+  assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+  assert.match(prompt, /Ethereum and Polygon\./);
 });

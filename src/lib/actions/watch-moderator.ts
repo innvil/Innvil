@@ -214,7 +214,12 @@ export interface AccountCommunityDeploymentRow {
  *  integration structurally can never have one, so offering that link here
  *  would be a dead end. The user adds the bot to their group directly in
  *  Telegram (by its username, already known from the connect step) instead. */
-export async function connectAccountCommunity(moderatorId: string, projectId: string, chatIdOrHandle: string): Promise<Result<AccountCommunityDeploymentRow>> {
+export async function connectAccountCommunity(
+  moderatorId: string,
+  projectId: string,
+  chatIdOrHandle: string,
+  connectionType: "community" | "escalation_group" = "community"
+): Promise<Result<AccountCommunityDeploymentRow>> {
   const c = await ctxModerator(moderatorId);
   if (!c) return { ok: false, error: "Watcher not found." };
   if (!DEPLOYABLE_PROVISIONING_STATUSES.has(c.moderator.provisioning_status)) {
@@ -257,6 +262,7 @@ export async function connectAccountCommunity(moderatorId: string, projectId: st
     handle: membership.result.chat.username ?? null,
     title: membership.result.chat.title ?? null,
     chatType: membership.result.chat.type ?? null,
+    connectionType,
   });
   if (!communityResult.ok) return communityResult;
   const community = communityResult.data as AccountCommunityRow;

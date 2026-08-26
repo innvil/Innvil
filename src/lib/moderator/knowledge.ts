@@ -42,7 +42,7 @@
    by this function or by prompting alone — this module never receives rows
    outside the scope it was asked to score. */
 
-export type KnowledgeSourceKind = "overview" | "faq" | "fact" | "link" | "note" | "document";
+export type KnowledgeSourceKind = "overview" | "faq" | "fact" | "link" | "note" | "document" | "escalation_answer";
 export type KnowledgeScopeType = "ORGANIZATION" | "PROJECT" | "COMMUNITY";
 
 export interface KnowledgeSource {
@@ -55,9 +55,14 @@ export interface KnowledgeSource {
   title: string;
   content: string;
   active: boolean;
+  /** ISO timestamp; null/undefined = never expires. An escalation-answer
+   *  promoted with a real-world deadline (e.g. a launch date) can be given
+   *  one so it's never presented as current once that date has passed --
+   *  see retrieveRelevantKnowledge below. */
+  expiresAt?: string | null;
 }
 
-export const KNOWLEDGE_KINDS: KnowledgeSourceKind[] = ["overview", "faq", "fact", "link", "note", "document"];
+export const KNOWLEDGE_KINDS: KnowledgeSourceKind[] = ["overview", "faq", "fact", "link", "note", "document", "escalation_answer"];
 
 function tokenize(text: string): string[] {
   return text
@@ -92,15 +97,18 @@ export function scoreKnowledgeRelevance(query: string, source: Pick<KnowledgeSou
   return score;
 }
 
-/** Retrieves the top-N (default 4) ACTIVE knowledge sources relevant to a
- *  query, highest score first. Returns an EMPTY array when nothing scores
- *  above 0 — "insufficient source material" (spec §33) is a valid outcome;
- *  the caller must never fall back to sending the whole tenant KB when
- *  retrieval comes up empty. Ties broken by insertion order (stable sort)
- *  so results are deterministic given the same input list. */
-export function retrieveRelevantKnowledge(query: string, sources: KnowledgeSource[], limit = 4): KnowledgeSource[] {
+/** Retrieves the top-N (default 4) ACTIVE, NOT-EXPIRED knowledge sources
+ *  relevant to a query, highest score first. An expired source (expiresAt in
+ *  the past) is excluded exactly like an inactive one -- expired information
+ *  must never be presented as current (Shared Escalation Group spec). Returns
+ *  an EMPTY array when nothing scores above 0 — "insufficient source
+ *  material" (spec §33) is a valid outcome; the caller must never fall back
+ *  to sending the whole tenant KB when retrieval comes up empty. Ties broken
+ *  by insertion order (stable sort) so results are deterministic given the
+ *  same input list. */
+export function retrieveRelevantKnowledge(query: string, sources: KnowledgeSource[], limit = 4, now: Date = new Date()): KnowledgeSource[] {
   return sources
-    .filter((s) => s.active)
+    .filter((s) => s.active && (!s.expiresAt || new Date(s.expiresAt) > now))
     .map((s, i) => ({ s, i, score: scoreKnowledgeRelevance(query, s) }))
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score || a.i - b.i)

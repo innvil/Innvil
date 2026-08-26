@@ -127,6 +127,100 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — Shared Escalation Group — Phase 1 closed loop (v1.47.73)
+- **New human-in-the-loop escalation system for Innvil Watch, per two verbatim user specs** ("Shared
+  Escalation Group Knowledge Instructions" + "Escalation Group Slot Rule"). When a Watcher genuinely can't
+  answer a question from Project Knowledge, it now forwards the question to a private, project-configured
+  Telegram group instead of guessing; a real admin of that group replies; the approved answer is relayed back
+  to the original community and may optionally be promoted to permanent Project Knowledge (with optional
+  expiration for time-sensitive facts). **Phase 1 scope, confirmed via 3 `AskUserQuestion` clarifications**:
+  the full closed loop (confidence-gated trigger, 0-slot billing, real Telegram send/reply-detection/resolve-
+  back, save-as-knowledge) — explicitly deferring duplicate-question merging, topic routing, priority/urgency
+  detection, the full named-role system, and the dashboard analytics/metrics page. Scoped to the direct Watch
+  surface only — the legacy Panel-owner Virtual Moderator flows (`actions/moderator.ts`,
+  `actions/customer-moderator.ts`) are untouched (confirmed via diff review).
+- **An Escalation Group is a real `communities` row**, tagged via a new `communities.connection_type` column
+  (`'community'` default | `'escalation_group'`) — reuses the EXACT SAME Telegram-membership-verified connect
+  flow already built (`connectAccountCommunity`/`createAccountCommunity`), never a second/parallel connection
+  path. Watchers "deploy" into it via the same `moderator_deployments` table.
+- **CRITICAL BILLING RULE, enforced structurally, not just documented**: an Escalation Group never consumes a
+  Watcher slot or counts toward the plan's Community allowance. `createAccountCommunity` skips its community-
+  cap check ENTIRELY for `connectionType: 'escalation_group'` (never merely excluded from the count).
+  `deployAccountWatcher` now ALSO skips the subscription slot-limit check entirely for an escalation-group
+  target — **found and fixed a real gap in the earlier partial implementation**: excluding an already-deployed
+  escalation-group Watcher from the USED count (already correct) is not sufficient on its own, since an
+  account already AT its real slot cap must still be able to deploy INTO its escalation group for the first
+  time. New `checkDeploymentSlotCaps` parameter `skipActiveSlotLimit` (`moderator/plan.ts`, additive, defaults
+  to `false` so every existing caller is unaffected) — the independent per-community 5-deployment cap
+  (`MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY`) still applies even to an escalation-group target, per explicit
+  product decision (an operational/noise safeguard unrelated to slot billing, out of this feature's scope).
+  `getAccountCapacity`'s `activeDeploymentCount`/`communitiesUsed`, `getAccountSlotBreakdown`, and
+  `listAccountAttentionItems`'s "no active Watcher" check all filter to `connectionType === 'community'` before
+  computing — an escalation group can never trigger a false "needs attention" alert either.
+- **Confidence-gated trigger, mirrors the EXISTING `INSUFFICIENT_KNOWLEDGE_SENTINEL` pattern from
+  `autopost-generate.ts`**: new `ESCALATE_REQUIRED` sentinel (`chatter-generate.ts`, ANSWER only, never
+  CASUAL_CHAT) — the model emits it when Project Knowledge has ZERO relevant information for a question that
+  genuinely needs project-specific facts, ONLY when a real escalation group is configured for the project
+  (`escalationConfigured`). An honest "not yet announced/decided" answer (real retrieved knowledge) is
+  explicitly distinguished and NEVER escalates — that's a genuine answer, not a knowledge gap. Without a
+  configured escalation group, behavior is byte-identical to before this feature existed.
+- **New `src/lib/moderator/escalation-runtime.ts`** — `resolveProjectEscalationTarget` (resolves a project's
+  connected escalation group + a deployed Watcher into it; `null` if either is missing, never a half-usable
+  target), `createEscalation` (inserts the tracking row, posts the formatted escalation card via Telegram,
+  returns the "forwarded to the team" text; a failed send rolls back the just-inserted row rather than leaving
+  a phantom escalation), `handleEscalationGroupMessage` (branched in `handleCommunityUpdate` BEFORE sender
+  classification/moderation/chatter — an escalation group is an internal ops channel, none of that is
+  meaningful there). Authorization is Phase 1's real Telegram admin/creator status check — **a non-admin's
+  reply is silently ignored, never resolves or publishes anything** (the spec's own hard security requirement).
+  Deliberately duplicates the small token-resolution/admin-check helpers already in `community-runtime.ts`
+  rather than cross-importing private functions, matching this codebase's established sibling-runtime-module
+  convention (`presence-runtime.ts`/`autopost-runtime.ts` do the same).
+- **Save-to-knowledge is a dashboard action, not parsed from the Telegram reply** (explicit architecture
+  decision — no Telegram inline-button/callback-query handling exists anywhere in this codebase, and building
+  one was judged separate, larger scope). New `src/lib/actions/watch-escalations.ts`
+  (`listProjectEscalations`/`promoteEscalationToKnowledge`) — promoting an answer inserts a real PROJECT-scope
+  `knowledge_sources` row (`kind: 'escalation_answer'`), flowing through the EXISTING retrieval pipeline for
+  free, with an optional `expires_at` for time-sensitive facts. New `knowledge_sources.expires_at` column;
+  `retrieveRelevantKnowledge` (`knowledge.ts`) now excludes an expired row exactly like an inactive one — an
+  expired approved-answer is never presented as current.
+- **New "Escalations" tab on the Project detail page** (`app/projects/[id]/page.tsx`,
+  `ProjectEscalationsTab.tsx`) — Open/Answered list, each answered-but-not-yet-promoted escalation gets a real
+  "Save as Project Knowledge" action (optional expiration date). New "+ Connect Escalation Group" CTA
+  (`ProjectAddEscalationGroupCta.tsx`) reuses `ProjectAddCommunityModal` (widened with an optional
+  `connectionType` prop) rather than a forked modal. An escalation-group row is visually labeled "Escalation
+  Group" (not a status badge) and excluded from every capacity-adjacent count (Communities tab header, top-of-
+  page "N communities" line, Settings summary) on both the Project detail page and the global `/communities`
+  list — the underlying data (`detail.communities`) still includes it so it's fully visible/manageable.
+- **Migration `0108_watch_escalations.sql`** — `communities.connection_type` (default `'community'`,
+  backward-compatible), `knowledge_sources.kind` check widened to include `'escalation_answer'` (also restored
+  the pre-existing `'document'` kind, which an earlier draft of this migration accidentally dropped — caught
+  before this was ever run against a live database), `knowledge_sources.expires_at`, and a new
+  `watch_escalations` table (project_id/escalation_community_id/source_community_id/watcher_id/asker identity/
+  source_message_id/question_text/escalation_message_id/status/answer_text/answered_by/answered_at/
+  `knowledge_source_id` — tracks promotion so an escalation can never be promoted to knowledge twice; service-
+  role only RLS, matching every other Watch runtime table).
+- New tests: `escalation-runtime.test.ts` (+14, new file, real fetch-mocked Telegram calls — no-escalation-
+  group-configured fallback, a real deployable target resolves correctly, project isolation, a real send
+  creates/posts/returns the forwarded text, a failed send rolls back the phantom row, non-reply/reply-to-
+  unknown-message no-ops, **a non-admin's reply is proven to never resolve/publish anything**, a real admin's
+  reply resolves + relays correctly, a second reply to an already-answered escalation is idempotent, an empty-
+  text reply is never treated as an answer), `chatter-generate.test.ts` (+11 — the sentinel only fires with
+  `escalationConfigured: true`, real retrieved knowledge always wins over escalation even when configured,
+  wired into the ANSWER prompt's closing decision line, never leaks into CASUAL_CHAT), `plan.test.ts` (+3 —
+  `skipActiveSlotLimit`'s exact contract, incl. the independent per-community cap still applying and the
+  default-false backward-compatibility guarantee), `watch-runtime.test.ts` (+6 — the exact live regression this
+  pass found and fixed: deploying into an escalation group at an already-full slot cap now succeeds; a real
+  community connection/deployment is still correctly blocked at the real cap in both cases; Needs Attention
+  never flags an escalation group; `connectionType` is exposed for the UI). 1816 tests pass (up from 1785),
+  `tsc --noEmit` clean, production build clean (confirmed `/projects/[id]`'s new tab in the build output).
+- **Run migration `0108` before this governs anything live.** **Not deployed automatically, per this session's
+  standing discipline** — built, tested, reported back; deploy is a separate, explicit next step.
+- **Deliberately not built this pass** (documented, not silently skipped, per the confirmed Phase 1 scope):
+  duplicate-question detection/merging, multiple broadcast modes, topic routing to specific admins, priority/
+  urgency levels, the full named-role authorization system (Project Owner/Admin/Knowledge Approver/Moderator/
+  Viewer — Phase 1 uses real Telegram admin/creator status only), and the dashboard's Open/Answered/Knowledge
+  Added/Expired/High Volume metrics view (Phase 1 ships a plain Open/Answered list instead).
+
 ### 2026-08-26 — Telegram Leads: a directory-based lead-research tool for marketing outreach (v1.47.72)
 - **Explicit scope, confirmed via AskUserQuestion before building anything**: scraping Telegram itself or
   mass-messaging communities was ruled out up front (Telegram's ToS bans unsolicited bulk messaging, real

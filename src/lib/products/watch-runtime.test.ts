@@ -2195,3 +2195,138 @@ test("still returns null with no self-serve tier, no Enterprise, and no active t
   const settings = await resolveStandaloneModeratorSettings(admin, "w-ent");
   assert.equal(settings, null);
 });
+
+/* ==================================== Shared Escalation Group (Phase 1) ====
+   CRITICAL BILLING RULE: an Escalation Group is a real `communities` row
+   (connection_type: 'escalation_group'), tagged so it is EXPLICITLY EXCLUDED
+   from Watcher-slot usage and the plan's Community allowance -- reused
+   Telegram-verified connect flow, zero-slot billing. Standard's real limits
+   (2 Communities / 5 Watcher slots) are used throughout as the boundary. */
+
+test("REQUIRED: connecting an Escalation Group NEVER competes for the plan's Community allowance -- an account already AT its Community cap can still connect one", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", connection_type: "community" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", connection_type: "community" },
+    ],
+  });
+  // Standard's real Community cap is 2 -- already at capacity with two
+  // ordinary communities above.
+  const capacityBefore = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacityBefore?.communitiesUsed, 2);
+  assert.equal(capacityBefore?.communitiesTotal, 2);
+
+  const result = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-2002", connectionType: "escalation_group" });
+  assert.equal(result.ok, true, "connecting an escalation group must never be blocked by an already-full Community cap");
+  if (result.ok) assert.equal(result.data.connectionType, "escalation_group");
+
+  const capacityAfter = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacityAfter?.communitiesUsed, 2, "the escalation group must never count toward communitiesUsed");
+});
+
+test("REQUIRED: a real (non-escalation) community connection is STILL correctly blocked once the Community cap is reached -- the exclusion is scoped to escalation groups only", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", connection_type: "community" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", connection_type: "community" },
+      { id: "esc", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-2002", connection_type: "escalation_group" },
+    ],
+  });
+  const result = await createAccountCommunity(admin, "acct-1", "proj-1", { platform: "telegram", chatId: "-1003" });
+  assert.equal(result.ok, false, "a 3rd ordinary community must still be rejected -- Standard's real cap is 2");
+});
+
+test("REQUIRED: deploying a Watcher into an Escalation Group NEVER consumes a Watcher slot -- an account already AT its slot cap can still deploy into one", async () => {
+  const moderatorId = "mod-1";
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    virtual_moderators: [{ id: moderatorId, account_id: "acct-1", name: "Kwan" }],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", connection_type: "community" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", connection_type: "community" },
+      { id: "c3", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1003", connection_type: "community" },
+      { id: "c4", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1004", connection_type: "community" },
+      { id: "c5", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1005", connection_type: "community" },
+      { id: "esc", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-2002", connection_type: "escalation_group" },
+    ],
+    // Standard's real Watcher-slot cap is 5 -- already fully deployed across
+    // 5 ordinary communities with the same single Watcher.
+    moderator_deployments: [
+      { id: "d1", panel_id: null, moderator_id: moderatorId, community_id: "c1", enabled: true },
+      { id: "d2", panel_id: null, moderator_id: moderatorId, community_id: "c2", enabled: true },
+      { id: "d3", panel_id: null, moderator_id: moderatorId, community_id: "c3", enabled: true },
+      { id: "d4", panel_id: null, moderator_id: moderatorId, community_id: "c4", enabled: true },
+      { id: "d5", panel_id: null, moderator_id: moderatorId, community_id: "c5", enabled: true },
+    ],
+  });
+  const capacityBefore = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacityBefore?.activeDeploymentCount, 5);
+  assert.equal(capacityBefore?.slotsTotal, 5);
+
+  const result = await deployAccountWatcher(admin, "acct-1", moderatorId, "esc");
+  assert.equal(result.ok, true, "deploying into an escalation group must never be blocked by an already-full slot cap");
+
+  const capacityAfter = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacityAfter?.activeDeploymentCount, 5, "the escalation-group deployment must never count toward activeDeploymentCount");
+
+  const breakdown = await getAccountSlotBreakdown(admin, "acct-1");
+  assert.equal(
+    breakdown.byWatcher.find((w) => w.watcherId === moderatorId)?.slots,
+    5,
+    "the slot breakdown must not attribute a 6th slot to the escalation-group deployment"
+  );
+});
+
+test("REQUIRED: a real (non-escalation) deployment is STILL correctly blocked once the Watcher-slot cap is reached -- the exclusion is scoped to escalation-group deployments only", async () => {
+  const moderatorId = "mod-1";
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    virtual_moderators: [{ id: moderatorId, account_id: "acct-1", name: "Kwan" }],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", connection_type: "community" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", connection_type: "community" },
+      { id: "c3", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1003", connection_type: "community" },
+      { id: "c4", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1004", connection_type: "community" },
+      { id: "c5", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1005", connection_type: "community" },
+      { id: "c6", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1006", connection_type: "community" },
+      { id: "esc", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-2002", connection_type: "escalation_group" },
+    ],
+    moderator_deployments: [
+      { id: "d1", panel_id: null, moderator_id: moderatorId, community_id: "c1", enabled: true },
+      { id: "d2", panel_id: null, moderator_id: moderatorId, community_id: "c2", enabled: true },
+      { id: "d3", panel_id: null, moderator_id: moderatorId, community_id: "c3", enabled: true },
+      { id: "d4", panel_id: null, moderator_id: moderatorId, community_id: "c4", enabled: true },
+      { id: "d5", panel_id: null, moderator_id: moderatorId, community_id: "c5", enabled: true },
+      // Already deployed into the escalation group too -- must never count
+      // toward the 5-slot cap that's about to be checked below.
+      { id: "d-esc", panel_id: null, moderator_id: moderatorId, community_id: "esc", enabled: true },
+    ],
+  });
+  const result = await deployAccountWatcher(admin, "acct-1", moderatorId, "c6");
+  assert.equal(result.ok, false, "a 6th REAL deployment must still be rejected -- Standard's real slot cap is 5, unaffected by the escalation-group deployment");
+});
+
+test("REQUIRED: listAccountAttentionItems never flags an Escalation Group with no active Watcher -- that check is scoped to ordinary communities only", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "esc", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-2002", connection_type: "escalation_group" }],
+    moderator_deployments: [],
+  });
+  const items = await listAccountAttentionItems(admin, "acct-1");
+  assert.deepEqual(items, [], "an Escalation Group with zero Watchers deployed must never surface as a 'needs attention' item");
+});
+
+test("listAccountCommunities exposes connectionType so the UI can label an Escalation Group distinctly from an ordinary Community", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001", connection_type: "community" },
+      { id: "esc", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-2002", connection_type: "escalation_group" },
+    ],
+  });
+  const communities = await listAccountCommunities(admin, "acct-1");
+  assert.equal(communities.find((c) => c.id === "c1")?.connectionType, "community");
+  assert.equal(communities.find((c) => c.id === "esc")?.connectionType, "escalation_group");
+});

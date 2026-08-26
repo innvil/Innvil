@@ -20,13 +20,20 @@ import type { AccountWatcherRow } from "@/src/lib/products/watch-runtime";
  *  same function the Watchers-page connect flow already calls) with THIS
  *  fixed `projectId`, never re-asked, never guessed. */
 export function ProjectAddCommunityModal({
-  projectId, deployableWatchers, onClose, onConnected,
+  projectId, deployableWatchers, onClose, onConnected, connectionType = "community",
 }: {
   projectId: string;
   deployableWatchers: AccountWatcherRow[];
   onClose: () => void;
   onConnected: () => void;
+  /** Shared Escalation Group (Phase 1) -- 'escalation_group' reuses this
+   *  EXACT SAME real Telegram-membership-verified connect flow (never a
+   *  second/unverified connection path), only tagging the resulting
+   *  `communities` row so watch-runtime.ts's 0-slot billing exclusion
+   *  applies to it. Defaults to the ordinary customer-facing community. */
+  connectionType?: "community" | "escalation_group";
 }) {
+  const isEscalation = connectionType === "escalation_group";
   const [watcherId, setWatcherId] = useState(deployableWatchers[0]?.id ?? "");
   const [chatInput, setChatInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,18 +44,18 @@ export function ProjectAddCommunityModal({
     if (!watcherId || !chatInput.trim()) return;
     setBusy(true);
     setError(null);
-    const res = await connectAccountCommunity(watcherId, projectId, chatInput.trim());
+    const res = await connectAccountCommunity(watcherId, projectId, chatInput.trim(), connectionType);
     setBusy(false);
     if (!res.ok) { setError(res.error); return; }
     setDoneTitle(res.data.title ?? res.data.chatId);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Add Community to this Project">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={isEscalation ? "Connect Escalation Group to this Project" : "Add Community to this Project"}>
       <div className="absolute inset-0 bg-black/60" onClick={onClose} aria-hidden="true" />
       <div className="relative w-full max-w-md w-card p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="w-display text-base">Add Community</h3>
+          <h3 className="w-display text-base">{isEscalation ? "Connect Escalation Group" : "Add Community"}</h3>
           <button onClick={onClose} aria-label="Close" className="w-text-dim hover:w-text"><X size={16} /></button>
         </div>
 
@@ -66,7 +73,11 @@ export function ProjectAddCommunityModal({
           </div>
         ) : (
           <div>
-            <p className="text-sm w-text-dim mb-3">Add the Watcher's bot to your Telegram group/channel, then verify the connection here.</p>
+            <p className="text-sm w-text-dim mb-3">
+              {isEscalation
+                ? "Add the Watcher's bot to your private team/ops Telegram group, then verify the connection here. This group is internal -- it never consumes a Watcher slot or counts toward your plan's Community allowance."
+                : "Add the Watcher's bot to your Telegram group/channel, then verify the connection here."}
+            </p>
             <label className="text-xs w-text-dim block mb-1">Verify using Watcher</label>
             <select value={watcherId} onChange={(e) => setWatcherId(e.target.value)} className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border mb-3">
               {deployableWatchers.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
@@ -84,7 +95,7 @@ export function ProjectAddCommunityModal({
               disabled={busy || !watcherId || !chatInput.trim()}
               className="w-btn-primary text-sm font-semibold w-full py-2.5 rounded-lg disabled:opacity-60"
             >
-              {busy ? <Loader2 size={14} className="animate-spin mx-auto" /> : "Connect community"}
+              {busy ? <Loader2 size={14} className="animate-spin mx-auto" /> : isEscalation ? "Connect escalation group" : "Connect community"}
             </button>
           </div>
         )}

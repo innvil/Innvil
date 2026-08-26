@@ -1,33 +1,44 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Users, Bot, Radio, ArrowRight, LayoutGrid, Settings as SettingsIcon } from "lucide-react";
+import { Users, Bot, Radio, ArrowRight, LayoutGrid, Settings as SettingsIcon, MessageCircleQuestion } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getAccountProjectDetail, listAccountActivity, listAccountWatchers, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
 import { DEPLOYABLE_PROVISIONING_STATUSES } from "@/src/lib/products/watch-status";
 import { getAccountProjectProfile } from "@/src/lib/actions/watch-project-profile";
+import { listProjectEscalations } from "@/src/lib/actions/watch-escalations";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { Breadcrumbs, StatusDot, EmptyRow, SectionHeader, OperationalStatusBadge, relTime } from "@/src/components/watch/WatchUI";
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
 import { ProjectKnowledgeTab } from "@/src/components/watch/ProjectKnowledgeTab";
 import { ProjectAddWatcherCta } from "@/src/components/watch/ProjectAddWatcherCta";
 import { ProjectAddCommunityCta } from "@/src/components/watch/ProjectAddCommunityCta";
+import { ProjectAddEscalationGroupCta } from "@/src/components/watch/ProjectAddEscalationGroupCta";
+import { ProjectEscalationsTab } from "@/src/components/watch/ProjectEscalationsTab";
 
 export const metadata: Metadata = { title: "Project — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { accountId, admin } = await requireWatchPage();
-  const [detail, profileResult, activity, shell, allWatchers] = await Promise.all([
+  const [detail, profileResult, activity, shell, allWatchers, escalationsResult] = await Promise.all([
     getAccountProjectDetail(admin, accountId, id),
     getAccountProjectProfile(id),
     listAccountActivity(admin, accountId, { projectId: id, limit: 20 }),
     getWatchShellContext(admin, accountId),
     listAccountWatchers(admin, accountId),
+    listProjectEscalations(id),
   ]);
   if (!detail) notFound();
 
-  const attention = detail.communities.filter((c) => communityOperationalStatus(c) === "needs_attention");
+  // Shared Escalation Group (Phase 1) -- an escalation-group community is
+  // internal ops infrastructure, never customer-facing; excluded from every
+  // capacity-adjacent count (0-slot billing is enforced server-side in
+  // watch-runtime.ts, but the UI's own "N communities" figures must agree
+  // with what actually counts toward the plan). Still rendered (labeled) in
+  // the Communities/Watchers tables below -- just never counted here.
+  const customerFacingCommunities = detail.communities.filter((c) => c.connectionType === "community");
+  const attention = customerFacingCommunities.filter((c) => communityOperationalStatus(c) === "needs_attention");
   const watchersInProject = Array.from(
     new Map(detail.communities.flatMap((c) => c.watchers.map((w) => [w.watcherId, w]))).values()
   );
@@ -45,7 +56,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   // count and an active DEPLOYMENT (slot) count are different numbers, and
   // showing only one at the Project level would reintroduce the exact
   // ambiguity already fixed globally.
-  const activeDeploymentsInProject = detail.communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
+  const activeDeploymentsInProject = customerFacingCommunities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
 
   const tabs: WatchTab[] = [
     {
@@ -60,7 +71,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             </div>
             <div className="w-card p-4">
               <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">Communities</p>
-              <p className="w-display text-lg w-text">{detail.communities.length}</p>
+              <p className="w-display text-lg w-text">{customerFacingCommunities.length}</p>
             </div>
             <div className="w-card p-4">
               <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">Watcher profiles</p>
@@ -123,13 +134,25 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       ),
     },
     {
+      id: "escalations",
+      label: "Escalations",
+      content: escalationsResult.ok ? (
+        <ProjectEscalationsTab initialEscalations={escalationsResult.data} />
+      ) : (
+        <EmptyRow text={escalationsResult.error} />
+      ),
+    },
+    {
       id: "communities",
       label: "Communities",
       content: (
         <div className="w-card p-5">
           <div className="flex items-center justify-between mb-3">
             <SectionHeader icon={Users} title="Communities" />
-            <ProjectAddCommunityCta projectId={detail.id} deployableWatchers={deployableWatchers} />
+            <div className="flex items-center gap-2">
+              <ProjectAddCommunityCta projectId={detail.id} deployableWatchers={deployableWatchers} />
+              <ProjectAddEscalationGroupCta projectId={detail.id} deployableWatchers={deployableWatchers} />
+            </div>
           </div>
           {detail.communities.length === 0 ? (
             <div className="text-center py-8">
@@ -154,7 +177,13 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     <tr key={c.id} className="border-t w-line-soft">
                       <td className="py-2.5 px-1 w-text">{c.title ?? c.chatId}</td>
                       <td className="py-2.5 px-1 w-text-dim">{c.watchers.length}</td>
-                      <td className="py-2.5 px-1"><OperationalStatusBadge status={communityOperationalStatus(c)} /></td>
+                      <td className="py-2.5 px-1">
+                        {c.connectionType === "escalation_group" ? (
+                          <span className="text-[11px] font-semibold uppercase tracking-wide w-text-faint">Escalation Group</span>
+                        ) : (
+                          <OperationalStatusBadge status={communityOperationalStatus(c)} />
+                        )}
+                      </td>
                       <td className="py-2.5 px-1 text-right"><Link href={`/communities/${c.id}`} className="text-xs w-teal hover:underline">Open</Link></td>
                     </tr>
                   ))}
@@ -197,7 +226,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                   {detail.communities.flatMap((c) => c.watchers.map((w) => (
                     <tr key={w.deploymentId} className="border-t w-line-soft">
                       <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
-                      <td className="py-2.5 px-1 w-text-dim">{c.title ?? c.chatId}</td>
+                      <td className="py-2.5 px-1 w-text-dim">
+                        {c.title ?? c.chatId}
+                        {c.connectionType === "escalation_group" && <span className="ml-1.5 text-[10px] uppercase tracking-wide w-text-faint">(Escalation Group)</span>}
+                      </td>
                       <td className="py-2.5 px-1"><StatusDot on={w.enabled} /></td>
                     </tr>
                   )))}
@@ -240,7 +272,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <div className="space-y-2.5 text-sm">
             <div className="flex items-center justify-between"><span className="w-text-dim">Name</span><span className="w-text">{detail.name}</span></div>
             <div className="flex items-center justify-between"><span className="w-text-dim">Project ID</span><span className="w-text w-mono text-xs">{detail.id}</span></div>
-            <div className="flex items-center justify-between"><span className="w-text-dim">Communities</span><span className="w-text">{detail.communities.length}</span></div>
+            <div className="flex items-center justify-between"><span className="w-text-dim">Communities</span><span className="w-text">{customerFacingCommunities.length}</span></div>
             <div className="flex items-center justify-between"><span className="w-text-dim">Watcher profiles</span><span className="w-text">{detail.watcherCount}</span></div>
           </div>
           <p className="text-xs w-text-faint mt-4">
@@ -259,7 +291,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <p className="text-xs w-text-faint uppercase tracking-wide font-semibold mb-1 flex items-center gap-1.5"><LayoutGrid size={12} /> Project</p>
           <h1 className="w-display text-xl mb-1">{detail.name}</h1>
           <p className="text-sm w-text-dim">
-            {detail.communities.length} communit{detail.communities.length === 1 ? "y" : "ies"} · {detail.watcherCount} watcher{detail.watcherCount === 1 ? "" : "s"}
+            {customerFacingCommunities.length} communit{customerFacingCommunities.length === 1 ? "y" : "ies"} · {detail.watcherCount} watcher{detail.watcherCount === 1 ? "" : "s"}
           </p>
         </div>
         <WatchTabs tabs={tabs} />

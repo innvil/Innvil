@@ -102,6 +102,15 @@ export interface GenerateChatterReplyInput {
    *  means BOTH ANSWER and CASUAL_CHAT MUST use `credential`, or fail
    *  explicitly — see resolveChatterRoute. */
   aiRouting?: AccountAiRouting;
+  /** Shared Escalation Group (Phase 1) — true only when the project has a
+   *  real, connected escalation-group community (community-runtime.ts
+   *  resolves this once per message, never trusts a client flag). ANSWER
+   *  generation only offers the ESCALATE_REQUIRED sentinel when this is
+   *  true; when false/undefined, behavior is byte-identical to before this
+   *  feature existed (the plain "I don't have that information" line).
+   *  Never read by CASUAL_CHAT — escalation only ever applies to a genuine
+   *  informational question. */
+  escalationConfigured?: boolean;
 }
 
 /** Real usage from the ONE model call generateChatterReply makes -- present
@@ -120,9 +129,16 @@ export interface ChatterGenerationUsage {
 export type ChatterGenerationResult =
   | { ok: true; reply: string; usage: ChatterGenerationUsage }
   | { ok: true; noReply: true; usage: ChatterGenerationUsage }
+  /** ANSWER only — the model found ZERO relevant Project Knowledge for a
+   *  question that genuinely needs project-specific information, and a
+   *  real escalation group is configured (escalationConfigured: true).
+   *  The caller (community-runtime.ts) must create a real escalation
+   *  instead of sending any text — never both. */
+  | { ok: true; escalate: true; usage: ChatterGenerationUsage }
   | { ok: false; error: string };
 
 const NO_REPLY_SENTINEL = "NO_REPLY";
+const ESCALATE_REQUIRED_SENTINEL = "ESCALATE_REQUIRED";
 const MAX_REPLY_CHARS = 300;
 
 /**
@@ -302,6 +318,22 @@ function projectKnowledgeContextLines(input: GenerateChatterReplyInput): string 
 const NO_PROJECT_KNOWLEDGE_LINE =
   "No Project Knowledge was found relevant to this question -- you currently have ZERO project-specific facts, features, or details to draw on for it. Do not invent, guess, or improvise plausible-sounding specifics about what the project does, how any feature works, or anything else project-related. If the question needs specific project information you don't actually have, say so honestly (e.g. \"not sure on the specifics there\") instead of making something up -- you may still speak generally/socially if the question doesn't actually require project-specific facts.";
 
+/** Shared Escalation Group (Phase 1): when real Project Knowledge WAS
+ *  retrieved (projectKnowledgeContextLines returns non-null), that already
+ *  covers the answer either way -- including an honest "not yet announced/
+ *  decided" fact, which IS a real answer and must never escalate. Escalation
+ *  only ever applies to the OTHER case: zero relevant knowledge exists at
+ *  all, the question genuinely needs project-specific facts, and this
+ *  project has a real escalation group configured (escalationConfigured).
+ *  Without a configured escalation group, behavior is byte-identical to
+ *  before this feature existed. */
+function knowledgeOrEscalationLine(input: GenerateChatterReplyInput): string {
+  const knowledge = projectKnowledgeContextLines(input);
+  if (knowledge) return knowledge;
+  if (!input.escalationConfigured) return NO_PROJECT_KNOWLEDGE_LINE;
+  return `${NO_PROJECT_KNOWLEDGE_LINE} However, a private team escalation channel IS configured for this project -- if this specific question genuinely needs project-specific information you don't have (a real informational question, not idle chat, not something answerable generally/socially), respond with EXACTLY: ${ESCALATE_REQUIRED_SENTINEL} -- never guess, never improvise a plausible-sounding answer, and never just write a freeform "I don't know" in this case; ${ESCALATE_REQUIRED_SENTINEL} is the correct response so the team can be asked for a verified answer instead.`;
+}
+
 /** Distinct-contribution rule for a multi-target exchange (only present for
  *  an ADDITIONAL, non-primary responder — see priorResponsesToThisMessage's
  *  doc comment). Grounds the "did another moderator already cover this?"
@@ -340,12 +372,14 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
       typoLine(input),
       obligationContextLines(input),
       collabContactLine(input),
-      projectKnowledgeContextLines(input) ?? NO_PROJECT_KNOWLEDGE_LINE,
+      knowledgeOrEscalationLine(input),
       `Be concise and natural for Telegram — not a formal support ticket reply. Use relevant knowledge you actually have; do not fabricate facts, features, prices, or policies.`,
       ...SHARED_RULES,
       STYLE_HIERARCHY_PREFACE,
       style.join(" "),
-      `Decide naturally: if you genuinely don't know and can't give a useful answer, or two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}`,
+      input.escalationConfigured
+        ? `Decide naturally: if two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}. If the question needs project-specific information that's genuinely missing (see above), respond with EXACTLY: ${ESCALATE_REQUIRED_SENTINEL}. Never combine either sentinel with other text.`
+        : `Decide naturally: if you genuinely don't know and can't give a useful answer, or two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}`,
       `Otherwise respond with ONLY the message you'd actually send — no quotation marks, no explanation, no markdown, under 30 words.`,
     ].filter(Boolean).join("\n");
   }
@@ -506,6 +540,14 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
     });
     const usage: ChatterGenerationUsage = { inputTokens: result.inputTokens, outputTokens: result.outputTokens, durationMs: result.durationMs };
     const text = result.text.trim();
+    // Checked BEFORE NO_REPLY -- ESCALATE_REQUIRED is only ever offered to
+    // ANSWER when escalationConfigured is true (knowledgeOrEscalationLine),
+    // but a defensive check here means an unexpected match can never be
+    // silently swallowed as a plain NO_REPLY (which would drop the question
+    // with no escalation and no team notification at all).
+    if (text.toUpperCase() === ESCALATE_REQUIRED_SENTINEL || text.toUpperCase().startsWith(ESCALATE_REQUIRED_SENTINEL)) {
+      return { ok: true, escalate: true, usage };
+    }
     if (!text || text.toUpperCase() === NO_REPLY_SENTINEL || text.toUpperCase().startsWith(NO_REPLY_SENTINEL)) {
       return { ok: true, noReply: true, usage };
     }
@@ -647,4 +689,4 @@ export async function classifyAmbientGreeting(
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live
  *  AI call. Not used by any other runtime code. */
-export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines, collabContactLine, projectKnowledgeContextLines };
+export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines, collabContactLine, projectKnowledgeContextLines, knowledgeOrEscalationLine };

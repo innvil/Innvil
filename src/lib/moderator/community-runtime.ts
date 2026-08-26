@@ -109,6 +109,7 @@ import {
 } from "@/src/lib/products/watch-media-moderation-usage";
 import { ENTERPRISE_MEDIA_ADDON, MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
 import { resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
+import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage, type EscalationTarget } from "./escalation-runtime";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -262,7 +263,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -283,7 +284,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
     .eq("id", data.id);
   if (updateError) console.error("[telegram/community] resolveCommunity metadata update failed", data.id, updateError.message);
 
-  return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null };
+  return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null; connection_type: "community" | "escalation_group" };
 }
 
 /* ---------------------------------------------------- community connect ---- */
@@ -1008,13 +1009,14 @@ async function logBotAckDecision(admin: SupabaseClient, panelId: string | null, 
 
 /* -------------------------------------------------------- natural chatter ---- */
 
-const KNOWLEDGE_SELECT = "id, panel_id, scope_type, project_id, community_id, kind, title, content, active";
+const KNOWLEDGE_SELECT = "id, panel_id, scope_type, project_id, community_id, kind, title, content, active, expires_at";
 
 function toKnowledgeSources(rows: Array<Record<string, unknown>> | null): KnowledgeSource[] {
   return (rows ?? []).map((r) => ({
     id: r.id as string, panelId: r.panel_id as string, scopeType: r.scope_type as KnowledgeSource["scopeType"],
     projectId: (r.project_id as string) ?? null, communityId: (r.community_id as string) ?? null, kind: r.kind as KnowledgeSource["kind"],
     title: (r.title as string) ?? "", content: (r.content as string) ?? "", active: r.active !== false,
+    expiresAt: (r.expires_at as string) ?? null,
   }));
 }
 
@@ -1128,6 +1130,13 @@ export async function loadRelevantKnowledge(admin: SupabaseClient, panelId: stri
 
 export interface ChatterDeployment {
   deploymentId: string;
+  /** virtual_moderators.id -- the Watcher PROFILE's own identity, distinct
+   *  from deploymentId (the Watcher-to-Community assignment). Needed for
+   *  Shared Escalation Group (Phase 1): an escalation's `watcher_id`
+   *  references this, since the resolve-back send later needs to find the
+   *  SAME Watcher's deployment (which may differ from `deploymentId` if the
+   *  deployment was recreated), not just replay the original deployment id. */
+  moderatorId: string;
   moderatorName: string;
   persona: ModeratorPersona;
   botUsername: string | null;
@@ -1161,6 +1170,7 @@ async function findChatterDeployments(admin: SupabaseClient, communityId: string
     const vm = Array.isArray(row.virtual_moderators) ? row.virtual_moderators[0] : row.virtual_moderators;
     return {
       deploymentId: row.id,
+      moderatorId: row.moderator_id,
       moderatorName: vm?.name ?? "Moderator",
       persona: normalizeModeratorPersona(vm?.persona),
       botUsername: usernameByModeratorId.get(row.moderator_id) ?? null,
@@ -1431,7 +1441,12 @@ async function runModeratorTaskCascade(
         addressedWithTypo: false,
         otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
       });
-      if (!generation.ok || "noReply" in generation) break; // can't produce a turn right now -- leave the task exactly as-is, don't corrupt state
+      // "escalate" is structurally unreachable here (this call is always
+      // action: "CASUAL_CHAT", and ESCALATE_REQUIRED is only ever offered
+      // to ANSWER's own prompt) -- guarded anyway so a future change can't
+      // silently corrupt task state by treating an escalate result as a
+      // real turn.
+      if (!generation.ok || "noReply" in generation || "escalate" in generation) break; // can't produce a turn right now -- leave the task exactly as-is, don't corrupt state
       outputText = generation.reply;
     }
 
@@ -2090,7 +2105,7 @@ async function runMediaModeration(
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; collab_contact?: string | null },
+  community: { id: string; collab_contact?: string | null; project_id?: string | null },
   message: TelegramMessage,
   event: CommunityEvent,
   isTrialEntitlement: boolean,
@@ -2249,6 +2264,18 @@ async function handleHumanMessage(
   // as undefined so generateChatterReply's prompt correctly omits the
   // "Project knowledge" block entirely rather than injecting an empty one.
   const projectKnowledge = action.type === "ANSWER" ? await loadRelevantKnowledge(admin, panelId, community.id, event.text) : undefined;
+  // Shared Escalation Group (Phase 1) — resolved ONCE per message, ANSWER
+  // only (escalation only ever applies to a genuine informational
+  // question), and only when this community actually belongs to a Project
+  // (standalone-Watch communities always do; a legacy Panel-distributed
+  // community may not have one resolved here, in which case escalation is
+  // simply unavailable — the existing plain "I don't have that
+  // information" behavior applies unchanged). null when no escalation
+  // group is connected for the project (or none has a Watcher deployed
+  // into it yet) — generateChatterReply's prompt never offers
+  // ESCALATE_REQUIRED in that case.
+  const escalationTarget =
+    action.type === "ANSWER" && community.project_id ? await resolveProjectEscalationTarget(admin, community.project_id) : null;
 
   let primaryResult = await respondAsDeployment({
     admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
@@ -2260,6 +2287,8 @@ async function handleHumanMessage(
     collabContact,
     projectKnowledge,
     aiRouting,
+    projectId: community.project_id ?? null,
+    escalationTarget,
     timer,
   });
   let respondingDeployment = deployment;
@@ -2290,6 +2319,8 @@ async function handleHumanMessage(
         collabContact,
         projectKnowledge,
         aiRouting,
+        projectId: community.project_id ?? null,
+        escalationTarget,
         timer,
       });
       if (rerouted.replied) {
@@ -2364,6 +2395,8 @@ async function handleHumanMessage(
           collabContact,
           projectKnowledge,
           aiRouting,
+          projectId: community.project_id ?? null,
+          escalationTarget,
           timer,
         });
         if (result.replied) priorResponses.push({ moderatorName: additionalDeployment.moderatorName, text: result.text });
@@ -2448,12 +2481,24 @@ export async function respondAsDeployment(params: {
    *  AI-provider routing decision (see GenerateChatterReplyInput's own doc
    *  comment). Defaults to MANAGED_AI_ROUTING when omitted. */
   aiRouting?: AccountAiRouting;
+  /** Shared Escalation Group (Phase 1) -- this community's Project id, when
+   *  known (see handleHumanMessage's own doc comment on when this may be
+   *  null). Required (with escalationTarget) to actually create an
+   *  escalation when the model emits ESCALATE_REQUIRED. */
+  projectId?: string | null;
+  /** Already-resolved once per message (handleHumanMessage) -- null means
+   *  no escalation group is configured/deployable for this project, in
+   *  which case generateChatterReply is never even offered the
+   *  ESCALATE_REQUIRED sentinel (escalationConfigured: false) and this
+   *  field is unused. */
+  escalationTarget?: EscalationTarget | null;
   timer: RequestTimer;
 }): Promise<{ replied: false; modelDeclined?: boolean } | { replied: true; text: string }> {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, accountId, paidTier, now, recentContext,
     isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
     aiRouting: initialAiRouting = MANAGED_AI_ROUTING,
+    projectId = null, escalationTarget = null,
   } = params;
   // Phase 4.V.1 (item 2) -- reassignable (`let`), since the deployment-
   // scoped usage-policy re-check below (SHORT_ACK-excluded -- see the
@@ -2562,6 +2607,11 @@ export async function respondAsDeployment(params: {
         collabContact,
         projectKnowledge,
         aiRouting,
+        // Shared Escalation Group (Phase 1) -- only ever true for ANSWER
+        // (escalationTarget is only ever resolved for ANSWER, see
+        // handleHumanMessage), and only when a real, deployable escalation
+        // group exists for this project.
+        escalationConfigured: !!escalationTarget,
       }),
       CHATTER_TOTAL_BUDGET_MS
     );
@@ -2589,29 +2639,69 @@ export async function respondAsDeployment(params: {
       recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, false, generation.error);
       return { replied: false };
     }
-    if ("noReply" in generation) {
+    if ("escalate" in generation) {
+      // Shared Escalation Group (Phase 1) -- the model found ZERO relevant
+      // Project Knowledge for a question that genuinely needs it, and a
+      // real escalation group is configured. Real provider spend already
+      // happened (a genuine successful call) -- counted the same way a
+      // normal successful reply is (see the counting-semantics comment
+      // below), never treated as a free/zero-cost outcome just because no
+      // text was sent to the community.
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
+      if (accountId && aiUsagePeriod) {
+        await incrementWatchAiGenerationUsage(admin, accountId, aiUsagePeriod);
+      }
+      if (escalationTarget && projectId) {
+        const result = await createEscalation({
+          admin, projectId, sourceCommunityId: communityId,
+          escalatingModeratorId: deployment.moderatorId, watcherName: deployment.moderatorName,
+          askerPlatformUserId: event.sender.platformUserId, askerDisplayName: event.sender.displayName,
+          sourceMessageId: event.messageId, questionText: event.text,
+        });
+        if (result.ok) {
+          await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "ESCALATED", reasons.join(","), { reasons });
+          replyText = result.forwardedText;
+        } else {
+          // Narrow failure path -- escalationConfigured was only true
+          // because a real target was resolved moments earlier, so this
+          // means the actual SEND to the escalation group failed (e.g. a
+          // permission/rate-limit hiccup), not a missing configuration.
+          // Never promises "forwarded to the team" when it wasn't.
+          console.error("[telegram/community] escalation creation failed despite a resolved target", communityId);
+          await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "ESCALATION_FAILED", reasons.join(","), { reasons });
+          replyText = "I don't have a confirmed answer for that right now.";
+        }
+      } else {
+        // Should be unreachable (escalationConfigured mirrors escalationTarget
+        // exactly) -- defensive fallback, never silently drops the question.
+        console.error("[telegram/community] model emitted ESCALATE_REQUIRED with no escalation target resolved", communityId);
+        await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "ESCALATION_FAILED", reasons.join(","), { reasons });
+        replyText = "I don't have a confirmed answer for that right now.";
+      }
+    } else if ("noReply" in generation) {
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
       // A genuine successful BYO call -- the model responded, it just chose
       // not to reply. Real provider spend happened, so this counts as a
       // successful call for telemetry purposes, same as any real reply.
       recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
       return { replied: false, modelDeclined: true };
-    }
-    replyText = generation.reply;
-    recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
+    } else {
+      replyText = generation.reply;
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
 
-    // 2026-08-22 counting-semantics change: an "AI Generation" is consumed
-    // the moment the provider successfully produces a usable reply -- NOT
-    // gated on the subsequent Telegram send. A timeout/auth failure/outage/
-    // declined generation (all handled above, all `return` before reaching
-    // this line) counts as 0; a successful generation whose Telegram
-    // delivery later fails still counts as 1 (the customer's provider spend
-    // already happened). This intentionally differs from the trial's
-    // SEPARATE reactive-quota counter below, which still counts only on a
-    // confirmed send -- the two are different products with different
-    // counting rules, never conflated.
-    if (accountId && aiUsagePeriod) {
-      await incrementWatchAiGenerationUsage(admin, accountId, aiUsagePeriod);
+      // 2026-08-22 counting-semantics change: an "AI Generation" is consumed
+      // the moment the provider successfully produces a usable reply -- NOT
+      // gated on the subsequent Telegram send. A timeout/auth failure/outage/
+      // declined generation (all handled above, all `return` before reaching
+      // this line) counts as 0; a successful generation whose Telegram
+      // delivery later fails still counts as 1 (the customer's provider spend
+      // already happened). This intentionally differs from the trial's
+      // SEPARATE reactive-quota counter below, which still counts only on a
+      // confirmed send -- the two are different products with different
+      // counting rules, never conflated.
+      if (accountId && aiUsagePeriod) {
+        await incrementWatchAiGenerationUsage(admin, accountId, aiUsagePeriod);
+      }
     }
   }
 
@@ -2697,6 +2787,17 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
 
   const community = await resolveCommunity(admin, integration.panel_id, message.chat);
   if (!community) { timer.mark("no_community", { chatId: message.chat.id, chatType: message.chat.type }); return; }
+
+  // Shared Escalation Group (Phase 1) -- an escalation-group community is
+  // an internal ops channel, never a customer-facing one. Branched BEFORE
+  // sender classification/moderation/chatter, none of which are meaningful
+  // here: an admin's reply either resolves a tracked escalation or it's a
+  // no-op, nothing else about this chat is ever moderated/chatted with.
+  if (community.connection_type === "escalation_group") {
+    await handleEscalationGroupMessage(admin, { id: community.id, chatId: String(message.chat.id) }, message);
+    timer.mark("escalation_group_message_handled");
+    return;
+  }
 
   const sender = await classifySender(admin, integration.panel_id, community.id, message.from);
 

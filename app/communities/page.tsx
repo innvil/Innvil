@@ -125,7 +125,13 @@ export default async function CommunitiesPage({
                         <td className="py-3 px-4"><Link href={`/communities/${c.id}`} className="w-text hover:w-teal font-medium">{c.title ?? c.chatId}</Link></td>
                         <td className="py-3 px-4"><Link href={`/projects/${c.projectId}`} className="w-text-dim hover:w-text">{c.projectName}</Link></td>
                         <td className="py-3 px-4 w-text-dim capitalize">{c.platform}</td>
-                        <td className="py-3 px-4"><OperationalStatusBadge status={communityOperationalStatus(c)} /></td>
+                        <td className="py-3 px-4">
+                          {c.connectionType === "escalation_group" ? (
+                            <span className="text-[11px] font-semibold uppercase tracking-wide w-text-faint">Escalation Group</span>
+                          ) : (
+                            <OperationalStatusBadge status={communityOperationalStatus(c)} />
+                          )}
+                        </td>
                         <td className="py-3 px-4 text-xs"><WatcherNamesCell watchers={c.watchers} /></td>
                         <td className="py-3 px-4 w-text-dim">{stats?.lastActivityAt ? relTime(stats.lastActivityAt) : "—"}</td>
                         <td className="py-3 px-4 w-text-dim">{stats?.moderationCount24h ?? 0}</td>

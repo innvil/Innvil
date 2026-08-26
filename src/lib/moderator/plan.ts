@@ -244,9 +244,17 @@ export function checkDeploymentSlotCaps(input: {
   activeSlotCount: number;
   maxActiveSlots: number;
   communityDeploymentCount: number;
+  /** Shared Escalation Group (Phase 1) — an escalation-group deployment must
+   *  NEVER consume a Watcher slot, so its caller skips the subscription
+   *  slot-limit check entirely for it (never merely excludes it from the
+   *  count) while the per-community deployment cap below still applies
+   *  independently (that cap is an operational/noise safeguard unrelated to
+   *  slot billing, not something this feature is meant to bypass). Defaults
+   *  to false so every existing caller's behavior is unchanged. */
+  skipActiveSlotLimit?: boolean;
 }): DeploymentSlotCheck {
   if (input.isExistingDeployment) return { ok: true };
-  if (input.activeSlotCount >= input.maxActiveSlots) return { ok: false, reason: "active_slot_limit" };
+  if (!input.skipActiveSlotLimit && input.activeSlotCount >= input.maxActiveSlots) return { ok: false, reason: "active_slot_limit" };
   if (input.communityDeploymentCount >= MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY) return { ok: false, reason: "community_deployment_cap" };
   return { ok: true };
 }

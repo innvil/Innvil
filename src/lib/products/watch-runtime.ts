@@ -622,6 +622,12 @@ export interface AccountCommunityInput {
   handle?: string | null;
   title?: string | null;
   chatType?: string | null;
+  /** Shared Escalation Group (Phase 1) -- defaults to "community" (every
+   *  existing caller is unaffected). "escalation_group" skips the plan's
+   *  Community-allowance cap check entirely (see createAccountCommunity's
+   *  own doc comment on why) and tags the resulting row so slot/community
+   *  counting excludes it everywhere else in this file. */
+  connectionType?: "community" | "escalation_group";
 }
 
 /** The only Telegram chat/resource types a Watch Community may represent.
@@ -640,6 +646,7 @@ export interface AccountCommunityRow {
   platform: string;
   chatId: string;
   title: string | null;
+  connectionType: "community" | "escalation_group";
 }
 
 /** Creates a Community (`communities` row) under a standalone Project --
@@ -672,18 +679,26 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
   if (existingForChat && existingForChat.project_id !== projectId) {
     return { ok: false, error: "This community is already connected to a different Project." };
   }
-  if (!existingForChat) {
+  const connectionType = input.connectionType ?? "community";
+  // Shared Escalation Group (Phase 1) -- connecting an escalation group
+  // NEVER competes for the plan's Community allowance at all (it's internal
+  // ops infrastructure, not a customer-facing deployment target), so the
+  // whole cap check is skipped for it, not merely excluded from the count.
+  if (!existingForChat && connectionType !== "escalation_group") {
     const { data: accountProjects } = await admin.from("projects").select("id").eq("account_id", accountId);
     const projectIds = (accountProjects ?? []).map((p: Record<string, unknown>) => p.id as string);
     // Counts in application code (not a head:true exact count) so a private
     // Telegram chat row never inflates the plan's community cap -- matches
     // listAccountCommunities' own exclusion, kept consistent rather than
     // letting the cap-check drift from what the Communities list actually
-    // shows.
+    // shows. Escalation-group rows are excluded from this count too, for
+    // the same reason.
     const { data: existingCommunityRows } = projectIds.length
-      ? await admin.from("communities").select("id, chat_type").in("project_id", projectIds)
-      : { data: [] as Array<{ id: string; chat_type: string | null }> };
-    const existingCommunityCount = (existingCommunityRows ?? []).filter((r: { chat_type: string | null }) => r.chat_type !== "private").length;
+      ? await admin.from("communities").select("id, chat_type, connection_type").in("project_id", projectIds)
+      : { data: [] as Array<{ id: string; chat_type: string | null; connection_type: string | null }> };
+    const existingCommunityCount = (existingCommunityRows ?? []).filter(
+      (r: { chat_type: string | null; connection_type: string | null }) => r.chat_type !== "private" && r.connection_type !== "escalation_group"
+    ).length;
     if (communityCountExceeded(true, existingCommunityCount, maxCommunities)) {
       return { ok: false, error: `Your plan supports up to ${maxCommunities} communit${maxCommunities === 1 ? "y" : "ies"}. Upgrade your plan to connect another Community.` };
     }
@@ -706,15 +721,15 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
       .from("communities")
       .update({ handle: input.handle ?? null, title: input.title ?? null, chat_type: input.chatType ?? null })
       .eq("id", existingForChat.id)
-      .select("id, project_id, platform, chat_id, title")
+      .select("id, project_id, platform, chat_id, title, connection_type")
       .single();
     data = res.data as Record<string, unknown> | null;
     error = res.error;
   } else {
     const res = await admin
       .from("communities")
-      .insert({ panel_id: null, project_id: projectId, platform: input.platform, chat_id: chatId, handle: input.handle ?? null, title: input.title ?? null, chat_type: input.chatType ?? null })
-      .select("id, project_id, platform, chat_id, title")
+      .insert({ panel_id: null, project_id: projectId, platform: input.platform, chat_id: chatId, handle: input.handle ?? null, title: input.title ?? null, chat_type: input.chatType ?? null, connection_type: connectionType })
+      .select("id, project_id, platform, chat_id, title, connection_type")
       .single();
     data = res.data as Record<string, unknown> | null;
     error = res.error;
@@ -723,7 +738,7 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
       // row the winner just created instead of surfacing a raw DB error.
       const retry = await admin
         .from("communities")
-        .select("id, project_id, platform, chat_id, title")
+        .select("id, project_id, platform, chat_id, title, connection_type")
         .eq("platform", input.platform)
         .eq("chat_id", chatId)
         .is("panel_id", null)
@@ -732,7 +747,14 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
     }
   }
   if (error || !data) return { ok: false, error: error?.message ?? "Could not save the community." };
-  return { ok: true, data: { id: data.id as string, projectId: data.project_id as string, platform: data.platform as string, chatId: data.chat_id as string, title: (data.title as string | null) ?? null } };
+  return {
+    ok: true,
+    data: {
+      id: data.id as string, projectId: data.project_id as string, platform: data.platform as string, chatId: data.chat_id as string,
+      title: (data.title as string | null) ?? null,
+      connectionType: data.connection_type === "escalation_group" ? "escalation_group" : "community",
+    },
+  };
 }
 
 export interface AccountDeploymentRow {
@@ -753,7 +775,7 @@ export async function deployAccountWatcher(admin: SupabaseClient, accountId: str
   const { data: moderator } = await admin.from("virtual_moderators").select("id, account_id").eq("id", moderatorId).maybeSingle();
   if (!moderator || moderator.account_id !== accountId) return { ok: false, error: "Watcher not found." };
 
-  const { data: community } = await admin.from("communities").select("id, project_id, chat_type").eq("id", communityId).maybeSingle();
+  const { data: community } = await admin.from("communities").select("id, project_id, chat_type, connection_type").eq("id", communityId).maybeSingle();
   if (!community) return { ok: false, error: "Community not found." };
   // A deployment target must be a real Community, never a Telegram person
   // that slipped into `communities` (defense in depth -- createAccountCommunity
@@ -771,22 +793,42 @@ export async function deployAccountWatcher(admin: SupabaseClient, accountId: str
     .maybeSingle();
 
   const maxActiveSlots = ctx.maxActiveSlots;
+  const isEscalationGroupTarget = community.connection_type === "escalation_group";
+
   const { data: accountModerators } = await admin.from("virtual_moderators").select("id").eq("account_id", accountId);
   const moderatorIds = (accountModerators ?? []).map((m: Record<string, unknown>) => m.id as string);
-  const { count: activeSlotCount } = moderatorIds.length
-    ? await admin.from("moderator_deployments").select("id", { count: "exact", head: true }).in("moderator_id", moderatorIds).eq("enabled", true)
-    : { count: 0 };
+  // A real row fetch (not a head:true exact count) so an escalation-group
+  // deployment can be excluded from the USED count in application code --
+  // an already-deployed escalation-group Watcher must never pad the count
+  // that gates every OTHER (real) deployment attempt.
+  const { data: activeDeploymentRows } = moderatorIds.length
+    ? await admin.from("moderator_deployments").select("id, community_id").in("moderator_id", moderatorIds).eq("enabled", true)
+    : { data: [] as Array<{ id: string; community_id: string }> };
+  const activeDeploymentCommunityIds = Array.from(new Set((activeDeploymentRows ?? []).map((r: { community_id: string }) => r.community_id)));
+  const { data: escalationCommunitiesAmongThose } = activeDeploymentCommunityIds.length
+    ? await admin.from("communities").select("id").in("id", activeDeploymentCommunityIds).eq("connection_type", "escalation_group")
+    : { data: [] as Array<{ id: string }> };
+  const escalationCommunityIdSet = new Set((escalationCommunitiesAmongThose ?? []).map((r: { id: string }) => r.id));
+  const activeSlotCount = (activeDeploymentRows ?? []).filter((r: { community_id: string }) => !escalationCommunityIdSet.has(r.community_id)).length;
   const { count: communityDeploymentCount } = await admin
     .from("moderator_deployments")
     .select("id", { count: "exact", head: true })
     .eq("community_id", communityId)
     .eq("enabled", true);
 
+  // Shared Escalation Group (Phase 1) -- deploying INTO an escalation group
+  // must never consume a Watcher slot, so the subscription slot-limit check
+  // is SKIPPED for it entirely (an account already at its real slot cap must
+  // still be able to deploy into its escalation group) -- but the flat
+  // per-community deployment cap still applies independently (an
+  // operational/noise safeguard unrelated to slot billing, unaffected by
+  // this feature's own scope per the explicit product decision).
   const check = checkDeploymentSlotCaps({
     isExistingDeployment: Boolean(existingDeployment?.enabled),
     activeSlotCount: activeSlotCount ?? 0,
     maxActiveSlots,
     communityDeploymentCount: communityDeploymentCount ?? 0,
+    skipActiveSlotLimit: isEscalationGroupTarget,
   });
   if (!check.ok) return { ok: false, error: deploymentSlotCheckErrorMessage(check, maxActiveSlots) };
 
@@ -846,6 +888,12 @@ export interface AccountCommunitySummary {
   platform: string;
   chatId: string;
   title: string | null;
+  /** Shared Escalation Group (Phase 1) -- "community" is an ordinary
+   *  customer-facing connection (counts toward Watcher-slot usage and the
+   *  plan's Community allowance); "escalation_group" is an internal ops
+   *  channel and is explicitly EXCLUDED from both (see getAccountCapacity/
+   *  getAccountSlotBreakdown/createAccountCommunity/deployAccountWatcher). */
+  connectionType: "community" | "escalation_group";
   watchers: Array<{ deploymentId: string; watcherId: string; watcherName: string; enabled: boolean }>;
 }
 
@@ -861,10 +909,10 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
 
   const { data: communities } = await admin
     .from("communities")
-    .select("id, project_id, platform, chat_id, title, chat_type")
+    .select("id, project_id, platform, chat_id, title, chat_type, connection_type")
     .in("project_id", projectIds)
     .order("created_at", { ascending: true });
-  const allRows = (communities ?? []) as Array<{ id: string; project_id: string; platform: string; chat_id: string; title: string | null; chat_type: string | null }>;
+  const allRows = (communities ?? []) as Array<{ id: string; project_id: string; platform: string; chat_id: string; title: string | null; chat_type: string | null; connection_type: "community" | "escalation_group" | null }>;
   // Excludes any row deterministically known to be a private Telegram 1:1
   // chat (a PERSON, not a Community) rather than filtering in the UI --
   // this is the single canonical Community query every other metric/table
@@ -897,6 +945,10 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     platform: c.platform,
     chatId: c.chat_id,
     title: c.title,
+    // Defaults to "community" for a row somehow missing the column (should
+    // never happen post-migration, since it's NOT NULL with a default) --
+    // never fabricates "escalation_group" from an unexpected/null value.
+    connectionType: c.connection_type === "escalation_group" ? "escalation_group" : "community",
     watchers: deploymentRows
       .filter((d) => d.community_id === c.id)
       .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: moderatorNameById.get(d.moderator_id) ?? "Watcher", enabled: d.enabled })),
@@ -1045,9 +1097,16 @@ export async function getAccountCapacity(admin: SupabaseClient, accountId: strin
     paidThrough: paidPlan?.currentPeriodEnd ?? enterprise?.currentPeriodEnd ?? null,
     billingInterval: paidPlan?.billingInterval ?? enterprise?.billingInterval ?? "monthly",
     watcherProfileCount: watchers.length,
-    activeDeploymentCount: communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length,
+    // Shared Escalation Group (Phase 1) -- an escalation-group connection is
+    // an internal ops channel, never a customer-facing deployment; it must
+    // never consume a Watcher slot or count toward the plan's Community
+    // allowance (see AccountCommunitySummary.connectionType's own doc
+    // comment). Excluded here, not in listAccountCommunities itself, since
+    // other callers of that function (e.g. the Communities list UI) still
+    // need to see and manage the escalation group as a real connection.
+    activeDeploymentCount: communities.filter((c) => c.connectionType === "community").flatMap((c) => c.watchers.filter((w) => w.enabled)).length,
     slotsTotal: ctx.maxActiveSlots,
-    communitiesUsed: communities.length,
+    communitiesUsed: communities.filter((c) => c.connectionType === "community").length,
     communitiesTotal: ctx.maxCommunities,
     communityExpansionActive,
     communityExpansionEligible: eligible,
@@ -1102,7 +1161,10 @@ export interface AccountSlotBreakdown {
  *  Only ENABLED deployments count -- a paused deployment consumes zero
  *  slots, matching the backend's own enforcement exactly. */
 export async function getAccountSlotBreakdown(admin: SupabaseClient, accountId: string): Promise<AccountSlotBreakdown> {
-  const communities = await listAccountCommunities(admin, accountId);
+  // Escalation-group deployments never consume a slot (Shared Escalation
+  // Group, Phase 1) -- excluded here so a Watcher connected to the ops
+  // group never shows as "consuming a slot there" on this exact breakdown.
+  const communities = (await listAccountCommunities(admin, accountId)).filter((c) => c.connectionType === "community");
   const byWatcher = new Map<string, SlotBreakdownByWatcher>();
   const byCommunity: SlotBreakdownByCommunity[] = [];
   for (const c of communities) {
@@ -1447,7 +1509,10 @@ export async function listAccountAttentionItems(admin: SupabaseClient, accountId
   const items: AttentionItem[] = [];
 
   for (const c of communities) {
-    if (!c.watchers.some((w) => w.enabled)) {
+    // An escalation group is optional internal ops infrastructure, not a
+    // customer-facing deployment -- an unconfigured one is never a "needs
+    // attention" condition the way an abandoned customer Community is.
+    if (c.connectionType === "community" && !c.watchers.some((w) => w.enabled)) {
       items.push({
         id: `community-${c.id}`,
         severity: "high",

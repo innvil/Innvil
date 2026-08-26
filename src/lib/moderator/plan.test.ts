@@ -203,6 +203,23 @@ test("communityCountExceeded only applies to a genuinely NEW community -- reconn
   assert.equal(communityCountExceeded(false, 999, 1), false);
 });
 
+/* -------------------------------------------- Shared Escalation Group (Phase 1) ---- */
+
+test("REQUIRED: skipActiveSlotLimit bypasses the slot-limit check even when already AT the cap -- deploying into an Escalation Group must never be blocked by it", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 5, maxActiveSlots: 5, communityDeploymentCount: 0, skipActiveSlotLimit: true });
+  assert.deepEqual(result, { ok: true });
+});
+
+test("REQUIRED: skipActiveSlotLimit does NOT bypass the independent per-community deployment cap -- that safeguard is unrelated to slot billing", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 0, maxActiveSlots: 5, communityDeploymentCount: MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY, skipActiveSlotLimit: true });
+  assert.deepEqual(result, { ok: false, reason: "community_deployment_cap" });
+});
+
+test("skipActiveSlotLimit defaults to false -- every existing caller's behavior is completely unchanged", () => {
+  const result = checkDeploymentSlotCaps({ isExistingDeployment: false, activeSlotCount: 5, maxActiveSlots: 5, communityDeploymentCount: 0 });
+  assert.deepEqual(result, { ok: false, reason: "active_slot_limit" });
+});
+
 test("communityCountExceeded rejects a new community once the plan's community limit is reached", () => {
   assert.equal(communityCountExceeded(true, 2, 2), true);
   assert.equal(communityCountExceeded(true, 1, 2), false);
