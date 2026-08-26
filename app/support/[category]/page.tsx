@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronRight } from "lucide-react";
-import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
+import { getSupportPageContext } from "@/src/lib/watch-page";
 import { WatchShell } from "@/src/components/watch/WatchShell";
+import { PublicDocsShell } from "@/src/components/watch/PublicDocsShell";
 import { HelpDocsNav, HelpDocsNavMobile } from "@/src/components/watch/HelpDocsNav";
 import { ContactSupportCta } from "@/src/components/watch/HelpRightRail";
 import { HELP_CATEGORIES, articlesByCategory, type HelpCategoryId } from "@/src/lib/watch-help/content";
@@ -15,26 +16,30 @@ function findCategory(id: string) {
 export async function generateMetadata({ params }: { params: Promise<{ category: string }> }): Promise<Metadata> {
   const { category } = await params;
   const cat = findCategory(category);
-  return { title: cat ? `${cat.label} — Innvil Watch Help` : "Help Center — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
+  return {
+    title: cat ? `${cat.label} — Innvil Watch Help` : "Help Center — Innvil Watch",
+    description: cat?.description,
+    icons: { icon: "/watch/app-tile.svg" },
+  };
 }
 
 /** Category pages keep the fuller docs-navigation layout (left category
  *  nav) -- this is exactly where it earns its keep, letting a visitor move
  *  between documentation sections after they've already found one. No
  *  right rail here (the article list itself IS the page's main content;
- *  a "Get Started" rail next to it would just be another duplicate list). */
+ *  a "Get Started" rail next to it would just be another duplicate list).
+ *  Public (per getSupportPageContext) -- a signed-in visitor still gets
+ *  the full WatchShell app experience. */
 export default async function HelpCategoryPage({ params }: { params: Promise<{ category: string }> }) {
   const { category } = await params;
   const cat = findCategory(category);
   if (!cat) notFound();
 
-  const { accountId, admin } = await requireWatchPage();
-  const shell = await getWatchShellContext(admin, accountId);
+  const ctx = await getSupportPageContext();
   const articles = articlesByCategory(cat.id as HelpCategoryId);
   if (articles.length === 0) notFound(); // never a category page with nothing behind it
 
-  return (
-    <WatchShell active="support" capacity={shell.capacity} attentionCount={shell.attentionCount}>
+  const content = (
       <div className="flex gap-8 items-start">
         <HelpDocsNav active={cat.id} />
 
@@ -61,6 +66,14 @@ export default async function HelpCategoryPage({ params }: { params: Promise<{ c
           <ContactSupportCta compact />
         </div>
       </div>
-    </WatchShell>
   );
+
+  if (ctx.authenticated) {
+    return (
+      <WatchShell active="support" capacity={ctx.shell.capacity} attentionCount={ctx.shell.attentionCount}>
+        {content}
+      </WatchShell>
+    );
+  }
+  return <PublicDocsShell>{content}</PublicDocsShell>;
 }

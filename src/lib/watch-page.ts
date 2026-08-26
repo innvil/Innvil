@@ -52,3 +52,25 @@ export async function getWatchShellContext(admin: SupabaseClient, accountId: str
   ]);
   return { capacity, attentionCount: attentionItems.length };
 }
+
+export type SupportPageContext =
+  | { authenticated: true; accountId: string; admin: SupabaseClient; shell: { capacity: AccountCapacity | null; attentionCount: number } }
+  | { authenticated: false };
+
+/** The Help Center (`/support`, `/support/[category]`, `/support/[category]/[slug]`)
+ *  is real product documentation, not account data — it must be reachable
+ *  by prospects and search engines, not just signed-in customers (per
+ *  explicit product decision: "docs should be accessible even outside
+ *  Innvil Watch"). Still Watch-host-only (these pages don't exist on the
+ *  main Innvil host), but authentication is now OPTIONAL rather than
+ *  required — a signed-in visitor still gets the full authenticated
+ *  `WatchShell` experience (sidebar, capacity, "needs attention"); a
+ *  signed-out one gets the lighter public `PublicDocsShell` instead. Never
+ *  redirects to `/login` the way `requireWatchPage()` does. */
+export async function getSupportPageContext(): Promise<SupportPageContext> {
+  if (!(await isWatchHost())) redirect("/");
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { authenticated: false };
+  const shell = await getWatchShellContext(admin, user.id);
+  return { authenticated: true, accountId: user.id, admin, shell };
+}

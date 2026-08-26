@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronRight } from "lucide-react";
-import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
+import { getSupportPageContext } from "@/src/lib/watch-page";
 import { WatchShell } from "@/src/components/watch/WatchShell";
+import { PublicDocsShell } from "@/src/components/watch/PublicDocsShell";
 import { HelpDocsNav, HelpDocsNavMobile } from "@/src/components/watch/HelpDocsNav";
 import { HelpArticleRail, ContactSupportCta } from "@/src/components/watch/HelpRightRail";
 import { HELP_CATEGORIES, getArticle, relatedArticles } from "@/src/lib/watch-help/content";
@@ -14,23 +15,22 @@ export async function generateMetadata({ params }: { params: Promise<{ category:
   return {
     title: article ? `${article.title} — Innvil Watch Help` : "Help Center — Innvil Watch",
     description: article?.description,
-    robots: { index: false },
     icons: { icon: "/watch/app-tile.svg" },
   };
 }
 
+/** Public (per getSupportPageContext) -- a signed-in visitor still gets
+ *  the full WatchShell app experience. */
 export default async function HelpArticlePage({ params }: { params: Promise<{ category: string; slug: string }> }) {
   const { category, slug } = await params;
   const article = getArticle(slug);
   if (!article || article.category !== category) notFound();
 
-  const { accountId, admin } = await requireWatchPage();
-  const shell = await getWatchShellContext(admin, accountId);
+  const ctx = await getSupportPageContext();
   const cat = HELP_CATEGORIES.find((c) => c.id === article.category);
   const related = relatedArticles(article);
 
-  return (
-    <WatchShell active="support" capacity={shell.capacity} attentionCount={shell.attentionCount}>
+  const content = (
       <div className="flex gap-8 items-start">
         <HelpDocsNav active={article.category} />
 
@@ -87,6 +87,14 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ ca
 
         <HelpArticleRail related={related} />
       </div>
-    </WatchShell>
   );
+
+  if (ctx.authenticated) {
+    return (
+      <WatchShell active="support" capacity={ctx.shell.capacity} attentionCount={ctx.shell.attentionCount}>
+        {content}
+      </WatchShell>
+    );
+  }
+  return <PublicDocsShell>{content}</PublicDocsShell>;
 }

@@ -1,32 +1,38 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
+import { getSupportPageContext } from "@/src/lib/watch-page";
 import { WatchShell } from "@/src/components/watch/WatchShell";
+import { PublicDocsShell } from "@/src/components/watch/PublicDocsShell";
 import { HelpSearch } from "@/src/components/watch/HelpSearch";
 import { ContactSupportCta } from "@/src/components/watch/HelpRightRail";
 import { HELP_CATEGORIES, popularArticles, articlesByCategory } from "@/src/lib/watch-help/content";
 
-export const metadata: Metadata = { title: "Help Center — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
+export const metadata: Metadata = {
+  title: "Help Center — Innvil Watch",
+  description: "Documentation for Innvil Watch — Watchers, moderation, Smart Escalation, plans, and billing.",
+  icons: { icon: "/watch/app-tile.svg" },
+};
 
 /**
- * Innvil Watch Help Center HOME — a discovery surface, deliberately
- * simple: Search -> Popular -> Browse by category -> Contact Support. No
- * internal docs sidebar and no right-rail article list here — the main
- * Watch application sidebar already provides global navigation, and a
- * second "Get Started" list next to Popular was pure duplication. The
- * fuller docs-navigation layout (left category nav + right rail) is kept
- * on category/article pages, where a visitor benefits from moving between
- * documentation sections after they've already found one.
+ * Innvil Watch Help Center HOME — public documentation, reachable without
+ * signing in (per explicit product decision: docs should be accessible
+ * outside the authenticated app, linked from the footer). A signed-in
+ * visitor still gets the full `WatchShell` app experience; a signed-out
+ * one gets the lighter `PublicDocsShell`.
+ *
+ * Deliberately simple: Search -> Popular -> Browse by category -> Contact
+ * Support. No internal docs sidebar and no right-rail article list here —
+ * the fuller docs-navigation layout (left category nav + right rail) is
+ * kept on category/article pages, where a visitor benefits from moving
+ * between documentation sections after they've already found one.
  */
 export default async function SupportPage() {
-  const { accountId, admin } = await requireWatchPage();
-  const shell = await getWatchShellContext(admin, accountId);
+  const ctx = await getSupportPageContext();
   const popular = popularArticles();
 
-  return (
-    <WatchShell active="support" capacity={shell.capacity} attentionCount={shell.attentionCount}>
-      <div className="max-w-4xl mx-auto space-y-10">
+  const content = (
+    <div className="max-w-4xl mx-auto space-y-10">
         <div className="max-w-lg mx-auto text-center">
           <h1 className="w-display text-2xl mb-2">Need help?</h1>
           <p className="text-sm w-text-dim mb-6">Search the Innvil Watch Help Center, or browse a category below.</p>
@@ -66,6 +72,14 @@ export default async function SupportPage() {
           <ContactSupportCta />
         </div>
       </div>
-    </WatchShell>
   );
+
+  if (ctx.authenticated) {
+    return (
+      <WatchShell active="support" capacity={ctx.shell.capacity} attentionCount={ctx.shell.attentionCount}>
+        {content}
+      </WatchShell>
+    );
+  }
+  return <PublicDocsShell>{content}</PublicDocsShell>;
 }

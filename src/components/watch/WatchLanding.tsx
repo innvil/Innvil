@@ -7,6 +7,7 @@ import {
 import { WatchPricingSection } from "./WatchPricingSection";
 import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
 import { WatchLogoutButton } from "./WatchLogoutButton";
+import { WatchFooter } from "./WatchFooter";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 import { MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
@@ -40,6 +41,7 @@ function WatchNav({ authenticated }: { authenticated: boolean }) {
         </a>
         <nav className="hidden md:flex items-center gap-6 text-sm w-text-dim">
           <a href="#what-is-a-watcher" className="hover:w-text">What&apos;s a Watcher?</a>
+          <Link href="/why-watchers" className="hover:w-text">Why Watchers?</Link>
           <a href="#features" className="hover:w-text">Features</a>
           <a href="#byo20" className="w-teal font-semibold hover:underline">BYO 20 ★</a>
           <a href="#how" className="hover:w-text">How it works</a>
@@ -286,10 +288,13 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
               Each Watcher has its own persona and settings, and can be deployed to one or more Communities.
               Every active Watcher-to-Community deployment uses one <strong className="w-text font-medium">Watcher slot</strong>.
             </p>
-            <p className="text-sm w-text-dim leading-relaxed">
+            <p className="text-sm w-text-dim leading-relaxed mb-4">
               A <strong className="w-text font-medium">Community</strong> is the actual Telegram group,
               supergroup, or channel you connect — connect your Telegram Community, then deploy Watchers into it.
             </p>
+            <Link href="/why-watchers" className="text-sm w-teal font-semibold hover:underline inline-flex items-center gap-1">
+              Why Watchers, not just another moderation bot? <ArrowRight size={13} />
+            </Link>
           </div>
           <div className="w-card p-5">
             <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-3">Watcher slots, in practice</p>
@@ -476,11 +481,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
 
       <WatchFaq />
 
-      <footer className="border-t w-line-soft py-10 text-center">
-        <p className="w-display text-sm mb-1">Innvil Watch</p>
-        <p className="text-xs w-text-faint mb-2">Part of the Innvil ecosystem.</p>
-        <a href="https://innvil.cloud" className="text-xs w-teal hover:underline">innvil.cloud</a>
-      </footer>
+      <WatchFooter />
     </div>
   );
 }

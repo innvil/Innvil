@@ -127,6 +127,51 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — Public docs + a real multi-column footer + a "Why Watchers?" page (v1.47.75)
+- **The Help Center is now public, per explicit product decision** ("docs should be accessible even outside
+  Innvil Watch"). `/support`, `/support/[category]`, `/support/[category]/[slug]` no longer require sign-in —
+  new `getSupportPageContext()` (`watch-page.ts`) replaces `requireWatchPage()` for these three routes: still
+  Watch-host-only (redirects to `/` off-host), but authentication is now OPTIONAL rather than forced. A
+  signed-in visitor still gets the exact same `WatchShell` app experience as before (sidebar, capacity, "needs
+  attention"); a signed-out one gets a new, lighter `PublicDocsShell` (logo + "Back to Watch"/"Sign in" header,
+  the docs content, the new footer) — no account data, no crash, just the real documentation. Dropped
+  `robots: {index:false}` from all three pages' metadata now that they're genuinely public content, not
+  account-gated.
+  `/support/contact` deliberately stays authenticated (its form is tied to a real account's own support
+  channel — no anonymous backend exists to send through, so this wasn't rebuilt as a second contact system;
+  a signed-out visitor clicking it is asked to sign in first, same as any other authenticated action, never a
+  dead link).
+- **New shared `WatchFooter`** (`src/components/watch/WatchFooter.tsx`) — a real 4-column footer (Product /
+  Resources / Company / Account), used on both the public landing (`WatchLanding.tsx`, replacing its old
+  1-line "Innvil Watch · innvil.cloud" footer) and every public Help Center page (via `PublicDocsShell`).
+  **Every link points at a real, working destination — nothing invented**: Documentation → `/support`,
+  Getting Started → the real getting-started-path article, FAQ → the real FAQ article, Virtual Moderators →
+  the new `/why-watchers` page, Smart Escalation/Media Moderation → their real doc articles, Terms/Privacy →
+  the existing `/terms`/`/privacy` pages, Contact → `/support/contact`. Deliberately **omitted** Changelog,
+  Status, and About (no such pages exist — not fabricated just to fill the layout), and no invented public
+  contact email (the only address on file, `RESEND_FROM`, is a `noreply@` sending address, never a real
+  inbound contact — using it in a public footer would have been misleading).
+- **New public page `/why-watchers`** (`app/why-watchers/page.tsx`) — a dedicated positioning page, per an
+  explicit verbatim spec: the capability grid (Moderate 24/7, talk naturally, answer from project knowledge,
+  know when not to guess, escalate, bring the answer back, learn approved answers, remember context, own
+  role/personality, work together), a Traditional-Bot-vs-Watcher comparison table (9 real rows), the
+  Ask → Verify → Escalate → Resolve → Learn flow, four example Watcher-role cards (Community/Security/Support/
+  Technical), the per-Watcher configuration list, and the closing "shouldn't depend on whether a moderator is
+  online" positioning + CTA. Reuses `PublicDocsShell` (with a custom `eyebrow` prop, widened for reuse beyond
+  just "Help Center") rather than a third distinct page shell. Linked from the footer ("Virtual Moderators"),
+  a new landing-page nav item ("Why Watchers?"), and a new inline link inside the landing's own "What is a
+  Watcher?" section.
+- **Live-verified** on `watch.localhost` (real dev server, no auth): `/why-watchers` renders the full spec
+  content verbatim; `/support` and `/support/escalation/smart-escalation` are reachable directly (confirmed
+  `location.pathname` stays on the route, no redirect to `/login`) with the correct `PublicDocsShell` header
+  ("Back to Watch" / "Sign in", never the authenticated `WatchShell` sidebar) and the real 4-column footer; the
+  landing page's nav and footer both render the new "Why Watchers?" links correctly.
+- No new tests (pure UI composition/routing-shell change, no new business logic — consistent with this
+  codebase's convention for comparable Watch layout passes). 1827 tests pass (unchanged), `tsc --noEmit`
+  clean, production build clean (`/why-watchers` present in the build output; `/support/*` unchanged in shape,
+  now reachable without auth).
+- **Not deployed automatically** — same standing discipline as every other change; deploy is a separate step.
+
 ### 2026-08-26 — Complete Innvil Watch product documentation, in the real Help Center (v1.47.74)
 - **A full operating-manual documentation system for Innvil Watch, per an explicit detailed spec** covering
   Introduction, Core Concepts, What Is a Watcher, Watcher Records, Personas/Roles, Community Conversation,
