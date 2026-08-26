@@ -167,3 +167,91 @@ test("REQUIRED: Innvil Credit article no longer claims annual billing is Innvil-
   assert.ok(!/annual billing is Innvil Credit only/i.test(text));
   assert.ok(text.includes("5%") && text.includes("10%"), "must state both real annual discount rates");
 });
+
+/* ------------------------------------------------- product documentation system ---- */
+
+test("REQUIRED: every new documentation category is populated -- no dead/empty category in the nav", () => {
+  for (const id of ["concepts", "knowledge", "moderation", "escalation", "dashboard", "faq"] as const) {
+    assert.ok(articlesByCategory(id).length > 0, `category "${id}" must have at least one real article`);
+  }
+});
+
+test("REQUIRED: the Escalation Group Slot Rule article states the exact rule and every worked example from the spec", () => {
+  const a = getArticle("escalation-group-slot-rule")!;
+  const text = a.body.join(" ");
+  assert.match(text, /1 Watcher Slot = 1 active Watcher × 1 deployed customer-facing Community/);
+  assert.match(text, /Community 1 = 1 slot/);
+  assert.match(text, /Community 1 and Community 2 = 2 slots/);
+  assert.match(text, /both deployed to Community 1 = 2 slots/);
+  assert.match(text, /Escalation Group = still 1 slot/);
+  assert.match(text, /3 slots, not 6/);
+});
+
+test("REQUIRED: Watcher Slots and Billing states the real formula and all four worked examples", () => {
+  const a = getArticle("watcher-slots-and-billing")!;
+  const text = a.body.join(" ");
+  assert.match(text, /Watcher Slot Usage = Active Watcher × Active Customer-Facing Community Deployment/);
+  assert.match(text, /1 Watcher, 1 Community = 1 slot/);
+  assert.match(text, /1 Watcher, 3 Communities = 3 slots/);
+  assert.match(text, /3 Watchers, 1 Community = 3 slots/);
+  assert.match(text, /= 3 slots\. All three also connected to one private Escalation Group = still 3 slots/);
+});
+
+test("REQUIRED: the FAQ states an Escalation Group never consumes a slot, in exactly that framing", () => {
+  const a = getArticle("faq")!;
+  const text = a.body.join(" ");
+  assert.match(text, /Does an Escalation Group consume a slot\? No\./);
+});
+
+test("REQUIRED: escalation docs never claim unbuilt capabilities as real -- duplicate merging, admin routing, priority levels, and named roles are explicitly marked not-yet-available", () => {
+  const a = getArticle("escalation-roadmap")!;
+  const text = a.body.join(" ").toLowerCase();
+  assert.match(text, /isn't available yet/);
+  assert.ok(text.includes("duplicate escalation merging"));
+  assert.ok(text.includes("topic-based admin routing"));
+  assert.ok(text.includes("priority/urgency levels"));
+  assert.ok(text.includes("named authorization role system"));
+});
+
+test("REQUIRED: the escalation lifecycle example matches the real implemented behavior (forwarded text, resolve-back wording)", () => {
+  const smart = getArticle("smart-escalation")!;
+  const admin = getArticle("admin-responses")!;
+  assert.match(smart.body.join(" "), /forwarded this to the team for clarification/);
+  assert.match(admin.body.join(" "), /Update from the team: Distribution is scheduled for September 12\./);
+});
+
+test("REQUIRED: the dashboard tour never invents escalation statuses beyond the real Open\\/Answered model", () => {
+  const a = getArticle("dashboard-tour")!;
+  const text = a.body.join(" ").toLowerCase();
+  assert.ok(!text.includes("waiting") && !text.includes("high-volume") && !text.includes("expired"));
+  assert.ok(text.includes("isn't available yet"), "must honestly disclose analytics isn't a real feature yet");
+});
+
+test("core-concepts glossary defines every term the terminology rules require", () => {
+  const a = getArticle("core-concepts")!;
+  const text = a.body.join(" ");
+  for (const term of ["Watcher —", "Watcher Record —", "Community —", "Deployment —", "Watcher Slot —", "Escalation Group —", "Authorized Admin —", "Escalation —", "Approved Knowledge —"]) {
+    assert.ok(text.includes(term), `core-concepts must define "${term.replace(" —", "")}"`);
+  }
+});
+
+test("Watch is positioned as a Virtual Moderator platform, never primarily as a bot", () => {
+  const a = getArticle("what-is-innvil-watch")!;
+  const text = a.body.join(" ");
+  assert.match(text, /Virtual Moderators/);
+  assert.doesNotMatch(text, /\bbot\b/i, "the platform-level pitch should not lead with 'bot' as the category");
+});
+
+test("REQUIRED: search surfaces the new escalation and slot-billing content for real queries", () => {
+  assert.ok(searchArticles("escalation group slot").some((a) => a.slug === "escalation-group-slot-rule"));
+  assert.ok(searchArticles("smart escalation").some((a) => a.slug === "smart-escalation"));
+  assert.ok(searchArticles("persona role").some((a) => a.slug === "personas-and-roles"));
+});
+
+test("REQUIRED: getting-started-path lays out the exact 8-step sequence from the spec", () => {
+  const a = getArticle("getting-started-path")!;
+  const text = a.body.join(" ");
+  for (const step of ["Create a Watcher", "Configure its persona", "Add Project Knowledge", "Configure moderation", "Deploy to a Telegram Community", "Connect an Escalation Group", "Test it", "Go live"]) {
+    assert.ok(text.includes(step), `getting-started-path must include step "${step}"`);
+  }
+});

@@ -127,6 +127,68 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — Complete Innvil Watch product documentation, in the real Help Center (v1.47.74)
+- **A full operating-manual documentation system for Innvil Watch, per an explicit detailed spec** covering
+  Introduction, Core Concepts, What Is a Watcher, Watcher Records, Personas/Roles, Community Conversation,
+  Context/Memory, Project Knowledge, Answer Confidence, Moderation (incl. Natural Moderation and Media
+  Moderation), Smart Escalation, Watcher Ops/Escalation Group, the Escalation Group Slot Rule, Admin Responses,
+  Approved/Time-Sensitive Knowledge, Multi-Watcher Communities, Deployment, Watcher Slots and Billing,
+  Scheduled Content, Permissions, Safety and Reliability, a Dashboard tour, and FAQ — plus terminology/
+  positioning consistency and a Getting Started path. Written as practical product documentation, not a
+  whitepaper — no "revolutionary"/"game-changing" language anywhere.
+- **Extended the EXISTING, already-routed Help Center content system** (`src/lib/watch-help/content.ts` +
+  `/support`, `/support/[category]`, `/support/[category]/[slug]`) rather than building a second, parallel
+  documentation system — it already provides every "Documentation UX" requirement asked for (sidebar/category
+  nav, page hierarchy, category + article overview pages, cross-links via `related`, local search, a Popular
+  Articles rail) fully data-driven off this one content module, so zero UI/routing code changes were needed.
+  6 new categories (Core Concepts, Project Knowledge, Moderation, Smart Escalation, Dashboard, FAQ) + 24 new
+  articles + 2 existing articles substantially rewritten (`what-is-innvil-watch`, `what-is-a-watcher`) + 1
+  recategorized (`how-moderation-works` → the new Moderation category).
+- **Verified every claim against the actual shipped implementation before writing it**, per the explicit
+  "only document capabilities that actually exist" instruction — grepped/read the real code rather than
+  inferring from the request's own suggested wording: `MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY` (=5, matches the
+  request's own worked examples exactly), the real Smart Escalation implementation (`escalation-runtime.ts`,
+  shipped this same session) for its exact forwarded-text/resolve-back wording and real Telegram admin/creator
+  authorization model, `presets.ts` (confirmed persona presets are personality profiles with no separate
+  structured "Role" field — documented that honestly rather than inventing one), `media-moderation.ts` (real
+  verdict categories are `safe`/`uncertain`/`explicit` only — no "QR-code phishing"/other invented media
+  categories), `AutoPostScheduleCard.tsx` (confirmed Auto-Posting content is AI-generated from Project
+  Knowledge, one post/day/Watcher, never manually authored), and the real dashboard tab structure across
+  `WatchShell.tsx`/Project/Community/Watcher detail pages (Knowledge/Escalations/Moderation/Auto-Posting live
+  as tabs inside a specific record's detail page, never as global top-level nav items — stated accurately in
+  the new Dashboard tour rather than implying they don't exist yet).
+- **Deliberately, explicitly marked as NOT YET AVAILABLE rather than invented** (new `escalation-roadmap`
+  article, cross-linked from the escalation category): duplicate-escalation merging, topic-based admin
+  routing, priority/urgency levels, the full named authorization-role system (Owner/Admin/Knowledge Approver/
+  Moderator/Viewer — today's real authorization is exactly "a real Telegram admin/creator of the Escalation
+  Group"), and an escalation analytics/metrics dashboard (today's real Escalations tab is a plain Open/Answered
+  list) — matches this feature's own confirmed Phase 1 scope from the same session.
+- **The Escalation Group Slot Rule is stated as its own dedicated article** (`escalation-group-slot-rule`) with
+  every worked example from the spec verbatim (1 Watcher→1 Community=1 slot; →2 Communities=2 slots; 2 Watchers
+  →1 Community=2 slots; +an Escalation Group=still 1/2/3 slots; the 3-Watchers/2-Communities/shared-Escalation-
+  Group=3-slots-not-6 example), and reinforced with the same rule/framing in `watcher-slots-and-billing`,
+  `smart-escalation`, `watcher-ops-escalation-group`, `watcher-profiles-deployments-slots`, `community-capacity`,
+  and the FAQ — repeated everywhere the request asked, never stated once and left to be found.
+- **Terminology enforced structurally, not just by intent**: "Virtual Moderator" is the primary product category
+  throughout; "bot" appears only when discussing the real Telegram bot identity/permissions, never as the
+  platform's own category label (a new test, `Watch is positioned as a Virtual Moderator platform, never
+  primarily as a bot`, asserts this on the platform-pitch article specifically). Never claims Watch replaces
+  every human admin — every relevant article states the "handles routine operations, your team stays authoritative
+  for decisions and unknown information" framing verbatim.
+- New tests (`content.test.ts`, +11): every new category is populated (no dead nav entry), the Slot Rule
+  article states the exact rule + every worked example, Watcher Slots and Billing states the real formula +
+  all four worked examples, the FAQ states the no-slot-consumption answer in the exact requested framing, the
+  escalation roadmap explicitly marks all four deferred capabilities as not-yet-available, the escalation
+  lifecycle example matches the real implemented forwarded-text/resolve-back wording character-for-character,
+  the dashboard tour never invents escalation statuses beyond the real Open/Answered model, the Core Concepts
+  glossary defines every required term, the positioning copy never leads with "bot" as the category, search
+  surfaces the new escalation/persona content for real queries, and the Getting Started path states the exact
+  8-step sequence. 1827 tests pass (up from 1816), `tsc --noEmit` clean, production build clean (all
+  `/support/*` routes unchanged in the build output — zero routing/UI code touched, content-only change).
+- **Not deployed automatically** — same standing discipline as every other change this session; this is a
+  pure content addition to an already-live, already-routed system, so it's safe to deploy whenever convenient,
+  but the deploy itself is a separate explicit step.
+
 ### 2026-08-26 — Shared Escalation Group — Phase 1 closed loop (v1.47.73)
 - **New human-in-the-loop escalation system for Innvil Watch, per two verbatim user specs** ("Shared
   Escalation Group Knowledge Instructions" + "Escalation Group Slot Rule"). When a Watcher genuinely can't
