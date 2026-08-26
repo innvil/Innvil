@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { generateMediaModerationWarning } from "./media-warning";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
-import { PROMOTION_WARNING_LIMIT } from "./link-moderation";
+import { SPAM_WARNING_LIMIT } from "./link-moderation";
 
 /**
  * The AI-touching half of media (photo/video) moderation's borderline-
@@ -67,7 +67,7 @@ test("REQUIRED: never outputs robotic 'Violation N/3' style wording -- the promp
       await generateMediaModerationWarning("Kwan", persona, 2, false);
       const body = calls[0].body as { system: string };
       assert.match(body.system, /never output "violation/i);
-      assert.match(body.system, /warning #2 of 3/i);
+      assert.match(body.system, /warning #2 of 2/i);
     });
   });
 });
@@ -75,7 +75,7 @@ test("REQUIRED: never outputs robotic 'Violation N/3' style wording -- the promp
 test("the FINAL warning tells the model to make removal-on-next-violation explicit", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("This is your final warning -- next time you're removed."), async (calls) => {
-      await generateMediaModerationWarning("Kwan", persona, PROMOTION_WARNING_LIMIT, true);
+      await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true);
       const body = calls[0].body as { system: string };
       assert.match(body.system, /FINAL warning/);
     });

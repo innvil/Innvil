@@ -255,3 +255,23 @@ test("REQUIRED: getting-started-path lays out the exact 8-step sequence from the
     assert.ok(text.includes(step), `getting-started-path must include step "${step}"`);
   }
 });
+
+test("REQUIRED: Watcher Ops Moderation Reports article states deterministic/no-AI-usage, real-outcome, shared-state, dedup, and Free Trial inclusion", () => {
+  const a = getArticle("watcher-ops-moderation-reports")!;
+  const text = a.body.join(" ");
+  assert.match(text, /built from templates, not written by a model/i);
+  assert.match(text, /never count toward your account's AI Generations usage/i);
+  assert.match(text, /reflect ACTUAL outcomes, never an assumed one/i);
+  assert.match(text, /belongs to the Community they're in, not to whichever specific Watcher/i);
+  assert.match(text, /only one of them acts on and reports any given violation/i);
+  assert.match(text, /available on the Free Trial too/i);
+});
+
+test("REQUIRED: Watcher Ops / Escalation Group article distinguishes Knowledge Escalation from Moderation Action reports, and states it's optional but strongly recommended", () => {
+  const a = getArticle("watcher-ops-escalation-group")!;
+  const text = a.body.join(" ");
+  assert.match(text, /Knowledge Escalation/);
+  assert.match(text, /Moderation Action report/);
+  assert.match(text, /strongly recommended/i);
+  assert.match(text, /it's optional/i);
+});

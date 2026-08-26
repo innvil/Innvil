@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
-import { PROMOTION_WARNING_LIMIT } from "./link-moderation";
+import { SPAM_WARNING_LIMIT } from "./link-moderation";
 
 /**
  * Phase 4.M (C)-(E): the AI-touching half of link moderation. Both
@@ -132,7 +132,7 @@ test("REQUIRED: never outputs robotic 'Violation N/3' style wording -- the promp
       await generateModerationWarning("Kwan", persona, 2, false);
       const body = calls[0].body as { system: string };
       assert.match(body.system, /never output "violation/i);
-      assert.match(body.system, /warning #2 of 3/i);
+      assert.match(body.system, /warning #2 of 2/i);
     });
   });
 });
@@ -140,7 +140,7 @@ test("REQUIRED: never outputs robotic 'Violation N/3' style wording -- the promp
 test("the FINAL warning tells the model to make removal-on-next-violation explicit", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("This is your final warning — next time you're removed."), async (calls) => {
-      await generateModerationWarning("Kwan", persona, PROMOTION_WARNING_LIMIT, true);
+      await generateModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true);
       const body = calls[0].body as { system: string };
       assert.match(body.system, /FINAL warning/);
     });

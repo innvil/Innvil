@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage } from "./escalation-runtime";
+import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage, sendModerationReport } from "./escalation-runtime";
 import type { TelegramMessage } from "./community-runtime";
 
 /**
@@ -413,6 +413,112 @@ test("REQUIRED: a second reply to an already-ANSWERED escalation is idempotent -
       // pure no-op: the FIRST recorded answer is preserved untouched.
       assert.equal(row.answer_text, "March 1st, confirmed.");
       assert.equal(calls.some((c) => c.method === "sendMessage"), false);
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+/* ------------------------------------------------------------ sendModerationReport ---- */
+// Watcher Ops moderation-reporting expansion -- reuses resolveProjectEscalationTarget
+// verbatim, never a second "which group" resolution.
+
+const BASE_REPORT_EVENT = {
+  userMention: "@offender",
+  violationCategory: "spam" as const,
+  warningNumber: 1,
+  warningLimit: 2,
+  muteMinutes: 10,
+  actionsTaken: ["warning" as const, "temporary_mute" as const],
+  reasonText: "First confirmed spam/unsolicited-promotion violation.",
+  previousEnforcementSummary: [],
+  purgedCount: null,
+  purgeFailed: false,
+  purgeFailureReason: null,
+  telegramActionFailed: false,
+  telegramFailureReason: null,
+};
+
+test("REQUIRED: no escalation group configured for the project -> silent no-op, never blocks the moderation action that already happened", async () => {
+  const admin = makeFakeAdmin({ communities: [], watch_moderation_reports: [] });
+  const result = await sendModerationReport({
+    admin, projectId: "project-1", sourceCommunityId: "source-1", watcherId: "mod-1",
+    platformUserId: "user-1", username: "offender", displayName: "Offender",
+    event: BASE_REPORT_EVENT,
+  });
+  assert.equal(result.sent, false);
+  assert.equal((admin.__tables.watch_moderation_reports ?? []).length, 0, "nothing to persist when there's no target project context at all");
+});
+
+test("REQUIRED: a real configured Escalation Group receives the moderation report AND it's persisted as a structured record", async () => {
+  const { fn, calls } = fakeTelegramFetch({ sendMessage: { body: { ok: true, result: { message_id: 555 } } } });
+  const originalFetch = global.fetch;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  global.fetch = fn as any;
+  try {
+    await withEnv({ PROVIDER_KEY_SECRET: "test-secret" }, async () => {
+      const admin = makeFakeAdmin(
+        {
+          communities: [
+            { id: "esc-community-1", project_id: "project-1", chat_id: "-2002", connection_type: "escalation_group" },
+            { id: "source-1", project_id: "project-1", chat_id: "-3003", title: "Alpha Community", connection_type: "community" },
+          ],
+          moderator_deployments: [{ id: "dep-esc-1", community_id: "esc-community-1", moderator_id: "mod-1", enabled: true }],
+          telegram_bot_integrations: [{ id: "integration-esc-1", virtual_moderator_id: "mod-1" }],
+          watch_moderation_reports: [],
+        },
+        { "integration-esc-1": "bot-token-abc" }
+      );
+      const result = await sendModerationReport({
+        admin, projectId: "project-1", sourceCommunityId: "source-1", watcherId: "mod-1",
+        platformUserId: "user-1", username: "offender", displayName: "Offender",
+        event: BASE_REPORT_EVENT,
+      });
+      assert.equal(result.sent, true);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].method, "sendMessage");
+      const rows = admin.__tables.watch_moderation_reports as Row[];
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].violation_category, "spam");
+      assert.equal(rows[0].sent, true);
+      assert.equal(rows[0].escalation_message_id, "555");
+      assert.equal(rows[0].warning_number, 1);
+      assert.match(rows[0].report_text as string, /Alpha Community/);
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("a failed Telegram send is still persisted as real audit history (sent: false), never silently dropped", async () => {
+  const { fn } = fakeTelegramFetch({ sendMessage: { body: { ok: false, description: "bot lacks permission" } } });
+  const originalFetch = global.fetch;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  global.fetch = fn as any;
+  try {
+    await withEnv({ PROVIDER_KEY_SECRET: "test-secret" }, async () => {
+      const admin = makeFakeAdmin(
+        {
+          communities: [
+            { id: "esc-community-1", project_id: "project-1", chat_id: "-2002", connection_type: "escalation_group" },
+            { id: "source-1", project_id: "project-1", chat_id: "-3003", connection_type: "community" },
+          ],
+          moderator_deployments: [{ id: "dep-esc-1", community_id: "esc-community-1", moderator_id: "mod-1", enabled: true }],
+          telegram_bot_integrations: [{ id: "integration-esc-1", virtual_moderator_id: "mod-1" }],
+          watch_moderation_reports: [],
+        },
+        { "integration-esc-1": "bot-token-abc" }
+      );
+      const result = await sendModerationReport({
+        admin, projectId: "project-1", sourceCommunityId: "source-1", watcherId: "mod-1",
+        platformUserId: "user-1", username: "offender", displayName: "Offender",
+        event: BASE_REPORT_EVENT,
+      });
+      assert.equal(result.sent, false);
+      const rows = admin.__tables.watch_moderation_reports as Row[];
+      assert.equal(rows.length, 1, "a delivery failure is still real audit history, not a dropped record");
+      assert.equal(rows[0].sent, false);
+      assert.equal(rows[0].escalation_message_id, null);
     });
   } finally {
     global.fetch = originalFetch;

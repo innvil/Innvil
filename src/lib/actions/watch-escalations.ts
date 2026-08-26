@@ -130,3 +130,89 @@ export async function promoteEscalationToKnowledge(escalationId: string, expires
   }
   return { ok: true, data: { knowledgeSourceId: row.id as string } };
 }
+
+/* ============================================== Watcher Ops moderation reports ==== */
+// Watcher Ops expansion -- the same private Escalation Group is now also the
+// project's real moderation operations/audit channel. This section is
+// read-only (no "promote to knowledge" equivalent action -- a moderation
+// report is a completed, structured audit record, not something to edit).
+
+export interface AccountModerationReportRow {
+  id: string;
+  sourceCommunityId: string;
+  sourceCommunityTitle: string | null;
+  watcherId: string;
+  watcherName: string;
+  username: string | null;
+  displayName: string | null;
+  violationCategory: "spam" | "scam_link" | "nsfw" | "explicit_link";
+  warningNumber: number | null;
+  warningLimit: number | null;
+  muteMinutes: number | null;
+  actionTypes: string[];
+  purgedCount: number | null;
+  purgeFailed: boolean;
+  telegramActionFailed: boolean;
+  telegramFailureReason: string | null;
+  reportText: string;
+  sent: boolean;
+  createdAt: string;
+}
+
+/** Every moderation report ever raised for this Project, newest first --
+ *  mirrors listProjectEscalations exactly (same ownership check, same
+ *  cap). Both feeds render in the SAME Watcher Ops dashboard tab -- per
+ *  the product decision that moderation reports and knowledge escalations
+ *  coexist in one operational view, matching the real Telegram group. */
+export async function listProjectModerationReports(projectId: string): Promise<Result<AccountModerationReportRow[]>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  const project = await ownedProject(user.id, projectId, admin);
+  if (!project) return { ok: false, error: "Not authorized." };
+
+  const { data, error } = await admin
+    .from("watch_moderation_reports")
+    .select(
+      "id, source_community_id, watcher_id, username, display_name, violation_category, warning_number, warning_limit, mute_minutes, action_types, purged_count, purge_failed, telegram_action_failed, telegram_failure_reason, report_text, sent, created_at"
+    )
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) return { ok: false, error: "Couldn't load moderation reports." };
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (rows.length === 0) return { ok: true, data: [] };
+
+  const communityIds = Array.from(new Set(rows.map((r) => r.source_community_id as string)));
+  const watcherIds = Array.from(new Set(rows.map((r) => r.watcher_id as string)));
+  const [{ data: communities }, { data: watchers }] = await Promise.all([
+    admin.from("communities").select("id, title").in("id", communityIds),
+    admin.from("virtual_moderators").select("id, name").in("id", watcherIds),
+  ]);
+  const communityTitleById = new Map(((communities ?? []) as Array<{ id: string; title: string | null }>).map((c) => [c.id, c.title]));
+  const watcherNameById = new Map(((watchers ?? []) as Array<{ id: string; name: string }>).map((w) => [w.id, w.name]));
+
+  return {
+    ok: true,
+    data: rows.map((r) => ({
+      id: r.id as string,
+      sourceCommunityId: r.source_community_id as string,
+      sourceCommunityTitle: communityTitleById.get(r.source_community_id as string) ?? null,
+      watcherId: r.watcher_id as string,
+      watcherName: watcherNameById.get(r.watcher_id as string) ?? "Deleted Watcher",
+      username: (r.username as string | null) ?? null,
+      displayName: (r.display_name as string | null) ?? null,
+      violationCategory: r.violation_category as AccountModerationReportRow["violationCategory"],
+      warningNumber: (r.warning_number as number | null) ?? null,
+      warningLimit: (r.warning_limit as number | null) ?? null,
+      muteMinutes: (r.mute_minutes as number | null) ?? null,
+      actionTypes: (r.action_types as string[] | null) ?? [],
+      purgedCount: (r.purged_count as number | null) ?? null,
+      purgeFailed: Boolean(r.purge_failed),
+      telegramActionFailed: Boolean(r.telegram_action_failed),
+      telegramFailureReason: (r.telegram_failure_reason as string | null) ?? null,
+      reportText: r.report_text as string,
+      sent: Boolean(r.sent),
+      createdAt: r.created_at as string,
+    })),
+  };
+}

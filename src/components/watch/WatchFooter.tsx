@@ -29,6 +29,7 @@ export function WatchFooter() {
               <li><a href="/#how" className="hover:w-text">How it works</a></li>
               <li><Link href="/why-watchers" className="hover:w-text">Virtual Moderators</Link></li>
               <li><Link href="/support/escalation/smart-escalation" className="hover:w-text">Smart Escalation</Link></li>
+              <li><Link href="/support/escalation/watcher-ops-moderation-reports" className="hover:w-text">Watcher Ops</Link></li>
               <li><Link href="/support/moderation/media-moderation" className="hover:w-text">Media Moderation</Link></li>
             </ul>
           </div>

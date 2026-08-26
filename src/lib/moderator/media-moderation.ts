@@ -14,7 +14,7 @@
    never depends on classification alone for anything irreversible.
    ========================================================= */
 
-import { PROMOTION_WARNING_LIMIT, type ModerationEnforcement } from "./link-moderation";
+import { SPAM_WARNING_LIMIT, type ModerationEnforcement } from "./link-moderation";
 
 export type MediaKind = "photo" | "video" | "animation";
 
@@ -148,23 +148,30 @@ export async function classifySampledFrames(
  *  interpreted as porn detected" and "do not auto-delete because the
  *  classifier failed". Explicit/high-confidence is NOT admin/trusted-role
  *  exempt (same principle as link-moderation.ts's severity branches — a
- *  safety question, not a self-promotion allowance). */
+ *  safety question, not a self-promotion allowance).
+ *
+ *  2026-08-27 (Watcher Ops moderation-reporting expansion): a confirmed
+ *  high-confidence explicit result is now an immediate KICK + message
+ *  purge, never a permanent ban and never preceded by a warning ("zero
+ *  tolerance" — no warning is required for prohibited NSFW content). The
+ *  borderline path's own repeat-offense ceiling now ends in the same
+ *  kick+purge outcome instead of a ban. */
 export function decideMediaEnforcement(input: {
   result: MediaClassificationResult;
   priorWarningCount: number;
-}): Exclude<ModerationEnforcement, { kind: "DELETE_KICK" }> {
+}): Exclude<ModerationEnforcement, { kind: "DELETE_BAN" }> {
   if (!input.result.ok) return { kind: "ALLOW" };
 
   const { verdict, confidence } = input.result;
-  if (verdict === "explicit" && confidence === "high") return { kind: "DELETE_BAN", reason: "explicit_content" };
+  if (verdict === "explicit" && confidence === "high") return { kind: "DELETE_KICK", reason: "explicit_content", purge: true };
 
   // Borderline: explicit-but-not-high-confidence, or uncertain-but-high-
   // confidence -- eligible for the SAME warn/escalate path link moderation
-  // already uses, rather than an instant ban on weaker evidence.
+  // already uses, rather than an instant removal on weaker evidence.
   const borderline = (verdict === "explicit" && confidence !== "high") || (verdict === "uncertain" && confidence === "high");
   if (!borderline) return { kind: "ALLOW" }; // safe, or uncertain at low/medium confidence
 
   const nextCount = input.priorWarningCount + 1;
-  if (nextCount > PROMOTION_WARNING_LIMIT) return { kind: "DELETE_BAN", reason: "repeated_explicit_content" };
+  if (nextCount > SPAM_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_explicit_content", purge: true };
   return { kind: "DELETE_WARN", warningNumber: nextCount, reason: "explicit_content_borderline" };
 }

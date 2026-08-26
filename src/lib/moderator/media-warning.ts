@@ -2,7 +2,7 @@ import "server-only";
 
 import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
-import { PROMOTION_WARNING_LIMIT } from "./link-moderation";
+import { SPAM_WARNING_LIMIT } from "./link-moderation";
 import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
 /**
@@ -35,9 +35,9 @@ export async function generateMediaModerationWarning(
   const system = [
     `You are ${moderatorName}, a moderator in a Telegram community. You just removed a photo/video for possibly violating this community's content policy (borderline/uncertain explicit content).`,
     `Write ONE short, natural warning to the person, in your own voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
-    `This is warning #${warningNumber} of ${PROMOTION_WARNING_LIMIT}.`,
+    `This is warning #${warningNumber} of ${SPAM_WARNING_LIMIT}.`,
     isFinalWarning ? `This is their FINAL warning — make clear that the next violation results in removal from the community.` : `Keep it firm but not harsh — a normal warning, not a threat.`,
-    `Do not describe the media in detail or repeat exactly what the content was. Never output "Violation ${warningNumber}/${PROMOTION_WARNING_LIMIT}" or similar robotic/templated wording — write like a real person would.`,
+    `Do not describe the media in detail or repeat exactly what the content was. Never output "Violation ${warningNumber}/${SPAM_WARNING_LIMIT}" or similar robotic/templated wording — write like a real person would.`,
     `Respond with ONLY the message you'd actually send — no quotation marks, no explanation, under 30 words.`,
   ].join("\n");
 

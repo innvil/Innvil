@@ -28,9 +28,9 @@ import {
 } from "./task-state";
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
-  COLLAB_ROUTABLE_CATEGORIES, PROMOTION_WARNING_LIMIT, type LinkWarningState,
+  COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
-  filterOutOwnBotMentions,
+  filterOutOwnBotMentions, spamWarningMuteSentence,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
@@ -109,7 +109,8 @@ import {
 } from "@/src/lib/products/watch-media-moderation-usage";
 import { ENTERPRISE_MEDIA_ADDON, MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
 import { resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
-import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage, type EscalationTarget } from "./escalation-runtime";
+import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage, sendModerationReport, type EscalationTarget } from "./escalation-runtime";
+import type { ModerationViolationCategory } from "./watcher-ops-report";
 
 /**
  * Community-runtime orchestration for a single incoming Telegram update on a
@@ -957,6 +958,25 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
   }
 
   if (action.kind === "RESTRICT_USER") {
+    if (action.mode === "MUTE") {
+      // Full temporary mute (all can_send_* permissions off), until
+      // `muteMinutes` minutes from NOW (execution time, not decision time --
+      // avoids any clock-skew between when the enforcement was decided and
+      // when this actually runs).
+      const untilDate = Math.floor(Date.now() / 1000) + action.muteMinutes * 60;
+      const res = await telegramApiCall(token, "restrictChatMember", {
+        chat_id: chatId,
+        user_id: action.targetPlatformUserId,
+        permissions: {
+          can_send_messages: false, can_send_audios: false, can_send_documents: false,
+          can_send_photos: false, can_send_videos: false, can_send_video_notes: false,
+          can_send_voice_notes: false, can_send_polls: false, can_send_other_messages: false,
+          can_add_web_page_previews: false,
+        },
+        until_date: untilDate,
+      });
+      return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
+    }
     if (action.mode === "KICK") {
       // Telegram has no dedicated "kick" method -- its own documented idiom
       // is banChatMember immediately followed by unbanChatMember (removes
@@ -974,6 +994,45 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
   }
 
   return { sentMessageId: null, ok: true };
+}
+
+/** Bounded, best-effort cleanup of a removed user's recent messages in a
+ *  Community -- reuses the EXISTING per-message DELETE_MESSAGE action (via
+ *  executeAction) once per message id, never a second Telegram call
+ *  mechanism. Never claims success unless Telegram actually confirmed each
+ *  deletion (spec §12) -- `purged` only counts real `ok:true` results.
+ *  Bounded by MESSAGE_PURGE_LIMIT (avoids an unbounded sweep/rate-limit
+ *  risk for a very chatty offender) and MESSAGE_PURGE_LOOKBACK_MS (stays
+ *  safely inside Telegram's own ~48h message-delete window). */
+const MESSAGE_PURGE_LIMIT = 50;
+const MESSAGE_PURGE_LOOKBACK_MS = 47 * 60 * 60_000;
+
+async function purgeUserMessages(
+  admin: SupabaseClient,
+  chatId: string,
+  communityId: string,
+  platformUserId: string,
+  enforcerDeploymentId: string,
+  now: Date
+): Promise<{ attempted: number; purged: number; failed: boolean }> {
+  const since = new Date(now.getTime() - MESSAGE_PURGE_LOOKBACK_MS).toISOString();
+  const { data: rows } = await admin
+    .from("community_messages")
+    .select("platform_message_id")
+    .eq("community_id", communityId)
+    .eq("sender_platform_id", platformUserId)
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(MESSAGE_PURGE_LIMIT);
+  const candidates = (rows ?? []) as Array<{ platform_message_id: string }>;
+  if (candidates.length === 0) return { attempted: 0, purged: 0, failed: false };
+
+  let purged = 0;
+  for (const row of candidates) {
+    const res = await executeAction(admin, chatId, { kind: "DELETE_MESSAGE", targetDeploymentId: enforcerDeploymentId, targetMessageId: row.platform_message_id });
+    if (res.ok) purged++;
+  }
+  return { attempted: candidates.length, purged, failed: purged === 0 };
 }
 
 /* ----------------------------------------------------------- observability ---- */
@@ -1665,7 +1724,7 @@ async function isSenderAdminOrTrusted(token: string, chatId: string, platformUse
 export async function runLinkModeration(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string },
+  community: { id: string; project_id?: string | null },
   chatId: string,
   event: CommunityEvent,
   deployments: ChatterDeployment[],
@@ -1755,54 +1814,91 @@ export async function runLinkModeration(
   }
 
   if (enforcement.kind === "DELETE_KICK") {
-    // Second confirmed high-confidence scam/phishing offense within the
-    // active strike window -- REMOVES the user (kick), never a permanent
-    // ban on its own (see event-types.ts's RESTRICT_USER doc comment).
+    // REMOVES the user (kick), never a permanent ban on its own (see
+    // event-types.ts's RESTRICT_USER doc comment) -- reached for the 2nd
+    // confirmed scam offense, the 3rd spam violation, or a confirmed
+    // high-confidence explicit link, all now with a message purge.
+    let kickFailed = false;
+    let kickError: string | undefined;
     if (token) {
       const kickResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "KICK" });
-      if (!kickResult.ok) console.error("[telegram/community] link moderation RESTRICT_USER (kick) failed", kickResult.error);
-    }
-    // Strike is recorded regardless of whether the kick itself succeeded --
-    // per spec "Kick failure: preserve the second strike" (a duplicate
-    // webhook delivery of the SAME message never reaches here a second
-    // time at all, since recordCommunityMessage's claim already made this
-    // whole function run at most once per real message).
-    const nextState: LinkWarningState = { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() };
-    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
-
-    const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
-    const warningText = scamRepeatOffenseWarningHtml(mention);
-    if (token) {
-      const sendResult = await executeAction(admin, chatId, {
-        kind: "SEND_TEXT",
-        text: warningText,
-        targetDeploymentId: enforcer.deploymentId,
-        replyToMessageId: null,
-        origin: "HUMAN",
-        interactionDepth: 0,
-        causationMessageId: event.messageId,
-        parseMode: "HTML",
-      });
-      if (sendResult.sentMessageId) {
-        await admin.from("community_messages").insert({
-          panel_id: panelId,
-          community_id: community.id,
-          platform_message_id: sendResult.sentMessageId,
-          sender_type: "INNVIL_MODERATOR",
-          sender_platform_id: null,
-          sender_display_name: enforcer.moderatorName,
-          deployment_id: enforcer.deploymentId,
-          text: warningText,
-        });
+      if (!kickResult.ok) {
+        console.error("[telegram/community] link moderation RESTRICT_USER (kick) failed", kickResult.error);
+        kickFailed = true;
+        kickError = kickResult.error;
       }
     }
+    // Strike is recorded regardless of whether the kick itself succeeded --
+    // per spec "Kick failure: preserve the strike" (a duplicate webhook
+    // delivery of the SAME message never reaches here a second time at
+    // all, since recordCommunityMessage's claim already made this whole
+    // function run at most once per real message).
+    const nextState: LinkWarningState = isScamEnforcement
+      ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
+      : { ...observedState, warningCount: priorState.warningCount + 1 };
+    await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
+
+    let purgeResult: { attempted: number; purged: number; failed: boolean } = { attempted: 0, purged: 0, failed: false };
+    if (enforcement.purge && token && !kickFailed) {
+      purgeResult = await purgeUserMessages(admin, chatId, community.id, senderPlatformId, enforcer.deploymentId, now);
+    }
+
+    // The scam-repeat public warning stays exactly as before (deterministic,
+    // never AI, never reproduces the URL); a spam/promotion or
+    // explicit-link kick has no equivalent public message today (matches
+    // the existing convention that only scam kicks announce themselves in
+    // the community) -- the Watcher Ops report below is where every kick
+    // is actually recorded regardless.
+    if (isScamEnforcement) {
+      const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
+      const warningText = scamRepeatOffenseWarningHtml(mention);
+      if (token) {
+        const sendResult = await executeAction(admin, chatId, {
+          kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null,
+          origin: "HUMAN", interactionDepth: 0, causationMessageId: event.messageId, parseMode: "HTML",
+        });
+        if (sendResult.sentMessageId) {
+          await admin.from("community_messages").insert({
+            panel_id: panelId, community_id: community.id, platform_message_id: sendResult.sentMessageId,
+            sender_type: "INNVIL_MODERATOR", sender_platform_id: null, sender_display_name: enforcer.moderatorName,
+            deployment_id: enforcer.deploymentId, text: warningText,
+          });
+        }
+      }
+    }
+
+    if (community.project_id) {
+      const violationCategory = isScamEnforcement ? "scam_link" : enforcement.reason === "explicit_content" ? "explicit_link" : "spam";
+      await sendModerationReport({
+        admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
+        platformUserId: senderPlatformId, username: event.sender.username ?? null, displayName: event.sender.displayName,
+        event: {
+          userMention: renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName),
+          violationCategory, warningNumber: null, warningLimit: null, muteMinutes: null,
+          actionsTaken: enforcement.purge ? ["kick", "message_purge"] : ["kick"],
+          reasonText: isScamEnforcement
+            ? "Repeated confirmed scam/phishing link after a prior warning."
+            : violationCategory === "explicit_link"
+              ? "User posted a confirmed high-confidence explicit/malicious link."
+              : "Repeated spam after prior warnings and temporary restrictions.",
+          previousEnforcementSummary: [],
+          purgedCount: enforcement.purge ? purgeResult.purged : null,
+          purgeFailed: enforcement.purge ? purgeResult.failed : false,
+          purgeFailureReason: enforcement.purge && purgeResult.failed ? "The Watcher does not currently have permission to remove older messages." : null,
+          telegramActionFailed: kickFailed,
+          telegramFailureReason: kickFailed ? (kickError ?? "The Watcher does not currently have permission to remove members.") : null,
+        },
+      });
+    }
+
     return { handled: true, collabRoutable: false };
   }
 
-  // DELETE_WARN -- either ordinary unsolicited-promotion escalation (AI-
-  // phrased, unchanged) or a FIRST confirmed scam/phishing offense
-  // (deterministic/template-based ONLY -- never a model call, never
-  // reproduces the malicious URL).
+  // DELETE_WARN -- either ordinary unsolicited-promotion/spam escalation
+  // (AI-phrased, unchanged, with a deterministic mute-duration sentence
+  // appended) or a FIRST confirmed scam/phishing offense (deterministic/
+  // template-based ONLY -- never a model call, never reproduces the
+  // malicious URL).
   const nextState: LinkWarningState = isScamEnforcement
     ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
     : { ...observedState, warningCount: enforcement.warningNumber };
@@ -1814,13 +1910,16 @@ export async function runLinkModeration(
   // EXISTING AI-phrased body (unchanged generation logic, per explicit
   // "don't rewrite detection/generation unless required") and is prefixed
   // with the SAME mention mechanism deterministically, never asking the
-  // model to compose or format the mention itself.
+  // model to compose or format the mention itself. A mute duration, when
+  // this violation includes one, is likewise ALWAYS a deterministic
+  // sentence appended after the model's own text -- the exact number must
+  // never be left to the model to state.
   const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
   const warningText = isScamEnforcement
     ? scamFirstOffenseWarningHtml(mention)
     : `${mention}, ${await generateModerationWarning(
-        enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT, aiRouting
-      )}`;
+        enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting
+      )}${enforcement.muteMinutes ? ` ${spamWarningMuteSentence(enforcement.muteMinutes)}` : ""}`;
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -1845,6 +1944,48 @@ export async function runLinkModeration(
       });
     }
   }
+
+  // The mute itself (a REAL Telegram restriction, separate from the SEND_TEXT
+  // warning above) -- executed whenever this violation includes one,
+  // regardless of category.
+  let muteFailed = false;
+  let muteError: string | undefined;
+  if (enforcement.muteMinutes && token) {
+    const muteResult = await executeAction(admin, chatId, {
+      kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "MUTE", muteMinutes: enforcement.muteMinutes,
+    });
+    if (!muteResult.ok) {
+      console.error("[telegram/community] link moderation RESTRICT_USER (mute) failed", muteResult.error);
+      muteFailed = true;
+      muteError = muteResult.error;
+    }
+  }
+
+  if (community.project_id) {
+    const violationCategory: ModerationViolationCategory = isScamEnforcement ? "scam_link" : "spam";
+    await sendModerationReport({
+      admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
+      platformUserId: senderPlatformId, username: event.sender.username ?? null, displayName: event.sender.displayName,
+      event: {
+        userMention: mention,
+        violationCategory,
+        warningNumber: enforcement.warningNumber,
+        warningLimit: isScamEnforcement ? 1 : SPAM_WARNING_LIMIT,
+        muteMinutes: enforcement.muteMinutes ?? null,
+        actionsTaken: enforcement.muteMinutes ? ["warning", "temporary_mute"] : ["warning"],
+        reasonText: isScamEnforcement
+          ? "First confirmed scam/phishing link from this member."
+          : enforcement.warningNumber === 1
+            ? "First confirmed spam/unsolicited-promotion violation."
+            : "Repeated spam/unsolicited-promotion after a prior warning.",
+        previousEnforcementSummary: [],
+        purgedCount: null, purgeFailed: false, purgeFailureReason: null,
+        telegramActionFailed: muteFailed,
+        telegramFailureReason: muteFailed ? (muteError ?? "The Watcher does not currently have permission to restrict members.") : null,
+      },
+    });
+  }
+
   return { handled: true, collabRoutable: false };
 }
 
@@ -1897,13 +2038,15 @@ export function detectSupportedMedia(message: TelegramMessage): DetectedMedia | 
   return null;
 }
 
-async function loadMediaDedup(admin: SupabaseClient, communityId: string, fileUniqueId: string): Promise<{ enforcementKind: "ALLOW" | "DELETE_WARN" | "DELETE_BAN" } | null> {
+type MediaDedupEnforcementKind = "ALLOW" | "DELETE_WARN" | "DELETE_KICK" | "DELETE_BAN";
+
+async function loadMediaDedup(admin: SupabaseClient, communityId: string, fileUniqueId: string): Promise<{ enforcementKind: MediaDedupEnforcementKind } | null> {
   const { data } = await admin.from("moderator_media_dedup").select("enforcement_kind").eq("community_id", communityId).eq("file_unique_id", fileUniqueId).maybeSingle();
   if (!data) return null;
-  return { enforcementKind: data.enforcement_kind as "ALLOW" | "DELETE_WARN" | "DELETE_BAN" };
+  return { enforcementKind: data.enforcement_kind as MediaDedupEnforcementKind };
 }
 
-async function recordMediaDedup(admin: SupabaseClient, panelId: string | null, communityId: string, fileUniqueId: string, verdict: "safe" | "uncertain" | "explicit" | "error", enforcementKind: "ALLOW" | "DELETE_WARN" | "DELETE_BAN") {
+async function recordMediaDedup(admin: SupabaseClient, panelId: string | null, communityId: string, fileUniqueId: string, verdict: "safe" | "uncertain" | "explicit" | "error", enforcementKind: MediaDedupEnforcementKind) {
   await admin.from("moderator_media_dedup").upsert(
     { panel_id: panelId, community_id: communityId, file_unique_id: fileUniqueId, verdict, enforcement_kind: enforcementKind },
     { onConflict: "community_id,file_unique_id" }
@@ -1919,7 +2062,7 @@ async function recordMediaDedup(admin: SupabaseClient, panelId: string | null, c
 async function runMediaModeration(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string },
+  community: { id: string; project_id?: string | null },
   chatId: string,
   message: TelegramMessage,
   event: CommunityEvent,
@@ -2073,20 +2216,57 @@ async function runMediaModeration(
     if (!deleteResult.ok) console.error("[telegram/community] media moderation DELETE_MESSAGE failed", deleteResult.error);
   }
 
-  if (enforcement.kind === "DELETE_BAN") {
+  if (enforcement.kind === "DELETE_KICK") {
+    // Zero-tolerance: immediate kick + purge for a confirmed explicit
+    // result, no warning; or the borderline path's own repeat-offense
+    // ceiling reaching the same removal + cleanup outcome. Never a
+    // permanent ban (see event-types.ts's RESTRICT_USER doc comment).
+    let kickFailed = false;
+    let kickError: string | undefined;
     if (token) {
-      const banResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: event.sender.platformUserId, mode: "BAN" });
-      if (!banResult.ok) console.error("[telegram/community] media moderation RESTRICT_USER failed", banResult.error);
+      const kickResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: event.sender.platformUserId, mode: "KICK" });
+      if (!kickResult.ok) {
+        console.error("[telegram/community] media moderation RESTRICT_USER (kick) failed", kickResult.error);
+        kickFailed = true;
+        kickError = kickResult.error;
+      }
     }
-    await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, priorState, { kind: enforcement.reason, now });
+    await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, { ...priorState, warningCount: priorState.warningCount + 1 }, { kind: enforcement.reason, now });
+
+    let purgeResult: { attempted: number; purged: number; failed: boolean } = { attempted: 0, purged: 0, failed: false };
+    if (enforcement.purge && token && !kickFailed) {
+      purgeResult = await purgeUserMessages(admin, chatId, community.id, event.sender.platformUserId, enforcer.deploymentId, now);
+    }
+
+    if (community.project_id) {
+      await sendModerationReport({
+        admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
+        platformUserId: event.sender.platformUserId, username: event.sender.username ?? null, displayName: event.sender.displayName,
+        event: {
+          userMention: renderHumanModerationMention(event.sender.platformUserId, event.sender.username ?? null, event.sender.displayName),
+          violationCategory: "nsfw", warningNumber: null, warningLimit: null, muteMinutes: null,
+          actionsTaken: enforcement.purge ? ["kick", "message_purge"] : ["kick"],
+          reasonText: enforcement.reason === "explicit_content"
+            ? "User posted prohibited pornographic/NSFW content."
+            : "Repeated borderline explicit media after a prior warning.",
+          previousEnforcementSummary: [],
+          purgedCount: enforcement.purge ? purgeResult.purged : null,
+          purgeFailed: enforcement.purge ? purgeResult.failed : false,
+          purgeFailureReason: enforcement.purge && purgeResult.failed ? "The Watcher does not currently have permission to remove older messages." : null,
+          telegramActionFailed: kickFailed,
+          telegramFailureReason: kickFailed ? (kickError ?? "The Watcher does not currently have permission to remove members.") : null,
+        },
+      });
+    }
     return { handled: true };
   }
 
-  // DELETE_WARN
+  // DELETE_WARN (borderline only -- a high-confidence explicit result never
+  // reaches here, see decideMediaEnforcement)
   const nextState: LinkWarningState = { ...priorState, warningCount: enforcement.warningNumber };
   await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
   const warningText = await generateMediaModerationWarning(
-    enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= PROMOTION_WARNING_LIMIT, aiRouting
+    enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting
   );
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
@@ -2098,6 +2278,20 @@ async function runMediaModeration(
         sender_type: "INNVIL_MODERATOR", sender_platform_id: null, sender_display_name: enforcer.moderatorName, deployment_id: enforcer.deploymentId, text: warningText,
       });
     }
+  }
+  if (community.project_id) {
+    await sendModerationReport({
+      admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
+      platformUserId: event.sender.platformUserId, username: event.sender.username ?? null, displayName: event.sender.displayName,
+      event: {
+        userMention: renderHumanModerationMention(event.sender.platformUserId, event.sender.username ?? null, event.sender.displayName),
+        violationCategory: "nsfw", warningNumber: enforcement.warningNumber, warningLimit: SPAM_WARNING_LIMIT, muteMinutes: null,
+        actionsTaken: ["warning"],
+        reasonText: "Borderline explicit/uncertain media content flagged for review.",
+        previousEnforcementSummary: [], purgedCount: null, purgeFailed: false, purgeFailureReason: null,
+        telegramActionFailed: false, telegramFailureReason: null,
+      },
+    });
   }
   return { handled: true };
 }

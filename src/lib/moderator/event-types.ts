@@ -111,14 +111,18 @@ export type CommunityAction =
    *  bot needs delete rights in that community). */
   | { kind: "DELETE_MESSAGE"; targetDeploymentId: string; targetMessageId: string }
   /** Removes the violating user from the community. `mode: "BAN"` is
-   *  permanent (Telegram banChatMember). `mode: "KICK"` is REMOVABLE, not
-   *  permanent -- implemented as banChatMember immediately followed by
-   *  unbanChatMember (Telegram's own documented kick idiom; there is no
-   *  separate "kick" API method), used for the second confirmed scam/
-   *  phishing offense within the active strike window. Further/rejoin
-   *  abuse escalates to the existing `mode: "BAN"` path, never a new
-   *  parallel punishment mechanism. */
-  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN" | "KICK" };
+   *  permanent (Telegram banChatMember) -- kept for a possible future
+   *  manual admin action, no automatic enforcement path produces it as of
+   *  the Watcher Ops moderation-reporting expansion (2026-08-27). `mode:
+   *  "KICK"` is REMOVABLE, not permanent -- implemented as banChatMember
+   *  immediately followed by unbanChatMember (Telegram's own documented
+   *  kick idiom; there is no separate "kick" API method). `mode: "MUTE"`
+   *  temporarily restricts the user's ability to send messages via Telegram
+   *  restrictChatMember, for `muteMinutes` minutes from execution time --
+   *  used for the first one/two graduated spam/scam warnings, always
+   *  alongside (never instead of) a DELETE_WARN. */
+  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN" | "KICK" }
+  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "MUTE"; muteMinutes: number };
 
 /* --------------------------------------------------- sender classification ---- */
 // Pure decision given already-resolved facts (spec §2/§3) — the DB lookups

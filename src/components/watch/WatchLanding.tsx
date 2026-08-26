@@ -3,7 +3,7 @@ import Link from "next/link";
 import {
   ShieldCheck, MessageSquare, Gauge, Bot, ArrowRight, ScrollText, Activity,
   Radio, Zap, Users, Clock, Rocket, Server, KeyRound, Star, Check,
-  HeartHandshake, LifeBuoy, Send, Fingerprint, Puzzle, MessageCircleQuestion, X,
+  HeartHandshake, LifeBuoy, Send, Fingerprint, Puzzle, MessageCircleQuestion, X, ShieldAlert,
 } from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
 import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
@@ -174,7 +174,7 @@ const PILLARS: Array<{ icon: typeof ShieldCheck; title: string; body: string }> 
   { icon: ShieldCheck, title: "Protect", body: "Graduated moderation for spam, scam links, and unsafe media — enforced by intent, not just keywords." },
   { icon: HeartHandshake, title: "Engage", body: "Natural conversation in a persona you configure, present in the room between commands." },
   { icon: LifeBuoy, title: "Support", body: "Answers grounded in your own Project Knowledge — never an invented claim about your project." },
-  { icon: Send, title: "Escalate", body: "When a Watcher genuinely can't answer, it can forward the question to your team and relay the approved answer back." },
+  { icon: Send, title: "Escalate", body: "When a Watcher genuinely can't answer, it forwards the question to your team — and reports its own moderation actions there too, so you always have a real audit trail." },
 ];
 
 function PillarsSection() {
@@ -353,6 +353,7 @@ const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldC
     items: [
       { icon: Gauge, title: "Auto-Posting", body: "Schedule per-Watcher posting windows so your community stays active." },
       { icon: Activity, title: "Activity & status", body: "See what your Watcher is doing — always on, always watching." },
+      { icon: ShieldAlert, title: "Watcher Ops reports", body: "A private, structured record of every warning, mute, kick, and purge — who was actioned, why, and whether it succeeded." },
     ],
   },
 ];

@@ -93,9 +93,9 @@ test("early exit never fires on a failure", () => {
 
 /* ==================================================== enforcement policy ==== */
 
-test("REQUIRED (CASE 1 shape): high-confidence explicit content -> DELETE_BAN, eligible for automatic action", () => {
+test("REQUIRED (CASE 1 shape): high-confidence explicit content -> immediate DELETE_KICK + purge, no warning required, never a permanent ban", () => {
   const enforcement = decideMediaEnforcement({ result: ok("explicit", "high"), priorWarningCount: 0 });
-  assert.deepEqual(enforcement, { kind: "DELETE_BAN", reason: "explicit_content" });
+  assert.deepEqual(enforcement, { kind: "DELETE_KICK", reason: "explicit_content", purge: true });
 });
 
 test("REQUIRED (CASE 3/CASE 4 shape): safe content -> ALLOW, no action at all", () => {
@@ -113,8 +113,8 @@ test("borderline (explicit but not high confidence, or uncertain at high confide
   assert.deepEqual(decideMediaEnforcement({ result: ok("uncertain", "high"), priorWarningCount: 0 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "explicit_content_borderline" });
 });
 
-test("repeated borderline violations escalate to a ban after the shared warning limit (reuses link moderation's own 3-strike limit)", () => {
-  assert.deepEqual(decideMediaEnforcement({ result: ok("explicit", "medium"), priorWarningCount: 3 }), { kind: "DELETE_BAN", reason: "repeated_explicit_content" });
+test("repeated borderline violations escalate to a kick + purge after the shared warning limit (reuses link moderation's own SPAM_WARNING_LIMIT), never a permanent ban", () => {
+  assert.deepEqual(decideMediaEnforcement({ result: ok("explicit", "medium"), priorWarningCount: 2 }), { kind: "DELETE_KICK", reason: "repeated_explicit_content", purge: true });
 });
 
 test("REQUIRED (CASE 5): a classifier failure (timeout, provider error, unconfigured) NEVER resolves to a delete/ban -- always ALLOW", () => {

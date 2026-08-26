@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall } from "./telegram-client";
 import type { TelegramMessage } from "./community-runtime";
+import { formatModerationReportText, type ModerationReportEvent, type ModerationViolationCategory, type ModerationActionKind } from "./watcher-ops-report";
 
 /**
  * Shared Escalation Group (Phase 1) -- a confidence-gated human-in-the-loop
@@ -245,3 +246,94 @@ export async function handleEscalationGroupMessage(
     reply_to_message_id: Number(escalation.source_message_id),
   });
 }
+
+/* ================================================ moderation reporting ==== */
+// Watcher Ops moderation-reporting expansion (2026-08-27) -- the SAME
+// private Escalation Group is now also the project's real operations/audit
+// channel for the moderation actions Watchers take (warnings, temporary
+// mutes, kicks, message purges, and permission failures), alongside the
+// existing knowledge-escalation workflow above. Reuses
+// resolveProjectEscalationTarget/tokenForDeployment verbatim -- never a
+// second "which group do I post to" resolution.
+
+export interface SendModerationReportInput {
+  admin: SupabaseClient;
+  projectId: string;
+  sourceCommunityId: string;
+  /** virtual_moderators.id of the Watcher that took the enforcement action
+   *  -- purely attribution for the stored report row; the report is always
+   *  POSTED via whichever Watcher is actually deployed into the ops group
+   *  (resolveProjectEscalationTarget), never the enforcing Watcher's own
+   *  bot, since it may not be deployed there at all. */
+  watcherId: string;
+  platformUserId: string;
+  username: string | null;
+  displayName: string | null;
+  /** Everything the report needs to render, minus the community label
+   *  (resolved here, same pattern as createEscalation above) and the
+   *  already-rendered mention (the caller renders it via
+   *  link-moderation.ts's renderHumanModerationMention and passes it in). */
+  event: Omit<ModerationReportEvent, "communityLabel">;
+}
+
+/** Sends (and persists) a structured moderation report. A project with NO
+ *  configured Escalation Group is a silent, expected no-op -- Watcher Ops
+ *  is strongly recommended, never required; a moderation action itself
+ *  (mute/kick/warn/purge) has ALREADY happened by the time this is called,
+ *  and must never be blocked or reversed by the absence of a reporting
+ *  channel. Zero AI/LLM calls anywhere in this path (see
+ *  watcher-ops-report.ts's own doc comment on why this can never consume
+ *  AI usage). */
+export async function sendModerationReport(input: SendModerationReportInput): Promise<{ sent: boolean }> {
+  const target = await resolveProjectEscalationTarget(input.admin, input.projectId);
+  if (!target) return { sent: false };
+
+  const { data: sourceCommunity } = await input.admin.from("communities").select("title, chat_id").eq("id", input.sourceCommunityId).maybeSingle();
+  const communityLabel = (sourceCommunity?.title as string | null) ?? (sourceCommunity?.chat_id as string | undefined) ?? "this community";
+
+  const event: ModerationReportEvent = { ...input.event, communityLabel };
+  const text = formatModerationReportText(event);
+
+  const token = await tokenForDeployment(input.admin, target.deploymentId);
+  let escalationMessageId: string | null = null;
+  let sent = false;
+  if (token) {
+    const res = await telegramApiCall<{ message_id: number }>(token, "sendMessage", { chat_id: target.chatId, text });
+    if (res.ok) {
+      escalationMessageId = String(res.result.message_id);
+      sent = true;
+    } else {
+      console.error("[watcher-ops] failed to post moderation report", res.error);
+    }
+  }
+
+  // Persisted regardless of whether the send itself succeeded -- a report
+  // that couldn't be delivered is still real audit history (structured
+  // event = source of truth, per spec §22), not something to silently drop.
+  await input.admin.from("watch_moderation_reports").insert({
+    project_id: input.projectId,
+    source_community_id: input.sourceCommunityId,
+    escalation_community_id: target.escalationCommunityId,
+    watcher_id: input.watcherId,
+    platform_user_id: input.platformUserId,
+    username: input.username,
+    display_name: input.displayName,
+    violation_category: event.violationCategory,
+    warning_number: event.warningNumber,
+    warning_limit: event.warningLimit,
+    mute_minutes: event.muteMinutes,
+    action_types: event.actionsTaken as ModerationActionKind[],
+    purged_count: event.purgedCount,
+    purge_failed: event.purgeFailed,
+    telegram_action_failed: event.telegramActionFailed,
+    telegram_failure_reason: event.telegramFailureReason,
+    previous_enforcement_summary: event.previousEnforcementSummary,
+    report_text: text,
+    escalation_message_id: escalationMessageId,
+    sent,
+  });
+
+  return { sent };
+}
+
+export type { ModerationReportEvent, ModerationViolationCategory, ModerationActionKind };

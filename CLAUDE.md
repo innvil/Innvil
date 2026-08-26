@@ -127,6 +127,93 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Watcher Ops: Escalation Group expanded into a real moderation operations/audit channel (v1.47.79)
+- **Expands the private Escalation Group (Phase 1, v1.47.73) from a knowledge-only channel into "Watcher Ops"**
+  — per explicit spec, it now also carries structured moderation reports (warnings, temporary mutes, kicks,
+  message purges, scam/NSFW removals, and permission failures) alongside the existing unanswered-question
+  workflow. **Zero changes to the documentation portal architecture, zero backend rewrite of unrelated Watcher
+  behavior** — this is additive: new enforcement outcomes, a new reporting engine, and dashboard/docs/landing
+  surfacing, all reusing existing infrastructure (the same connect flow, the same shared per-community warning
+  state, the same Telegram token resolution).
+- **Real enforcement-model change** (`link-moderation.ts`/`media-moderation.ts`) — supersedes the earlier warn-
+  then-ban model with the spec's own graduated mute-then-kick-and-purge model, and NEVER produces a permanent
+  `DELETE_BAN` from automatic enforcement anymore (the type is kept, reserved for a possible future manual
+  admin action): **spam** (unsolicited promotion + an obvious flood burst, unified into one progression) —
+  warning 1 mutes 10 minutes, warning 2 mutes 30 minutes, the 3rd violation kicks + purges recent messages
+  (`SPAM_WARNING_LIMIT = 2`, replaces `PROMOTION_WARNING_LIMIT = 3`). **Scam/phishing** — warning 1 mutes 30
+  minutes, the 2nd confirmed offense kicks + purges (no more 3rd-tier ban fallback). **Explicit content** (a
+  link, or media at high confidence) — zero-tolerance, immediate kick + purge, no warning required, matching
+  "no warning is required" for prohibited NSFW content exactly. Media's own borderline path (explicit-but-not-
+  high-confidence, or uncertain-at-high-confidence) reuses the same `SPAM_WARNING_LIMIT`, ending in kick+purge
+  instead of a ban. `ModerationEnforcement`'s `DELETE_WARN` gained an optional `muteMinutes`; `DELETE_KICK`
+  gained a `purge: boolean`. Public warning text: the scam first-offense template now states the real 30-minute
+  mute duration verbatim; the AI-phrased promotion-warning body gets a new DETERMINISTIC mute-duration sentence
+  appended after generation (`spamWarningMuteSentence`) — the exact number is never left to the model to state.
+- **Real Telegram mute execution** — `event-types.ts`'s `RESTRICT_USER` gained a `mode: "MUTE"` variant
+  (`muteMinutes`); `executeAction` calls `restrictChatMember` with every `can_send_*` permission off and a real
+  `until_date` computed at execution time (never decision time, avoiding clock-skew). **Real bounded message
+  purge** — new `purgeUserMessages()` (`community-runtime.ts`) queries the sender's recent messages in that
+  Community (bounded to 50, within the last 47 hours — safely inside Telegram's own ~48h delete window) and
+  deletes each via the EXISTING `DELETE_MESSAGE` action per id, counting only real Telegram-confirmed
+  successes — never claims a purge succeeded unless Telegram actually confirmed it (spec §12), matching the
+  file's own established "never fabricate success" discipline.
+- **New pure module `src/lib/moderator/watcher-ops-report.ts`** — deterministic, template-based report
+  formatting (`formatModerationReportText`/`moderationReportHeading`), matching the spec's own heading
+  vocabulary exactly ("Spam Warning" / "Repeated Spam" / "User Removed — Repeated Spam" / "Scam Link Removed" /
+  "User Removed — Repeated Scam Links" / "User Removed — Prohibited NSFW Content" / "Moderation Action
+  Partially Failed"). A failed primary action (mute/kick/ban) renders its OWN line as a real failure
+  ("User removal failed"), per-item — never a generic "Attempted:" header papering over unchanged success
+  text — while an independently-failed purge states its own honest failure reason, distinct from the primary
+  action's outcome. **Zero AI/LLM import anywhere in this file** — a report built here structurally cannot
+  consume AI Generation pool / BYO usage accounting, by construction, not by a special-cased exemption flag.
+- **New `sendModerationReport()`** (`escalation-runtime.ts`) — reuses `resolveProjectEscalationTarget`/
+  `tokenForDeployment` verbatim (never a second "which group" resolution); a project with no configured
+  Escalation Group is a silent, expected no-op (the moderation action itself already happened and is never
+  blocked/reversed by the absence of a reporting channel — Watcher Ops is strongly recommended, never
+  required). A failed Telegram send is still persisted as real audit history (`sent: false`), never dropped.
+- **New migration `0109_watcher_ops_reports.sql`** — `watch_moderation_reports` (the structured event as the
+  source of truth, per spec §22 — project/community/Telegram-user/Watcher/violation-category/warning-number/
+  mute-minutes/action-types/purge-result/failure-reason/previous-history/report-text/sent, service-role only
+  RLS, matching every other Watch runtime table) + widens `moderator_media_dedup`'s `enforcement_kind` check
+  constraint to include the new `DELETE_KICK` outcome media moderation can now produce.
+- **Dashboard**: the Project detail page's "Escalations" tab is now labeled **"Watcher Ops"** and shows BOTH
+  feeds in one chronologically-merged, visually-distinguished list (`ProjectEscalationsTab.tsx`) — a
+  "Knowledge Escalation" heading (teal) for unanswered questions, and a "Moderation Action" (amber) / "Watcher
+  Error" (red, when the Telegram action itself failed) heading for real enforcement events, each showing the
+  exact deterministic report text. A new **"Watcher Ops not configured"** recommendation banner (amber) shows
+  whenever the Project has no connected Escalation Group, per spec §19 — states plainly it's optional and
+  never consumes a slot. New `listProjectModerationReports()` action mirrors `listProjectEscalations()` exactly
+  (same ownership check, same 100-row cap, same community/Watcher name resolution).
+- **Free Trial inclusion (spec §20) — already structurally true, verified rather than newly built**: neither
+  `resolveProjectEscalationTarget`/`createEscalation`/`sendModerationReport` nor the link/media moderation
+  functions have any tier/entitlement gate at all — Watcher Ops works identically for a trial account.
+- **Slot rule (spec §21) — unchanged, re-verified**: this pass adds zero new community/deployment concepts:
+  an Escalation Group still never consumes a Watcher slot or counts toward the plan's Community allowance
+  (unchanged from v1.47.73's `connection_type = 'escalation_group'` filtering in `watch-runtime.ts`).
+- **Docs**: extended the existing "Watcher Ops / Escalation Group" article to describe both post kinds and the
+  optional-but-strongly-recommended framing; added a new "Watcher Ops Moderation Reports" article (deterministic/
+  no-AI-usage, real-outcomes-only, shared-per-Community state, single-enforcer dedup, Free Trial inclusion) —
+  purely additive content, zero changes to the Help Center's rendering/routing architecture.
+- **Landing/footer**: the "Escalate" pillar and a new "Watcher Ops reports" feature card (Operate group) now
+  state the real audit-trail capability on the main landing; `/why-watchers`' escalation card and the shared
+  `WatchFooter` gained matching mentions/links — the same "surface real, already-shipped capabilities, invent
+  nothing" discipline as the rest of this session's landing work.
+- New tests: `watcher-ops-report.test.ts` (+13, new file — every heading/template combination incl. the
+  per-item failure-vs-success distinction, deterministic-repeatability, and the never-fabricate-a-purge-count
+  guard), `escalation-runtime.test.ts` (+3 — no-target no-op, a real send+persist round trip, a failed send
+  still persisted as honest audit history), `link-moderation.test.ts`/`media-moderation.test.ts`/
+  `media-warning.test.ts`/`link-classify.test.ts` (pinned-value updates for the new mute/kick/purge model —
+  every prior DELETE_BAN-producing scenario now asserts the corresponding DELETE_KICK+purge outcome), plus 2
+  new content.ts tests. 1852 tests pass (up from 1828), `tsc --noEmit` clean, production build clean.
+- **Not built this pass** (documented, not silently skipped): Telegram-message-editing report consolidation for
+  a rapid multi-message burst (the flood-forced-kick path already collapses most bursts into one kick+purge
+  event, since the offender is removed after the first one — a deeper "edit the same ops message to bump a
+  running count" mechanism is a real v2 enhancement, not attempted here); duplicate-question merging/broadcast
+  modes/topic routing/a named authorization-role system/the analytics dashboard (all still Phase-1-deferred per
+  the original escalation spec, unchanged by this pass).
+- **Run migration `0109`** before this governs anything live. **Not deployed automatically** — same standing
+  discipline as every other change this session.
+
 ### 2026-08-27 — Fix: a dismissive "nothing, just checking" reply got re-greeted as if the chat were new (v1.47.78)
 - **Live bug, reported with a screenshot**: after Ms VP asked "hey K! 👋 what's up?", K replied "nothing, just
   checking" (a Telegram reply to that message) and got ANOTHER fresh greeting back ("hey K! good to see you

@@ -6,7 +6,7 @@ import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getAccountProjectDetail, listAccountActivity, listAccountWatchers, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
 import { DEPLOYABLE_PROVISIONING_STATUSES } from "@/src/lib/products/watch-status";
 import { getAccountProjectProfile } from "@/src/lib/actions/watch-project-profile";
-import { listProjectEscalations } from "@/src/lib/actions/watch-escalations";
+import { listProjectEscalations, listProjectModerationReports } from "@/src/lib/actions/watch-escalations";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { Breadcrumbs, StatusDot, EmptyRow, SectionHeader, OperationalStatusBadge, relTime } from "@/src/components/watch/WatchUI";
 import { WatchTabs, type WatchTab } from "@/src/components/watch/WatchTabs";
@@ -21,13 +21,14 @@ export const metadata: Metadata = { title: "Project — Innvil Watch", robots: {
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { accountId, admin } = await requireWatchPage();
-  const [detail, profileResult, activity, shell, allWatchers, escalationsResult] = await Promise.all([
+  const [detail, profileResult, activity, shell, allWatchers, escalationsResult, moderationReportsResult] = await Promise.all([
     getAccountProjectDetail(admin, accountId, id),
     getAccountProjectProfile(id),
     listAccountActivity(admin, accountId, { projectId: id, limit: 20 }),
     getWatchShellContext(admin, accountId),
     listAccountWatchers(admin, accountId),
     listProjectEscalations(id),
+    listProjectModerationReports(id),
   ]);
   if (!detail) notFound();
 
@@ -135,9 +136,13 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     },
     {
       id: "escalations",
-      label: "Escalations",
+      label: "Watcher Ops",
       content: escalationsResult.ok ? (
-        <ProjectEscalationsTab initialEscalations={escalationsResult.data} />
+        <ProjectEscalationsTab
+          initialEscalations={escalationsResult.data}
+          initialModerationReports={moderationReportsResult.ok ? moderationReportsResult.data : []}
+          hasEscalationGroup={detail.communities.some((c) => c.connectionType === "escalation_group")}
+        />
       ) : (
         <EmptyRow text={escalationsResult.error} />
       ),

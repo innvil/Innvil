@@ -19,7 +19,7 @@ const CAPABILITIES: Array<{ icon: typeof ShieldCheck; title: string; body: strin
   { icon: MessageSquare, title: "Talk like a real community moderator", body: "Respond naturally to members instead of behaving like a command-only bot." },
   { icon: BookOpen, title: "Answer from your project knowledge", body: "Give members useful answers based on your approved documentation, FAQs, and project information." },
   { icon: HelpCircle, title: "Know when not to guess", body: "When a verified answer is unavailable, Watchers can escalate the question instead of hallucinating." },
-  { icon: Send, title: "Escalate directly to your team", body: "Unresolved questions can be sent to a private Watcher Ops group where authorized admins provide the answer." },
+  { icon: Send, title: "Escalate directly to your team", body: "Unresolved questions can be sent to a private Watcher Ops group where authorized admins provide the answer — the same group also gets a real audit trail of every warning, mute, kick, and purge a Watcher takes." },
   { icon: RotateCcw, title: "Bring the answer back to the community", body: "Once your team responds, the Watcher can update the original conversation automatically." },
   { icon: BadgeCheck, title: "Learn approved answers", body: "Admin responses can become reusable project knowledge so the same question does not need to be answered repeatedly." },
   { icon: History, title: "Remember conversation context", body: "Watchers can use recent community context to understand follow-up questions and previous interactions." },

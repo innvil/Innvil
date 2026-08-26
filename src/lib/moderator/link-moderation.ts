@@ -235,23 +235,60 @@ export function isFloodRepeat(observedState: LinkWarningState): boolean {
 
 export type ModerationEnforcement =
   | { kind: "ALLOW" }
-  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "explicit_content_borderline" | "scam_or_phishing" }
-  /** Second confirmed high-confidence scam/phishing offense within the
-   *  active strike window — removes (kicks) the user, but is NOT a
-   *  permanent ban. Structurally distinct from DELETE_BAN so a caller can
-   *  never confuse "temporary removal, can rejoin" with "permanent". */
-  | { kind: "DELETE_KICK"; reason: "repeated_scam_or_phishing" }
+  /** `muteMinutes`, when set, means this warning is ALSO accompanied by a
+   *  temporary mute of that duration (Watcher Ops moderation-reporting
+   *  expansion, 2026-08-27) — a real Telegram restrictChatMember action,
+   *  executed alongside the delete+warn, never inferred by the caller from
+   *  warningNumber alone. Undefined means no mute (e.g. media's borderline
+   *  path, which was never specified to include one). */
+  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "explicit_content_borderline" | "scam_or_phishing"; muteMinutes?: number }
+  /** Removes (kicks) the user — NOT a permanent ban (structurally distinct
+   *  from DELETE_BAN, so a caller can never confuse "temporary removal, can
+   *  rejoin" with "permanent"). `purge: true` means the caller should also
+   *  attempt to delete this user's other recent messages in the Community
+   *  (see community-runtime.ts's purgeUserMessages) — always true for the
+   *  categories that reach this kind today (repeated spam, repeated scam,
+   *  explicit content), since a kick without cleanup leaves the offending
+   *  history sitting in the room. */
+  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
+  /** Reserved for a possible future manual admin action — the automatic
+   *  policy below (as of 2026-08-27) no longer PRODUCES this kind for any
+   *  category; every automatic escalation that used to end in a permanent
+   *  ban now ends in DELETE_KICK+purge instead (removable, with cleanup,
+   *  matching the Watcher Ops spec's "kick and purge, not a silent
+   *  permanent ban" model). Kept in the union so existing callers/tests
+   *  referencing it don't need to be restructured for a type that's simply
+   *  unreachable today. */
   | { kind: "DELETE_BAN"; reason: "explicit_content" | "flood" | "repeated_unsolicited_promotion" | "repeated_explicit_content" | "repeated_scam_or_phishing" };
 
-/** 3 confirmed unsolicited-promotion violations get a warning each; the
- *  NEXT one after that (the 4th) escalates to removal (spec §25/§57). */
-export const PROMOTION_WARNING_LIMIT = 3;
+/** Maximum number of WARNINGS (with escalating mutes) before the next
+ *  violation removes the user — 2 warnings, then the 3rd violation kicks.
+ *  Shared by both the unified "spam" progression (unsolicited promotion +
+ *  obvious flood bursts) and media's own borderline-explicit progression,
+ *  so both read the same real number rather than a duplicated literal. */
+export const SPAM_WARNING_LIMIT = 2;
+
+/** Deterministic mute durations for the unified spam progression — first
+ *  warning mutes for 10 minutes, second for 30. Scam/phishing (stricter,
+ *  see below) mutes 30 minutes on its single warning before removal. */
+export const SPAM_MUTE_MINUTES_BY_WARNING: Record<number, number> = { 1: 10, 2: 30 };
+export const SCAM_FIRST_WARNING_MUTE_MINUTES = 30;
 
 /** The deterministic policy layer (spec §42) — classification informs this,
  *  it never decides alone. Admin/trusted-role exemption applies ONLY to
  *  ordinary advertising (spec §43); severity-based enforcement
  *  (explicit/phishing) is never role-exempt, since that's a safety
- *  question, not a "who's allowed to self-promote" one. */
+ *  question, not a "who's allowed to self-promote" one.
+ *
+ *  Enforcement model (2026-08-27, Watcher Ops moderation-reporting
+ *  expansion — supersedes the earlier warn-then-ban model): spam
+ *  (unsolicited promotion, and an obvious automated flood burst) gets a
+ *  graduated mute-then-kick response — warning 1 mutes 10 minutes, warning
+ *  2 mutes 30 minutes, the 3rd violation kicks the user AND purges their
+ *  recent messages. Scam/phishing is stricter — a single warning (30-minute
+ *  mute), then the 2nd confirmed offense kicks+purges. Explicit content
+ *  (text link or media) is zero-tolerance — no warning, immediate
+ *  kick+purge. None of these produce a permanent DELETE_BAN anymore. */
 export function decideLinkEnforcement(input: {
   category: LinkCategory;
   confidence: ClassificationConfidence;
@@ -262,22 +299,20 @@ export function decideLinkEnforcement(input: {
    *  stays pure and never reasons about time itself. */
   priorScamStrikeCount: number;
 }): ModerationEnforcement {
-  if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_BAN", reason: "explicit_content" };
+  if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_KICK", reason: "explicit_content", purge: true };
 
-  // Scam/phishing gets a GRADUATED response, never an instant permanent ban
-  // on a single offense — first confirmed high-confidence offense is
-  // DELETE+WARN, the second within the active strike window is DELETE+KICK
-  // (removable, not permanent), and only a third+ offense falls back to the
-  // existing stronger DELETE_BAN path. Never role-exempt (a safety
-  // question, same principle as EXPLICIT_CONTENT above) and never
-  // escalated by borderline/uncertain confidence (spec: "only sufficiently
-  // high-confidence scam/phishing/malicious-wallet-link detections should
+  // Scam/phishing gets a GRADUATED response, never an instant permanent
+  // outcome on a single offense — a first confirmed high-confidence offense
+  // is DELETE+WARN+MUTE(30min); the second within the active strike window
+  // removes the user (kick+purge). Never role-exempt (a safety question,
+  // same principle as EXPLICIT_CONTENT above) and never escalated by
+  // borderline/uncertain confidence (spec: "only sufficiently high-
+  // confidence scam/phishing/malicious-wallet-link detections should
   // contribute to this stronger escalation behavior").
   if (input.category === "PHISHING_OR_SCAM" && input.confidence === "high") {
     const nextScamCount = input.priorScamStrikeCount + 1;
-    if (nextScamCount === 1) return { kind: "DELETE_WARN", warningNumber: nextScamCount, reason: "scam_or_phishing" };
-    if (nextScamCount === 2) return { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing" };
-    return { kind: "DELETE_BAN", reason: "repeated_scam_or_phishing" };
+    if (nextScamCount === 1) return { kind: "DELETE_WARN", warningNumber: nextScamCount, reason: "scam_or_phishing", muteMinutes: SCAM_FIRST_WARNING_MUTE_MINUTES };
+    return { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing", purge: true };
   }
 
   if (
@@ -294,24 +329,30 @@ export function decideLinkEnforcement(input: {
   // requires stronger confidence/history than "we're not sure."
   if (input.category === "UNKNOWN_OR_AMBIGUOUS") return { kind: "ALLOW" };
 
-  // Obvious automated/rapid repetition (spec §28) justifies stronger
-  // enforcement without needing the full 3-warning grace period -- checked
-  // BEFORE the admin/trusted exemption below, since a rapid flood burst
-  // reads as a compromised-account/safety signal, not ordinary self-
-  // promotion; spec §43 explicitly warns against exempting trusted
-  // accounts from ALL safety/security logic, only from ordinary ad
-  // enforcement.
-  if (input.category === "LINK_SPAM_OR_FLOOD" || input.floodRepeat) return { kind: "DELETE_BAN", reason: "flood" };
-
   // Admins/trusted roles may legitimately post partner/AMA/campaign links
   // (spec §43) — exempted from ORDINARY ad enforcement only, checked after
-  // the severe/safe/unknown/flood branches above (never exempt from those).
-  if (input.isAdminOrTrusted) return { kind: "ALLOW" };
+  // the severe branches above (never exempt from those). A flood burst is
+  // still folded into the unified spam progression below, never exempted
+  // for a trusted role either — an obvious automated burst is a safety
+  // signal, not ordinary self-promotion.
+  if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
 
-  // UNSOLICITED_PROMOTION from here on -- 3-strike escalation (spec §25).
-  const nextCount = input.priorWarningCount + 1;
-  if (nextCount > PROMOTION_WARNING_LIMIT) return { kind: "DELETE_BAN", reason: "repeated_unsolicited_promotion" };
-  return { kind: "DELETE_WARN", warningNumber: nextCount, reason: nextCount === 1 ? "unsolicited_promotion" : "repeated_unsolicited_promotion" };
+  // Unified spam progression: UNSOLICITED_PROMOTION and an obvious
+  // automated flood burst share ONE escalation counter/response shape. A
+  // detected flood burst (spec §28's "obvious automated/rapid repetition")
+  // skips straight past any remaining warning grace period rather than
+  // needing the full count -- it forces the count to at least
+  // SPAM_WARNING_LIMIT + 1, so it always resolves to the kick+purge tier
+  // below, never a fresh warning.
+  const isFlood = input.category === "LINK_SPAM_OR_FLOOD" || input.floodRepeat;
+  const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SPAM_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
+  if (nextCount > SPAM_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true };
+  return {
+    kind: "DELETE_WARN",
+    warningNumber: nextCount,
+    reason: nextCount === 1 ? "unsolicited_promotion" : "repeated_unsolicited_promotion",
+    muteMinutes: SPAM_MUTE_MINUTES_BY_WARNING[nextCount],
+  };
 }
 
 /* ---------------------------------------------------- identity/mention rendering ---- */
@@ -359,14 +400,25 @@ export function renderHumanModerationMention(platformUserId: string, username: s
 // depend on a model call (never Claude/DeepSeek), and must never reproduce
 // the malicious URL itself.
 
-/** First confirmed high-confidence scam/phishing offense -- warn only,
- *  never ban. The malicious URL is deliberately never included. */
+/** First confirmed high-confidence scam/phishing offense -- warn AND mute,
+ *  never ban. The malicious URL is deliberately never included. States the
+ *  real mute duration explicitly (deterministic, never AI-paraphrased --
+ *  the exact number matters and must never be hallucinated). */
 export function scamFirstOffenseWarningHtml(mentionHtml: string): string {
-  return `${mentionHtml}, your message was removed because it contained a suspected scam/phishing link. Do not post scam, wallet-drainer, or fake reward links. Repeated violations may result in removal from this community.`;
+  return `${mentionHtml}, your message was removed because it contained a suspected scam/phishing link. You've been muted for ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes. Another confirmed violation will result in removal from this community.`;
 }
 
 /** Second confirmed high-confidence scam/phishing offense within the
- *  active strike window -- accompanies a DELETE_KICK. */
+ *  active strike window -- accompanies a DELETE_KICK (+ message purge). */
 export function scamRepeatOffenseWarningHtml(mentionHtml: string): string {
   return `${mentionHtml}, another scam/phishing link was detected. You have been removed from this community.`;
+}
+
+/** Deterministic sentence appended to the AI-phrased unsolicited-promotion
+ *  warning when it also comes with a mute -- the exact duration must never
+ *  be left to the model to state (a hallucinated number would be a real,
+ *  visible correctness bug), so it's always this fixed, separately-composed
+ *  sentence, never part of the generated text itself. */
+export function spamWarningMuteSentence(muteMinutes: number): string {
+  return `You've been muted for ${muteMinutes} minutes.`;
 }

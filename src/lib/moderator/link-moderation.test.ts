@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
-  EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, PROMOTION_WARNING_LIMIT,
+  EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SPAM_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions,
   type LinkWarningState,
@@ -191,9 +191,9 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
   });
 }
 
-test("REQUIRED (§54.1): unsolicited promotion, no legitimate context -> DELETE_WARN, warning #1", () => {
+test("REQUIRED (§54.1): unsolicited promotion, no legitimate context -> DELETE_WARN, warning #1, muted for 10 minutes", () => {
   const result = decide({ category: "UNSOLICITED_PROMOTION" });
-  assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion" });
+  assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
 });
 
 test("REQUIRED (§54.2): a genuine AMA proposal -> ALLOW", () => {
@@ -209,36 +209,36 @@ test('REQUIRED (§54.4): "leave this group and join ours" -> DELETE_WARN', () =>
   assert.equal(result.kind, "DELETE_WARN");
 });
 
-test("REQUIRED (§54.5): high-confidence explicit/pornographic link -> immediate DELETE_BAN, no warning grace period", () => {
-  assert.deepEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "high" }), { kind: "DELETE_BAN", reason: "explicit_content" });
+test("REQUIRED (§54.5): high-confidence explicit/pornographic link -> immediate DELETE_KICK + purge, no warning grace period, never a permanent ban", () => {
+  assert.deepEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "high" }), { kind: "DELETE_KICK", reason: "explicit_content", purge: true });
 });
 
-test("REQUIRED (scenario 1): first confirmed high-confidence scam/phishing offense -> DELETE_WARN, never an instant ban", () => {
-  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high" }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" });
+test("REQUIRED (scenario 1): first confirmed high-confidence scam/phishing offense -> DELETE_WARN + 30-minute mute, never an instant kick/ban", () => {
+  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high" }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing", muteMinutes: 30 });
 });
 
-test("REQUIRED (scenario 2): second confirmed high-confidence scam offense within the strike window -> DELETE_KICK", () => {
+test("REQUIRED (scenario 2): second confirmed high-confidence scam offense within the strike window -> DELETE_KICK + purge", () => {
   assert.deepEqual(
     decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount: 1 }),
-    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing" }
+    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing", purge: true }
   );
 });
 
-test("a third confirmed high-confidence scam offense falls back to the existing stronger DELETE_BAN path, not a new punishment engine", () => {
+test("a third confirmed high-confidence scam offense stays at DELETE_KICK + purge -- never escalates to a permanent ban", () => {
   assert.deepEqual(
     decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount: 2 }),
-    { kind: "DELETE_BAN", reason: "repeated_scam_or_phishing" }
+    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing", purge: true }
   );
 });
 
 test("REQUIRED: scam strike escalation is never role-exempt -- an admin/trusted sender still gets the graduated response", () => {
   assert.deepEqual(
     decide({ category: "PHISHING_OR_SCAM", confidence: "high", isAdminOrTrusted: true }),
-    { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" }
+    { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing", muteMinutes: 30 }
   );
   assert.deepEqual(
     decide({ category: "PHISHING_OR_SCAM", confidence: "high", isAdminOrTrusted: true, priorScamStrikeCount: 1 }),
-    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing" }
+    { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing", purge: true }
   );
 });
 
@@ -248,29 +248,29 @@ test("REQUIRED (scenario 9): borderline/uncertain (medium or low confidence) sca
 });
 
 test("REQUIRED (scenario 13): ordinary UNSOLICITED_PROMOTION escalation is completely unaffected by the new scam strike counter", () => {
-  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", priorWarningCount: 0, priorScamStrikeCount: 5 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion" });
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", priorWarningCount: 0, priorScamStrikeCount: 5 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
 });
 
-test("LOW-confidence explicit/phishing does NOT auto-ban -- confidence gates severe enforcement too", () => {
-  assert.notEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "low" }).kind, "DELETE_BAN");
-  assert.notEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "low" }).kind, "DELETE_BAN");
+test("LOW-confidence explicit/phishing does NOT auto-remove -- confidence gates severe enforcement too", () => {
+  assert.notEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "low" }).kind, "DELETE_KICK");
+  assert.notEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "low" }).kind, "DELETE_KICK");
 });
 
-test("REQUIRED (§54.6): flagged as flood/spam -> DELETE_BAN directly, not a 3-warning grace period", () => {
-  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD" }), { kind: "DELETE_BAN", reason: "flood" });
+test("REQUIRED (§54.6): flagged as flood/spam -> DELETE_KICK + purge directly, not a warning grace period, never a permanent ban", () => {
+  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD" }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
-test("REQUIRED: a floodRepeat signal escalates straight to DELETE_BAN even if classified as ordinary unsolicited promotion", () => {
-  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", floodRepeat: true }), { kind: "DELETE_BAN", reason: "flood" });
+test("REQUIRED: a floodRepeat signal escalates straight to DELETE_KICK even if classified as ordinary unsolicited promotion", () => {
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", floodRepeat: true }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
-test("REQUIRED (§54.8/§54.9): repeated unsolicited promotion continues escalating warning counts, non-flood", () => {
-  assert.deepEqual(decide({ priorWarningCount: 1 }), { kind: "DELETE_WARN", warningNumber: 2, reason: "repeated_unsolicited_promotion" });
-  assert.deepEqual(decide({ priorWarningCount: 2 }), { kind: "DELETE_WARN", warningNumber: 3, reason: "repeated_unsolicited_promotion" });
+test("REQUIRED (§54.8/§54.9): repeated unsolicited promotion continues escalating -- warning 1 (10-min mute), warning 2 (30-min mute), then removal", () => {
+  assert.deepEqual(decide({ priorWarningCount: 0 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
+  assert.deepEqual(decide({ priorWarningCount: 1 }), { kind: "DELETE_WARN", warningNumber: 2, reason: "repeated_unsolicited_promotion", muteMinutes: 30 });
 });
 
-test("REQUIRED (§54.9): the 4th unsolicited-promotion violation (past the 3-warning limit) -> DELETE_BAN", () => {
-  assert.deepEqual(decide({ priorWarningCount: PROMOTION_WARNING_LIMIT }), { kind: "DELETE_BAN", reason: "repeated_unsolicited_promotion" });
+test("REQUIRED (§54.9): the 3rd unsolicited-promotion violation (past the 2-warning limit) -> DELETE_KICK + purge, never a permanent ban", () => {
+  assert.deepEqual(decide({ priorWarningCount: SPAM_WARNING_LIMIT }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
 test("REQUIRED (§54.10): unknown/ambiguous, unfamiliar-looking link -> ALLOW, never an automatic permanent ban", () => {
@@ -282,11 +282,11 @@ test("REQUIRED (§54.13): an admin/trusted user posting what would otherwise be 
 });
 
 test("admin/trusted exemption does NOT apply to severe content -- safety is never role-exempt", () => {
-  assert.deepEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "high", isAdminOrTrusted: true }), { kind: "DELETE_BAN", reason: "explicit_content" });
+  assert.deepEqual(decide({ category: "EXPLICIT_CONTENT", confidence: "high", isAdminOrTrusted: true }), { kind: "DELETE_KICK", reason: "explicit_content", purge: true });
 });
 
 test("admin/trusted exemption does NOT apply to an obvious flood/spam signal either", () => {
-  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD", isAdminOrTrusted: true }), { kind: "DELETE_BAN", reason: "flood" });
+  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD", isAdminOrTrusted: true }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
 test("a SAFE_RELEVANT_LINK is always ALLOW regardless of history", () => {
@@ -333,7 +333,7 @@ test("REQUIRED (scenario 3, end-to-end via decide()): an expired strike means th
   const strikeAt = "2026-01-01T00:00:00Z";
   const now = new Date(new Date(strikeAt).getTime() + SCAM_STRIKE_WINDOW_MS + 1);
   const priorScamStrikeCount = effectiveScamStrikeCount(1, strikeAt, now);
-  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing" });
+  assert.deepEqual(decide({ category: "PHISHING_OR_SCAM", confidence: "high", priorScamStrikeCount }), { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing", muteMinutes: 30 });
 });
 
 /* --------------------------------------------------- identity/mention rendering ---- */
@@ -377,9 +377,9 @@ test("REQUIRED (scenario 7): the first-offense scam warning never includes a URL
   assert.match(text, /removal from this community/i);
 });
 
-test("the first-offense warning explicitly includes @username when the sender has one, matching the exact requested wording", () => {
+test("the first-offense warning explicitly includes @username and the real 30-minute mute duration, matching the exact requested wording", () => {
   const text = scamFirstOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
-  assert.equal(text, "@jon_arthur1, your message was removed because it contained a suspected scam/phishing link. Do not post scam, wallet-drainer, or fake reward links. Repeated violations may result in removal from this community.");
+  assert.equal(text, "@jon_arthur1, your message was removed because it contained a suspected scam/phishing link. You've been muted for 30 minutes. Another confirmed violation will result in removal from this community.");
 });
 
 test("REQUIRED (scenario 7): the second-offense (kick) warning never includes a URL either", () => {
