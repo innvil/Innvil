@@ -127,6 +127,71 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Watch landing repositioned: "Virtual Moderators for Telegram," not a moderation bot (v1.47.77)
+- **Explicit product-positioning pass, per direct instruction: "Do not rebuild or redefine existing moderation
+  logic... surface [existing capabilities] properly in the marketing."** Zero backend/moderation-logic changes
+  in this pass — `WatchLanding.tsx` only. Every claim below traces to real, already-shipped code, verified
+  before writing any copy (grep/read first, same discipline as every prior pass this session).
+- **New primary category**: "Virtual Moderators for Telegram," replacing the old "AI Watchers for Telegram —
+  moderation that actually talks" tagline. New hero headline: "Traditional moderation bots enforce rules.
+  Watchers actually help run the community." — leads with the differentiator, not a feature list.
+- **New "Why Watchers?" section** (`WhyWatchersSection`) — a 7-row bot-vs-Watcher comparison table, deliberately
+  shorter and differently-worded from the existing 9-row table on `/why-watchers` (that page is the deep dive;
+  this is the landing's quick-scan version): understanding-by-intent vs. keyword-matching, Project-Knowledge-
+  grounded answers vs. no real conversation, configurable persona vs. one generic voice, multi-Watcher
+  coordination vs. bots acting alone, Smart-Escalation forwarding vs. silent/canned fallback, intent-based
+  moderation vs. blunt keyword filters, and conversational presence vs. command-by-command reaction.
+- **New compact Four-Pillar strip** (`PillarsSection` — Protect/Engage/Support/Escalate). Escalate is stated
+  as a real, currently-live capability ("can forward the question to your team and relay the approved answer
+  back") — Smart Escalation shipped in v1.47.73, so per the task's own explicit conditional ("if not yet
+  publicly released, label it appropriately") it's presented plainly, not hedged.
+- **New "Knows the rules — and enforces them" section** (`ModerationResponsibilitySection`) — grounds the REAL
+  graduated moderation system (unsolicited-promotion/link-spam get a warning-first escalation; phishing/scam
+  and explicit content at high confidence are enforced immediately) with a real example warning template
+  matching the exact wording already documented in the Help Center's "Natural Moderation" article — verified
+  against `content.ts` before writing it, not invented.
+- **New "It speaks Telegram" section** (`CryptoNativeSection`) — crypto/Telegram shorthand understanding
+  ("ca?", "wen distro?", "socials?", "mc?" + TG/CEX/DEX/TGE/WL/LP/ATH/FUD/GM/GN/AMA/tokenomics/vesting/claim),
+  with the explicit required safety caveat stated verbatim in the copy itself: "Understanding a question is
+  not the same as inventing an answer... it doesn't make up the contract address, the launch date, or the
+  market cap."
+- **New persona + natural-participation section** (`PersonaSection`) — illustrative example personas ("Mr.
+  Pres" / "Ms. VP", per the task's own suggested example names — same illustrative-sample-data convention
+  already used for "Kwan" in the hero's `WatchOpsPanel`), plus the real "present in the room, not just on
+  command" behavior (directly-addressed vs. selective ambient engagement, silence as a valid outcome,
+  multi-Watcher coordination against piling on) — grounded in the Help Center's "Community Conversation"
+  article, not invented.
+- **New "Works alongside the tools you already use" section** (`ComplementarySection`) — positions Watch as
+  complementary to existing utility bots (Rose named as the example, per the task's own instruction) —
+  pure positioning copy, no technical dependency/compatibility claim of any kind.
+- **Terminology swept for this file**: confirmed via a post-build grep that every remaining "moderation bot"
+  occurrence is intentional, contrastive language (the hero's "Traditional moderation bots enforce rules..." /
+  the new FAQ's "Is a Watcher just another moderation bot?") — Innvil Watch's own product is never described
+  as "a moderation bot" anywhere in the file. Added a new leading FAQ entry stating the category distinction
+  directly: "Is a Watcher just another moderation bot? No. A moderation bot enforces fixed rules. A Watcher is
+  a Virtual Moderator..."
+- **A real gap was found and deliberately NOT papered over**: the task's spec described a "Watchers welcome
+  new members individually or collectively" capability as EXISTING behavior to surface as a proof point (with
+  specific example copy for both an individual welcome and a batch/collective welcome for an influx of new
+  members). Investigated first, per this session's standing discipline — grepped
+  `event-types.ts`/`community-runtime.ts` for every plausible Telegram join/leave event field
+  (`new_chat_member(s)`, `left_chat_member`, `chat_member`, `member_joined`) and found **zero matches** — no
+  "notice a member joining and welcome them" event handler exists anywhere in the Watcher runtime today. Per
+  the task's own explicit conditional for Smart Escalation ("if not yet publicly released, label it
+  appropriately and do not present it as a current capability until implemented"), the SAME standard was
+  applied here: this specific proof-point section, with its literal example transcripts, was **not written** —
+  fabricating live product behavior that doesn't exist would be a real, false claim to prospective customers.
+  Flagged to the user directly rather than silently built or silently omitted without explanation. The rest of
+  the "Engage" pillar/natural-participation messaging is unaffected, since it's grounded in real, verified
+  conversational behavior, not the join-event feature.
+- No test file exists for `WatchLanding.tsx` (this codebase has no React component-render test infrastructure —
+  consistent with every other Watch UI pass); verified via `tsc --noEmit` (clean) + full test suite (1828 pass,
+  unaffected — pure landing copy/composition, no logic touched) + production build (clean, all 60+ routes
+  unchanged) + a direct `curl -H "Host: watch.localhost"` fetch of the rendered page confirming every new
+  section's text renders correctly and the string "welcomes new member" appears nowhere on the page.
+- **Not deployed automatically** — same standing discipline as every other change this session; deploy is a
+  separate, explicit step.
+
 ### 2026-08-26 — BYO 20 repriced to $169.99 (was $199.99) + simplified Watch landing header (v1.47.76)
 - **Pricing correction, per direct user feedback with the actual numbers checked first.** BYO 20 was priced
   ABOVE the cost of assembling its own equivalent capacity out of Platinum + Community Expansion + Media

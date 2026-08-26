@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   ShieldCheck, MessageSquare, Gauge, Bot, ArrowRight, ScrollText, Activity,
   Radio, Zap, Users, Clock, Rocket, Server, KeyRound, Star, Check,
+  HeartHandshake, LifeBuoy, Send, Fingerprint, Puzzle, MessageCircleQuestion, X,
 } from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
 import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
@@ -26,6 +27,18 @@ import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
  * `fp-root`/`fp-*` gold-editorial system, and NOT a copy of
  * PublicLanding.tsx's structure. Still visibly "by Innvil" via the shared
  * brand mark + explicit ecosystem links in the nav/footer.
+ *
+ * POSITIONING (2026-08-27): the whole page is written around the product
+ * category "Virtual Moderators for Telegram" rather than "a moderation
+ * bot" — every capability described below is real, already-shipped
+ * behavior (graduated moderation, persona, Project-Knowledge-grounded
+ * Q&A, multi-Watcher coordination, Smart Escalation, natural
+ * conversation understanding). Nothing here documents a capability that
+ * doesn't exist — a real "notify + welcome a new member on join" event
+ * handler was investigated and confirmed NOT to exist anywhere in the
+ * runtime (grepped event-types.ts/community-runtime.ts for
+ * new_chat_member/left_chat_member/chat_member — zero matches), so no
+ * "welcomes new members" claim is made anywhere on this page.
  */
 function WatchNav({ authenticated }: { authenticated: boolean }) {
   return (
@@ -41,7 +54,7 @@ function WatchNav({ authenticated }: { authenticated: boolean }) {
         </a>
         <nav className="hidden md:flex items-center gap-6 text-sm w-text-dim">
           <a href="#what-is-a-watcher" className="hover:w-text">Watchers</a>
-          <Link href="/why-watchers" className="hover:w-text">Why Watchers?</Link>
+          <a href="#why-watchers" className="hover:w-text">Why Watchers?</a>
           <a href="#features" className="hover:w-text">Features</a>
           <a href="#pricing" className="hover:w-text">Pricing</a>
         </nav>
@@ -108,9 +121,221 @@ function WatchOpsPanel() {
   );
 }
 
+/** The bot-vs-Watcher comparison — deliberately shorter/differently-worded
+ *  from the 9-row table on /why-watchers (that page is the deep dive; this
+ *  is the landing's quick-scan version). Every "Watcher" claim maps to a
+ *  real, already-shipped capability. */
+const COMPARISON: Array<{ topic: string; bot: string; watcher: string }> = [
+  { topic: "Understanding a message", bot: "Matches fixed commands or keywords", watcher: "Understands questions by intent, however they're phrased" },
+  { topic: "Answering questions", bot: "Can't hold a real conversation", watcher: "Answers from your own Project Knowledge, grounded in real facts" },
+  { topic: "Personality", bot: "One generic voice, the same for everyone", watcher: "A configurable persona — tone, style, and role you define" },
+  { topic: "Working as a team", bot: "Each bot acts on its own", watcher: "Multiple Watchers coordinate so replies don't pile on" },
+  { topic: "When it doesn't know", bot: "Stays silent or gives a canned fallback", watcher: "Can forward the question to your team and relay the answer back" },
+  { topic: "Moderation", bot: "Blunt keyword and regex filters", watcher: "Recognizes real violations by intent, not just banned words" },
+  { topic: "Presence", bot: "Reacts to commands, message by message", watcher: "Follows the conversation, so it stays present between them" },
+];
+
+function WhyWatchersSection() {
+  return (
+    <section id="why-watchers" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
+      <p className="text-xs w-mono uppercase w-teal tracking-wider text-center mb-2">Why Watchers?</p>
+      <h2 className="w-display text-2xl sm:text-3xl text-center mb-3">
+        Traditional moderation bots enforce rules.<br className="hidden sm:block" /> Watchers actually help run the community.
+      </h2>
+      <p className="w-text-dim text-center max-w-2xl mx-auto mb-10">
+        A Watcher is a Virtual Moderator — a persistent, persona-driven team member for your Telegram Community,
+        not a script that deletes messages when a keyword matches.
+      </p>
+      <div className="w-card overflow-hidden">
+        <div className="grid grid-cols-[1fr_1fr_1fr] text-[11px] uppercase tracking-wide font-semibold w-text-faint border-b w-line-soft">
+          <div className="p-3 sm:p-4"></div>
+          <div className="p-3 sm:p-4 flex items-center gap-1.5"><X size={12} className="w-text-faint" /> Traditional bot</div>
+          <div className="p-3 sm:p-4 flex items-center gap-1.5 w-teal"><Check size={12} /> Innvil Watcher</div>
+        </div>
+        {COMPARISON.map((row, i) => (
+          <div
+            key={row.topic}
+            className={`grid grid-cols-[1fr_1fr_1fr] text-xs sm:text-sm ${i < COMPARISON.length - 1 ? "border-b w-line-soft" : ""}`}
+          >
+            <div className="p-3 sm:p-4 w-text font-medium">{row.topic}</div>
+            <div className="p-3 sm:p-4 w-text-faint">{row.bot}</div>
+            <div className="p-3 sm:p-4 w-text-dim">{row.watcher}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** The Four Pillars — a compact, quick-scan strip. Escalate references
+ *  Smart Escalation, which is a real, currently-live capability (shipped
+ *  as v1.47.73) -- stated plainly, not hedged as "coming soon". */
+const PILLARS: Array<{ icon: typeof ShieldCheck; title: string; body: string }> = [
+  { icon: ShieldCheck, title: "Protect", body: "Graduated moderation for spam, scam links, and unsafe media — enforced by intent, not just keywords." },
+  { icon: HeartHandshake, title: "Engage", body: "Natural conversation in a persona you configure, present in the room between commands." },
+  { icon: LifeBuoy, title: "Support", body: "Answers grounded in your own Project Knowledge — never an invented claim about your project." },
+  { icon: Send, title: "Escalate", body: "When a Watcher genuinely can't answer, it can forward the question to your team and relay the approved answer back." },
+];
+
+function PillarsSection() {
+  return (
+    <section className="max-w-5xl mx-auto px-6 pb-16">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {PILLARS.map((p) => (
+          <div key={p.title} className="w-card p-4">
+            <p.icon size={18} className="w-teal mb-2.5" />
+            <p className="w-display text-sm mb-1">{p.title}</p>
+            <p className="text-xs w-text-dim leading-relaxed">{p.body}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** "Knows the rules — and enforces them": grounds the existing graduated
+ *  moderation system (real: unsolicited-promotion/link-spam get a
+ *  warning-first escalation, phishing/scam and explicit content are
+ *  enforced immediately at high confidence) as a proof point that a
+ *  Watcher does what a human moderator would normally be expected to do. */
+function ModerationResponsibilitySection() {
+  return (
+    <section className="max-w-5xl mx-auto px-6 pb-16">
+      <div className="w-card-raised p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1fr_1.05fr] gap-8 items-center">
+        <div>
+          <p className="text-xs w-mono uppercase w-teal tracking-wider mb-2">Knows the rules — and enforces them</p>
+          <h2 className="w-display text-2xl mb-3">Judgment, not just a keyword filter.</h2>
+          <p className="text-sm w-text-dim leading-relaxed mb-3">
+            Enforcement is graduated where it should be, and immediate where it has to be. Unsolicited promotion
+            and link spam get a real warning first — escalating only on repeat offenses. Phishing/scam links and
+            explicit content, at high confidence, are treated as safety issues and acted on immediately.
+          </p>
+          <p className="text-sm w-text-dim leading-relaxed">
+            Warnings are phrased naturally, in the Watcher&apos;s own configured voice — never a robotic
+            &quot;Violation 2/3&quot; template repeated word-for-word.
+          </p>
+        </div>
+        <div className="w-card p-5">
+          <div className="flex items-start gap-2.5 mb-3">
+            <div className="w-7 h-7 rounded-full w-teal-soft-bg border w-teal-border flex items-center justify-center shrink-0">
+              <Bot size={13} className="w-teal" />
+            </div>
+            <div className="w-surface-raised rounded-lg rounded-tl-sm p-3 text-xs w-text-dim leading-relaxed">
+              Hey @newuser, that&apos;s the second promotional post I&apos;ve had to remove — please keep
+              promotional links out of this community. Another one may result in further action.
+            </div>
+          </div>
+          <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mt-4 mb-1">Example warning</p>
+          <p className="text-[11px] w-text-faint">Graduated enforcement, phrased in the Watcher&apos;s own persona — not a canned message.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** "It speaks Telegram": crypto/Telegram shorthand understanding. Explicit
+ *  safety caveat, per product requirement — understanding a question is
+ *  never presented as license to invent an answer. */
+function CryptoNativeSection() {
+  const examples = ["ca?", "wen distro?", "socials?", "mc?"];
+  const terms = ["TG", "CEX", "DEX", "TGE", "WL", "LP", "ATH", "FUD", "GM", "GN", "AMA", "tokenomics", "vesting", "claim"];
+  return (
+    <section className="max-w-5xl mx-auto px-6 pb-16">
+      <div className="w-card-raised p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-8 items-center">
+        <div className="w-card p-5 order-2 lg:order-1">
+          <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-3">Shorthand a Watcher understands</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {examples.map((e) => (
+              <span key={e} className="w-pill w-surface-raised w-text-dim font-mono text-xs">{e}</span>
+            ))}
+          </div>
+          <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-2">Common terms</p>
+          <div className="flex flex-wrap gap-1.5">
+            {terms.map((t) => (
+              <span key={t} className="text-[11px] px-2 py-0.5 rounded-full w-surface-raised w-text-faint">{t}</span>
+            ))}
+          </div>
+        </div>
+        <div className="order-1 lg:order-2">
+          <p className="text-xs w-mono uppercase w-teal tracking-wider mb-2 flex items-center gap-1.5">
+            <MessageCircleQuestion size={13} /> It speaks Telegram
+          </p>
+          <h2 className="w-display text-2xl mb-3">Understands the shorthand your community actually uses.</h2>
+          <p className="text-sm w-text-dim leading-relaxed mb-3">
+            A Watcher recognizes real crypto and Telegram shorthand — &quot;ca?&quot;, &quot;wen distro?&quot;,
+            &quot;socials?&quot;, &quot;mc?&quot; — and common terms like TG, CEX, DEX, TGE, WL, LP, ATH, FUD,
+            GM, GN, AMA, tokenomics, vesting, and claim, without needing a member to spell everything out.
+          </p>
+          <p className="text-sm w-text-dim leading-relaxed">
+            <strong className="w-text font-medium">Understanding a question is not the same as inventing an
+            answer.</strong> A Watcher still answers from your own configured Project Knowledge — it recognizes
+            what&apos;s being asked, it doesn&apos;t make up the contract address, the launch date, or the
+            market cap.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Persona + natural participation, combined into one section. Example
+ *  persona names ("Mr. Pres" / "Ms. VP") are illustrative sample data,
+ *  same convention already used for "Kwan" in WatchOpsPanel above. */
+function PersonaSection() {
+  return (
+    <section className="max-w-5xl mx-auto px-6 pb-16">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+        <div className="w-card p-6">
+          <Fingerprint size={18} className="w-teal mb-3" />
+          <p className="w-display text-lg mb-1">A real persona, not one generic voice</p>
+          <p className="text-sm w-text-dim leading-relaxed mb-3">
+            Configure a Watcher&apos;s tone, formality, humor, and role from a curated preset, or write your own
+            from scratch. &quot;Mr. Pres&quot; and &quot;Ms. VP&quot; can sound nothing alike — one calm and
+            formal, the other playful and terse — while both stay grounded in the same rules and knowledge.
+          </p>
+          <p className="text-xs w-text-faint">A Watcher&apos;s persona is its primary identity — being AI-powered is a fact it can acknowledge, never something that overrides how it&apos;s configured to sound.</p>
+        </div>
+        <div className="w-card p-6">
+          <Users size={18} className="w-teal mb-3" />
+          <p className="w-display text-lg mb-1">Present in the room, not just on command</p>
+          <p className="text-sm w-text-dim leading-relaxed mb-3">
+            A Watcher responds naturally when it&apos;s directly addressed, and more selectively to general
+            conversation — weighing what&apos;s already happened so it doesn&apos;t repeat what another Watcher
+            or a human just said. Silence is frequently the correct outcome, not a bug.
+          </p>
+          <p className="text-xs w-text-faint">Multiple Watchers deployed together coordinate so they don&apos;t pile on with several near-identical replies to the same message.</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Positions Watch as complementary to existing utility bots (e.g. Rose),
+ *  never a required replacement — pure positioning, no technical
+ *  dependency claim. */
+function ComplementarySection() {
+  return (
+    <section className="max-w-4xl mx-auto px-6 pb-16">
+      <div className="w-card p-6 sm:p-8 flex flex-col sm:flex-row items-start sm:items-center gap-5">
+        <div className="w-11 h-11 rounded-full w-teal-soft-bg border w-teal-border flex items-center justify-center shrink-0">
+          <Puzzle size={19} className="w-teal" />
+        </div>
+        <div>
+          <p className="w-display text-lg mb-1">Works alongside the tools you already use</p>
+          <p className="text-sm w-text-dim leading-relaxed">
+            A Watcher isn&apos;t trying to replace your gatekeeping bot, your captcha bot, or a utility bot like
+            Rose. Those handle entry rules and utilities; a Watcher handles the part they don&apos;t — moderating
+            with judgment, answering real questions, and staying present in the conversation.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldCheck; title: string; body: string }> }> = [
   {
-    label: "Watch",
+    label: "Protect",
     items: [
       { icon: ShieldCheck, title: "Spam & scam moderation", body: "Automatic detection and graduated enforcement for unsolicited promotion, link spam, and phishing/scam links." },
       { icon: Radio, title: "Media safety", body: "Photo and video moderation, so unsafe media doesn't sit in your community." },
@@ -208,6 +433,7 @@ function HowItWorksVerticalConnector({ flip }: { flip: boolean }) {
 }
 
 const FAQ: Array<{ q: string; a: string }> = [
+  { q: "Is a Watcher just another moderation bot?", a: "No. A moderation bot enforces fixed rules. A Watcher is a Virtual Moderator — it moderates with judgment, answers real questions from your own Project Knowledge, holds a persona, and can escalate what it genuinely can't answer to your team." },
   { q: "What is the Free Trial?", a: `A one-time, ${TRIAL_DURATION_DAYS}-day trial of Innvil Watch — ${TRIAL_CAPACITY.maxActiveSlots} Watcher slot and ${TRIAL_CAPACITY.maxCommunities} Community, no payment required. One-time Free Trial. Telegram verification required.` },
   { q: "Do I need to pay to start?", a: "No. No payment is required for the Free Trial." },
   { q: "Do I need Telegram?", a: "Yes. A verified Telegram account is required to activate the one-time Watch trial." },
@@ -249,15 +475,15 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-16 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>
           <span className="w-pill w-teal-soft-bg w-teal mb-5">
-            <Zap size={12} /> Innvil Watch
+            <Zap size={12} /> Virtual Moderators for Telegram
           </span>
           <h1 className="w-display text-4xl sm:text-5xl leading-[1.08] mb-6">
-            AI Watchers for Telegram —<br />moderation that actually talks.
+            Traditional moderation bots enforce rules.<br />Watchers actually help run the community.
           </h1>
           <p className="w-text-dim text-lg mb-4 max-w-md">
-            Deploy <strong className="w-text font-semibold">Watchers</strong> — AI-powered Virtual Moderators —
-            into your Telegram Communities to moderate, protect, monitor, and help operate them, even when
-            you&apos;re not online.
+            Deploy <strong className="w-text font-semibold">Watchers</strong> — AI-powered Virtual Moderators
+            with their own persona and knowledge — into your Telegram Communities. There is always a moderator
+            present, even when you&apos;re not online.
           </p>
           <p className="text-sm w-teal flex items-center gap-1.5 mb-8">
             <Clock size={14} /> Try it free for {TRIAL_DURATION_DAYS} days — no payment required.
@@ -266,13 +492,17 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
             <Link href="/signup" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg flex items-center gap-1.5">
               Start Free Trial <ArrowRight size={14} />
             </Link>
-            <a href="#what-is-a-watcher" className="text-sm px-5 py-3 rounded-lg border w-line-soft w-surface w-text-dim hover:w-text">
-              See how Watchers work
+            <a href="#why-watchers" className="text-sm px-5 py-3 rounded-lg border w-line-soft w-surface w-text-dim hover:w-text">
+              Why Watchers?
             </a>
           </div>
         </div>
         <WatchOpsPanel />
       </section>
+
+      <WhyWatchersSection />
+
+      <PillarsSection />
 
       <section id="what-is-a-watcher" className="max-w-6xl mx-auto px-6 pb-16">
         <div className="w-card-raised border w-teal-border p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-8 items-center">
@@ -288,7 +518,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
               supergroup, or channel you connect — connect your Telegram Community, then deploy Watchers into it.
             </p>
             <Link href="/why-watchers" className="text-sm w-teal font-semibold hover:underline inline-flex items-center gap-1">
-              Why Watchers, not just another moderation bot? <ArrowRight size={13} />
+              See the full Watcher vs. moderation-bot comparison <ArrowRight size={13} />
             </Link>
           </div>
           <div className="w-card p-5">
@@ -312,6 +542,14 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
           </div>
         </div>
       </section>
+
+      <ModerationResponsibilitySection />
+
+      <CryptoNativeSection />
+
+      <PersonaSection />
+
+      <ComplementarySection />
 
       <section id="byo20" className="max-w-5xl mx-auto px-6 pb-16 scroll-mt-24">
         <div className="w-card-raised border w-teal-border p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-8 items-center relative overflow-hidden">
