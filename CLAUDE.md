@@ -127,6 +127,28 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — Fix: BYO 20 plan card was rendering orphaned on its own row (v1.47.70)
+- **Live report: "is it deployed to prod? I don't see it."** Deployment was confirmed genuinely live (verified
+  via `vercel inspect watch.innvil.cloud` — pointed at the exact build with BYO 20, `x-vercel-cache: MISS`, no
+  stale caching involved), but a real layout bug found while re-checking the code explains the symptom: the
+  Plans page's plan grid (`BillingPlanPicker.tsx`) was still `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4` — a
+  hardcoded 4-column layout left over from when there were only 4 self-serve tiers. With `watchPlanOptions()`
+  now returning 5 (Bronze/Silver/Gold/Platinum/BYO 20), the 5th card had nowhere to go in the fixed 4-column
+  grid and wrapped alone onto a new row, sized to just one quarter-width column — easy to miss entirely or read
+  as "something's broken" rather than a real 5th plan card.
+- **Fix**: grid widened to `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5` — all 5 cards now sit in
+  one row on wide desktop screens, with sensible intermediate steps on smaller viewports (3-across on medium
+  desktop, 2 on tablet, 1 on mobile) rather than an orphaned single card.
+- **Also fixed two smaller, related staleness spots found while investigating**: the Plans page's paid-tier
+  section header still read "Bronze, Silver, Gold, Platinum" (`app/plans/page.tsx`) — now includes "BYO 20";
+  and the page's separate `getMediaModerationAddonState` call (used to feed the CURRENT-plan card's Media
+  Moderation + manage control) didn't exclude `capacity.tier === "byo20"` the way every other byo20-aware call
+  site in the codebase already does — harmless in practice (the byo20 card's own render branch never reads that
+  prop, confirmed via code review), but a wasted query and an inconsistency with the established exclusion
+  pattern; now excluded explicitly, with a comment explaining why.
+- 1769 tests pass (unchanged — pure layout/copy fix, no logic touched), `tsc --noEmit` clean, production build
+  clean. Deployed to production; `vercel inspect watch.innvil.cloud` reconfirmed pointed at the new build.
+
 ### 2026-08-26 — New self-serve tier: BYO 20 ($199.99/mo), Platinum cut to $149.99 (v1.47.69)
 - **New 5th self-serve Watch tier — "BYO 20"** — self-serve, checkout-purchasable (unlike Enterprise's
   manual/devops-only BYO tiers), $199.99/mo, always requires the customer's own AI provider credential (never

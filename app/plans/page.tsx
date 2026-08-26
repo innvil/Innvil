@@ -35,8 +35,12 @@ export default async function PlansPage() {
   const currentDisplayName = capacity
     ? watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })
     : null;
+  // byo20 is excluded here too -- its 3,000-unit allowance is always
+  // bundled/active (never a purchased row), so there's nothing for
+  // getMediaModerationAddonState to find; the plan card renders its own
+  // "included" statement for byo20 without ever reading this prop.
   const mediaAddonState =
-    capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise"
+    capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" && capacity.tier !== "byo20"
       ? await getMediaModerationAddonState(admin, accountId, capacity.tier)
       : null;
   const platinum = options.find((o) => o.displayName === "Platinum")!;
@@ -66,7 +70,7 @@ export default async function PlansPage() {
         />
 
         <div id="paid-plans" className="w-card p-5 scroll-mt-20">
-          <SectionHeader icon={CreditCard} title="Bronze, Silver, Gold, Platinum" />
+          <SectionHeader icon={CreditCard} title="Bronze, Silver, Gold, Platinum, BYO 20" />
           <BillingPlanPicker
             options={options}
             currentDisplayName={capacity?.tier !== "trial" ? currentDisplayName : null}
