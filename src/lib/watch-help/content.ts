@@ -15,7 +15,7 @@
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
-import { INNVIL_CREDIT_DISCOUNT, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_DIRECT_DISCOUNT_BPS } from "@/src/lib/products/innvil-credit-pricing";
+import { INNVIL_CREDIT_DISCOUNT, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_DIRECT_DISCOUNT_BPS, annualCreditPriceUsd, annualDirectPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
 
 export type HelpCategoryId =
@@ -44,23 +44,267 @@ export const HELP_CATEGORIES: HelpCategory[] = [
   { id: "faq", label: "FAQ", description: "Quick answers to the most common questions." },
 ];
 
+/** Optional rich-content blocks for an article, additive to the plain
+ *  `body: string[]` paragraph model every other article still uses
+ *  unchanged. Introduced specifically to make the Plans & Billing article
+ *  scannable (comparison tables, callouts, per-plan summary cards, anchor
+ *  navigation) without redesigning the Help Center portal itself — every
+ *  other article's rendering (app/support/[category]/[slug]/page.tsx's
+ *  plain `body.map(p => <p>)` loop) is completely untouched; only an
+ *  article that sets `richBody` renders through the new HelpRichBody
+ *  component instead. */
+export type HelpBlock =
+  | { type: "heading"; id: string; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "callout"; tone: "info" | "warning"; title: string; text: string }
+  | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "cards"; items: Array<{ title: string; lines: string[] }> }
+  | { type: "list"; items: string[] };
+
 export interface HelpArticle {
   slug: string;
   category: HelpCategoryId;
   title: string;
   description: string;
   keywords: string[];
+  /** Plain-text paragraphs — always populated (used for search relevance
+   *  scoring and as the description/fallback rendering). For an article
+   *  with `richBody`, this is auto-derived from it via
+   *  flattenBlocksToPlainText rather than hand-duplicated, so the two can
+   *  never drift apart. */
   body: string[];
+  /** When present, the article page renders THIS instead of the plain
+   *  `body` paragraphs (tables/callouts/cards/anchored headings). */
+  richBody?: HelpBlock[];
   related: string[];
 }
 
+/** Flattens rich blocks into plain search/description-friendly text — the
+ *  ONE place `body` is derived from `richBody`, so search indexing never
+ *  needs a second hand-maintained copy of the same facts. */
+export function flattenBlocksToPlainText(blocks: HelpBlock[]): string[] {
+  const out: string[] = [];
+  for (const b of blocks) {
+    if (b.type === "heading") out.push(b.text);
+    else if (b.type === "paragraph") out.push(b.text);
+    else if (b.type === "callout") out.push(`${b.title}: ${b.text}`);
+    else if (b.type === "table") out.push(`${b.headers.join(" ")} ${b.rows.map((r) => r.join(" ")).join(" ")}`);
+    else if (b.type === "cards") out.push(b.items.map((c) => `${c.title}: ${c.lines.join(" ")}`).join(" "));
+    else if (b.type === "list") out.push(b.items.join(" "));
+  }
+  return out;
+}
+
 const plans = watchPlanOptions();
-const planLine = plans.map((p) => `${p.displayName} $${p.price.toFixed(2)}/mo`).join(", ");
-const slotLine = plans.map((p) => `${p.displayName} ${p.slots}`).join(" · ");
 const discountedTiers = plans.filter((p) => INNVIL_CREDIT_DISCOUNT[p.tier] > 0).map((p) => p.displayName).join("/");
 const monthlyDiscountPct = Math.round((plans.find((p) => INNVIL_CREDIT_DISCOUNT[p.tier] > 0) ? INNVIL_CREDIT_DISCOUNT[plans.find((p) => INNVIL_CREDIT_DISCOUNT[p.tier] > 0)!.tier] : 0) * 100);
 const annualDiscountPct = ANNUAL_CREDIT_DISCOUNT_BPS / 100;
 const annualDirectDiscountPct = ANNUAL_DIRECT_DISCOUNT_BPS / 100;
+
+/** "Best For" is the one column with no canonical source to read from (it's
+ *  positioning copy, not a config value) — kept as a small local map so
+ *  every other cell in the comparison table still traces back to
+ *  watchPlanOptions()/money.ts, never a duplicated number. */
+const BEST_FOR: Record<string, string> = {
+  Bronze: "Small communities",
+  Silver: "Growing projects",
+  Gold: "Larger operations",
+  Platinum: "Multi-community teams",
+  "BYO 20": "Teams using their own AI provider",
+};
+
+function communitiesCell(p: (typeof plans)[number]): string {
+  return p.communitiesMax > p.communitiesIncluded ? `${p.communitiesIncluded} (up to ${p.communitiesMax})` : `${p.communitiesIncluded}`;
+}
+
+function aiGenerationsCell(p: (typeof plans)[number]): string {
+  return p.tier === "byo20" ? "BYO / provider-based" : MODERATOR_AI_GENERATION_POOL[p.tier].toLocaleString();
+}
+
+/** Plans & Billing rich content — comparison table -> key definitions ->
+ *  per-plan details -> usage rules -> examples -> edge cases, per the
+ *  explicit "summary first, details second" requirement. Every number
+ *  traces to the SAME canonical sources every other Watch surface enforces
+ *  from (watchPlanOptions/money.ts/innvil-credit-pricing.ts) -- nothing
+ *  here is a second, driftable copy. */
+const plansAndBillingRichBody: HelpBlock[] = [
+  { type: "heading", id: "pricing-overview", text: "Pricing Overview" },
+  {
+    type: "table",
+    headers: ["Plan", "Monthly Price", "Watcher Slots", "Communities", "AI Generations", "Best For"],
+    rows: plans.map((p) => [p.displayName, `$${p.price.toFixed(2)}`, String(p.slots), communitiesCell(p), aiGenerationsCell(p), BEST_FOR[p.displayName]]),
+  },
+  {
+    type: "paragraph",
+    text: "Enterprise (beyond Platinum) is three fixed, manually-provisioned packages — see its own summary further down and the full Innvil Watch Enterprise article.",
+  },
+  { type: "heading", id: "how-to-read", text: "How to Read the Plans" },
+  {
+    type: "cards",
+    items: [
+      { title: "Watcher Slots", lines: ["One slot means one Watcher actively deployed to one customer-facing Community."] },
+      { title: "Communities", lines: ["The maximum number of customer-facing Communities allowed by the plan (some plans can expand this — see Community Expansion)."] },
+      { title: "AI Generations", lines: ["The monthly pooled number of AI-generated responses/actions included with the plan, shared across every Watcher on the account."] },
+      { title: "Escalation Groups", lines: ["Private Watcher Ops / Escalation Groups do NOT consume Watcher slots or Community allowances."] },
+    ],
+  },
+  {
+    type: "callout",
+    tone: "warning",
+    title: "Escalation Groups do not consume slots",
+    text: "Connecting a Watcher to a private Watcher Ops / Escalation Group does not use an additional Watcher slot or customer-facing Community allowance.",
+  },
+  {
+    type: "callout",
+    tone: "warning",
+    title: "Watcher Records are not deployments",
+    text: "Creating a Watcher profile does not consume a slot. A slot is consumed only when that Watcher is actively deployed to a customer-facing Community.",
+  },
+
+  { type: "heading", id: "free-trial", text: "Free Trial" },
+  {
+    type: "cards",
+    items: [
+      {
+        title: "Free Trial",
+        lines: [
+          `$0 for ${TRIAL_DURATION_DAYS} days`,
+          `${TRIAL_CAPACITY.maxActiveSlots} Watcher slot`,
+          `${TRIAL_CAPACITY.maxCommunities} Community`,
+          "Full Smart Escalation / Watcher Ops included",
+        ],
+      },
+    ],
+  },
+  {
+    type: "paragraph",
+    text: `A one-time, ${TRIAL_DURATION_DAYS}-day trial — no payment required, tied to your verified Telegram identity so it can't be reclaimed from a second account. It includes the SAME Smart Escalation and Watcher Ops moderation reporting every paid plan gets — this isn't held back for the trial. There's no separate AI Generations allowance number for the trial (it uses its own reactive daily quota, not the pooled monthly model paid plans use). When it ends, nothing is deleted — your Projects, Communities, and Watchers stay exactly as they are until you choose a paid plan.`,
+  },
+
+  ...plans.flatMap((p): HelpBlock[] => [
+    { type: "heading" as const, id: `plan-${p.tier}`, text: p.displayName },
+    {
+      type: "cards" as const,
+      items: [
+        {
+          title: p.displayName,
+          lines: [
+            `$${p.price.toFixed(2)}/month`,
+            `${p.slots} Watcher slots`,
+            `${communitiesCell(p)} Communities`,
+            `${aiGenerationsCell(p)}${p.tier === "byo20" ? "" : " AI Generations"}`,
+          ],
+        },
+      ],
+    },
+    {
+      type: "paragraph" as const,
+      text:
+        p.tier === "byo20"
+          ? `BYO 20 always requires your own AI provider credential (Anthropic or an OpenAI-compatible provider) — Innvil never charges you for AI usage on top of the $${p.price.toFixed(2)}/mo plan price. Media Moderation + is bundled in (${MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} units/mo, never a separate purchase). Communities are fixed at ${p.communitiesIncluded} — already the max, with no expansion path. Best for teams that already run their own AI provider and want the most included in one flat price.`
+          : `Media Moderation + is an optional add-on on ${p.displayName} — +$${MODERATOR_MEDIA_ADDON[p.tier].price.toFixed(2)}/mo for ${MODERATOR_MEDIA_ADDON[p.tier].units.toLocaleString()} Media Moderation Units per period, never bundled into the base price. ${
+              p.communitiesMax > p.communitiesIncluded
+                ? `Community Expansion can raise its Community allowance from ${p.communitiesIncluded} to ${p.communitiesMax} for an additional monthly fee — see the Community Expansion article.`
+                : "Its Community allowance is fixed — the only way to raise it is to upgrade to a plan with a higher allowance."
+            } Best for: ${BEST_FOR[p.displayName].toLowerCase()}.`,
+    },
+  ]),
+
+  { type: "heading", id: "enterprise", text: "Enterprise" },
+  {
+    type: "cards",
+    items: [
+      {
+        title: "Managed Enterprise 50",
+        lines: [`from $${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo`, `${MANAGED_ENTERPRISE_50.slots} Watcher slots`, `${MANAGED_ENTERPRISE_50.communities} Communities`, "Managed — Innvil funds AI usage"],
+      },
+      {
+        title: "BYO Enterprise 50",
+        lines: [`$${WATCH_ENTERPRISE_BYO_TIERS[0].price}/mo`, `up to ${WATCH_ENTERPRISE_BYO_TIERS[0].maxSlots} Watcher deployments`, "Bring Your Own AI provider"],
+      },
+      {
+        title: "BYO Enterprise Unlimited",
+        lines: [`$${WATCH_ENTERPRISE_BYO_TIERS[1].price}/mo`, "Unlimited licensed Watcher deployments", "Bring Your Own AI provider"],
+      },
+    ],
+  },
+  {
+    type: "paragraph",
+    text: "Enterprise is for accounts that need more than Platinum's allowances — it's still the same Innvil Watch product, never a separate dashboard or domain. Managed means Innvil runs and pays for your AI provider usage; Bring Your Own (BYO) means you supply and pay for your own provider credential directly, lowering the Innvil platform fee (never a guarantee your total spend, Innvil fee plus your own provider usage, ends up lower overall). Support and provisioning for either mode are completed manually with the Innvil team — reach out from the Plans page. See the full Innvil Watch Enterprise article for everything each package includes.",
+  },
+
+  { type: "heading", id: "watcher-slots", text: "Watcher Slots" },
+  {
+    type: "paragraph",
+    text: "Watcher Slot Usage = Active Watcher × Active Customer-Facing Community Deployment. A slot is consumed only by an ACTIVE deployment — creating a Watcher profile, or connecting a private Escalation Group, never consumes one. See \"Watcher Profiles vs Deployments vs Slots\" and \"Watcher Slots and Billing\" for the full concepts and formula.",
+  },
+  { type: "heading", id: "billing-examples", text: "Slot Examples" },
+  {
+    type: "table",
+    headers: ["Example", "Setup", "Slots Used"],
+    rows: [
+      ["1", "1 Watcher deployed to 1 Community", "1 Watcher slot"],
+      ["2", "1 Watcher deployed to 3 Communities", "3 Watcher slots"],
+      ["3", "3 Watchers deployed to 1 Community", "3 Watcher slots"],
+      ["4", "3 Watchers across Communities, all also connected to the same private Watcher Ops group", "Only the customer-facing deployments count — the Watcher Ops group adds 0 slots"],
+    ],
+  },
+
+  { type: "heading", id: "ai-usage", text: "AI Usage" },
+  {
+    type: "paragraph",
+    text: "Most conversation and Project Knowledge answers use your account's pooled AI Generations allowance. Deterministic actions — including the new Watcher Ops moderation reports — never do, because there's nothing for a model to generate: the backend already knows every fact the report states.",
+  },
+  {
+    type: "table",
+    headers: ["Activity", "Counts Toward AI Usage?"],
+    rows: [
+      ["Normal AI-generated conversation", "Yes"],
+      ["Project Knowledge answer generated by AI", "Yes"],
+      ["Deterministic warning notice", "No"],
+      ["Template-based mute report", "No"],
+      ["Template-based kick report", "No"],
+      ["Template-based purge report", "No"],
+      ["Structured Watcher Ops moderation report", "No, unless an AI model is actually used"],
+      ["AI-generated summary", "Yes"],
+    ],
+  },
+
+  { type: "heading", id: "media-moderation", text: "Media Moderation" },
+  {
+    type: "table",
+    headers: ["Media Feature", "Included / Add-on", "Allowance / Price"],
+    rows: [
+      ["Photo moderation", "Part of Media Moderation +", "Shares the plan's Media Moderation Unit allowance"],
+      ["Video moderation", "Part of Media Moderation +", "Shares the plan's Media Moderation Unit allowance"],
+      [
+        "Media Moderation +",
+        "Optional add-on (Bronze–Platinum); bundled on BYO 20",
+        [
+          ...plans.filter((p) => p.tier !== "byo20").map((p) => `${p.displayName} +$${MODERATOR_MEDIA_ADDON[p.tier].price.toFixed(2)}/mo (${MODERATOR_MEDIA_ADDON[p.tier].units.toLocaleString()} units)`),
+          `BYO 20: ${MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} units/mo included, no separate charge`,
+        ].join(" · "),
+      ],
+    ],
+  },
+
+  { type: "heading", id: "annual-billing", text: "Annual Billing" },
+  {
+    type: "paragraph",
+    text: `Annual billing is paid upfront, on every self-serve plan: ${annualDirectDiscountPct}% off 12 months of the regular price with any direct crypto payment, or ${annualDiscountPct}% off with Innvil Credit — the bigger discount. The table below does the math for you.`,
+  },
+  {
+    type: "table",
+    headers: ["Plan", "Monthly", "Annual (Direct, -" + annualDirectDiscountPct + "%)", "Annual (Innvil Credit, -" + annualDiscountPct + "%)"],
+    rows: plans.map((p) => [p.displayName, `$${p.price.toFixed(2)}`, `$${annualDirectPriceUsd(p.price).toFixed(2)}`, `$${annualCreditPriceUsd(p.price).toFixed(2)}`]),
+  },
+
+  { type: "heading", id: "payments", text: "Payments" },
+  {
+    type: "paragraph",
+    text: "Watch is billed with crypto payments (Cryptomus, NOWPayments, or Binance Pay, depending on what's configured) or Innvil Credit, a discounted second way to pay — see the Innvil Credit article. There is currently no auto-renewal — you renew manually from the Billing page when your period ends; nothing about your existing Projects, Communities, or Watchers is affected while a subscription is expired.",
+  },
+];
 
 export const HELP_ARTICLES: HelpArticle[] = [
   {
@@ -226,17 +470,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
     slug: "plans-and-billing",
     category: "plans-billing",
     title: "Plans and Billing",
-    description: "Bronze through Platinum, monthly or annual, and how payment works.",
-    keywords: ["plans", "billing", "pricing", "annual", "monthly"],
-    body: [
-      `Self-serve monthly plans: ${planLine}. Each includes a Watcher-slot allowance (${slotLine}) and a separate Community allowance.`,
-      `Each plan also includes a pooled monthly AI Generations allowance — Bronze ${MODERATOR_AI_GENERATION_POOL.basic.toLocaleString()}, Silver ${MODERATOR_AI_GENERATION_POOL.standard.toLocaleString()}, Gold ${MODERATOR_AI_GENERATION_POOL.premium.toLocaleString()}, Platinum ${MODERATOR_AI_GENERATION_POOL.pro.toLocaleString()} per billing period, shared across every Watcher on the account. An AI Generation is counted once your Watcher's AI reply is successfully generated — deterministic actions like silence, reactions, short acknowledgements, and moderation decisions never consume one.`,
-      `Media Moderation + is an optional add-on available on every self-serve plan — Bronze +$${MODERATOR_MEDIA_ADDON.basic.price.toFixed(2)}/mo, Silver +$${MODERATOR_MEDIA_ADDON.standard.price.toFixed(2)}/mo, Gold +$${MODERATOR_MEDIA_ADDON.premium.price.toFixed(2)}/mo, Platinum +$${MODERATOR_MEDIA_ADDON.pro.price.toFixed(2)}/mo, each with its own included Media Moderation Unit allowance per period.`,
-      `Annual billing is available on every self-serve plan, paid upfront: ${annualDirectDiscountPct}% off 12 months of the regular price with any direct payment option (crypto), or ${annualDiscountPct}% off with Innvil Credit — the bigger discount.`,
-      "Watch is billed with crypto payments (Cryptomus, NOWPayments, or Binance Pay, depending on what's configured) or Innvil Credit, a discounted second way to pay. There is currently no auto-renewal — you renew manually from the Billing page when your period ends; nothing about your existing Projects, Communities, or Watchers is affected while a subscription is expired.",
-      `Enterprise (beyond Platinum) is three fixed packages: Managed Enterprise 50 ($${MANAGED_ENTERPRISE_50.price.toFixed(2)}/mo), Bring Your Own Provider 50 ($${WATCH_ENTERPRISE_BYO_TIERS[0].price}/mo), and Bring Your Own Provider Unlimited ($${WATCH_ENTERPRISE_BYO_TIERS[1].price}/mo) — see the Innvil Watch Enterprise article for what each includes.`,
-    ],
-    related: ["start-the-free-trial", "innvil-credit", "crypto-payments", "community-expansion", "innvil-watch-enterprise"],
+    description: "Comparison table first, details second — Free Trial through Enterprise, Watcher slots, AI usage, and annual pricing.",
+    keywords: ["plans", "billing", "pricing", "annual", "monthly", "comparison", "watcher slots", "ai usage"],
+    body: flattenBlocksToPlainText(plansAndBillingRichBody),
+    richBody: plansAndBillingRichBody,
+    related: ["start-the-free-trial", "innvil-credit", "crypto-payments", "community-expansion", "innvil-watch-enterprise", "watcher-slots-and-billing"],
   },
   {
     slug: "innvil-watch-enterprise",

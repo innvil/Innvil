@@ -7,6 +7,7 @@ import { WatchShell } from "@/src/components/watch/WatchShell";
 import { PublicDocsShell } from "@/src/components/watch/PublicDocsShell";
 import { HelpDocsNav, HelpDocsNavMobile } from "@/src/components/watch/HelpDocsNav";
 import { HelpArticleRail, ContactSupportCta } from "@/src/components/watch/HelpRightRail";
+import { HelpRichBody, HelpOnThisPage } from "@/src/components/watch/HelpRichBody";
 import { HELP_CATEGORIES, getArticle, relatedArticles } from "@/src/lib/watch-help/content";
 
 export async function generateMetadata({ params }: { params: Promise<{ category: string; slug: string }> }): Promise<Metadata> {
@@ -39,8 +40,11 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ ca
 
           {/* Article prose keeps a comfortable reading measure even though
               this column itself is wider -- the extra room goes to the docs
-              nav/rail, not to stretched paragraph lines. */}
-          <div className="max-w-2xl">
+              nav/rail, not to stretched paragraph lines. An article with
+              richBody (tables/cards) uses the FULL available width instead --
+              a comparison table cramped into a narrow paragraph column would
+              defeat the point of adding one. */}
+          <div className={article.richBody ? "max-w-none" : "max-w-2xl"}>
             <nav aria-label="Breadcrumb" className="text-xs w-text-faint mb-4 flex items-center gap-1 flex-wrap">
               <Link href="/support" className="hover:w-text-dim">Help Center</Link>
               <ChevronRight size={11} />
@@ -52,11 +56,18 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ ca
             <article>
               <h1 className="w-display text-2xl mb-2">{article.title}</h1>
               <p className="text-sm w-text-dim mb-6">{article.description}</p>
-              <div className="space-y-4">
-                {article.body.map((p, i) => (
-                  <p key={i} className="text-sm w-text leading-relaxed">{p}</p>
-                ))}
-              </div>
+              {article.richBody ? (
+                <>
+                  <HelpOnThisPage blocks={article.richBody} />
+                  <HelpRichBody blocks={article.richBody} />
+                </>
+              ) : (
+                <div className="space-y-4">
+                  {article.body.map((p, i) => (
+                    <p key={i} className="text-sm w-text leading-relaxed">{p}</p>
+                  ))}
+                </div>
+              )}
             </article>
 
             {/* Below `xl` the right rail is hidden, so Related lives here

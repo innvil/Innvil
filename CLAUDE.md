@@ -127,6 +127,50 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Plans & Billing docs: comparison table first, details second (v1.47.80)
+- **Explicit "do not redesign the documentation portal" scope — additive only.** Every other Help Center
+  article (30+) keeps rendering exactly as before, via the plain `body.map(p => <p>)` loop; only the
+  `plans-and-billing` article opts into the new capability.
+- **New optional `richBody?: HelpBlock[]` on `HelpArticle`** (`content.ts`) — `heading` (anchored, `id`),
+  `paragraph`, `callout` (info/warning), `table`, `cards`, `list`. New `flattenBlocksToPlainText()` auto-derives
+  the existing plain `body` (used for search indexing/descriptions) from `richBody`, so the two can never drift
+  apart — no hand-duplicated content. New `src/components/watch/HelpRichBody.tsx` (`HelpRichBody` renderer +
+  `HelpOnThisPage`, an anchor nav generated FROM the same heading blocks the body renders, so it can never list
+  a section that doesn't actually exist on the page). `app/support/[category]/[slug]/page.tsx` renders
+  `richBody` when present (and widens the reading column to full-width for it — a comparison table cramped into
+  a `max-w-2xl` paragraph column would defeat the point) — every other article's layout is byte-for-byte
+  unchanged.
+- **Rewrote `plans-and-billing`** into the requested structure — comparison table → key definitions → plan
+  details → usage rules → examples → edge cases: a **5-row Bronze/Silver/Gold/Platinum/BYO 20 comparison table**
+  (Monthly Price/Watcher Slots/Communities/AI Generations/Best For, every cell read from `watchPlanOptions()`/
+  `money.ts` — BYO 20's AI-Generations cell honestly shows "BYO / provider-based" rather than fabricating the
+  real `0` as if it were a meaningful allowance number); a **"How to Read the Plans"** card row (Watcher Slots/
+  Communities/AI Generations/Escalation Groups definitions) with the two exact requested **callout boxes**
+  ("Escalation Groups do not consume slots" / "Watcher Records are not deployments"); a **Free Trial** summary
+  card + detail paragraph (explicitly states Smart Escalation/Watcher Ops is included, not held back for
+  trial); a **per-plan section for each of the 5 self-serve tiers** (summary card + price/slots/communities/
+  AI-generations + a detail paragraph covering Media Moderation +/Community Expansion/Best-For, generated once
+  per plan from `watchPlanOptions()` rather than hand-written 5 times); an **Enterprise summary** (3 package
+  cards + a real comparison paragraph); a **Watcher Slots** pointer + a **4-row Slot Examples table** (the exact
+  worked examples, including "the Watcher Ops group adds 0 slots"); an **AI Usage table** (8 rows, exactly the
+  requested Yes/No matrix incl. "Structured Watcher Ops moderation report — No, unless an AI model is actually
+  used"); a **Media Moderation table** (photo/video/the real per-tier add-on pricing, BYO 20's bundled
+  allowance); an **Annual Billing table** (real per-plan dollar amounts via the SAME `annualDirectPriceUsd`/
+  `annualCreditPriceUsd` functions Billing itself uses — never a duplicated calculation, closing the exact
+  "do not force users to calculate discounts manually" requirement); and a **Payments** section (unchanged
+  facts, now its own anchored heading). **14 "On this page" anchors**, exactly matching the requested list.
+- New tests (`content.test.ts`, +8): the comparison table's exact headers/row-order/prices traced to
+  `watchPlanOptions()`, the BYO-20-never-fabricates-a-number guard, both required callouts present verbatim,
+  the 4-row Slot Examples table, the AI-usage Yes/No matrix, the annual table computed from the real canonical
+  pricing functions (not a duplicated formula), every required anchor id present, and a backward-compatibility
+  guard proving a `richBody`-less article is completely unaffected. Every PRE-EXISTING `plans-and-billing`
+  test (AI-Generations/Media-Moderation-pricing/annual-discount-framing assertions) still passes unchanged
+  against the auto-flattened `body`. 1859 tests pass (up from 1852), `tsc --noEmit` clean, production build
+  clean. **Live-verified** via a host-header fetch of the real rendered page: comparison table, both callouts,
+  the "On this page" nav, the annual table's real discount percentages, and the honest BYO-20 AI-generations
+  cell all render correctly.
+- **Not deployed automatically** — same standing discipline as every other change this session.
+
 ### 2026-08-27 — Watcher Ops: Escalation Group expanded into a real moderation operations/audit channel (v1.47.79)
 - **Expands the private Escalation Group (Phase 1, v1.47.73) from a knowledge-only channel into "Watcher Ops"**
   — per explicit spec, it now also carries structured moderation reports (warnings, temporary mutes, kicks,

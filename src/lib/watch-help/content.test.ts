@@ -2,10 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   HELP_ARTICLES, HELP_CATEGORIES, getArticle, articlesByCategory, relatedArticles, searchArticles, popularArticles,
+  type HelpBlock,
 } from "./content";
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
 import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
+import { watchPlanOptions } from "@/src/lib/products/watch-plans";
+import { annualCreditPriceUsd, annualDirectPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
 
 /* ------------------------------------------------------------- structure ---- */
 
@@ -265,6 +268,72 @@ test("REQUIRED: Watcher Ops Moderation Reports article states deterministic/no-A
   assert.match(text, /belongs to the Community they're in, not to whichever specific Watcher/i);
   assert.match(text, /only one of them acts on and reports any given violation/i);
   assert.match(text, /available on the Free Trial too/i);
+});
+
+test("REQUIRED: Plans and Billing's comparison table has one row per real self-serve plan, matching watchPlanOptions() exactly", () => {
+  const a = getArticle("plans-and-billing")!;
+  const table = a.richBody!.find((b) => b.type === "table" && b.headers[0] === "Plan") as Extract<HelpBlock, { type: "table" }>;
+  assert.ok(table, "the main comparison table must exist");
+  assert.deepEqual(table.headers, ["Plan", "Monthly Price", "Watcher Slots", "Communities", "AI Generations", "Best For"]);
+  const names = table.rows.map((r) => r[0]);
+  assert.deepEqual(names, ["Bronze", "Silver", "Gold", "Platinum", "BYO 20"]);
+  // Every price cell must be the real canonical price, byte-for-byte.
+  for (const row of table.rows) {
+    const plan = watchPlanOptions().find((p) => p.displayName === row[0])!;
+    assert.equal(row[1], `$${plan.price.toFixed(2)}`);
+    assert.equal(row[2], String(plan.slots));
+  }
+  const byo20Row = table.rows.find((r) => r[0] === "BYO 20")!;
+  assert.equal(byo20Row[4], "BYO / provider-based", "BYO 20 must never show a fabricated numeric AI-generation pool");
+});
+
+test("REQUIRED: Plans and Billing states the exact two required callouts verbatim (Escalation Groups and Watcher Records are not deployments)", () => {
+  const a = getArticle("plans-and-billing")!;
+  const callouts = a.richBody!.filter((b) => b.type === "callout") as Array<Extract<HelpBlock, { type: "callout" }>>;
+  assert.ok(callouts.some((c) => c.title === "Escalation Groups do not consume slots"));
+  assert.ok(callouts.some((c) => c.title === "Watcher Records are not deployments"));
+});
+
+test("REQUIRED: Plans and Billing includes a real 'Slot Examples' table with the exact 4 worked examples from the spec", () => {
+  const a = getArticle("plans-and-billing")!;
+  const table = a.richBody!.find((b) => b.type === "table" && b.headers[0] === "Example") as Extract<HelpBlock, { type: "table" }>;
+  assert.ok(table);
+  assert.equal(table.rows.length, 4);
+  assert.match(table.rows[3].join(" "), /Watcher Ops group adds 0 slots/i);
+});
+
+test("REQUIRED: Plans and Billing includes a real AI-usage table distinguishing deterministic reports (No) from real AI generation (Yes)", () => {
+  const a = getArticle("plans-and-billing")!;
+  const table = a.richBody!.find((b) => b.type === "table" && b.headers[0] === "Activity") as Extract<HelpBlock, { type: "table" }>;
+  assert.ok(table);
+  const byActivity = new Map(table.rows.map((r) => [r[0], r[1]]));
+  assert.equal(byActivity.get("Normal AI-generated conversation"), "Yes");
+  assert.equal(byActivity.get("Template-based kick report"), "No");
+  assert.equal(byActivity.get("Structured Watcher Ops moderation report"), "No, unless an AI model is actually used");
+});
+
+test("REQUIRED: Plans and Billing's annual pricing table uses the SAME canonical annualCreditPriceUsd/annualDirectPriceUsd functions Billing itself uses -- never a duplicated calculation", () => {
+  const a = getArticle("plans-and-billing")!;
+  const table = a.richBody!.find((b) => b.type === "table" && b.headers[0] === "Plan" && b.headers.length === 4) as Extract<HelpBlock, { type: "table" }>;
+  assert.ok(table);
+  const platinum = watchPlanOptions().find((p) => p.displayName === "Platinum")!;
+  const row = table.rows.find((r) => r[0] === "Platinum")!;
+  assert.equal(row[2], `$${annualDirectPriceUsd(platinum.price).toFixed(2)}`);
+  assert.equal(row[3], `$${annualCreditPriceUsd(platinum.price).toFixed(2)}`);
+});
+
+test("REQUIRED: Plans and Billing has a real 'On this page' anchor for every major section from the spec", () => {
+  const a = getArticle("plans-and-billing")!;
+  const headingIds = a.richBody!.filter((b) => b.type === "heading").map((b) => (b as Extract<HelpBlock, { type: "heading" }>).id);
+  for (const id of ["pricing-overview", "free-trial", "plan-basic", "plan-standard", "plan-premium", "plan-pro", "plan-byo20", "enterprise", "watcher-slots", "ai-usage", "media-moderation", "billing-examples", "annual-billing", "payments"]) {
+    assert.ok(headingIds.includes(id), `missing anchor heading "${id}"`);
+  }
+});
+
+test("REQUIRED: an article with no richBody still renders via the plain body model unaffected (backward compatible)", () => {
+  const a = getArticle("what-is-a-watcher")!;
+  assert.equal(a.richBody, undefined);
+  assert.ok(a.body.length > 0);
 });
 
 test("REQUIRED: Watcher Ops / Escalation Group article distinguishes Knowledge Escalation from Moderation Action reports, and states it's optional but strongly recommended", () => {
