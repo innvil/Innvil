@@ -71,7 +71,7 @@ export function watchOnboardingSteps(): OnboardingStep[] {
       title: "Choose your Watch plan",
       summary: "Your plan sets two separate limits: total Watcher slots and how many communities you can connect.",
       body: [
-        "Pick Bronze, Silver, Gold, or Platinum for self-serve monthly billing, or contact us for Enterprise. Each plan includes a set number of total Watcher slots (how many Watchers you can have active at once, across all your communities) and a separate community allowance (how many distinct communities you can connect at all).",
+        "Pick Bronze, Silver, Gold, Platinum, or BYO 20 for self-serve monthly billing, or contact us for Enterprise. BYO 20 is the flagship self-serve plan — it bundles the most Watcher slots, Communities, and Media Moderation units of any self-serve plan into one price, in exchange for connecting your own AI provider credential. Each plan includes a set number of total Watcher slots (how many Watchers you can have active at once, across all your communities) and a separate community allowance (how many distinct communities you can connect at all).",
         "These two numbers are independent — reaching your community limit doesn't use up Watcher slots, and vice versa.",
       ],
       callouts: [

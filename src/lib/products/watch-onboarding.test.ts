@@ -79,3 +79,11 @@ test("every callout has a non-empty text field", () => {
     }
   }
 });
+
+test("REQUIRED: the plan-choice step (02) names BYO 20 as a real self-serve option, not only Bronze/Silver/Gold/Platinum", () => {
+  const steps = watchOnboardingSteps();
+  const planStep = steps.find((s) => s.title.toLowerCase().includes("plan"));
+  assert.ok(planStep);
+  const allText = [planStep!.summary, ...planStep!.body, ...planStep!.callouts.map((c) => c.text)].join(" ");
+  assert.ok(allText.includes("BYO 20"), "the plan step must mention BYO 20 by name, since it's a genuine 5th self-serve tier");
+});

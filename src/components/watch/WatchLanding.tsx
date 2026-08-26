@@ -2,13 +2,14 @@ import React from "react";
 import Link from "next/link";
 import {
   ShieldCheck, MessageSquare, Gauge, Bot, ArrowRight, ScrollText, Activity,
-  Radio, Zap, Users, Clock, Rocket, Server, KeyRound,
+  Radio, Zap, Users, Clock, Rocket, Server, KeyRound, Star, Check,
 } from "lucide-react";
 import { WatchPricingSection } from "./WatchPricingSection";
 import { WatchOnboardingGuide } from "./WatchOnboardingGuide";
 import { WatchLogoutButton } from "./WatchLogoutButton";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
+import { MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 // Client-safe canonical trial constants -- watch-trial.ts itself is
 // server-only (full of DB functions); moderator/plan.ts is the plain,
 // client-safe module those constants actually originate from, and is
@@ -40,6 +41,7 @@ function WatchNav({ authenticated }: { authenticated: boolean }) {
         <nav className="hidden md:flex items-center gap-6 text-sm w-text-dim">
           <a href="#what-is-a-watcher" className="hover:w-text">What&apos;s a Watcher?</a>
           <a href="#features" className="hover:w-text">Features</a>
+          <a href="#byo20" className="w-teal font-semibold hover:underline">BYO 20 ★</a>
           <a href="#how" className="hover:w-text">How it works</a>
           <a href="#pricing" className="hover:w-text">Pricing</a>
           <a href="#free-trial" className="hover:w-text">Free Trial</a>
@@ -242,6 +244,7 @@ function WatchFaq() {
 
 export function WatchLanding({ authenticated }: { authenticated: boolean }) {
   const options = watchPlanOptions();
+  const byo20 = options.find((o) => o.tier === "byo20")!;
   return (
     <div id="top" className="watch-root min-h-screen">
       <WatchNav authenticated={authenticated} />
@@ -306,6 +309,58 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
               </div>
             </div>
             <p className="text-xs w-text-faint mt-4">One Watcher profile, deployed to two Communities, uses two slots — slots count active deployments, not distinct Watchers.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="byo20" className="max-w-5xl mx-auto px-6 pb-16 scroll-mt-24">
+        <div className="w-card-raised border w-teal-border p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-8 items-center relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-40 h-40 rounded-full w-teal-soft-bg blur-3xl opacity-40 -translate-y-1/2 translate-x-1/3" aria-hidden="true" />
+          <div className="relative">
+            <span className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full mb-4 w-teal-soft-bg w-teal">
+              <Star size={11} /> Best value plan
+            </span>
+            <h2 className="w-display text-2xl sm:text-3xl mb-3">
+              BYO 20 — everything included. Bring your own AI.
+            </h2>
+            <p className="w-text-dim text-sm leading-relaxed mb-5 max-w-md">
+              One flat price for the most Watch offers as a self-serve plan. Connect your own AI provider
+              credential (Anthropic or an OpenAI-compatible provider) and Innvil never charges you for AI usage
+              on top of the plan price — self-serve, purchase it right now, no sales call required.
+            </p>
+            <ul className="space-y-2 mb-6 text-sm w-text-dim">
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {byo20.slots} Watcher slots</li>
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {byo20.communitiesIncluded} Communities — already the max, nothing more to unlock</li>
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} Media Moderation units/mo, bundled — never a separate purchase</li>
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> Same Innvil Credit discounts as every other plan</li>
+            </ul>
+            <a href="#pricing" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg inline-flex items-center gap-1.5">
+              Get BYO 20 <ArrowRight size={14} />
+            </a>
+            <p className="text-xs w-text-faint mt-3">
+              Not the same as Enterprise BYO — this is a self-serve plan; Enterprise BYO is manually provisioned for larger, custom deployments.
+            </p>
+          </div>
+          <div className="relative w-card p-6 text-center">
+            <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-2">BYO 20 · monthly</p>
+            <p className="w-display text-4xl mb-1">
+              ${byo20.price.toFixed(2)}<span className="text-base w-text-faint font-normal">/mo</span>
+            </p>
+            <p className="text-xs w-text-faint mb-5">Bring your own AI provider credential</p>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="w-surface-raised rounded-lg p-2.5">
+                <p className="w-display text-lg w-teal">{byo20.slots}</p>
+                <p className="text-[10px] w-text-faint">slots</p>
+              </div>
+              <div className="w-surface-raised rounded-lg p-2.5">
+                <p className="w-display text-lg w-teal">{byo20.communitiesIncluded}</p>
+                <p className="text-[10px] w-text-faint">communities</p>
+              </div>
+              <div className="w-surface-raised rounded-lg p-2.5">
+                <p className="w-display text-lg w-teal">{(MODERATOR_MEDIA_ADDON.byo20.units / 1000).toFixed(0)}K</p>
+                <p className="text-[10px] w-text-faint">media units</p>
+              </div>
+            </div>
           </div>
         </div>
       </section>

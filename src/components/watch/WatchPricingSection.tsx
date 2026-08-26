@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Clock } from "lucide-react";
+import { CheckCircle2, Clock, Star } from "lucide-react";
 import { WatchCheckout } from "./WatchCheckout";
 import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
@@ -62,14 +62,22 @@ export function WatchPricingSection({ options, authenticated }: { options: Watch
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {options.map((opt) => {
           const plan = opt.displayName as Plan;
+          const isBest = plan === "BYO 20";
           return (
-            <div key={opt.tier} className="w-card p-5 flex flex-col">
-              <span
-                className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full mb-3"
-                style={{ color: RANK_ACCENT[plan], background: `${RANK_ACCENT[plan]}1F`, border: `1px solid ${RANK_ACCENT[plan]}55` }}
-              >
-                {plan}
-              </span>
+            <div key={opt.tier} className={`p-5 flex flex-col ${isBest ? "w-card-raised border w-teal-border" : "w-card"}`}>
+              <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+                <span
+                  className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                  style={{ color: RANK_ACCENT[plan], background: `${RANK_ACCENT[plan]}1F`, border: `1px solid ${RANK_ACCENT[plan]}55` }}
+                >
+                  {plan}
+                </span>
+                {isBest && (
+                  <span className="inline-flex w-fit items-center gap-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full w-teal-soft-bg w-teal">
+                    <Star size={10} /> Best value
+                  </span>
+                )}
+              </div>
               <p className="text-xs w-text-faint mb-4">{PLAN_BLURBS[plan]}</p>
               <p className="text-2xl w-display mb-1">${opt.price.toFixed(2)}<span className="text-sm w-text-faint">/mo</span></p>
               <div className="text-[11px] w-text-dim space-y-0.5 mb-3">

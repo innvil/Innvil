@@ -127,6 +127,40 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-26 — BYO 20 marketed hard on the Watch landing page (v1.47.71)
+- **Per explicit instruction to market BYO 20 hard on the public landing.** Prior state: BYO 20 only appeared
+  as one more card in the pricing grid at the bottom of the page, visually equal-weight with Bronze/Silver/
+  Gold/Platinum — nowhere near the prominence the tier's own "best value, everything included" positioning
+  called for.
+- **New dedicated promo section** (`WatchLanding.tsx`, `id="byo20"`), placed early on the page — right after
+  the "What is a Watcher?" education block and before the Features grid, so it's the second real content
+  section a visitor sees. A "Best value plan" pill, a bold headline ("BYO 20 — everything included. Bring your
+  own AI."), a real feature checklist (20 Watcher slots, 10 Communities "already the max", 3,000 bundled Media
+  Moderation units, same Innvil Credit discounts as every plan), a "Get BYO 20" CTA scrolling to `#pricing`,
+  and an explicit disclaimer distinguishing it from the separate Enterprise BYO offering ("this is a self-serve
+  plan; Enterprise BYO is manually provisioned for larger, custom deployments") so the two "bring your own AI"
+  concepts on the same page are never conflated. A companion price card shows the real `$199.99/mo` plus
+  20/10/3K stat tiles — every number read from `watchPlanOptions()`/`MODERATOR_MEDIA_ADDON.byo20`, never a
+  duplicated literal.
+- **Nav gained a highlighted `BYO 20 ★` link** (`#byo20`, styled teal/bold, distinct from the plain-colored
+  nav items around it) — the only nav item with visual emphasis, deliberately reserved for the tier being
+  pushed hardest.
+- **Pricing grid card upgraded** (`WatchPricingSection.tsx`) — BYO 20's card is now `w-card-raised` with a
+  teal border (matching `/plans`' `BillingPlanPicker` treatment) and carries an explicit "★ Best value" pill
+  next to its rank badge, instead of reading identically to the other four cards.
+- **Fixed a real, stale accuracy gap found while touching this area**: the "Getting Started" onboarding guide's
+  step 2 body still said "Pick Bronze, Silver, Gold, or Platinum for self-serve monthly billing" — technically
+  correct before this tier existed, now misleadingly implies BYO 20 isn't self-serve. Corrected to name BYO 20
+  explicitly as the flagship self-serve plan (the step's own `planLine` callout already listed it correctly via
+  `watchPlanCapacityTable()` — only the hardcoded prose sentence above it was stale).
+- New test (`watch-onboarding.test.ts`, +1): the plan-choice step's body text names "BYO 20" explicitly, not
+  just the four legacy tier names. 1770 tests pass (up from 1769), `tsc --noEmit` clean, production build
+  clean. Live-verified locally on `watch.localhost` (the real dev-mode Watch host) via `get_page_text` — nav
+  highlight, promo section, price/stat card, and the upgraded pricing-grid card all render with the exact
+  intended copy and real numbers.
+- **Not deployed automatically until confirmed working locally, per this session's own standing discipline —
+  now deployed to production.**
+
 ### 2026-08-26 — Fix: BYO 20 plan card was rendering orphaned on its own row (v1.47.70)
 - **Live report: "is it deployed to prod? I don't see it."** Deployment was confirmed genuinely live (verified
   via `vercel inspect watch.innvil.cloud` — pointed at the exact build with BYO 20, `x-vercel-cache: MISS`, no
