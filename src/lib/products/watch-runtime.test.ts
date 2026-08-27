@@ -63,9 +63,30 @@ function fakeAdmin(seed: {
     from(table: string) {
       const filters: Array<(r: Row) => boolean> = [];
       let headMode = false;
+      let selectCols = "";
       const applyFilters = () => (store[table] ?? []).filter((r) => filters.every((f) => f(r)));
+      // Simulates the ONE embedded-resource shape listAccountCommunities
+      // actually requests (communities -> moderator_deployments ->
+      // virtual_moderators, via the real FK columns) -- resolved against the
+      // SAME flat seed tables every other test in this file already uses, so
+      // a wrong embed here would show up as a real assertion failure, not a
+      // false pass. Never fires for a plain, non-embedded `communities`
+      // select (every other existing call/test is unaffected).
+      const attachCommunityEmbeds = (rows: Row[]): Row[] => {
+        if (table !== "communities" || !selectCols.includes("moderator_deployments")) return rows;
+        return rows.map((r) => ({
+          ...r,
+          moderator_deployments: (store.moderator_deployments ?? [])
+            .filter((d) => d.community_id === r.id)
+            .map((d) => ({
+              id: d.id, moderator_id: d.moderator_id, enabled: d.enabled,
+              virtual_moderators: (store.virtual_moderators ?? []).find((m) => m.id === d.moderator_id) ?? null,
+            })),
+        }));
+      };
       const builder: Record<string, unknown> = {
-        select(_cols?: string, opts?: { count?: string; head?: boolean }) {
+        select(cols?: string, opts?: { count?: string; head?: boolean }) {
+          if (cols) selectCols = cols;
           if (opts?.head) headMode = true;
           return builder;
         },
@@ -75,9 +96,9 @@ function fakeAdmin(seed: {
         gte(col: string, val: string) { filters.push((r) => String(r[col]) >= val); return builder; },
         order() { return builder; },
         limit() { return builder; },
-        async maybeSingle() { return { data: applyFilters()[0] ?? null, error: null }; },
+        async maybeSingle() { return { data: attachCommunityEmbeds(applyFilters())[0] ?? null, error: null }; },
         then(resolve: (v: { data: Row[] | null; error: null; count?: number }) => void) {
-          const rows = applyFilters();
+          const rows = attachCommunityEmbeds(applyFilters());
           if (headMode) resolve({ data: null, error: null, count: rows.length });
           else resolve({ data: rows, error: null });
         },

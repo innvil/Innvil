@@ -907,12 +907,33 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   const projectNameById = new Map(projectRows.map((p) => [p.id, p.name]));
   if (!projectIds.length) return [];
 
+  // Deployments and their Watcher names are fetched as EMBEDDED resources in
+  // this same query (a single PostgREST request, resolved via the real,
+  // unambiguous FKs moderator_deployments.community_id -> communities.id and
+  // moderator_deployments.moderator_id -> virtual_moderators.id -- verified
+  // there is exactly one FK on each of those two relationships before
+  // relying on this, since PostgREST fails closed on an ambiguous one, same
+  // class of gap that once broke /api/v2's own implicit embed) -- collapses
+  // what used to be 3 sequential round trips (communities -> deployments ->
+  // moderators) into 1, on top of the still-separate `projects` query above
+  // (unavoidable: it's what scopes this whole read to THIS account).
   const { data: communities } = await admin
     .from("communities")
-    .select("id, project_id, platform, chat_id, title, chat_type, connection_type")
+    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, moderator_deployments ( id, moderator_id, enabled, virtual_moderators ( id, name ) )")
     .in("project_id", projectIds)
     .order("created_at", { ascending: true });
-  const allRows = (communities ?? []) as Array<{ id: string; project_id: string; platform: string; chat_id: string; title: string | null; chat_type: string | null; connection_type: "community" | "escalation_group" | null }>;
+  // `as unknown as` -- without generated Database types, supabase-js infers
+  // every embedded resource's cardinality from the select STRING alone
+  // (defaulting nested resources to arrays), which doesn't match the real
+  // to-one shape here (moderator_deployments.moderator_id -> exactly one
+  // virtual_moderators row). Runtime behavior is unaffected -- PostgREST
+  // itself correctly returns a single object for this real one-to-many-then-
+  // many-to-one chain; this is a compile-time-only mismatch.
+  const allRows = (communities ?? []) as unknown as Array<{
+    id: string; project_id: string; platform: string; chat_id: string; title: string | null; chat_type: string | null;
+    connection_type: "community" | "escalation_group" | null;
+    moderator_deployments: Array<{ id: string; moderator_id: string; enabled: boolean; virtual_moderators: { id: string; name: string } | null }> | null;
+  }>;
   // Excludes any row deterministically known to be a private Telegram 1:1
   // chat (a PERSON, not a Community) rather than filtering in the UI --
   // this is the single canonical Community query every other metric/table
@@ -926,18 +947,6 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   const communityRows = allRows.filter((c) => c.chat_type !== "private");
   if (!communityRows.length) return [];
 
-  const communityIds = communityRows.map((c) => c.id);
-  const { data: deployments } = await admin
-    .from("moderator_deployments")
-    .select("id, moderator_id, community_id, enabled")
-    .in("community_id", communityIds);
-  const deploymentRows = (deployments ?? []) as Array<{ id: string; moderator_id: string; community_id: string; enabled: boolean }>;
-  const moderatorIds = Array.from(new Set(deploymentRows.map((d) => d.moderator_id)));
-  const { data: moderators } = moderatorIds.length
-    ? await admin.from("virtual_moderators").select("id, name").in("id", moderatorIds)
-    : { data: [] as Array<{ id: string; name: string }> };
-  const moderatorNameById = new Map(((moderators ?? []) as Array<{ id: string; name: string }>).map((m) => [m.id, m.name]));
-
   return communityRows.map((c) => ({
     id: c.id,
     projectId: c.project_id,
@@ -949,9 +958,8 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     // never happen post-migration, since it's NOT NULL with a default) --
     // never fabricates "escalation_group" from an unexpected/null value.
     connectionType: c.connection_type === "escalation_group" ? "escalation_group" : "community",
-    watchers: deploymentRows
-      .filter((d) => d.community_id === c.id)
-      .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: moderatorNameById.get(d.moderator_id) ?? "Watcher", enabled: d.enabled })),
+    watchers: (c.moderator_deployments ?? [])
+      .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: d.virtual_moderators?.name ?? "Watcher", enabled: d.enabled })),
   }));
 }
 

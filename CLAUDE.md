@@ -127,6 +127,54 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Perf: collapsed listAccountCommunities' internal 4-sequential-round-trip chain into 2 (v1.47.84)
+- **Third follow-up in the same investigation, per a live "still have noticeable delay" report after v1.47.82/
+  v1.47.83.** Pulled real Vercel production logs (`vercel logs`) and measured the actual middleware→response
+  gap for real page loads — a genuine 300-800ms per page, even with the redundant-fetch bugs from the prior
+  two passes gone. Root cause of the remainder: `listAccountCommunities()` itself is 4 SEQUENTIAL round trips
+  internally (`projects` → `communities` → `moderator_deployments` → `virtual_moderators`, each depending on
+  the previous one's ids) — with the duplication fixed, this single function's own inherent depth is now the
+  dominant remaining cost, since it's called at least once on every page (via `getWatchShellContext`).
+- **Investigated first, per this session's "flag shared-system risk" discipline, before changing anything** —
+  the exact bug class that once broke `/api/v2` (`PGRST201`, an ambiguous implicit embed with 2+ FK paths
+  between the same two tables) was checked for directly: grepped every `references communities`/
+  `references virtual_moderators` in the whole migration history and confirmed `moderator_deployments
+  .community_id → communities(id)` and `moderator_deployments.moderator_id → virtual_moderators(id)` are each
+  the ONLY foreign key of their kind — safe to embed unambiguously.
+- **Fix**: `listAccountCommunities` now fetches `communities` WITH `moderator_deployments` WITH
+  `virtual_moderators` embedded in ONE PostgREST query (real Postgres joins, not a client-side stitch),
+  collapsing the 3 dependent steps into 1 — the function is now 2 round trips total (`projects`, then the one
+  embedded `communities` query) instead of 4. Also considered collapsing the initial `projects` lookup into the
+  same query (querying `projects` with `communities` embedded) but kept it separate — `projects` is what scopes
+  the whole read to this account, and folding it in would only reduce 2 round trips to 1 at meaningfully higher
+  complexity/risk for one function this deeply relied upon; not attempted this pass.
+- **A real compile-time-only mismatch caught and fixed**: without generated Supabase `Database` types, supabase-js
+  infers every embedded resource's cardinality from the select STRING alone and defaults nested resources to
+  arrays — it doesn't know `moderator_deployments → virtual_moderators` is really a to-one relationship the way
+  a schema-aware type generator would. Runtime behavior is correct regardless (PostgREST embeds it as a single
+  object, per the real FK) — bridged with an explicit, commented `as unknown as` cast rather than silently
+  fighting the inferred type.
+- **Test-harness enhancement, not a shortcut**: the shared fake-admin mock in `watch-runtime.test.ts` (reused by
+  174 tests in that file) gained a scoped `attachCommunityEmbeds` helper that simulates this ONE specific embed
+  shape from the SAME flat seed tables every existing test already uses (via the real `community_id`/
+  `moderator_id` FK columns) — it only activates when a query's own select string actually requests the embed,
+  so every other existing use of the mock is unaffected. All 174 tests in that file, including every cross-
+  account-isolation/escalation-group-exclusion/live-bug-regression test, pass unchanged against the real
+  rewritten function — not a re-implementation of the mock's expectations to fit the new code.
+- No migration (pure read-path change, zero schema/behavior change, same external `AccountCommunitySummary[]`
+  shape). 1859 tests pass (unchanged), `tsc --noEmit` clean, production build clean.
+- **Considered and deliberately NOT done this pass** (a materially bigger, security-adjacent change for a
+  smaller marginal win): every authenticated Watch page currently calls Supabase Auth TWICE per request — once
+  in `proxy.ts`'s middleware (`updateSession` → `getClaims()`/`getUser()`, refreshing the session cookie) and
+  again in the page's own `requireWatchPage()` → `getAuthedAdmin()` → `getUser()` (which always makes a real
+  network call to Supabase's Auth server, unlike `getClaims()`, which can validate the JWT locally ONLY if the
+  project uses asymmetric signing keys — otherwise it also always hits the network). Eliminating this would mean
+  middleware passing an already-verified identity down to every Server Component via a request header, which
+  touches the app's entire authentication boundary (owner app, storefront, every server action — not just
+  Watch) — flagged here as a real, quantifiable remaining cost, but deliberately not attempted in this pass
+  given the blast radius and security sensitivity of changing how identity is trusted app-wide.
+- **Deployed to Production**, verified live on `innvil.cloud`/`watch.innvil.cloud`.
+
 ### 2026-08-27 — Fix: every page ALSO independently re-fetched what its own shell context had just fetched (v1.47.83)
 - **Follow-up to v1.47.82, per a live "still has visible delays" report.** That pass eliminated the
   redundancy INSIDE `getWatchShellContext`/`getWatchAccessState` (Communities/Watchers/Capacity computed once,
