@@ -7,8 +7,7 @@ import HomeClient from "./HomeClient";
 import { isWatchHost } from "@/src/lib/watch-host";
 import { watchPageMetadata } from "@/src/lib/watch-metadata";
 import { WatchLanding } from "@/src/components/watch/WatchLanding";
-import { WatchDashboard } from "@/src/components/watch/WatchDashboard";
-import { getWatchAccessState } from "@/src/lib/actions/watch-dashboard";
+import { OverviewClient } from "@/src/components/watch/OverviewClient";
 
 // Homepage-only canonical + OG url (kept off the layout so storefronts don't inherit it).
 // Host-aware: watch.innvil.cloud gets its own product metadata, never the
@@ -47,30 +46,20 @@ export default async function Home({
   // experience, never the SMM-panel/Forge landing, but the SAME app/backend
   // (host is presentation-only; Watch access is always resolved server-side).
   if (await isWatchHost()) {
-    const access = await getWatchAccessState();
-    // AUTHENTICATION != ENTITLEMENT -- any signed-in visitor gets the real
-    // dashboard shell (empty/onboarding states for a fresh, not-yet-entitled
-    // account, per getWatchAccessState's own doc comment), never the
-    // marketing landing just because they haven't started a trial/subscribed
-    // yet. Only a genuinely unauthenticated visitor sees WatchLanding.
-    if (access.authenticated) {
-      return (
-        <WatchDashboard
-          projects={access.projects}
-          watchers={access.watchers}
-          communities={access.communities}
-          capacity={access.capacity}
-          activity={access.activity}
-          moderationActionsLast7Days={access.moderationActionsLast7Days}
-          attentionItems={access.attentionItems}
-          communityStats={access.communityStats}
-          telegramVerified={access.telegramVerified}
-          trialStatus={access.trialStatus}
-          onboardingStage={access.onboardingStage}
-        />
-      );
-    }
-    return <WatchLanding authenticated={access.authenticated} />;
+    // Cache-first navigation: only a CHEAP auth check runs here (no DB
+    // queries beyond validating the session) so this route itself responds
+    // fast -- the real account data (Projects/Watchers/Communities/capacity/
+    // etc., previously fetched here via getWatchAccessState() on every
+    // single visit) is now fetched CLIENT-SIDE by OverviewClient via SWR,
+    // which renders from its cache instantly on every visit after the first
+    // and revalidates in the background. AUTHENTICATION != ENTITLEMENT --
+    // any signed-in visitor gets the real dashboard shell (empty/onboarding
+    // states for a fresh, not-yet-entitled account -- OverviewClient/
+    // WatchDashboard already render those correctly), never the marketing
+    // landing just because they haven't started a trial/subscribed yet.
+    const user = await getUser();
+    if (user) return <OverviewClient />;
+    return <WatchLanding authenticated={false} />;
   }
 
   // Dev world-switcher harness.

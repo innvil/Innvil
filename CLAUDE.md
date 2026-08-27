@@ -127,6 +127,81 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Cache-first / stale-while-revalidate navigation for Overview, Watchers, Communities (v1.48.0)
+- **Explicit feature request, distinct from the v1.47.82-84 server-side perf work**: those passes made each
+  page's OWN data-fetch faster, but every page was still a Server Component that re-fetches everything fresh
+  from Supabase on EVERY navigation, blocking the page transition on that fetch every single time — there was
+  no CLIENT-SIDE cache to render from immediately. This pass adds one: `swr` (new dependency — ~0 dependencies
+  of its own, Vercel-maintained, chosen specifically because it's the purpose-built implementation of exactly
+  the named pattern, "stale-while-revalidate," rather than hand-rolling a client cache).
+- **Architecture, per page**: the Server Component (`page.tsx`) now does ONLY the cheap auth/host gate
+  (`requireWatchPage()`/a plain `getUser()` check — no DB queries beyond session validation) and renders a thin
+  Client Component. That Client Component calls an EXISTING (or newly added, thin) `"use server"` action
+  directly as its SWR fetcher — Server Actions are callable from Client Components as ordinary async functions,
+  so no new API routes were needed. SWR's cache is a plain module-level singleton (no custom provider needed) —
+  confirmed this correctly SURVIVES Next.js App Router client-side `<Link>` navigations (no full page reload
+  happens on those), which is exactly what makes revisiting a page within the same session instant.
+- **Converted**: **Overview** (`/`, new `OverviewClient.tsx`, reuses the existing `getWatchAccessState` action
+  unchanged as the SWR fetcher), **Watchers** (`/watchers`, new `WatchersPageClient.tsx` + a new thin
+  `getWatchersPageData()` action reusing the SAME already-optimized `listAccountCommunities`/
+  `listAccountWatchers`/`getAccountCapacity`/`listAccountAttentionItems` fetch-once-then-share staging from
+  v1.47.82's fix), **Communities** (`/communities`, new `CommunitiesPageClient.tsx` + `getCommunitiesPageData()`,
+  same staging pattern, `useSearchParams()` used client-side for the `?status=` filter now that the page no
+  longer does a server-side `searchParams` read). **Knowledge/Escalations were NOT touched** — investigated
+  first and confirmed they're TABS on the Project detail page (`WatchTabs.tsx`), not real navigations at all;
+  that component already only toggles visibility of pre-rendered content with zero re-fetch, so they were
+  already instant before this pass — nothing to fix there.
+- **New shared, reusable pieces** (matching "reuse the current architecture" rather than one bespoke
+  implementation per page): `src/lib/watch-swr-keys.ts` (a tiny, dependency-free cache-key registry — exists
+  specifically so a page's Client Component and any component that mutates its data can both reference the
+  SAME key without a circular import between them), `src/components/watch/DashboardSkeletons.tsx`
+  (`OverviewSkeleton`/`TableSkeleton`, shown ONLY on a genuinely empty cache — first visit to a page in the
+  session — never layered over already-visible data).
+- **A real, latent bug found and fixed while wiring Overview's mutations**: `WatchDashboard.tsx` held its own
+  `useState(initialProjects)`/`useState(initialWatchers)` mirrors of the server-passed props — harmless when the
+  page was fully server-rendered on every navigation (a fresh mount every time meant the initial value was
+  always current), but would have gone silently STALE forever under this new architecture, since a `useState`
+  initial value doesn't re-derive from a later prop change and `OverviewClient` now re-renders `WatchDashboard`
+  with fresh `data.watchers`/`data.projects` on every SWR revalidation without unmounting it. Removed both
+  mirrors — the component now reads `projects`/`watchers` directly from props (i.e., from SWR's cache, the one
+  source of truth), eliminating the drift risk entirely rather than patching around it.
+- **Mutations now call `mutate(key)` instead of `window.location.reload()`** (3 spots in `WatchDashboard.tsx`:
+  create Project, create Watcher, connect a Watcher) — the modal closes immediately and the real data appears
+  once the real revalidation resolves, matching "keep cached data visible while refreshing" and "no full-page
+  spinners." The Watcher-creation path uses `mutate(key, updaterFn, {revalidate: true})` for a real optimistic
+  update (the new Watcher appears in the SWR cache immediately, then a background revalidation reconciles with
+  the server) — this preserves the instant-feeling UX the old `setWatchers` local-state hack was trying to
+  provide, but correctly through the single source of truth instead of a second, driftable copy.
+- **Cache clears on logout with ZERO new code**: confirmed (didn't assume) that `WatchLogoutButton.tsx` already
+  does a genuine hard `window.location.href = "/"` navigation, not a client-side route change — this fully
+  resets the JS module state, so SWR's module-level cache (which has no persistence to localStorage/
+  sessionStorage in this implementation) is automatically and completely cleared on every logout/account switch
+  for free.
+- **Realtime behavior confirmed unaffected — because none exists**: grepped the entire codebase
+  (`supabase.*channel`, `postgres_changes`, `realtime`) and found zero matches anywhere. There was nothing to
+  preserve or break.
+- **Scope, stated explicitly rather than silently left incomplete**: this pass converts 3 of the ~14 real
+  navigation targets (11 top-level sidebar pages + 3 `[id]` detail routes). The remaining 8 sidebar pages
+  (Projects, Activity, Deployments, Profile, Usage, Plans, Billing, Settings) and all 3 detail routes
+  (`/projects/[id]`, `/communities/[id]`, `/watchers/[id]`) still use the original full-server-render-per-
+  navigation pattern — the SAME now-proven pattern (thin auth-gate page + SWR-driven Client Component + a thin
+  page-data action reusing existing `watch-runtime.ts` functions) applies directly to each, and is the natural
+  next step. Also left as-is for now: `WatchersWorkspaceClient.tsx`'s own Watcher-connect flow still calls
+  `window.location.reload()` (unchanged) — it's shared by BOTH `/watchers` (now cache-first) and
+  `/watchers/[id]` (not yet converted), and the latter still genuinely needs a real refresh; converting it
+  properly is bundled into converting `/watchers/[id]` itself, not attempted as a partial fix here.
+- No migration (pure client-side data-fetching addition, zero schema/business-logic change — every action
+  returns byte-identical data to its existing server-rendered equivalent). 1859 tests pass (unchanged — no
+  server-side logic changed, only how/when it's invoked), `tsc --noEmit` clean, production build clean (same
+  58-route output, confirmed unchanged). `swr` adds zero new vulnerabilities to the dependency tree (confirmed
+  via `npm audit` — it has no dependencies of its own).
+- **Verified live** (local dev server, `watch.localhost`, unauthenticated): the cheap-auth-check routing works
+  correctly (landing page for guests, `/watchers`/`/communities` correctly redirect to `/login`), zero console
+  errors. **Not verified live with a real authenticated session** — same sandbox limitation as every other
+  authenticated Watch dashboard change this session; the actual cache-first behavior (instant re-navigation,
+  background revalidation, skeleton-on-first-visit) needs to be confirmed by signing in and clicking between
+  Overview/Watchers/Communities a few times.
+
 ### 2026-08-27 — Perf: collapsed listAccountCommunities' internal 4-sequential-round-trip chain into 2 (v1.47.84)
 - **Third follow-up in the same investigation, per a live "still have noticeable delay" report after v1.47.82/
   v1.47.83.** Pulled real Vercel production logs (`vercel logs`) and measured the actual middleware→response

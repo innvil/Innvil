@@ -2,10 +2,12 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { mutate } from "swr";
 import {
   Plus, FolderKanban, Bot, Users, ShieldCheck, Radio, Activity, ArrowRight, ChevronRight, AlertTriangle, CheckCircle2,
 } from "lucide-react";
 import { createWatchProject, createWatcher } from "@/src/lib/actions/watch-dashboard";
+import { WATCH_SWR_KEYS } from "@/src/lib/watch-swr-keys";
 import type { AccountProjectRow } from "@/src/lib/products/ownership";
 import type {
   AccountWatcherRow, AccountCommunitySummary, AccountCapacity, AccountActivityItem, AttentionItem,
@@ -23,7 +25,7 @@ import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalSta
 /* ------------------------------------------------------------- overview ---- */
 
 export function WatchDashboard({
-  projects: initialProjects, watchers: initialWatchers, communities, capacity, activity, moderationActionsLast7Days,
+  projects, watchers, communities, capacity, activity, moderationActionsLast7Days,
   attentionItems = [], communityStats = {}, telegramVerified = true, trialStatus = "active", onboardingStage = "operational",
 }: {
   projects: AccountProjectRow[];
@@ -42,8 +44,13 @@ export function WatchDashboard({
   trialStatus?: WatchTrialStatus;
   onboardingStage?: OnboardingStage;
 }) {
-  const [projects, setProjects] = useState(initialProjects);
-  const [watchers, setWatchers] = useState(initialWatchers);
+  // `projects`/`watchers` are the SWR-driven props directly (no local
+  // mirror) -- OverviewClient re-renders this component with fresh data on
+  // every revalidation, and a `useState` mirror would only capture its
+  // INITIAL value, silently going stale the moment a background
+  // revalidation (or another mutation) brings in a genuinely different
+  // `projects`/`watchers` array. Post-mutation UI updates come from
+  // `mutate()` triggering a real revalidation, not local optimistic state.
   const [modal, setModal] = useState<"project" | "watcher" | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -87,14 +94,29 @@ export function WatchDashboard({
       const res = await createWatchProject(name.trim());
       setBusy(false);
       if (!res.ok) { setError(res.error); return; }
-      window.location.reload(); // simplest correct refresh -- server data (capacity, etc.) stays in sync
+      // Revalidates Overview's cached data in place (a real network round
+      // trip, resolved in the background) instead of a full page reload --
+      // the modal closes immediately and the new Project appears once the
+      // revalidation resolves, same "cache stays visible while refreshing"
+      // behavior every cache-first page now uses.
+      setModal(null);
+      await mutate(WATCH_SWR_KEYS.overview);
     } else if (modal === "watcher") {
       const res = await createWatcher(name.trim());
       setBusy(false);
       if (!res.ok) { setError(res.error); return; }
-      if (showOnboarding) { window.location.reload(); return; } // same reason as Project above -- lands on the real next onboarding stage (assign_moderation) instead of a stale one
-      setWatchers((prev) => [...prev, res.data]);
       setModal(null);
+      // Optimistically appends the new Watcher straight into the SWR CACHE
+      // (never a separate local mirror, which would drift the moment a
+      // background revalidation replaces the `watchers` prop) -- shows up
+      // immediately, then `revalidate: true` reconciles with the server's
+      // real state right after, which is also what picks up a whole new
+      // onboarding stage (e.g. assign_moderation) while still onboarding.
+      await mutate(
+        WATCH_SWR_KEYS.overview,
+        (current) => (current ? { ...current, watchers: [...current.watchers, res.data] } : current),
+        { revalidate: true }
+      );
     }
   };
 
@@ -342,7 +364,7 @@ export function WatchDashboard({
           watcher={connectingWatcher}
           projects={projects}
           onClose={() => setConnectingWatcher(null)}
-          onConnected={() => window.location.reload()}
+          onConnected={() => { setConnectingWatcher(null); mutate(WATCH_SWR_KEYS.overview); }}
         />
       )}
     </WatchShell>

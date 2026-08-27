@@ -23,6 +23,8 @@ import { getAccountTelegramIdentity } from "@/src/lib/products/watch-abuse";
 import { getWatchTrialState, type WatchTrialStatus } from "@/src/lib/products/watch-trial";
 import { resolveOnboardingStage, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
 import { moderatorPersonaIsAssigned } from "@/src/lib/moderator/domain";
+import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
+import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 
 export interface WatchAccessState {
   authenticated: boolean;
@@ -154,4 +156,79 @@ export async function deployWatcher(moderatorId: string, communityId: string): P
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return deployAccountWatcher(admin, user.id, moderatorId, communityId);
+}
+
+/* ============================================================
+   Cache-first page-data actions -- one per SWR-driven page, each a thin
+   "use server" wrapper reusing the SAME already-optimized watch-runtime.ts
+   functions every server-rendered page already relies on. Called directly
+   as a Client Component's SWR fetcher (Server Actions are callable from
+   Client Components as ordinary async functions) -- no new data-fetching
+   logic, just a callable shape for the client to invoke on demand instead of
+   the page's own Server Component blocking on it before rendering anything.
+   ============================================================ */
+
+export interface WatchersPageData {
+  watchers: AccountWatcherRow[];
+  communities: AccountCommunitySummary[];
+  projects: AccountProjectRow[];
+  capacity: AccountCapacity | null;
+  attentionCount: number;
+}
+
+const EMPTY_WATCHERS_PAGE: WatchersPageData = { watchers: [], communities: [], projects: [], capacity: null, attentionCount: 0 };
+
+export async function getWatchersPageData(): Promise<WatchersPageData> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return EMPTY_WATCHERS_PAGE;
+  // Same fetch-once-then-share staging as getWatchShellContext/
+  // getWatchAccessState -- communities -> watchers (reusing communities) ->
+  // capacity (reusing both) -> attentionItems (reusing all three), never a
+  // second independent re-fetch of the same data.
+  const [communities, projects] = await Promise.all([
+    listAccountCommunities(admin, user.id),
+    listAccountProjects(admin, user.id),
+  ]);
+  const watchers = await listAccountWatchers(admin, user.id, communities);
+  const capacity = await getAccountCapacity(admin, user.id, { communities, watchers });
+  const attentionItems = await listAccountAttentionItems(admin, user.id, { communities, watchers, capacity });
+  return { watchers, communities, projects, capacity, attentionCount: attentionItems.length };
+}
+
+export interface CommunitiesPageData {
+  communities: AccountCommunitySummary[];
+  capacity: AccountCapacity | null;
+  attentionCount: number;
+  /** Keyed by community id -- a plain object (not a Map), same reason
+   *  WatchAccessState.communityStats already is: it crosses the server ->
+   *  client action boundary and must stay serializable. */
+  communityStats: Record<string, CommunityOperationalStats>;
+  expansionActive: boolean;
+  expansionCancelAtPeriodEnd: boolean;
+  gateways: string[];
+}
+
+const EMPTY_COMMUNITIES_PAGE: CommunitiesPageData = {
+  communities: [], capacity: null, attentionCount: 0, communityStats: {}, expansionActive: false, expansionCancelAtPeriodEnd: false, gateways: [],
+};
+
+export async function getCommunitiesPageData(): Promise<CommunitiesPageData> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return EMPTY_COMMUNITIES_PAGE;
+  const communities = await listAccountCommunities(admin, user.id);
+  const watchers = await listAccountWatchers(admin, user.id, communities);
+  const [capacity, expansion, gateways, statsMap] = await Promise.all([
+    getAccountCapacity(admin, user.id, { communities, watchers }),
+    getCommunityExpansionState(admin, user.id),
+    listAvailableDirectWatchGateways(),
+    getCommunityOperationalStats(admin, user.id, communities),
+  ]);
+  const attentionItems = await listAccountAttentionItems(admin, user.id, { communities, watchers, capacity });
+  return {
+    communities, capacity, attentionCount: attentionItems.length,
+    communityStats: Object.fromEntries(statsMap),
+    expansionActive: expansion != null,
+    expansionCancelAtPeriodEnd: expansion?.cancelAtPeriodEnd ?? false,
+    gateways,
+  };
 }
