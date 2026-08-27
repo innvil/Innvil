@@ -127,6 +127,45 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Fix: every real Watch page redundantly re-fetched the same Communities/Watchers/Capacity data 3-10x per load (v1.47.82)
+- **Live report: "the system currently feels too heavy. overview or other menus takes forever."** Traced to a
+  real, quantifiable N-times-redundant-query bug in the shared read layer (`watch-runtime.ts`), not a single
+  slow query or an infinite loop. `listAccountCommunities()` (a 4-SEQUENTIAL-round-trip chain: projects →
+  communities → deployments → moderators) was being called independently, with no data sharing, from inside
+  `listAccountWatchers`, `getAccountCapacity`, `listAccountActivity`, `countRecentModerationActions`,
+  `getCommunityOperationalStats`, AND `listAccountAttentionItems` — and **`listAccountAttentionItems` also
+  re-ran the ENTIRE `getAccountCapacity` computation a second time internally**, which itself re-triggered
+  `listAccountCommunities`/`listAccountWatchers` yet again. Both hot-path entry points every real page goes
+  through hit this: **`getWatchShellContext`** (`watch-page.ts`, called by every one of the 10+ non-Overview
+  Watch routes via `requireWatchPage()`) fired the chain ~3x per page just from its own
+  `Promise.all([getAccountCapacity, listAccountAttentionItems])`; **`getWatchAccessState`** (Overview's own
+  data loader) fired it **8-10 times** in a single page load from its 10-item `Promise.all`. Running "in
+  parallel" didn't help — all those redundant chains still compete for the same Supabase connection pool and
+  multiply total DB round trips for zero additional information.
+- **Fix: fetch Communities/Watchers/Capacity ONCE per request and thread them down, rather than adding any
+  caching layer** (no request-scoped or cross-request cache was introduced — every value is still fetched
+  fresh on every call, just without the redundant repeat trips, so there's no new staleness risk). Widened 6
+  functions in `watch-runtime.ts` — `listAccountWatchers`, `getAccountCapacity`, `listAccountActivity`,
+  `countRecentModerationActions`, `getCommunityOperationalStats`, `listAccountAttentionItems` — to each accept
+  an **optional pre-fetched-data parameter**, falling back to their original internal fetch when omitted
+  (fully backward compatible — confirmed via a full grep that every OTHER existing call site across the app,
+  e.g. `/activity`, `/billing`, `/communities`, `/deployments`, `/plans`, `/projects/[id]`, `/settings`,
+  `/usage`, `/watchers`, `/watchers/[id]`, never passes a 3rd/4th positional argument, so none of them are
+  affected by this change at all). `getWatchShellContext` and `getWatchAccessState` were rewritten to fetch
+  Communities once → Watchers (reusing Communities) → Capacity (reusing both) → everything else (reusing all
+  three) — collapsing what was previously ~8-25 redundant round trips per page load down to the real minimum.
+- No migration (pure read-path refactor, zero schema/behavior change — every returned value is byte-identical
+  to before, only computed once instead of many times). 1859 tests pass (unchanged — no logic changed, only
+  call-graph structure), `tsc --noEmit` clean, production build clean (all 60+ routes present, unchanged).
+- **Deployed to Production**, alongside v1.47.79/80/81 (the Watcher Ops moderation-reporting expansion, the
+  Plans & Billing docs restructure, and the 0109 migration fix) — all four verified live on `innvil.cloud`/
+  `www.innvil.cloud`/`*.innvil.cloud`/`watch.innvil.cloud` via `vercel alias ls` + live host checks.
+- **Not yet touched, a smaller remaining opportunity**: each individual page's OWN page-specific data function
+  (e.g. `/communities`'s own `Promise.all([getCommunityOperationalStats, getAccountCapacity])`) still makes its
+  own single (non-multiplied) call rather than sharing with `getWatchShellContext`'s already-fetched data from
+  the same request — a real but much smaller optimization than the one fixed here, since the dominant, ~3-10x
+  multiplied cost was the shared per-page guard fixed in this pass, not each page's own single extra fetch.
+
 ### 2026-08-27 — Fix: migration 0109 failed on a database where 0059 was never applied (v1.47.81)
 - **Live report**: running migration `0109_watcher_ops_reports.sql` failed with `42P01: relation
   "moderator_media_dedup" does not exist`. That table is created by `0059_media_moderation.sql` (the original

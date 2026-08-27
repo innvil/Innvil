@@ -599,10 +599,10 @@ const WATCHER_ROW_COLUMNS = "id, name, account_id, provisioning_status, persona,
  *  filter, which caused a real, live discrepancy: the Watchers page showed
  *  "No Watchers yet" while Overview/Communities/Usage all showed 2 real
  *  deployed Watchers for the same account. */
-export async function listAccountWatchers(admin: SupabaseClient, accountId: string): Promise<AccountWatcherRow[]> {
+export async function listAccountWatchers(admin: SupabaseClient, accountId: string, preCommunities?: AccountCommunitySummary[]): Promise<AccountWatcherRow[]> {
   const [{ data: direct }, communities] = await Promise.all([
     admin.from("virtual_moderators").select(WATCHER_ROW_COLUMNS).eq("account_id", accountId),
-    listAccountCommunities(admin, accountId),
+    preCommunities ?? listAccountCommunities(admin, accountId),
   ]);
   const directRows = (direct ?? []) as Array<Record<string, unknown>>;
   const directIds = new Set(directRows.map((r) => r.id as string));
@@ -1046,13 +1046,17 @@ export interface AccountCapacity {
  *  Community/Deployment creation path already uses, never a second/duplicated
  *  capacity model for trial vs. paid. Returns null when there's no active
  *  entitlement at all (nothing to show a capacity panel for). */
-export async function getAccountCapacity(admin: SupabaseClient, accountId: string): Promise<AccountCapacity | null> {
+export async function getAccountCapacity(
+  admin: SupabaseClient,
+  accountId: string,
+  pre?: { communities?: AccountCommunitySummary[]; watchers?: AccountWatcherRow[] },
+): Promise<AccountCapacity | null> {
   const ctx = await requireAccountWatchContext(admin, accountId);
   if (!ctx.ok) return null;
   const isSelfServeTier = ctx.tier !== "trial" && ctx.tier !== "enterprise";
   const [watchers, communities, trial, paidPlan, enterprise, mediaAddon] = await Promise.all([
-    listAccountWatchers(admin, accountId),
-    listAccountCommunities(admin, accountId),
+    pre?.watchers ?? listAccountWatchers(admin, accountId, pre?.communities),
+    pre?.communities ?? listAccountCommunities(admin, accountId),
     ctx.tier === "trial" ? getWatchTrialState(admin, accountId) : Promise.resolve(null),
     isSelfServeTier ? getAccountPaidPlan(admin, accountId) : Promise.resolve(null),
     // A small extra query, mirroring the existing tier/getAccountPaidPlan
@@ -1221,9 +1225,9 @@ export interface ListAccountActivityOptions {
   since?: string;
 }
 
-export async function listAccountActivity(admin: SupabaseClient, accountId: string, opts: ListAccountActivityOptions = {}): Promise<AccountActivityItem[]> {
+export async function listAccountActivity(admin: SupabaseClient, accountId: string, opts: ListAccountActivityOptions = {}, preCommunities?: AccountCommunitySummary[]): Promise<AccountActivityItem[]> {
   const limit = opts.limit ?? 15;
-  const communities = await listAccountCommunities(admin, accountId);
+  const communities = preCommunities ?? (await listAccountCommunities(admin, accountId));
   if (!communities.length) return [];
   let scoped = communities;
   if (opts.communityId) scoped = scoped.filter((c) => c.id === opts.communityId);
@@ -1337,8 +1341,8 @@ export async function getAccountActivityTrend(admin: SupabaseClient, accountId: 
  *  `count: "exact"` query, not derived from the (possibly-truncated)
  *  activity feed list, so the stat card number is always accurate even
  *  when there's more history than the feed displays. */
-export async function countRecentModerationActions(admin: SupabaseClient, accountId: string, days = 7): Promise<number> {
-  const communities = await listAccountCommunities(admin, accountId);
+export async function countRecentModerationActions(admin: SupabaseClient, accountId: string, days = 7, preCommunities?: AccountCommunitySummary[]): Promise<number> {
+  const communities = preCommunities ?? (await listAccountCommunities(admin, accountId));
   if (!communities.length) return 0;
   const communityIds = communities.map((c) => c.id);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -1370,8 +1374,8 @@ export interface CommunityOperationalStats {
  *  most recent recorded MODERATION event (the only event stream this
  *  codebase persists today) -- honestly reflects what's actually tracked,
  *  never a fabricated "online since" signal. */
-export async function getCommunityOperationalStats(admin: SupabaseClient, accountId: string): Promise<Map<string, CommunityOperationalStats>> {
-  const communities = await listAccountCommunities(admin, accountId);
+export async function getCommunityOperationalStats(admin: SupabaseClient, accountId: string, preCommunities?: AccountCommunitySummary[]): Promise<Map<string, CommunityOperationalStats>> {
+  const communities = preCommunities ?? (await listAccountCommunities(admin, accountId));
   const stats = new Map<string, CommunityOperationalStats>();
   if (!communities.length) return stats;
   const communityIds = communities.map((c) => c.id);
@@ -1500,11 +1504,18 @@ function capacityExceedsLimit(used: number, total: number): boolean {
  *  media-usage metering exists), and payment/entitlement issues beyond "no
  *  active plan" (this list is only ever reached by an already-entitled
  *  account, since the whole dashboard is gated on that). */
-export async function listAccountAttentionItems(admin: SupabaseClient, accountId: string): Promise<AttentionItem[]> {
-  const [communities, watchers, capacity] = await Promise.all([
-    listAccountCommunities(admin, accountId),
-    listAccountWatchers(admin, accountId),
-    getAccountCapacity(admin, accountId),
+export async function listAccountAttentionItems(
+  admin: SupabaseClient,
+  accountId: string,
+  pre?: { communities?: AccountCommunitySummary[]; watchers?: AccountWatcherRow[]; capacity?: AccountCapacity | null },
+): Promise<AttentionItem[]> {
+  const communities = pre?.communities ?? (await listAccountCommunities(admin, accountId));
+  const [watchers, capacity] = await Promise.all([
+    pre?.watchers ?? listAccountWatchers(admin, accountId, communities),
+    // `capacity` is always a real `AccountCapacity | null` when the caller
+    // already resolved it (never `undefined`) -- an `undefined` here always
+    // means "not provided, please compute it," never a real value to trust.
+    pre?.capacity !== undefined ? Promise.resolve(pre.capacity) : getAccountCapacity(admin, accountId, { communities }),
   ]);
   const items: AttentionItem[] = [];
 

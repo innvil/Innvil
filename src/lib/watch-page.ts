@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isWatchHost } from "@/src/lib/watch-host";
 import { getAuthedAdmin } from "@/src/lib/auth";
-import { getAccountCapacity, listAccountAttentionItems, type AccountCapacity } from "@/src/lib/products/watch-runtime";
+import { getAccountCapacity, listAccountAttentionItems, listAccountCommunities, listAccountWatchers, type AccountCapacity } from "@/src/lib/products/watch-runtime";
 
 /**
  * Shared guard for every real Watch feature route (`/projects`,
@@ -44,12 +44,25 @@ export async function requireWatchPage(): Promise<{ accountId: string; admin: Su
 /** Shared sidebar/topbar context (plan capacity + the "needs attention"
  *  count) every real Watch feature page passes into `WatchShell` — kept in
  *  one place so all 10+ pages agree on the same two numbers instead of each
- *  re-deriving them slightly differently. */
+ *  re-deriving them slightly differently.
+ *
+ *  Fetches Communities/Watchers ONCE and threads them into both
+ *  `getAccountCapacity`/`listAccountAttentionItems` — previously each of
+ *  those independently re-fetched Communities/Watchers (and
+ *  `listAccountAttentionItems` additionally re-ran the ENTIRE
+ *  `getAccountCapacity` computation a second time internally), meaning this
+ *  one shared function — called on literally every real Watch page — fired
+ *  `listAccountCommunities`'s own 4-sequential-round-trip chain 3+ times per
+ *  page load. Live-reported as generalized app slowness ("Overview or other
+ *  menus takes forever"); fixed by computing the shared inputs once and
+ *  passing them down, not by adding any caching layer (no request-scoped or
+ *  cross-request cache — every value here is still fetched fresh on every
+ *  call, just without the redundant repeat trips). */
 export async function getWatchShellContext(admin: SupabaseClient, accountId: string): Promise<{ capacity: AccountCapacity | null; attentionCount: number }> {
-  const [capacity, attentionItems] = await Promise.all([
-    getAccountCapacity(admin, accountId),
-    listAccountAttentionItems(admin, accountId),
-  ]);
+  const communities = await listAccountCommunities(admin, accountId);
+  const watchers = await listAccountWatchers(admin, accountId, communities);
+  const capacity = await getAccountCapacity(admin, accountId, { communities, watchers });
+  const attentionItems = await listAccountAttentionItems(admin, accountId, { communities, watchers, capacity });
   return { capacity, attentionCount: attentionItems.length };
 }
 

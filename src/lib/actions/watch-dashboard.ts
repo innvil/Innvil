@@ -74,19 +74,32 @@ export async function getWatchAccessState(): Promise<WatchAccessState> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return EMPTY_ACCESS;
 
-  const entitled = await hasProductAccess(admin, user.id, WATCH_PRODUCT_SLUG);
-
-  const [projects, watchers, communities, capacity, activity, moderationActionsLast7Days, attentionItems, statsMap, telegramIdentity, trial] = await Promise.all([
+  // Communities/Watchers are fetched ONCE and threaded into every downstream
+  // read below -- previously each of `getAccountCapacity`/`listAccountActivity`/
+  // `countRecentModerationActions`/`listAccountAttentionItems`/
+  // `getCommunityOperationalStats` independently re-ran `listAccountCommunities`'s
+  // own 4-sequential-round-trip chain (and `listAccountAttentionItems` also
+  // re-ran the entire `getAccountCapacity` computation a second time
+  // internally), meaning a single Overview page load fired that one chain
+  // roughly 8-10 times over. Live-reported as generalized app slowness
+  // ("Overview or other menus takes forever"). Fixed by computing the shared
+  // inputs once, not by adding any caching layer -- every value here is still
+  // fetched fresh on every call.
+  const [entitled, projects, communities, telegramIdentity, trial] = await Promise.all([
+    hasProductAccess(admin, user.id, WATCH_PRODUCT_SLUG),
     listAccountProjects(admin, user.id),
-    listAccountWatchers(admin, user.id),
     listAccountCommunities(admin, user.id),
-    getAccountCapacity(admin, user.id),
-    listAccountActivity(admin, user.id),
-    countRecentModerationActions(admin, user.id),
-    listAccountAttentionItems(admin, user.id),
-    getCommunityOperationalStats(admin, user.id),
     getAccountTelegramIdentity(admin, user.id),
     getWatchTrialState(admin, user.id),
+  ]);
+  const watchers = await listAccountWatchers(admin, user.id, communities);
+  const capacity = await getAccountCapacity(admin, user.id, { communities, watchers });
+
+  const [activity, moderationActionsLast7Days, attentionItems, statsMap] = await Promise.all([
+    listAccountActivity(admin, user.id, {}, communities),
+    countRecentModerationActions(admin, user.id, 7, communities),
+    listAccountAttentionItems(admin, user.id, { communities, watchers, capacity }),
+    getCommunityOperationalStats(admin, user.id, communities),
   ]);
   const communityStats = Object.fromEntries(statsMap);
   const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
