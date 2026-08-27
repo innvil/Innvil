@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { CreditCard, Receipt, ShieldCheck, Clock } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountCapacity, getAccountPaidPlan } from "@/src/lib/products/watch-runtime";
+import { getAccountPaidPlan } from "@/src/lib/products/watch-runtime";
 import { getWatchTrialState } from "@/src/lib/products/watch-trial";
 import { watchPlanOptions, watchAccessLabel, watchPlanDisplayName, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import { listWatchPaymentHistory, listAvailableDirectWatchGateways, getPendingWatchPayment } from "@/src/lib/products/watch-checkout";
@@ -35,8 +35,8 @@ function formatDate(iso: string): string {
  *  here auto-charges anything. */
 export default async function BillingPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, trial, paidPlan, history, availableGateways, pending, creditBalance, creditActivity, shell, expansion] = await Promise.all([
-    getAccountCapacity(admin, accountId),
+  const [shell, trial, paidPlan, history, availableGateways, pending, creditBalance, creditActivity, expansion] = await Promise.all([
+    getWatchShellContext(admin, accountId),
     getWatchTrialState(admin, accountId),
     getAccountPaidPlan(admin, accountId),
     listWatchPaymentHistory(),
@@ -44,9 +44,9 @@ export default async function BillingPage() {
     getPendingWatchPayment(),
     getInnvilCreditBalance(admin, accountId),
     listInnvilCreditActivity(admin, accountId),
-    getWatchShellContext(admin, accountId),
     getCommunityExpansionState(admin, accountId),
   ]);
+  const capacity = shell.capacity;
 
   const options = watchPlanOptions();
   // Managed Enterprise is a SEPARATE, manually-provisioned entitlement --

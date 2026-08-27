@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { listAccountProjects } from "@/src/lib/products/ownership";
-import { listAccountWatchers, listAccountCommunities } from "@/src/lib/products/watch-runtime";
 import { deploymentSummaries } from "@/src/lib/products/watch-status";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { WatchersWorkspaceClient } from "@/src/components/watch/WatchersWorkspaceClient";
@@ -16,18 +15,16 @@ export const metadata: Metadata = { title: "Watchers — Innvil Watch", robots: 
  *  navigator via the SAME shared client shell, never a separate list page. */
 export default async function WatchersPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [watchers, communities, projects, shell] = await Promise.all([
-    listAccountWatchers(admin, accountId),
-    listAccountCommunities(admin, accountId),
-    listAccountProjects(admin, accountId),
+  const [shell, projects] = await Promise.all([
     getWatchShellContext(admin, accountId),
+    listAccountProjects(admin, accountId),
   ]);
 
   return (
     <WatchShell active="watchers" capacity={shell.capacity} attentionCount={shell.attentionCount}>
       <WatchersWorkspaceClient
-        watchers={watchers}
-        deployments={deploymentSummaries(communities)}
+        watchers={shell.watchers}
+        deployments={deploymentSummaries(shell.communities)}
         projects={projects}
         selectedId={null}
         detail={null}

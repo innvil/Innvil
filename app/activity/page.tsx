@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { Radio, TrendingUp } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { listAccountActivity, listAccountCommunities, listAccountWatchers, getAccountActivityTrend, type AccountActivityItem } from "@/src/lib/products/watch-runtime";
+import { listAccountActivity, getAccountActivityTrend, type AccountActivityItem } from "@/src/lib/products/watch-runtime";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { relTime, EmptyRow, SectionHeader } from "@/src/components/watch/WatchUI";
 import { ActivityFilters } from "@/src/components/watch/ActivityFilters";
@@ -33,12 +33,11 @@ export default async function ActivityPage({
   const daysNum = Number(days) || 30;
   const since = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
 
-  const [activity, communities, watchers, trend, shell] = await Promise.all([
-    listAccountActivity(admin, accountId, { limit: 100, communityId: communityId || undefined, watcherId: watcherId || undefined, since }),
-    listAccountCommunities(admin, accountId),
-    listAccountWatchers(admin, accountId),
-    getAccountActivityTrend(admin, accountId, { days: daysNum, communityId: communityId || undefined, watcherId: watcherId || undefined }),
-    getWatchShellContext(admin, accountId),
+  const shell = await getWatchShellContext(admin, accountId);
+  const { communities, watchers } = shell;
+  const [activity, trend] = await Promise.all([
+    listAccountActivity(admin, accountId, { limit: 100, communityId: communityId || undefined, watcherId: watcherId || undefined, since }, communities),
+    getAccountActivityTrend(admin, accountId, { days: daysNum, communityId: communityId || undefined, watcherId: watcherId || undefined }, communities),
   ]);
   const groups = groupByDay(activity);
   const trendTotal = trend.reduce((s, p) => s + p.count, 0);

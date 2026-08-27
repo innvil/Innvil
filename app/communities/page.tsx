@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { Users } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import {
-  listAccountCommunities, getCommunityOperationalStats, communityOperationalStatus, getAccountCapacity,
+  getCommunityOperationalStats, communityOperationalStatus,
   type CommunityOperationalStatus,
 } from "@/src/lib/products/watch-runtime";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
@@ -29,14 +29,13 @@ export default async function CommunitiesPage({
 }) {
   const { status } = await searchParams;
   const { accountId, admin } = await requireWatchPage();
-  const [communities, statsMap, shell, capacity, expansion, gateways] = await Promise.all([
-    listAccountCommunities(admin, accountId),
-    getCommunityOperationalStats(admin, accountId),
+  const [shell, expansion, gateways] = await Promise.all([
     getWatchShellContext(admin, accountId),
-    getAccountCapacity(admin, accountId),
     getCommunityExpansionState(admin, accountId),
     listAvailableDirectWatchGateways(),
   ]);
+  const { communities, capacity } = shell;
+  const statsMap = await getCommunityOperationalStats(admin, accountId, communities);
 
   const filtered = status ? communities.filter((c) => communityOperationalStatus(c) === status) : communities;
 

@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Users, Bot, Radio, ArrowRight, LayoutGrid, Settings as SettingsIcon, MessageCircleQuestion } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountProjectDetail, listAccountActivity, listAccountWatchers, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
+import { getAccountProjectDetail, listAccountActivity, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
 import { DEPLOYABLE_PROVISIONING_STATUSES } from "@/src/lib/products/watch-status";
 import { getAccountProjectProfile } from "@/src/lib/actions/watch-project-profile";
 import { listProjectEscalations, listProjectModerationReports } from "@/src/lib/actions/watch-escalations";
@@ -21,12 +21,12 @@ export const metadata: Metadata = { title: "Project — Innvil Watch", robots: {
 export default async function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { accountId, admin } = await requireWatchPage();
-  const [detail, profileResult, activity, shell, allWatchers, escalationsResult, moderationReportsResult] = await Promise.all([
-    getAccountProjectDetail(admin, accountId, id),
+  const shell = await getWatchShellContext(admin, accountId);
+  const { communities, watchers: allWatchers } = shell;
+  const [detail, profileResult, activity, escalationsResult, moderationReportsResult] = await Promise.all([
+    getAccountProjectDetail(admin, accountId, id, communities),
     getAccountProjectProfile(id),
-    listAccountActivity(admin, accountId, { projectId: id, limit: 20 }),
-    getWatchShellContext(admin, accountId),
-    listAccountWatchers(admin, accountId),
+    listAccountActivity(admin, accountId, { projectId: id, limit: 20 }, communities),
     listProjectEscalations(id),
     listProjectModerationReports(id),
   ]);

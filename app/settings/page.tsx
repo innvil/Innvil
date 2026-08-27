@@ -4,7 +4,6 @@ import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { getNotificationPreferences } from "@/src/lib/products/watch-notifications";
 import { getAccountPreferences } from "@/src/lib/products/watch-account-preferences";
 import { timezoneLabel } from "@/src/lib/products/watch-datetime";
-import { getAccountCapacity } from "@/src/lib/products/watch-runtime";
 import { getWatchByoCredentialState } from "@/src/lib/actions/watch-byo-settings";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
@@ -47,13 +46,13 @@ export const metadata: Metadata = { title: "Settings — Innvil Watch", robots: 
 // even rendered.
 export default async function SettingsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [shell, notificationPrefs, generalPrefs, userRes, capacity] = await Promise.all([
+  const [shell, notificationPrefs, generalPrefs, userRes] = await Promise.all([
     getWatchShellContext(admin, accountId),
     getNotificationPreferences(admin, accountId),
     getAccountPreferences(admin, accountId),
     admin.auth.admin.getUserById(accountId),
-    getAccountCapacity(admin, accountId),
   ]);
+  const capacity = shell.capacity;
 
   const notificationsEnabledCount = [
     notificationPrefs.noActiveWatcherEnabled, notificationPrefs.capacityWarningEnabled, notificationPrefs.watcherStatusEnabled,

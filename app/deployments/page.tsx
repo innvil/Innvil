@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { Layers, Bot, Users, HelpCircle } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountCapacity, listAccountCommunities, listAccountWatchers, getAccountSlotBreakdown } from "@/src/lib/products/watch-runtime";
+import { getAccountSlotBreakdown } from "@/src/lib/products/watch-runtime";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
 import { formatSlotLimit } from "@/src/lib/products/watch-plans";
@@ -24,13 +24,9 @@ export const metadata: Metadata = { title: "Deployments — Innvil Watch", robot
  */
 export default async function DeploymentsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, communities, watchers, breakdown, shell] = await Promise.all([
-    getAccountCapacity(admin, accountId),
-    listAccountCommunities(admin, accountId),
-    listAccountWatchers(admin, accountId),
-    getAccountSlotBreakdown(admin, accountId),
-    getWatchShellContext(admin, accountId),
-  ]);
+  const shell = await getWatchShellContext(admin, accountId);
+  const { capacity, communities, watchers } = shell;
+  const breakdown = await getAccountSlotBreakdown(admin, accountId, communities);
 
   const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
   const communitiesWithDeployments = communities.filter((c) => c.watchers.length > 0).length;

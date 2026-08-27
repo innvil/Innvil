@@ -127,6 +127,36 @@ innvil/
 
 ## Recent Updates
 
+### 2026-08-27 — Fix: every page ALSO independently re-fetched what its own shell context had just fetched (v1.47.83)
+- **Follow-up to v1.47.82, per a live "still has visible delays" report.** That pass eliminated the
+  redundancy INSIDE `getWatchShellContext`/`getWatchAccessState` (Communities/Watchers/Capacity computed once,
+  not 3-10x, within each of those two functions). What survived was a SECOND layer of the same problem: every
+  individual page called `getWatchShellContext(...)` (for the sidebar) **and separately** called its own
+  `listAccountCommunities`/`listAccountWatchers`/`getAccountCapacity`/`getCommunityOperationalStats`/
+  `getAccountSlotBreakdown`/`getAccountActivityTrend`/`getAccountProjectDetail`/`getAccountCommunityDetail`/
+  `getAccountWatcherDetail` for its own content — none of which shared data with the shell context that had
+  JUST computed the exact same thing moments earlier in the same request. `/usage` was the worst single
+  offender: it called `getAccountCapacity`, `countRecentModerationActions` (×2), `listAccountCommunities`,
+  `listAccountWatchers`, AND `getWatchShellContext` all in one `Promise.all` — 5 independent trips through the
+  same underlying data for one page load.
+- **Fix**: `getWatchShellContext` now returns the `communities`/`watchers` it already computed (new
+  `WatchShellContext` type, `watch-page.ts`), alongside the existing `capacity`/`attentionCount`. Every one of
+  the 12 Watch pages (`/activity`, `/billing`, `/communities`, `/communities/[id]`, `/deployments`, `/plans`,
+  `/projects`, `/projects/[id]`, `/settings`, `/usage`, `/watchers`, `/watchers/[id]`) was updated to read
+  `shell.communities`/`shell.watchers`/`shell.capacity` directly instead of re-fetching them, and to pass
+  `shell.communities` into every other function that accepts a pre-fetched-data parameter. Widened 6 more
+  functions in `watch-runtime.ts` to accept one (`getAccountSlotBreakdown`, `getAccountActivityTrend`,
+  `getAccountProjectDetail`, `getAccountCommunityDetail`, `getAccountWatcherDetail`) — same additive,
+  backward-compatible pattern as v1.47.82 (falls back to fetching internally when omitted, so no other caller
+  is affected). Kept genuinely-independent queries (payment history, trial state, gateways, credit balance,
+  etc.) running in the SAME `Promise.all` as `getWatchShellContext` rather than sequencing them needlessly —
+  only queries that actually depend on Communities/Watchers/Capacity were moved after the shell resolves.
+- No migration (pure read-path refactor, zero behavior change — confirmed via a repo-wide grep that no page
+  still calls `listAccountCommunities`/`listAccountWatchers`/`getAccountCapacity` alongside
+  `getWatchShellContext` anymore). 1859 tests pass (unchanged), `tsc --noEmit` clean, production build clean
+  (same 58-route output as before).
+- **Deployed to Production**, verified live on `innvil.cloud`/`watch.innvil.cloud`.
+
 ### 2026-08-27 — Fix: every real Watch page redundantly re-fetched the same Communities/Watchers/Capacity data 3-10x per load (v1.47.82)
 - **Live report: "the system currently feels too heavy. overview or other menus takes forever."** Traced to a
   real, quantifiable N-times-redundant-query bug in the shared read layer (`watch-runtime.ts`), not a single

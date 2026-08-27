@@ -1164,11 +1164,11 @@ export interface AccountSlotBreakdown {
  *  show either label without the caller needing to know they're identical.
  *  Only ENABLED deployments count -- a paused deployment consumes zero
  *  slots, matching the backend's own enforcement exactly. */
-export async function getAccountSlotBreakdown(admin: SupabaseClient, accountId: string): Promise<AccountSlotBreakdown> {
+export async function getAccountSlotBreakdown(admin: SupabaseClient, accountId: string, preCommunities?: AccountCommunitySummary[]): Promise<AccountSlotBreakdown> {
   // Escalation-group deployments never consume a slot (Shared Escalation
   // Group, Phase 1) -- excluded here so a Watcher connected to the ops
   // group never shows as "consuming a slot there" on this exact breakdown.
-  const communities = (await listAccountCommunities(admin, accountId)).filter((c) => c.connectionType === "community");
+  const communities = (preCommunities ?? (await listAccountCommunities(admin, accountId))).filter((c) => c.connectionType === "community");
   const byWatcher = new Map<string, SlotBreakdownByWatcher>();
   const byCommunity: SlotBreakdownByCommunity[] = [];
   for (const c of communities) {
@@ -1295,9 +1295,9 @@ export interface ActivityTrendOptions {
  *  disagree with the Activity event list it sits above. Every requested day
  *  is present in the result, including zero-count days -- a real gap in
  *  activity is genuine information, never silently omitted. */
-export async function getAccountActivityTrend(admin: SupabaseClient, accountId: string, opts: ActivityTrendOptions): Promise<ActivityTrendPoint[]> {
+export async function getAccountActivityTrend(admin: SupabaseClient, accountId: string, opts: ActivityTrendOptions, preCommunities?: AccountCommunitySummary[]): Promise<ActivityTrendPoint[]> {
   const days = Math.max(1, Math.floor(opts.days));
-  const communities = await listAccountCommunities(admin, accountId);
+  const communities = preCommunities ?? (await listAccountCommunities(admin, accountId));
   let scoped = communities;
   if (opts.communityId) scoped = scoped.filter((c) => c.id === opts.communityId);
   if (opts.projectId) scoped = scoped.filter((c) => c.projectId === opts.projectId);
@@ -1417,11 +1417,11 @@ export interface AccountProjectDetail {
 /** A single Project this account owns, with its Communities -- null if it
  *  doesn't exist or belongs to a different account (never trusts a
  *  client-supplied id beyond using it as a lookup key). */
-export async function getAccountProjectDetail(admin: SupabaseClient, accountId: string, projectId: string): Promise<AccountProjectDetail | null> {
+export async function getAccountProjectDetail(admin: SupabaseClient, accountId: string, projectId: string, preCommunities?: AccountCommunitySummary[]): Promise<AccountProjectDetail | null> {
   const projects = await listAccountProjects(admin, accountId);
   const project = projects.find((p) => p.id === projectId);
   if (!project) return null;
-  const communities = (await listAccountCommunities(admin, accountId)).filter((c) => c.projectId === projectId);
+  const communities = (preCommunities ?? (await listAccountCommunities(admin, accountId))).filter((c) => c.projectId === projectId);
   const watcherCount = new Set(communities.flatMap((c) => c.watchers.map((w) => w.watcherId))).size;
   return { id: project.id, name: project.name, panelId: project.panelId, communities, watcherCount };
 }
@@ -1432,10 +1432,11 @@ export interface AccountCommunityDetail extends AccountCommunitySummary {
 
 /** A single Community this account owns (via its Project), with recent
  *  activity scoped to just this Community. */
-export async function getAccountCommunityDetail(admin: SupabaseClient, accountId: string, communityId: string): Promise<AccountCommunityDetail | null> {
-  const community = (await listAccountCommunities(admin, accountId)).find((c) => c.id === communityId);
+export async function getAccountCommunityDetail(admin: SupabaseClient, accountId: string, communityId: string, preCommunities?: AccountCommunitySummary[]): Promise<AccountCommunityDetail | null> {
+  const communities = preCommunities ?? (await listAccountCommunities(admin, accountId));
+  const community = communities.find((c) => c.id === communityId);
   if (!community) return null;
-  const activity = await listAccountActivity(admin, accountId, { communityId, limit: 30 });
+  const activity = await listAccountActivity(admin, accountId, { communityId, limit: 30 }, communities);
   return { ...community, activity };
 }
 
@@ -1446,14 +1447,19 @@ export interface AccountWatcherDetail extends AccountWatcherRow {
 
 /** A single Watcher this account owns directly, with every Community it's
  *  deployed to and its own recent activity. */
-export async function getAccountWatcherDetail(admin: SupabaseClient, accountId: string, watcherId: string): Promise<AccountWatcherDetail | null> {
-  const watcher = (await listAccountWatchers(admin, accountId)).find((w) => w.id === watcherId);
+export async function getAccountWatcherDetail(
+  admin: SupabaseClient,
+  accountId: string,
+  watcherId: string,
+  pre?: { communities?: AccountCommunitySummary[]; watchers?: AccountWatcherRow[] },
+): Promise<AccountWatcherDetail | null> {
+  const communities = pre?.communities ?? (await listAccountCommunities(admin, accountId));
+  const watcher = (pre?.watchers ?? (await listAccountWatchers(admin, accountId, communities))).find((w) => w.id === watcherId);
   if (!watcher) return null;
-  const communities = await listAccountCommunities(admin, accountId);
   const deployments = communities.flatMap((c) =>
     c.watchers.filter((w) => w.watcherId === watcherId).map((w) => ({ deploymentId: w.deploymentId, communityId: c.id, communityTitle: c.title ?? c.chatId, projectName: c.projectName, enabled: w.enabled }))
   );
-  const activity = await listAccountActivity(admin, accountId, { watcherId, limit: 30 });
+  const activity = await listAccountActivity(admin, accountId, { watcherId, limit: 30 }, communities);
   return { ...watcher, deployments, activity };
 }
 

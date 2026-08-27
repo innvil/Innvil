@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CreditCard, ShieldCheck, LifeBuoy } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountCapacity } from "@/src/lib/products/watch-runtime";
 import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
 import { getWatchTrialState, TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/products/watch-trial";
 import { watchPlanOptions, watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
@@ -25,11 +24,11 @@ export const metadata: Metadata = { title: "Plans — Innvil Watch", robots: { i
 
 export default async function PlansPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, trial, shell] = await Promise.all([
-    getAccountCapacity(admin, accountId),
-    getWatchTrialState(admin, accountId),
+  const [shell, trial] = await Promise.all([
     getWatchShellContext(admin, accountId),
+    getWatchTrialState(admin, accountId),
   ]);
+  const capacity = shell.capacity;
 
   const options = watchPlanOptions();
   const currentDisplayName = capacity

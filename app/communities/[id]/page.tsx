@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Bot, Radio, Settings as SettingsIcon } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { listAccountCommunities, listAccountActivity, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
+import { listAccountActivity, communityOperationalStatus } from "@/src/lib/products/watch-runtime";
 import { MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/products/watch-plans";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { Breadcrumbs, EmptyRow, SectionHeader, relTime, OperationalStatusBadge } from "@/src/components/watch/WatchUI";
@@ -30,14 +30,15 @@ export default async function CommunityDetailPage({
   const daysNum = Number(days) || 7;
   const since = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
 
-  const [communities, recentActivity, filteredModeration, shell] = await Promise.all([
-    listAccountCommunities(admin, accountId),
-    listAccountActivity(admin, accountId, { communityId: id, limit: 8 }),
-    listAccountActivity(admin, accountId, { communityId: id, watcherId: watcherId || undefined, since, limit: 100 }),
-    getWatchShellContext(admin, accountId),
-  ]);
+  const shell = await getWatchShellContext(admin, accountId);
+  const { communities } = shell;
   const community = communities.find((c) => c.id === id);
   if (!community) notFound();
+
+  const [recentActivity, filteredModeration] = await Promise.all([
+    listAccountActivity(admin, accountId, { communityId: id, limit: 8 }, communities),
+    listAccountActivity(admin, accountId, { communityId: id, watcherId: watcherId || undefined, since, limit: 100 }, communities),
+  ]);
 
   const status = communityOperationalStatus(community);
   const watchersForFilter = community.watchers.map((w) => ({ id: w.watcherId, name: w.watcherName }));

@@ -2,9 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { LayoutGrid, ShieldCheck, Bot, MessageSquare } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import {
-  getAccountCapacity, countRecentModerationActions, listAccountCommunities, listAccountWatchers,
-} from "@/src/lib/products/watch-runtime";
+import { countRecentModerationActions } from "@/src/lib/products/watch-runtime";
 import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
@@ -26,16 +24,16 @@ export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { i
 
 export default async function UsagePage() {
   const { accountId, admin } = await requireWatchPage();
-  const [capacity, actions7d, actions30d, communities, watchers, shell, expansion, gateways, aiPeriod] = await Promise.all([
-    getAccountCapacity(admin, accountId),
-    countRecentModerationActions(admin, accountId, 7),
-    countRecentModerationActions(admin, accountId, 30),
-    listAccountCommunities(admin, accountId),
-    listAccountWatchers(admin, accountId),
+  const [shell, expansion, gateways, aiPeriod] = await Promise.all([
     getWatchShellContext(admin, accountId),
     getCommunityExpansionState(admin, accountId),
     listAvailableDirectWatchGateways(),
     resolveAccountBillingPeriod(admin, accountId),
+  ]);
+  const { capacity, communities, watchers } = shell;
+  const [actions7d, actions30d] = await Promise.all([
+    countRecentModerationActions(admin, accountId, 7, communities),
+    countRecentModerationActions(admin, accountId, 30, communities),
   ]);
 
   const activeWatcherCount = new Set(communities.flatMap((c) => c.watchers.filter((w) => w.enabled).map((w) => w.watcherId))).size;

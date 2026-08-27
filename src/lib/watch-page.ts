@@ -3,7 +3,10 @@ import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isWatchHost } from "@/src/lib/watch-host";
 import { getAuthedAdmin } from "@/src/lib/auth";
-import { getAccountCapacity, listAccountAttentionItems, listAccountCommunities, listAccountWatchers, type AccountCapacity } from "@/src/lib/products/watch-runtime";
+import {
+  getAccountCapacity, listAccountAttentionItems, listAccountCommunities, listAccountWatchers,
+  type AccountCapacity, type AccountCommunitySummary, type AccountWatcherRow,
+} from "@/src/lib/products/watch-runtime";
 
 /**
  * Shared guard for every real Watch feature route (`/projects`,
@@ -58,16 +61,31 @@ export async function requireWatchPage(): Promise<{ accountId: string; admin: Su
  *  passing them down, not by adding any caching layer (no request-scoped or
  *  cross-request cache — every value here is still fetched fresh on every
  *  call, just without the redundant repeat trips). */
-export async function getWatchShellContext(admin: SupabaseClient, accountId: string): Promise<{ capacity: AccountCapacity | null; attentionCount: number }> {
+export interface WatchShellContext {
+  capacity: AccountCapacity | null;
+  attentionCount: number;
+  /** Exposed so a page's OWN data-fetch (e.g. `/communities`'s Community
+   *  Health table, `/usage`'s slot breakdown) can reuse these instead of
+   *  independently re-fetching the same 4-round-trip Communities chain this
+   *  function already resolved — the "shell fetch vs. page fetch" duplication
+   *  layer that survived the v1.47.82 fix, since each page still called
+   *  `getWatchShellContext` AND its own `listAccountCommunities`/
+   *  `getAccountCapacity`/etc. independently. Pages should pass these into
+   *  every downstream call that accepts a pre-fetched-data parameter. */
+  communities: AccountCommunitySummary[];
+  watchers: AccountWatcherRow[];
+}
+
+export async function getWatchShellContext(admin: SupabaseClient, accountId: string): Promise<WatchShellContext> {
   const communities = await listAccountCommunities(admin, accountId);
   const watchers = await listAccountWatchers(admin, accountId, communities);
   const capacity = await getAccountCapacity(admin, accountId, { communities, watchers });
   const attentionItems = await listAccountAttentionItems(admin, accountId, { communities, watchers, capacity });
-  return { capacity, attentionCount: attentionItems.length };
+  return { capacity, attentionCount: attentionItems.length, communities, watchers };
 }
 
 export type SupportPageContext =
-  | { authenticated: true; accountId: string; admin: SupabaseClient; shell: { capacity: AccountCapacity | null; attentionCount: number } }
+  | { authenticated: true; accountId: string; admin: SupabaseClient; shell: WatchShellContext }
   | { authenticated: false };
 
 /** The Help Center (`/support`, `/support/[category]`, `/support/[category]/[slug]`)

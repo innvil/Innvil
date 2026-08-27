@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Bot, Radio, Settings as SettingsIcon } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getAccountWatcherDetail, listAccountWatchers, listAccountCommunities } from "@/src/lib/products/watch-runtime";
+import { getAccountWatcherDetail } from "@/src/lib/products/watch-runtime";
 import { listAccountProjects } from "@/src/lib/products/ownership";
 import { deploymentSummaries } from "@/src/lib/products/watch-status";
 import { WatchShell } from "@/src/components/watch/WatchShell";
@@ -41,13 +41,12 @@ export default async function WatcherDetailPage({
   const { id } = await params;
   const { tab } = await searchParams;
   const { accountId, admin } = await requireWatchPage();
-  const [detail, allWatchers, communities, projects, shell] = await Promise.all([
-    getAccountWatcherDetail(admin, accountId, id),
-    listAccountWatchers(admin, accountId),
-    listAccountCommunities(admin, accountId),
-    listAccountProjects(admin, accountId),
+  const [shell, projects] = await Promise.all([
     getWatchShellContext(admin, accountId),
+    listAccountProjects(admin, accountId),
   ]);
+  const { communities, watchers: allWatchers } = shell;
+  const detail = await getAccountWatcherDetail(admin, accountId, id, { communities, watchers: allWatchers });
   if (!detail) notFound();
 
   const hasActive = detail.deployments.some((d) => d.enabled);

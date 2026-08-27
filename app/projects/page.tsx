@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 import { FolderKanban, ChevronRight } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
 import { listAccountProjects } from "@/src/lib/products/ownership";
-import { listAccountCommunities } from "@/src/lib/products/watch-runtime";
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { EmptyRow } from "@/src/components/watch/WatchUI";
 import { CreateProjectButton } from "@/src/components/watch/ProjectsClient";
@@ -12,11 +11,11 @@ export const metadata: Metadata = { title: "Projects — Innvil Watch", robots: 
 
 export default async function ProjectsPage() {
   const { accountId, admin } = await requireWatchPage();
-  const [projects, communities, shell] = await Promise.all([
+  const [projects, shell] = await Promise.all([
     listAccountProjects(admin, accountId),
-    listAccountCommunities(admin, accountId),
     getWatchShellContext(admin, accountId),
   ]);
+  const communities = shell.communities;
 
   const communityCountByProject = new Map<string, number>();
   const watcherCountByProject = new Map<string, Set<string>>();
