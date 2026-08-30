@@ -2369,7 +2369,8 @@ async function handleHumanMessage(
   accountId: string | null = null,
   paidTier: ModeratorPlanTier | null = null,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  mediaBaseAllowance: number | null = null
+  mediaBaseAllowance: number | null = null,
+  chatterActive: boolean = true
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
@@ -2413,6 +2414,14 @@ async function handleHumanMessage(
   timer.mark("link_moderation_check", { handled: moderation.handled });
   if (moderation.handled) return;
   const collabContact = moderation.collabRoutable ? (community.collab_contact ?? null) : null;
+
+  // Everything above this line (media moderation, link moderation) is a
+  // SEPARATE decision from conversational chatter and always runs
+  // regardless of `chatterActive` -- see the doc comment at this
+  // function's caller. Only the conversational-reply portion below
+  // (conversation tasks, ordinary chatter selection, generation) is gated
+  // on Natural Chatter actually being entitled/enabled.
+  if (!chatterActive) return;
 
   // Checked BEFORE any ordinary chatter routing -- an active/newly-created
   // conversational task fully owns this message (see routeConversationTask's
@@ -3170,9 +3179,19 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   }
 
   if (sender.senderType === "HUMAN") {
+    // Natural Chatter's own entitlement is a SEPARATE decision from
+    // moderation (see runMediaModeration/runLinkModeration's own doc
+    // comments: "independent of and never disabled by the reactive chatter
+    // quota"). Previously this gate short-circuited BEFORE
+    // handleHumanMessage was ever called, which meant an inactive/disabled
+    // Natural Chatter entitlement (a lapsed plan, the master rollout flag
+    // off, etc.) silently disabled moderation too -- a real bug, not the
+    // intended design. `chatterActive` is now only ever consulted INSIDE
+    // handleHumanMessage, strictly to gate the conversational-reply portion
+    // (task routing onward) -- media/link moderation always run first,
+    // unconditionally, regardless of this flag.
     const chatterActive = virtualModNaturalChatterActive(settings);
     timer.mark("natural_chatter_entitlement_gate", { active: chatterActive });
-    if (!chatterActive) return;
     // Phase 4.M (B): the 20/day reactive quota is trial-only (spec §2) --
     // paid tiers are unaffected and this patch does not change their
     // existing (unlimited) behavior.
@@ -3237,7 +3256,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
           ? MEDIA_MODERATION_BASE_ALLOWANCE[paidTier]
           : null;
     await handleHumanMessage(
-      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, mediaBaseAllowance
+      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, mediaBaseAllowance, chatterActive
     );
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;
