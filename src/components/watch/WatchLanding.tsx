@@ -148,50 +148,103 @@ function WatchOpsPanel() {
   );
 }
 
-/** The bot-vs-Watcher comparison — deliberately shorter/differently-worded
- *  from the 9-row table on /why-watchers (that page is the deep dive; this
- *  is the landing's quick-scan version). Every "Watcher" claim maps to a
- *  real, already-shipped capability. Ordered so the biggest differentiator
- *  (presence) comes first, moderation last -- a Watcher is not primarily a
- *  moderation bot with extra features. */
-const COMPARISON: Array<{ topic: string; bot: string; watcher: string }> = [
-  { topic: "Presence", bot: "Reacts to commands or individual messages", watcher: "Follows the conversation and participates when a moderator naturally should" },
-  { topic: "Conversation", bot: "Responds to predefined commands or canned flows", watcher: "Talks naturally with members in its configured persona" },
-  { topic: "Understanding", bot: "Matches fixed commands or keywords", watcher: "Understands messages and conversations by intent, not just commands or keywords" },
-  { topic: "Project Knowledge", bot: "Uses predefined answers or static commands", watcher: "Answers project-specific questions using the knowledge you provide" },
-  { topic: "Persona", bot: "One generic voice", watcher: "A configurable persona — tone, style, and role you define" },
-  { topic: "Team coordination", bot: "Each bot acts independently", watcher: "Multiple Watchers coordinate so they do not all respond to the same moment" },
-  { topic: "Escalation", bot: "Stays silent or gives a canned fallback", watcher: "Can forward the question to your team and relay the answer back" },
-  { topic: "Moderation", bot: "Blunt keyword and regex filters", watcher: "Recognizes real violations by intent, not just banned words" },
+/** The bot vs. human moderator vs. Watcher comparison. Every "Watcher"
+ *  claim maps to a real, already-shipped capability (including the
+ *  honestly-qualified "where supported" on escalation — that capability
+ *  requires a project to actually have an Escalation Group configured, so
+ *  it's never stated as unconditional). This is the landing's own
+ *  comprehensive comparison -- REVISED (2026-08-30) to also compare
+ *  against a human moderator, not just a traditional bot, and expanded
+ *  from 8 to 12 rows per explicit product direction; no longer the
+ *  "shorter" version relative to /why-watchers. Ordered so the biggest
+ *  differentiator (presence) comes first, moderation-adjacent rows later
+ *  -- a Watcher is not primarily a moderation bot with extra features.
+ *  Positioning throughout: Watchers close the gap between rigid
+ *  automation and needing a human moderator online at all times -- never
+ *  framed as "better than" or a replacement for a human team. */
+const COMPARISON: Array<{ topic: string; bot: string; human: string; watcher: string }> = [
+  { topic: "Presence", bot: "Reacts to commands or individual triggers", human: "Present only when someone is available", watcher: "Follows the conversation and stays present continuously" },
+  { topic: "Conversation", bot: "Uses commands, canned replies, or fixed flows", human: "Can hold natural conversations", watcher: "Talks naturally with members in its configured persona" },
+  { topic: "Understanding", bot: "Matches keywords, commands, or predefined patterns", human: "Understands context and intent naturally", watcher: "Understands messages and conversations by intent" },
+  { topic: "Project Knowledge", bot: "Relies on predefined answers or static commands", human: "Depends on what the moderator personally knows", watcher: "Answers from your configured Project Knowledge" },
+  { topic: "Personality", bot: "One generic bot voice", human: "Has a natural individual personality", watcher: "Has a configurable persona, tone, style, and identity" },
+  { topic: "Moderation judgment", bot: "Uses keyword, regex, or rigid rule matching", human: "Can judge context and intent", watcher: "Recognizes violations by context and intent" },
+  { topic: "Availability", bot: "Always running, but only reacts to programmed triggers", human: "Limited by shifts, availability, and staffing", watcher: "Continuously available for moderation and community operations" },
+  { topic: "Consistency", bot: "Consistent, but rigid", human: "Can vary by moderator or shift", watcher: "Applies configured behavior consistently while still using context" },
+  { topic: "Working as a team", bot: "Each bot usually acts independently", human: "Requires coordination between team members", watcher: "Multiple Watchers coordinate roles and avoid duplicate replies" },
+  { topic: "Specialization", bot: "Usually built around individual commands/features", human: "Responsibilities depend on staff assignments", watcher: "Can have dedicated specialist roles such as Host, Knowledge, Spam & Scam, Media Safety, and Rules & Conduct" },
+  { topic: "When it doesn't know", bot: "Returns a canned fallback or fails", human: "Can ask another team member", watcher: "Can use Project Knowledge and escalate when a human is needed, where supported" },
+  { topic: "Scale / coverage", bot: "Easy to run, but limited in judgment", human: "More coverage requires more people and shifts", watcher: "Adds coordinated moderation coverage without requiring a human moderator online at every moment" },
 ];
+
+/** One capability's comparison, stacked as a card -- the responsive
+ *  fallback for screens below `lg`, where a real 4-column grid table would
+ *  force narrow, wrapping, or clipped text. Same three-tier visual
+ *  treatment as the desktop table (bot subdued, human neutral, watcher
+ *  emphasized), just laid out vertically per row instead of across
+ *  columns. */
+function ComparisonCard({ row }: { row: (typeof COMPARISON)[number] }) {
+  return (
+    <div className="w-card p-4 space-y-3">
+      <p className="w-text font-semibold text-sm">{row.topic}</p>
+      <div className="flex items-start gap-2 text-xs">
+        <span className="w-text-faint shrink-0 w-28 flex items-center gap-1"><X size={11} /> Traditional Bot</span>
+        <span className="w-text-faint">{row.bot}</span>
+      </div>
+      <div className="flex items-start gap-2 text-xs">
+        <span className="w-text-dim shrink-0 w-28 flex items-center gap-1"><Users size={11} /> Human Moderator</span>
+        <span className="w-text-dim">{row.human}</span>
+      </div>
+      <div className="flex items-start gap-2 text-xs rounded-lg w-teal-soft-bg p-2 -mx-2">
+        <span className="w-teal shrink-0 w-28 flex items-center gap-1 font-medium"><Check size={11} /> Innvil Watcher</span>
+        <span className="w-text font-medium">{row.watcher}</span>
+      </div>
+    </div>
+  );
+}
 
 function WhyWatchersSection() {
   return (
-    <section id="why-watchers" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
+    <section id="why-watchers" className="max-w-6xl mx-auto px-6 py-16 scroll-mt-24">
       <p className="text-xs w-mono uppercase w-teal tracking-wider text-center mb-2">Why Watchers?</p>
       <h2 className="w-display text-2xl sm:text-3xl text-center mb-3">
         Traditional moderation bots enforce rules.<br className="hidden sm:block" /> Watchers actually help run the community.
       </h2>
       <p className="w-text-dim text-center max-w-2xl mx-auto mb-10">
-        A Watcher is a persistent virtual member of your moderation team. It follows the conversation, talks with
-        members when appropriate, moderates with context, and knows when to stay quiet — not just when to react
-        to a command.
+        A Watcher sits between a traditional bot and a human moderator — it stays available like software, but
+        follows the conversation, talks with members, and moderates with context instead of reacting only to
+        commands and keywords.
       </p>
-      <div className="w-card overflow-hidden">
-        <div className="grid grid-cols-[1fr_1fr_1fr] text-[11px] uppercase tracking-wide font-semibold w-text-faint border-b w-line-soft">
-          <div className="p-3 sm:p-4"></div>
-          <div className="p-3 sm:p-4 flex items-center gap-1.5"><X size={12} className="w-text-faint" /> Traditional bot</div>
-          <div className="p-3 sm:p-4 flex items-center gap-1.5 w-teal"><Check size={12} /> Innvil Watcher</div>
+
+      {/* Desktop/tablet: a real 4-column grid table, comfortable spacing --
+          hidden below lg where 3 full sentence-columns would force narrow,
+          wrapping, or clipped text. */}
+      <div className="hidden lg:block w-card overflow-hidden">
+        <div className="grid grid-cols-[150px_1fr_1fr_1fr] text-[11px] uppercase tracking-wide font-semibold w-text-faint border-b w-line-soft">
+          <div className="p-4"></div>
+          <div className="p-4 flex items-center gap-1.5"><X size={12} className="w-text-faint" /> Traditional Bot</div>
+          <div className="p-4 flex items-center gap-1.5 w-text-dim"><Users size={12} /> Human Moderator</div>
+          <div className="p-4 flex items-center gap-1.5 w-teal"><Check size={12} /> Innvil Watcher</div>
         </div>
         {COMPARISON.map((row, i) => (
           <div
             key={row.topic}
-            className={`grid grid-cols-[1fr_1fr_1fr] text-xs sm:text-sm ${i < COMPARISON.length - 1 ? "border-b w-line-soft" : ""}`}
+            className={`grid grid-cols-[150px_1fr_1fr_1fr] text-sm ${i < COMPARISON.length - 1 ? "border-b w-line-soft" : ""}`}
           >
-            <div className="p-3 sm:p-4 w-text font-medium">{row.topic}</div>
-            <div className="p-3 sm:p-4 w-text-faint">{row.bot}</div>
-            <div className="p-3 sm:p-4 w-text-dim">{row.watcher}</div>
+            <div className="p-4 w-text font-medium">{row.topic}</div>
+            <div className="p-4 w-text-faint">{row.bot}</div>
+            <div className="p-4 w-text-dim">{row.human}</div>
+            <div className="p-4 w-text font-medium w-teal-soft-bg">{row.watcher}</div>
           </div>
+        ))}
+      </div>
+
+      {/* Below lg: stacked cards, one per capability -- keeps every
+          sentence fully readable instead of squeezing 3 content columns
+          into a narrow viewport. */}
+      <div className="lg:hidden space-y-3">
+        {COMPARISON.map((row) => (
+          <ComparisonCard key={row.topic} row={row} />
         ))}
       </div>
     </section>
@@ -497,14 +550,14 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
             <Zap size={12} /> Virtual Moderators for Telegram
           </span>
           <h1 className="w-display text-4xl sm:text-5xl leading-[1.08] mb-6">
-            Traditional moderation bots enforce rules.<br />Watchers actually help run the community.
+            Watchers that do more than watch.
           </h1>
           <p className="w-text-dim text-lg mb-2 max-w-md">
-            Deploy AI-powered <strong className="w-text font-semibold">Watchers</strong> that participate in
-            conversation, moderate with judgment, answer from your Project Knowledge, and help keep your Telegram
-            community running — even when your team is offline.
+            <strong className="w-text font-semibold">Watchers</strong> are virtual moderators that talk with
+            members, moderate with judgment, answer from your Project Knowledge, and help keep your Telegram
+            community running — even when your team is away.
           </p>
-          <p className="w-text-dim text-lg mb-4 max-w-md">Each Watcher has its own persona, voice, and role.</p>
+          <p className="w-text-dim text-lg mb-4 max-w-md">Each Watcher has its own persona, voice, and specialist role.</p>
           <p className="text-sm w-teal flex items-center gap-1.5 mb-8">
             <Clock size={14} /> Try a Watcher free for {TRIAL_DURATION_DAYS} days — no payment required.
           </p>
