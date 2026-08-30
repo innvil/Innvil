@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveAuthBrand, authPageMetadata } from "./product-brand";
-import { WATCH_TITLE } from "@/src/lib/watch-metadata";
+import { WATCH_TITLE, WATCH_BASE_URL } from "@/src/lib/watch-metadata";
 
 /**
  * `getAuthProductContext()` itself wraps `isWatchHost()` (next/headers,
@@ -98,7 +98,7 @@ test("REQUIRED: authPageMetadata on the plain Innvil brand is unchanged -- icon 
   assert.equal((meta as { title?: string }).title, undefined, "the Innvil brand must keep inheriting the root layout's own title, not a Watch one");
 });
 
-test("authPageMetadata's og:url reflects the specific auth route", () => {
+test("authPageMetadata's og:url reflects the specific auth route, as a real absolute watch.innvil.cloud URL", () => {
   const meta = authPageMetadata(resolveAuthBrand(true), "/forgot-password");
-  assert.equal((meta.openGraph as { url?: string })?.url, "/forgot-password");
+  assert.equal((meta.openGraph as { url?: string })?.url, `${WATCH_BASE_URL}/forgot-password`);
 });

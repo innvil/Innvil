@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { transitionKindFor, localMinutesOfDay, claimPresenceTransition } from "./presence-runtime";
 
 /**
@@ -12,6 +14,36 @@ import { transitionKindFor, localMinutesOfDay, claimPresenceTransition } from ".
  * getAccountCapacity, the two functions the sweep leans on for ownership
  * and plan-gating, are already fully covered in watch-runtime.test.ts.
  */
+
+/* ---------------------------------------- online/offline scope lock (Watcher
+   Role Separation) -------------------------------------------------------- */
+
+// REQUIRED regression lock: Presence Scheduling's "active"/"away" state (the
+// only online/offline-shaped state machine anywhere in this codebase) must
+// NEVER be wired into moderation or chatter selection -- it exists solely
+// to flavor scheduled arrival/departure ANNOUNCEMENT messages. Watcher Role
+// Separation (chatter duty ACTIVE_CHATTER/SPECIALIST_ONLY/DISABLED) is a
+// completely separate, additional concept; this test guards against a
+// future change accidentally coupling the two by re-checking, structurally,
+// that this file never imports any moderation/chatter symbol. A behavioral
+// (not just doc-comment) guarantee is impractical to test any other way
+// without a full DB/Telegram-mocked orchestrator (this file has none, by
+// this codebase's own established convention -- see the header comment) --
+// a source-level import check is a real, low-risk, zero-flake way to lock
+// in an architectural boundary, not a substitute for one.
+test("REQUIRED: presence-runtime.ts never imports or calls moderation/chatter selection -- structurally cannot gate specialist availability", () => {
+  const source = readFileSync(join(__dirname, "presence-runtime.ts"), "utf-8");
+  // Strip comments first -- the file's own doc comment DELIBERATELY names
+  // these functions to document the boundary this test enforces ("has zero
+  // effect on core safety/scam/phishing moderation
+  // (runLinkModeration/runMediaModeration)..."); mentioning them in prose is
+  // the documentation this test locks in, not a violation of it. What must
+  // never appear is a real IMPORT or a real CALL.
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  for (const forbidden of ["runLinkModeration", "runMediaModeration", "findChatterDeployments", "selectChatterAction", "chatter-coordinator"]) {
+    assert.ok(!withoutComments.includes(forbidden), `presence-runtime.ts must never import or call "${forbidden}" outside of documentation comments`);
+  }
+});
 
 /* -------------------------------------------------------- transitionKindFor ---- */
 

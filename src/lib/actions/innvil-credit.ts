@@ -9,13 +9,15 @@
 
 import { getAuthedAdmin } from "@/src/lib/auth";
 import {
-  getInnvilCreditBalance, listInnvilCreditActivity, purchaseWatchWithCredit,
+  getInnvilCreditBalance, listInnvilCreditActivity, purchaseWatchWithCredit, cancelPendingWatchDowngrade,
   purchaseCommunityExpansionWithCredit, scheduleCommunityExpansionRemoval,
   purchaseMediaModerationAddonWithCredit, scheduleMediaModerationAddonRemoval,
+  purchaseMediaModerationExpansion,
 } from "@/src/lib/products/innvil-credit";
 import type {
   InnvilCreditBalance, CreditActivityItem, PurchaseWithCreditResult,
   CommunityExpansionPurchaseResult, ScheduleRemovalResult, MediaModerationAddonPurchaseResult,
+  PurchaseMediaModerationExpansionResult,
 } from "@/src/lib/products/innvil-credit";
 import type { WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
@@ -41,6 +43,12 @@ export async function purchaseWatchWithCreditAction(
   return purchaseWatchWithCredit(admin, user.id, planName, billingInterval);
 }
 
+export async function cancelPendingWatchDowngradeAction(): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return cancelPendingWatchDowngrade(admin, user.id);
+}
+
 export async function purchaseCommunityExpansionWithCreditAction(): Promise<CommunityExpansionPurchaseResult> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
@@ -63,4 +71,10 @@ export async function scheduleMediaModerationAddonRemovalAction(): Promise<Sched
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return scheduleMediaModerationAddonRemoval(admin, user.id);
+}
+
+export async function purchaseMediaModerationExpansionAction(units: number): Promise<PurchaseMediaModerationExpansionResult> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return purchaseMediaModerationExpansion(admin, user.id, units);
 }

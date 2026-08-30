@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { watchPageMetadata, WATCH_TITLE, WATCH_DESCRIPTION, WATCH_SITE_NAME } from "./watch-metadata";
+import { watchPageMetadata, WATCH_TITLE, WATCH_DESCRIPTION, WATCH_SITE_NAME, WATCH_BASE_URL, WATCH_KEYWORDS } from "./watch-metadata";
 
 const BAD_SMM_TITLE = "Innvil — SMM Panel Making & Managing, Made Easy";
 
@@ -21,7 +21,23 @@ test("REQUIRED: watchPageMetadata sets a Watch-specific openGraph title/descript
   assert.equal(meta.openGraph.title, WATCH_TITLE);
   assert.equal(meta.openGraph.description, WATCH_DESCRIPTION);
   assert.equal(meta.openGraph.siteName, WATCH_SITE_NAME);
-  assert.equal(meta.openGraph.url, "/login");
+  assert.equal(meta.openGraph.url, `${WATCH_BASE_URL}/login`);
+});
+
+test("REQUIRED: watchPageMetadata's og:url and canonical are REAL ABSOLUTE watch.innvil.cloud URLs -- never a relative path that could resolve against the main Innvil site's metadataBase", () => {
+  const meta = watchPageMetadata("/");
+  assert.equal(WATCH_BASE_URL, "https://watch.innvil.cloud");
+  assert.equal(meta.openGraph.url, "https://watch.innvil.cloud/");
+  assert.equal(meta.alternates.canonical, "https://watch.innvil.cloud/");
+  assert.doesNotMatch(meta.alternates.canonical, /^\/(?!\/)/, "must never be a bare relative path");
+});
+
+test("REQUIRED: watchPageMetadata sets real, Watch/Telegram-specific keywords -- overriding the root layout's own SMM-panel keywords, never inheriting them", () => {
+  const meta = watchPageMetadata("/");
+  assert.deepEqual(meta.keywords, WATCH_KEYWORDS);
+  const joined = meta.keywords.join(" ").toLowerCase();
+  assert.ok(!joined.includes("smm panel"), "must never carry the main site's unrelated SMM-panel keywords");
+  assert.ok(joined.includes("telegram"), "must be Telegram-specific");
 });
 
 test("REQUIRED: watchPageMetadata sets Twitter card metadata too -- not just Open Graph", () => {
@@ -38,6 +54,6 @@ test("watchPageMetadata never leaks generic SMM Panel copy into any field", () =
 });
 
 test("watchPageMetadata's url reflects the given path, so every route gets a distinct canonical og:url", () => {
-  assert.equal(watchPageMetadata("/plans").openGraph.url, "/plans");
-  assert.equal(watchPageMetadata("/billing").openGraph.url, "/billing");
+  assert.equal(watchPageMetadata("/plans").openGraph.url, `${WATCH_BASE_URL}/plans`);
+  assert.equal(watchPageMetadata("/billing").openGraph.url, `${WATCH_BASE_URL}/billing`);
 });

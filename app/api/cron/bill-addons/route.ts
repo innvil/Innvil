@@ -3,11 +3,15 @@ import { billDueSupportAddons } from "@/src/lib/billing/assistant";
 import { billDuePlans } from "@/src/lib/billing/plans";
 import { billDueAutomatorSubs } from "@/src/lib/billing/automator";
 import { runDraftOnboardingSweepCron } from "@/src/lib/actions/platform-support";
+import { sweepWatchAutoRenewals } from "@/src/lib/billing/watch-subscriptions";
 
 /* =========================================================
    Add-on recurring billing cron.
    Charges due AI Assistant subscriptions ($2.99/mo) from each panel's Innvil
-   balance; pauses the add-on when a panel can't cover it.
+   balance; pauses the add-on when a panel can't cover it. Also auto-renews
+   any direct Innvil Watch subscription whose most recent payment was made
+   with Innvil Credit (sweepWatchAutoRenewals) -- a manual-crypto-paid
+   subscription is never auto-charged.
 
    Schedule via Supabase pg_cron (project convention), e.g. daily at 06:00 UTC
    (it only charges subscriptions whose next-charge date has passed):
@@ -38,13 +42,14 @@ function isAuthorized(req: Request): boolean {
 async function run(req: Request) {
   if (!isAuthorized(req)) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   try {
-    const [addons, plans, automator, onboarding] = await Promise.all([
+    const [addons, plans, automator, onboarding, watchRenewals] = await Promise.all([
       billDueSupportAddons(),
       billDuePlans(),
       billDueAutomatorSubs(),
       runDraftOnboardingSweepCron(),
+      sweepWatchAutoRenewals(),
     ]);
-    return NextResponse.json({ ok: true, addons, plans, automator, onboarding });
+    return NextResponse.json({ ok: true, addons, plans, automator, onboarding, watchRenewals });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : "billing failed" }, { status: 500 });
   }

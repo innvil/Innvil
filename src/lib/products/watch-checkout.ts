@@ -158,6 +158,19 @@ export async function createDirectWatchCheckout(
     const expansion = await getCommunityExpansionState(admin, user.id);
     if (expansion && !expansion.cancelAtPeriodEnd) price += COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
   } else if (existingPlan && existingPlan.tier !== tier) {
+    const currentBasePrice = watchPlanOptions().find((o) => o.tier === existingPlan.tier)?.price;
+    const isDowngrade = currentBasePrice != null && basePrice < currentBasePrice;
+    if (isDowngrade) {
+      // A downgrade only ever takes effect at the account's next renewal
+      // (see innvil-credit.ts's purchaseWatchWithCredit) -- that requires
+      // charging nothing right now and scheduling the change instead, which
+      // this webhook-settled crypto-checkout flow has no way to represent
+      // (a checkout either gets paid now or doesn't happen at all). Rather
+      // than build a second, parallel "scheduled crypto charge" mechanism,
+      // a downgrade is only offered through Innvil Credit, which already
+      // supports it.
+      return { ok: false, error: "Downgrading takes effect at your next renewal — pay with Innvil Credit to schedule it. Direct crypto checkout only supports new subscriptions, renewals, and upgrades." };
+    }
     // A plan CHANGE never carries Community Expansion across tiers (see
     // watch-community-expansion.ts's finalizeAddonsOnTierChange doc comment)
     // -- block the checkout itself (never just hide it in UI) if current
@@ -173,6 +186,14 @@ export async function createDirectWatchCheckout(
           error: `You have ${communities.length} Communities connected — more than the ${includedCap} included in this plan. Disconnect down to ${includedCap} or fewer before changing plans (Community Expansion doesn't carry over to a new plan automatically).`,
         };
       }
+    }
+    // Upgrade -- charge only the DIFFERENCE between the new tier's price
+    // and what the account is already paying for its current tier, at the
+    // SAME billing interval, never the new tier's full price on top of
+    // what this period already cost.
+    if (currentBasePrice != null) {
+      const currentTierPrice = isAnnual ? annualDirectPriceUsd(currentBasePrice) : currentBasePrice;
+      price = Math.max(0, price - currentTierPrice);
     }
   }
 

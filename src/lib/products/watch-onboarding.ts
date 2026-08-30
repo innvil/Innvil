@@ -112,8 +112,8 @@ export function watchOnboardingSteps(): OnboardingStep[] {
       title: "Create your Watcher",
       summary: "Configure the AI-powered Virtual Moderator that will represent you in the community.",
       body: [
-        "Give your Watcher a name and a persona — a starting style preset, or your own custom description and tone. Its persona is what makes it sound like a real, consistent voice in your community rather than a generic bot.",
-        "Your Watcher answers questions grounded in the Project knowledge from step 3 — it never fabricates facts about your project beyond what you've told it.",
+        "Give your Watcher a name and a persona — a starting style preset, or your own custom description and tone. Its persona shapes how it talks and behaves in the room, not just how it answers a question.",
+        "When the conversation involves project-specific facts, it uses your Project Knowledge from step 3 rather than making information up.",
       ],
       callouts: [
         { kind: "plan-limit", text: `Total Watcher slots are shared across every community you connect — ${planLine}` },
@@ -136,10 +136,10 @@ export function watchOnboardingSteps(): OnboardingStep[] {
     {
       n: "07",
       title: "Configure how it behaves",
-      summary: "Moderation, media safety, and scheduled posting are all separate switches you control.",
+      summary: "Choose how your Watcher participates, moderates, handles media, and posts in the community.",
       body: [
-        "Moderation covers spam and scam-link detection with graduated enforcement (a warning first, escalating only on repeat offenses). Media moderation reviews supported photos/videos against your community's own settings. Auto-Posting lets a Watcher publish on a schedule you define, grounded in the same Project knowledge it answers questions from.",
-        "Every one of these is opt-in — nothing is turned on without your choice, and none of them are required to deploy a Watcher.",
+        "Natural conversation is on by default, so your Watcher can respond when addressed and join general conversation selectively. Moderation, media safety, and scheduled posting are all separate switches you control on top of that.",
+        "Moderation covers spam and scam-link detection with graduated enforcement (a warning first, escalating only on repeat offenses). Media moderation reviews supported photos/videos against your community's own settings. Auto-Posting lets a Watcher publish on a schedule you define, grounded in the same Project Knowledge it answers questions from — every one of these is opt-in, and none are required to deploy a Watcher.",
       ],
       callouts: [
         { kind: "good-to-know", text: "Moderation, media safety, and Auto-Posting are independent, opt-in settings — not bundled together." },
@@ -150,7 +150,7 @@ export function watchOnboardingSteps(): OnboardingStep[] {
       title: "Go live and monitor",
       summary: "Your Watcher starts operating immediately — you can pause, adjust, or remove it any time.",
       body: [
-        "Once deployed, your Watcher answers naturally, moderates, and (if configured) posts on schedule — no further action needed from you.",
+        "Once deployed, your Watcher becomes an active presence in the community — talking with members when appropriate, answering project-specific questions, moderating when needed, and posting on schedule if enabled.",
         "You can pause a deployment, edit its persona, or disconnect a community whenever you like; nothing about existing data is deleted just because a Watcher is paused. If you ever reach a plan limit, Innvil tells you clearly rather than silently degrading or shutting things down.",
       ],
       callouts: [

@@ -15,6 +15,7 @@ import {
   getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, getEnterpriseCommunityExpansionPrice,
   validateEnterpriseCommunityCapacity, communityModeFor, type EnterpriseCommunityMode,
 } from "@/src/lib/products/watch-enterprise-community";
+import { formatSlotLimit } from "@/src/lib/products/watch-plans";
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
@@ -233,7 +234,17 @@ export function WatchDevOpsAdmin() {
               {state.tier === "enterprise" && (
                 <p className="text-[11px] fp-text-faint">
                   {state.apiSourceMode === "byo" ? (state.enterpriseSlots ?? "Unlimited") : (state.enterpriseSlots ?? "?")} slots ·{" "}
-                  {state.enterpriseCommunityCapacity ?? getEnterpriseIncludedCommunities(communityModeFor(state.apiSourceMode, state.enterpriseSlots))} Communities ·{" "}
+                  {/* BYO Community capacity is now ALWAYS the mode's real automatic,
+                      free value (25 / Unlimited) -- see resolveAccountEnterpriseEntitlement
+                      in watch-runtime.ts, the actual enforcement path. Any raw stored
+                      enterprise_community_capacity is irrelevant/stale for BYO and is
+                      deliberately never shown here, so this summary can't disagree with
+                      what the account actually gets. */}
+                  {formatSlotLimit(
+                    state.apiSourceMode === "byo"
+                      ? getEnterpriseIncludedCommunities(communityModeFor("byo", state.enterpriseSlots))
+                      : state.enterpriseCommunityCapacity ?? getEnterpriseIncludedCommunities("managed")
+                  )} Communities ·{" "}
                   {state.apiSourceMode === "byo" ? "BYO" : "Managed"} · {state.billingInterval} · Media +{state.mediaAddonActive ? " on" : " off"}
                   {state.apiSourceMode === "byo" && (
                     <span className={state.hasByoCredential ? "text-emerald-400" : "text-amber-400"}>
@@ -267,7 +278,7 @@ export function WatchDevOpsAdmin() {
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input
                       type="radio" name="apiSourceMode" checked={apiSourceMode === "byo"}
-                      onChange={() => { setApiSourceMode("byo"); setEnterpriseCapacity(String(getEnterpriseIncludedCommunities(communityModeFor("byo", formByoTier.maxSlots)))); }}
+                      onChange={() => { setApiSourceMode("byo"); setEnterpriseCapacity(""); }}
                     />
                     BYO
                   </label>
@@ -276,10 +287,8 @@ export function WatchDevOpsAdmin() {
                   <select
                     value={byoTierId}
                     onChange={(e) => {
-                      const nextId = e.target.value as typeof byoTierId;
-                      setByoTierId(nextId);
-                      const nextTier = WATCH_ENTERPRISE_BYO_TIERS.find((t) => t.id === nextId)!;
-                      setEnterpriseCapacity(String(getEnterpriseIncludedCommunities(communityModeFor("byo", nextTier.maxSlots))));
+                      setByoTierId(e.target.value as typeof byoTierId);
+                      setEnterpriseCapacity("");
                     }}
                     className="fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
                   >
@@ -297,30 +306,16 @@ export function WatchDevOpsAdmin() {
                     className="w-28 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm fp-text outline-none"
                   />
                 )}
-                {/* BYO Unlimited genuinely has NO fixed maximum -- it can add
-                    as many Communities as wanted, in real +10 blocks past its
-                    two starting packages (10 base, then 15, 25, 35, 45, ...).
-                    A closed <select> is the wrong control for an unbounded
-                    range, so it gets a real free-form number input instead --
-                    Managed and BYO 50 both have a real, small, fixed 4-value
-                    package menu (base/10 or 8/15/25), so a select stays
-                    correct for those two. */}
-                {formCommunityMode === "byoUnlimited" ? (
-                  <div className="flex flex-col gap-1">
-                    <input
-                      type="number"
-                      min={formCommunityBase}
-                      step={1}
-                      value={enterpriseCapacity}
-                      onChange={(e) => setEnterpriseCapacity(e.target.value)}
-                      placeholder="Communities"
-                      className={`w-32 fp-panel border rounded-lg px-3 py-2 text-sm fp-text outline-none ${formCommunityCapacityValid ? "fp-line-soft" : "border-red-500/60"}`}
-                    />
-                    <p className="text-[10px] fp-text-faint">
-                      No fixed max — {formCommunityBase} base, then 15, 25, then +10 per block (35, 45, 55…)
-                      {!formCommunityCapacityValid && enterpriseCapacity.trim() && <span className="text-red-400"> — not a valid value</span>}
-                    </p>
-                  </div>
+                {/* BYO (either variant) has NO paid Community capacity path
+                    anymore -- bring-your-own means Innvil incurs no marginal
+                    cost for extra Communities, so it's always the mode's own
+                    free, automatic value (25 / Unlimited), never something a
+                    devops admin selects or persists. Only Managed Enterprise
+                    still has a real, purchasable package menu. */}
+                {apiSourceMode === "byo" ? (
+                  <p className="text-[11px] fp-teal fp-panel border fp-line-soft rounded-lg px-3 py-2">
+                    {formatSlotLimit(formCommunityBase)} Communities included automatically — free, no extra cost
+                  </p>
                 ) : (
                   <select
                     value={enterpriseCapacity}

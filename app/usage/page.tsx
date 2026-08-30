@@ -7,9 +7,11 @@ import { getCommunityExpansionState } from "@/src/lib/products/watch-community-e
 import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
 import { getWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
+import { getMediaModerationExpansionUnits } from "@/src/lib/products/watch-media-moderation-expansion";
 import { getByoUsageSummary } from "@/src/lib/products/watch-byo-usage";
 import { getByoUsageStatus } from "@/src/lib/products/watch-byo-usage-policy";
 import { ByoUsagePolicyCard } from "@/src/components/watch/ByoUsagePolicyCard";
+import { MediaModerationCapacityCard } from "@/src/components/watch/MediaModerationCapacityCard";
 import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
 import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
 import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
@@ -17,8 +19,8 @@ import { WatchShell } from "@/src/components/watch/WatchShell";
 import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
 import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
 import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
-import { MANAGED_ENTERPRISE_50, resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
-import { MODERATOR_COMMUNITY_CAPACITY, ENTERPRISE_MEDIA_ADDON, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
+import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
+import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
 
 export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -82,31 +84,20 @@ export default async function UsagePage() {
   // gating as the telemetry query above.
   const byoPolicies = capacity?.apiSourceMode === "byo" ? await getByoUsageStatus(admin, accountId) : null;
 
-  // Real per-request Media Moderation Unit consumption (2026-08-23) --
-  // reuses the SAME real billing period aiPeriod already resolved above
-  // (Media Moderation + renews on the same cadence as the base
-  // subscription, never a second period concept). Only meaningful when the
-  // add-on is genuinely active AND a real period exists to count against --
-  // mirrors aiUsageCount's own null-safety exactly.
-  const mediaUsageCount =
-    capacity?.mediaModerationAddonActive && aiPeriod ? await getWatchMediaModerationUsage(admin, accountId, aiPeriod.start) : null;
-
-  // Enterprise's OWN Media Moderation + -- a real, superadmin-granted state
-  // (migration 0097), separate from the self-serve tiers' own add-on above.
-  // The allowance comes from the account's REAL provisioned package
-  // (resolveEnterpriseMediaAddonKey -- the SAME resolver runMediaModeration
-  // itself enforces against, so this display can never disagree with what's
-  // actually being counted/enforced at classification time). Usage is
-  // tracked in the SAME watch_media_moderation_usage table the self-serve
-  // tiers use -- it's account+period scoped, not tier-specific.
-  const enterpriseMediaAllowance =
-    capacity?.tier === "enterprise"
-      ? ENTERPRISE_MEDIA_ADDON[resolveEnterpriseMediaAddonKey(capacity.apiSourceMode ?? "managed", capacity.enterpriseSlots)].units
-      : null;
-  const enterpriseMediaUsageCount =
-    capacity?.tier === "enterprise" && capacity.enterpriseMediaAddonActive && aiPeriod
-      ? await getWatchMediaModerationUsage(admin, accountId, aiPeriod.start)
-      : null;
+  // Media Moderation Units -- REVISED model (2026-08-27). Every plan gets a
+  // real, unconditionally-included base allowance (capacity.mediaModerationBaseAllowance,
+  // a pure lookup already resolved by getAccountCapacity) plus any purchased
+  // expansion packs for the CURRENT period (watch-media-moderation-expansion.ts,
+  // a real, stackable, current-period top-up -- see its own doc comment).
+  // Only meaningful when a real, trackable billing period exists (mirrors
+  // aiUsageCount's own null-safety exactly).
+  const mediaBaseAllowance = capacity?.mediaModerationBaseAllowance ?? null;
+  const [mediaUsedCount, mediaExpansionUnits] = mediaBaseAllowance != null && aiPeriod
+    ? await Promise.all([
+        getWatchMediaModerationUsage(admin, accountId, aiPeriod.start),
+        getMediaModerationExpansionUnits(admin, accountId, aiPeriod.start),
+      ])
+    : [null, null];
 
   // Trial's own real, measurable current-period consumption: the 20/day
   // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
@@ -141,7 +132,7 @@ export default async function UsagePage() {
             denominator={capacity ? formatSlotLimit(capacity.slotsTotal) : undefined}
             note={`${activeWatcherCount} unique Watcher${activeWatcherCount === 1 ? "" : "s"} deployed`}
           />
-          <StatCard label="Communities" value={communities.length} denominator={capacity ? String(capacity.communitiesTotal) : undefined} />
+          <StatCard label="Communities" value={communities.length} denominator={capacity ? formatSlotLimit(capacity.communitiesTotal) : undefined} />
           <StatCard label="Moderation actions" value={actions7d} note="last 7 days" />
         </div>
 
@@ -262,56 +253,16 @@ export default async function UsagePage() {
           />
         )}
 
-        {/* Read-only here -- purchase/removal for this add-on lives on
-            /plans (self-serve, Innvil Credit, shipped 2026-08-22). Real
-            per-request consumption is metered as of 2026-08-23 (photo = 1
-            unit, video = 1 unit per actually-classified sampled frame) --
-            mediaUsageCount is a genuine "used" count, not a fabricated one;
-            it stays null (rendered as "0 used" below) only when the add-on
-            is active but the account has no trackable billing period yet
-            (a legacy pre-migration-0080 row), mirroring aiUsageCount's own
-            same-shaped fallback exactly. */}
-        {capacity?.mediaModerationAddonActive && capacity.mediaModerationUnitAllowance != null && (
-          <div className="w-card p-5">
-            <SectionHeader icon={ShieldCheck} title="Media Moderation +" />
-            <p className="text-sm w-text-dim mb-1">
-              {(mediaUsageCount ?? 0).toLocaleString()} / {capacity.mediaModerationUnitAllowance.toLocaleString()} Media Moderation Units used this period.
-            </p>
-            <div className="w-full h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
-              <div
-                className="h-full w-teal-bg"
-                style={{ width: `${Math.min(100, ((mediaUsageCount ?? 0) / capacity.mediaModerationUnitAllowance) * 100)}%` }}
-              />
-            </div>
-            <Link href="/plans#paid-plans" className="w-teal hover:underline text-xs font-medium">Manage from Plans →</Link>
-          </div>
-        )}
-
-        {/* Enterprise's OWN Media Moderation + (migration 0097) -- a
-            devops-granted state, not self-serve purchasable, so always
-            shown (never conditionally hidden) once the account is
-            Enterprise -- either "Not added" (a real, honest state, never
-            silently omitted) or the real X/total consumption for the
-            account's actual provisioned package. */}
-        {capacity?.tier === "enterprise" && (
-          <div className="w-card p-5">
-            <SectionHeader icon={ShieldCheck} title="Media Moderation +" />
-            {capacity.enterpriseMediaAddonActive && enterpriseMediaAllowance != null ? (
-              <>
-                <p className="text-sm w-text-dim mb-1">
-                  {(enterpriseMediaUsageCount ?? 0).toLocaleString()} / {enterpriseMediaAllowance.toLocaleString()} Media Moderation Units used this period.
-                </p>
-                <div className="w-full h-1.5 rounded-full w-surface-raised overflow-hidden">
-                  <div
-                    className="h-full w-teal-bg"
-                    style={{ width: `${Math.min(100, ((enterpriseMediaUsageCount ?? 0) / enterpriseMediaAllowance) * 100)}%` }}
-                  />
-                </div>
-              </>
-            ) : (
-              <p className="text-sm w-text-faint">Not added — contact support to add Media Moderation + to your Enterprise plan.</p>
-            )}
-          </div>
+        {/* Media Moderation -- REVISED model (2026-08-27). Every plan
+            (self-serve, byo20, and every Enterprise variant) gets a real,
+            unconditionally-included base allowance automatically; expansion
+            packs stack on top of it for the current billing period. Shown
+            whenever the account has a representable Media Moderation Units
+            concept at all (i.e. not trial, and a real trackable period
+            exists) -- mediaUsedCount/mediaExpansionUnits both resolve to a
+            real number (never null) together with mediaBaseAllowance. */}
+        {mediaBaseAllowance != null && aiPeriod && mediaUsedCount != null && mediaExpansionUnits != null && (
+          <MediaModerationCapacityCard base={mediaBaseAllowance} expansion={mediaExpansionUnits} used={mediaUsedCount} />
         )}
 
         {/* BYO Enterprise (Phase 2, 2026-08-24) -- real, observed call/outcome

@@ -9,7 +9,7 @@ import {
 import { signOutAction } from "@/src/lib/actions/auth";
 import { withTimeout } from "@/src/lib/timeout";
 import type { AccountCapacity } from "@/src/lib/products/watch-runtime";
-import { watchAccessLabel } from "@/src/lib/products/watch-plans";
+import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import { getInnvilCreditBalanceAction } from "@/src/lib/actions/innvil-credit";
 import { amSuperAdmin } from "@/src/lib/actions/superadmin";
 import { HeaderCreditIndicator } from "./HeaderCreditIndicator";
@@ -136,7 +136,7 @@ function SidebarContent({ active, capacity, isSuper, onNavigate }: { active: str
           <p className="text-[10px] uppercase tracking-wide w-text-faint mb-1">{capacity.tier === "trial" ? "Access" : "Plan"}</p>
           <p className="w-display text-sm w-teal">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
           <p className="text-[11px] w-text-faint mt-0.5">
-            {capacity.activeDeploymentCount}/{capacity.slotsTotal} slots · {capacity.communitiesUsed}/{capacity.communitiesTotal} Communities
+            {capacity.activeDeploymentCount}/{formatSlotLimit(capacity.slotsTotal)} slots · {capacity.communitiesUsed}/{formatSlotLimit(capacity.communitiesTotal)} Communities
           </p>
         </Link>
       )}

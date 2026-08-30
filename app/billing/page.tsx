@@ -13,6 +13,7 @@ import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, ty
 import { WatchShell } from "@/src/components/watch/WatchShell";
 import { SectionHeader } from "@/src/components/watch/WatchUI";
 import { RenewWatchButton } from "@/src/components/watch/RenewWatchButton";
+import { PendingDowngradeCard } from "@/src/components/watch/PendingDowngradeCard";
 import { InnvilCreditSection } from "@/src/components/watch/InnvilCreditSection";
 import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
 
@@ -123,8 +124,13 @@ export default async function BillingPage() {
                 <p className="text-xs w-text-faint">No tracked billing period on this subscription yet — it stays active until your next renewal or plan change.</p>
               )}
               <p className="text-xs w-text-faint">
-                Renewal: manual crypto payment, or Innvil Credit. Innvil Watch does not currently auto-charge a recurring payment.
+                {paidPlan?.renewalMode === "innvil_credit"
+                  ? "Renewal: automatic from your Innvil Credit balance when your period ends. If your balance is too low, the subscription lapses instead of failing silently."
+                  : "Renewal: manual crypto payment, or pay with Innvil Credit to enable automatic renewal."}
               </p>
+              {paidPlan?.pendingTier && (
+                <PendingDowngradeCard pendingPlanLabel={watchPlanDisplayName(paidPlan.pendingTier)} effectiveDate={capacity.paidThrough} />
+              )}
               {pending ? (
                 <PendingPaymentNote pending={pending} />
               ) : (
@@ -142,7 +148,7 @@ export default async function BillingPage() {
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div>
                   <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
-                  <p className="text-xs w-text-faint mt-0.5">{formatSlotLimit(capacity.slotsTotal)} Watcher slots · {capacity.communitiesTotal} Communities included</p>
+                  <p className="text-xs w-text-faint mt-0.5">{formatSlotLimit(capacity.slotsTotal)} Watcher slots · {formatSlotLimit(capacity.communitiesTotal)} Communities included</p>
                 </div>
                 <span className="w-pill w-teal-soft-bg w-teal text-[11px]">Active</span>
               </div>

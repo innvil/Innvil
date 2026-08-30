@@ -130,6 +130,12 @@ export async function activateWatchEntitlement(
       current_period_start: period.start,
       current_period_end: period.end,
       billing_interval: billingInterval,
+      // A scheduled downgrade (migration 0111) is always superseded by any
+      // real activation -- a fresh purchase/upgrade replaces whatever was
+      // queued, and the scheduled downgrade actually taking effect (this
+      // very call, with `tier` = the pending tier) has nothing left to
+      // queue. Never left stale.
+      pending_tier: null,
       // Only meaningful for tier === "enterprise" (migration 0086) -- the
       // manually-provisioned Watcher-slot count Managed/BYO Enterprise
       // capacity resolves from (requireAccountWatchContext, watch-runtime.ts),
@@ -193,6 +199,22 @@ export async function activateWatchEntitlement(
     },
     { onConflict: "account_id,product_id" }
   );
+}
+
+/**
+ * Schedules (or clears, when `tier` is `null`) a downgrade to take effect
+ * at the account's own next renewal, WITHOUT touching its currently-active
+ * tier/period/subscription_ref/addons at all -- the entitlement stays
+ * exactly as it is right now. The only caller that actually SETS this is a
+ * customer-initiated downgrade request (`innvil-credit.ts`'s
+ * `purchaseWatchWithCredit`); `activateWatchEntitlement` itself always
+ * clears it back to null on every successful activation. A no-op if the
+ * account has no `product_entitlements` row for Watch at all.
+ */
+export async function setPendingWatchTier(admin: SupabaseClient, accountId: string, tier: string | null): Promise<void> {
+  const productId = await resolveProductId(admin, WATCH_PRODUCT_SLUG);
+  if (!productId) return;
+  await admin.from("product_entitlements").update({ pending_tier: tier }).eq("account_id", accountId).eq("product_id", productId);
 }
 
 export interface StandaloneProjectResult {

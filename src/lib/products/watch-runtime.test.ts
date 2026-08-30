@@ -19,7 +19,7 @@ import {
   resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
-import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration } from "@/src/lib/moderator/plan";
+import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration, communityCountExceeded } from "@/src/lib/moderator/plan";
 import { MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
 
 /**
@@ -638,6 +638,38 @@ test("REQUIRED: getAccountCapacity reads real usage against the canonical CAPACI
   // premium's real numbers, from moderator/plan.ts's CAPACITY table -- never a duplicated constant here.
   assert.equal(capacity?.slotsTotal, 10);
   assert.equal(capacity?.communitiesTotal, 3);
+});
+
+test("REQUIRED (10): getAccountCapacity resolves the REVISED canonical Media Moderation Unit base allowance per tier -- Usage/Billing read directly from this field, so this proves the update actually reaches them", async () => {
+  const premium = await getAccountCapacity(fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "premium:dep-1" }],
+  }), "acct-1");
+  assert.equal(premium?.mediaModerationBaseAllowance, 700, "Gold -- 700");
+
+  const pro = await getAccountCapacity(fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "pro:dep-1" }],
+  }), "acct-1");
+  assert.equal(pro?.mediaModerationBaseAllowance, 1000, "Platinum -- 1,000");
+
+  const byo20 = await getAccountCapacity(fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "byo20:dep-1" }],
+  }), "acct-1");
+  assert.equal(byo20?.mediaModerationBaseAllowance, 2000, "BYO 20 -- 2,000");
+
+  const managedEnterprise = await getAccountCapacity(fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e-ent", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-1", enterprise_slots: 50 }],
+  }), "acct-1");
+  assert.equal(managedEnterprise?.mediaModerationBaseAllowance, 1500, "Managed Enterprise -- 1,500");
+
+  const byoEnterprise = await getAccountCapacity(fakeAdmin({
+    products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }],
+    product_entitlements: [{ id: "e-ent2", account_id: "acct-1", product_id: "product-watch", status: "active", subscription_ref: "enterprise:manual-2", enterprise_slots: null, api_source_mode: "byo" }],
+  }), "acct-1");
+  assert.equal(byoEnterprise?.mediaModerationBaseAllowance, 2000, "BYO Unlimited -- 2,000, same as BYO 20/BYO 50");
 });
 
 test("REQUIRED: the SAME Watcher deployed to two Communities consumes TWO slots, not one -- profile count stays 1", async () => {
@@ -1810,15 +1842,23 @@ test("an invalid/stray api_source_mode value never fabricates byo -- falls back 
   assert.equal(entitlement?.apiSourceMode, "managed", "only the exact stored string 'byo' ever resolves to byo");
 });
 
-test("REQUIRED: apiSourceMode never affects capacity/slot resolution -- byte-identical for managed vs byo", async () => {
+test("REQUIRED: apiSourceMode never affects TIER or WATCHER-SLOT resolution -- byte-identical for managed vs byo at the same provisioned slot count", async () => {
   const managed = ENTITLED_ENTERPRISE_50;
   const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
   const managedCapacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [managed] }), "acct-1");
   const byoCapacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo] }), "acct-1");
   assert.equal(managedCapacity?.tier, byoCapacity?.tier);
   assert.equal(managedCapacity?.slotsTotal, byoCapacity?.slotsTotal);
-  assert.equal(managedCapacity?.communitiesTotal, byoCapacity?.communitiesTotal);
-  assert.equal(managedCapacity?.communityExpansionEligible, byoCapacity?.communityExpansionEligible);
+  assert.equal(managedCapacity?.communityExpansionEligible, byoCapacity?.communityExpansionEligible, "Community Expansion stays self-serve Gold/Platinum-only either way -- Enterprise is never eligible regardless of mode");
+});
+
+test("REQUIRED (2026-08-28 revision): apiSourceMode DOES change Community capacity -- BYO 50 gets its own real free 25 while Managed at the same 50 slots still only gets its base 8, since bring-your-own has no paid Community Expansion path", async () => {
+  const managed = ENTITLED_ENTERPRISE_50;
+  const byo = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo" };
+  const managedCapacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [managed] }), "acct-1");
+  const byoCapacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [byo] }), "acct-1");
+  assert.equal(managedCapacity?.communitiesTotal, 8, "Managed's own base, unchanged");
+  assert.equal(byoCapacity?.communitiesTotal, 25, "BYO 50's own free, automatic base -- genuinely different from Managed's, by design");
 });
 
 test("REQUIRED: Managed Enterprise entitlement never leaks across accounts", async () => {
@@ -2084,6 +2124,30 @@ test("REQUIRED: requireAccountWatchContext resolves BYO Unlimited's maxActiveSlo
   const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO_UNLIMITED] });
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.slotsTotal, Number.POSITIVE_INFINITY);
+});
+
+test("REQUIRED (2026-08-28 revision): BYO Unlimited's Community capacity is ALSO a real, honest Infinity -- unlimited Communities, free, automatic, ignoring any stray stored capacity value", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO_UNLIMITED] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communitiesTotal, Number.POSITIVE_INFINITY);
+  const enterprise = await resolveAccountEnterpriseEntitlement(admin, "acct-1");
+  assert.equal(enterprise?.communityCapacity, Number.POSITIVE_INFINITY);
+});
+
+test("REQUIRED: a real, previously-stored (pre-revision) Community capacity value is IGNORED for a BYO account -- the free/automatic value always wins, so a stale DB row can never under- or over-grant capacity", async () => {
+  const staleByoUnlimited = { ...ENTITLED_BYO_UNLIMITED, enterprise_community_capacity: 35 };
+  const capacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [staleByoUnlimited] }), "acct-1");
+  assert.equal(capacity?.communitiesTotal, Number.POSITIVE_INFINITY, "the stale stored 35 must never be read back for BYO -- it's always automatically unlimited now");
+
+  const staleByo50 = { ...ENTITLED_ENTERPRISE_50, api_source_mode: "byo", enterprise_community_capacity: 15 };
+  const byo50Capacity = await getAccountCapacity(fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [staleByo50] }), "acct-1");
+  assert.equal(byo50Capacity?.communitiesTotal, 25, "the stale stored 15 must never be read back for BYO 50 -- it's always automatically 25 now");
+});
+
+test("REQUIRED: a real deployment/Community count can NEVER exceed BYO Unlimited's capacity check -- true unlimited, not a large finite stand-in", async () => {
+  const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO_UNLIMITED] });
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(communityCountExceeded(true, 1_000_000, capacity!.communitiesTotal), false, "a genuinely unlimited cap must never trip a limit check, at any real-world scale");
 });
 
 test("REQUIRED: AccountCapacity.enterpriseSlots exposes the real value -- null for BYO Unlimited, a real number for a normal BYO/Managed grant", async () => {

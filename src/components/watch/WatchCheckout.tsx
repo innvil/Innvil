@@ -54,7 +54,7 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
   const [creditBalanceCents, setCreditBalanceCents] = useState<number | null>(null);
   const [creditBusy, setCreditBusy] = useState(false);
   const [creditError, setCreditError] = useState<string | null>(null);
-  const [creditConfirmed, setCreditConfirmed] = useState<{ paidThrough: string | null } | null>(null);
+  const [creditConfirmed, setCreditConfirmed] = useState<{ paidThrough: string | null; scheduled?: boolean; effectiveAt?: string | null } | null>(null);
   const [addCreditOpen, setAddCreditOpen] = useState(false);
 
   const tier = watchTierFromDisplayName(plan);
@@ -85,7 +85,7 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
     setCreditBusy(false);
     if (!res.ok) { setCreditError(res.error); return; }
     setCreditBalanceCents(res.balanceCents);
-    setCreditConfirmed({ paidThrough: res.paidThrough });
+    setCreditConfirmed({ paidThrough: res.paidThrough, scheduled: res.scheduled, effectiveAt: res.effectiveAt });
   };
 
   const startHostedCheckout = async (gateway: "cryptomus" | "nowpayments") => {
@@ -199,7 +199,13 @@ export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { 
         {creditConfirmed && (
           <div className="text-center py-4 space-y-2">
             <CheckCircle2 size={32} className="mx-auto w-green" />
-            <p className="text-sm w-text">Payment confirmed — your Watch subscription is now active.</p>
+            {creditConfirmed.scheduled ? (
+              <p className="text-sm w-text">
+                Downgrade to {plan} scheduled{creditConfirmed.effectiveAt ? <> — takes effect at your next renewal on {new Date(creditConfirmed.effectiveAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</> : ""}. Your current plan stays active until then, and nothing was charged.
+              </p>
+            ) : (
+              <p className="text-sm w-text">Payment confirmed — your Watch subscription is now active.</p>
+            )}
             <button onClick={() => window.location.reload()} className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg mt-2">
               Continue to dashboard
             </button>

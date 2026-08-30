@@ -60,100 +60,83 @@ const MANAGED_PACKAGES: EnterpriseCommunityPackageOption[] = [
   { capacity: 25, price: 24.99 },
 ];
 
-const BYO50_BASE = 10;
-const BYO50_PACKAGES: EnterpriseCommunityPackageOption[] = [
-  { capacity: 15, price: 12.99 },
-  { capacity: 25, price: 19.99 },
-];
-
-const BYO_UNLIMITED_BASE = 10;
-const BYO_UNLIMITED_PACKAGES: EnterpriseCommunityPackageOption[] = [
-  { capacity: 15, price: 12.99 },
-  { capacity: 25, price: 19.99 },
-];
-/** Beyond the 25-capacity package, BYO Unlimited has NO plan-level ceiling --
- *  every additional +10-Community block is a flat, cumulative price, derived
- *  from the incremental cost between the 15 and 25 packages (19.99 - 12.99 =
- *  7.00), discounted 30% at scale: 7.00 * 0.70 = 4.90/block. This is the
- *  ONLY canonical self-serve-style overage rate that exists anywhere in this
- *  codebase -- it applies ONLY to BYO Unlimited beyond 25, never invented
- *  for Managed or BYO 50 (both have a real hard maximum at 25). */
-export const BYO_UNLIMITED_BLOCK_SIZE = 10;
-export const BYO_UNLIMITED_BLOCK_PRICE = 4.9;
-const BYO_UNLIMITED_MAX_PACKAGED_CAPACITY = 25;
+/**
+ * REVISED (business decision, 2026-08-28): BYO literally means the customer
+ * brings their own infrastructure/provider -- Innvil incurs no additional
+ * marginal cost when a BYO customer connects more Communities the way it
+ * does for a Managed account (which Innvil's own provider capacity has to
+ * cover), so there is NO paid Community Expansion path for either BYO
+ * Enterprise variant anymore. Only Managed Enterprise still has one.
+ *
+ * BYO 50 includes its real hard maximum (25 -- unchanged from before, see
+ * `getEnterpriseCommunityHardMax`) as the base, for free, from day one --
+ * nothing to buy, nothing above it to reach.
+ *
+ * BYO Unlimited includes literally UNLIMITED Communities, for free, from
+ * day one -- represented the exact same way BYO Unlimited's own Watcher-
+ * slot ceiling already is elsewhere in this codebase (a real
+ * `Number.POSITIVE_INFINITY` sentinel, never a stored/fabricated finite
+ * cap -- see `resolveAccountEnterpriseEntitlement`'s `slots: null` handling
+ * in watch-runtime.ts). This is a genuine, honest "no limit", not a large
+ * finite number standing in for one.
+ */
+const BYO50_BASE = 25;
+const BYO_UNLIMITED_BASE = Number.POSITIVE_INFINITY;
 
 /** The base (no add-on) included Community capacity for a mode -- what the
- *  fixed Enterprise package itself already includes before any expansion. */
+ *  fixed Enterprise package itself already includes before any expansion.
+ *  Callers rendering this value to a customer/admin MUST use
+ *  `formatSlotLimit` (or an equivalent finite-check) rather than
+ *  interpolating it directly -- `Infinity` is a real, intentional return
+ *  value for `"byoUnlimited"`, never a number to display or persist as-is. */
 export function getEnterpriseIncludedCommunities(mode: EnterpriseCommunityMode): number {
   if (mode === "managed") return MANAGED_BASE;
   return mode === "byo50" ? BYO50_BASE : BYO_UNLIMITED_BASE;
 }
 
-/** The selectable expansion packages for a mode, in ascending capacity
- *  order -- NOT including the base (unexpanded) state, which callers should
- *  represent separately (e.g. "Included" vs. these paid options). For BYO
- *  Unlimited, this returns only the two fixed packages (15/25); +10 blocks
- *  beyond 25 are a continuous, uncapped continuation handled separately by
- *  `getEnterpriseCommunityExpansionPrice`/`nextByoUnlimitedBlockCapacity`,
- *  never enumerated as a finite list (there is no ceiling to enumerate to). */
+/** The selectable PAID expansion packages for a mode -- empty for BOTH BYO
+ *  variants (nothing to buy, per the module's own doc comment above); only
+ *  Managed Enterprise still has real, purchasable packages. */
 export function getEnterpriseCommunityExpansionOptions(mode: EnterpriseCommunityMode): EnterpriseCommunityPackageOption[] {
-  if (mode === "managed") return MANAGED_PACKAGES;
-  return mode === "byo50" ? BYO50_PACKAGES : BYO_UNLIMITED_PACKAGES;
+  return mode === "managed" ? MANAGED_PACKAGES : [];
 }
 
-/** The real, absolute maximum Community capacity for a mode via THIS
- *  package model -- Managed and BYO 50 both hard-cap at 25 (no path beyond
- *  it exists in this model); BYO Unlimited has none (returns null). */
+/** The real, absolute maximum Community capacity for a mode -- Managed and
+ *  BYO 50 both hard-cap at 25 (BYO 50's cap is now also its free, included
+ *  base -- see above); BYO Unlimited has none (returns null, matching its
+ *  `Infinity` included value). */
 export function getEnterpriseCommunityHardMax(mode: EnterpriseCommunityMode): number | null {
   return mode === "byoUnlimited" ? null : 25;
 }
 
-/** Whether a requested TOTAL capacity is a real, purchasable state for a
- *  mode -- the base, one of the mode's fixed packages, or (BYO Unlimited
- *  only) a valid 25 + N*10 block continuation. Never trusts a client-
- *  submitted capacity value without this check -- the canonical server-side
- *  gate every admin/devops provisioning path and any future purchase path
- *  must call before persisting a requested capacity. */
+/** Whether a requested TOTAL capacity is a real, valid state for a mode.
+ *  The mode's own free/included base is ALWAYS valid (this is the only
+ *  valid state at all for either BYO variant now, since neither has a paid
+ *  expansion path anymore); for Managed, one of the real fixed packages
+ *  above the base is also valid. Never trusts a client-submitted capacity
+ *  value without this check -- the canonical server-side gate every admin/
+ *  devops provisioning path must call before persisting a requested
+ *  capacity. */
 export function validateEnterpriseCommunityCapacity(mode: EnterpriseCommunityMode, capacity: number): boolean {
-  if (!Number.isInteger(capacity) || capacity < getEnterpriseIncludedCommunities(mode)) return false;
-  if (capacity === getEnterpriseIncludedCommunities(mode)) return true;
-  const packaged = getEnterpriseCommunityExpansionOptions(mode).some((o) => o.capacity === capacity);
-  if (packaged) return true;
-  if (mode === "byoUnlimited" && capacity > BYO_UNLIMITED_MAX_PACKAGED_CAPACITY) {
-    const extra = capacity - BYO_UNLIMITED_MAX_PACKAGED_CAPACITY;
-    return extra % BYO_UNLIMITED_BLOCK_SIZE === 0;
-  }
-  return false;
+  const included = getEnterpriseIncludedCommunities(mode);
+  if (capacity === included) return true;
+  if (mode !== "managed") return false; // BYO has no paid expansion above its free base at all
+  if (!Number.isInteger(capacity) || capacity < included) return false;
+  return getEnterpriseCommunityExpansionOptions(mode).some((o) => o.capacity === capacity);
 }
 
 /** The real total monthly expansion price for a mode at a given TOTAL
- *  capacity -- $0 at the base (included) capacity, the matching fixed
- *  package's own price for a packaged capacity, or (BYO Unlimited only)
- *  19.99 + (blocksAbove25 * 4.90) for a valid capacity beyond 25. Packages
- *  are NEVER additive -- this returns the ONE price for the SELECTED total
- *  capacity, never a sum of every package up to it. Returns null for an
- *  invalid/unsupported capacity (never fabricates a price for one) --
- *  callers should check `validateEnterpriseCommunityCapacity` first, or
- *  treat a null return the same way. */
+ *  capacity -- always $0 at the mode's own included capacity (the only
+ *  valid state for a BYO mode), or the matching fixed Managed package's own
+ *  price. Packages are NEVER additive -- this returns the ONE price for the
+ *  SELECTED total capacity, never a sum of every package up to it. Returns
+ *  null for an invalid/unsupported capacity (never fabricates a price for
+ *  one) -- callers should check `validateEnterpriseCommunityCapacity` first,
+ *  or treat a null return the same way. */
 export function getEnterpriseCommunityExpansionPrice(mode: EnterpriseCommunityMode, capacity: number): number | null {
   if (!validateEnterpriseCommunityCapacity(mode, capacity)) return null;
   const included = getEnterpriseIncludedCommunities(mode);
   if (capacity === included) return 0;
   const packaged = getEnterpriseCommunityExpansionOptions(mode).find((o) => o.capacity === capacity);
-  if (packaged) return packaged.price;
-  // Only reachable for BYO Unlimited beyond 25 (validated above).
-  const blocksAbove25 = (capacity - BYO_UNLIMITED_MAX_PACKAGED_CAPACITY) / BYO_UNLIMITED_BLOCK_SIZE;
-  const base25 = BYO_UNLIMITED_PACKAGES.find((o) => o.capacity === BYO_UNLIMITED_MAX_PACKAGED_CAPACITY)!.price;
-  return Math.round((base25 + blocksAbove25 * BYO_UNLIMITED_BLOCK_PRICE) * 100) / 100;
-}
-
-/** BYO Unlimited only -- the next valid +10-Community capacity step above a
- *  given current capacity (used to drive a simple "Add 10 Communities"
- *  control rather than enumerating an infinite option list). Returns the
- *  first real package (15) if starting from the base, otherwise the next
- *  package/block in sequence. */
-export function nextByoUnlimitedCapacityStep(currentCapacity: number): number {
-  if (currentCapacity < 15) return 15;
-  if (currentCapacity < 25) return 25;
-  return currentCapacity + BYO_UNLIMITED_BLOCK_SIZE;
+  return packaged ? packaged.price : null;
 }

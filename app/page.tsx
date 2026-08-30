@@ -14,9 +14,12 @@ import { OverviewClient } from "@/src/components/watch/OverviewClient";
 // inherited SMM-panel/Forge title+description.
 export async function generateMetadata(): Promise<Metadata> {
   if (await isWatchHost()) {
+    // watchPageMetadata("/") already sets a real, absolute canonical/og:url
+    // for the actual Watch domain -- do NOT override it with a relative
+    // "/" here (that was the exact bug: a relative path resolves against
+    // metadataBase, which points at the MAIN Innvil site, not Watch).
     return {
       ...watchPageMetadata("/"),
-      alternates: { canonical: "/" },
       robots: { index: true, follow: true },
       icons: { icon: "/watch/app-tile.svg" },
     };

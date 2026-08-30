@@ -2,8 +2,12 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ModeratorPlanTier } from "@/src/lib/money";
-import { MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
-import { validateEnterpriseCommunityCapacity, getEnterpriseIncludedCommunities } from "./watch-enterprise-community";
+import {
+  MODERATOR_COMMUNITY_CAPACITY, isCommunityExpansionEligibleTier, MODERATOR_MEDIA_ADDON,
+  MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE,
+} from "@/src/lib/money";
+import { resolveEnterpriseMediaAddonKey } from "./watch-enterprise";
+import { validateEnterpriseCommunityCapacity, getEnterpriseIncludedCommunities, communityModeFor } from "./watch-enterprise-community";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
 import { hasActiveCommunityExpansion } from "./watch-community-expansion";
 import { getMediaModerationAddonState } from "./watch-media-moderation-addon";
@@ -105,11 +109,17 @@ export interface AccountEnterpriseEntitlement {
   slots: number | null;
   currentPeriodEnd: string | null;
   billingInterval: WatchBillingInterval;
-  /** The REAL, manually-provisioned Community capacity (migration 0088) --
-   *  never derived from `slots`. Extra Watcher slots above a package's base
-   *  never imply extra Community capacity; only this field does. Defaults
-   *  to the Managed Enterprise 50 base (8) when unset (a pre-0088 or
-   *  never-expanded entitlement). */
+  /** For Managed: the REAL, manually-provisioned Community capacity
+   *  (migration 0088) -- never derived from `slots`; defaults to the
+   *  Managed Enterprise 50 base (8) when unset (a pre-0088 or never-
+   *  expanded entitlement). For EITHER BYO variant: always that mode's own
+   *  free, automatic included capacity (25 for BYO 50, `Infinity` for BYO
+   *  Unlimited) -- any stored `enterprise_community_capacity` value is
+   *  ignored for BYO, since neither has a paid expansion path anymore (see
+   *  watch-enterprise-community.ts). `Infinity` is a real, intentional
+   *  value here for BYO Unlimited -- callers rendering it MUST use
+   *  `formatSlotLimit` or an equivalent finite-check, never interpolate it
+   *  directly. */
   communityCapacity: number;
   /** "managed" (default -- Innvil covers the AI provider spend) or "byo"
    *  (the account supplies their own provider credential, migration 0092).
@@ -170,12 +180,23 @@ export async function resolveAccountEnterpriseEntitlement(admin: SupabaseClient,
     slots = rawSlots;
   }
   const billingInterval: WatchBillingInterval = entitlement.billing_interval === "annual" ? "annual" : "monthly";
-  // Real, manually-provisioned Community capacity (migration 0088) -- never
-  // derived from `slots`. A NULL/invalid value falls back to the base
-  // Managed Enterprise 50 package (8), never a fabricated/scaled number.
+  // Community capacity -- branched by the account's REAL commercial mode
+  // (communityModeFor, the one canonical (apiSourceMode, slots) -> mode
+  // mapping every other Enterprise Community surface already uses; this
+  // resolver previously validated/fell back against "managed" UNCONDITIONALLY
+  // regardless of the account's actual mode, a real bug -- a BYO row's own
+  // stored capacity was always checked against Managed's package table).
+  // Managed: the REAL, manually-provisioned capacity (migration 0088), never
+  // derived from `slots`; a NULL/invalid value falls back to the Managed
+  // Enterprise 50 base (8). BYO (either variant): always that mode's own
+  // free, automatic included capacity (25 / Infinity) -- neither has a paid
+  // expansion path, so any stored value is irrelevant and ignored.
+  const communityMode = communityModeFor(apiSourceMode, slots);
   const rawCapacity = entitlement.enterprise_community_capacity as number | null;
   const communityCapacity =
-    rawCapacity && validateEnterpriseCommunityCapacity("managed", rawCapacity) ? rawCapacity : getEnterpriseIncludedCommunities("managed");
+    communityMode === "managed"
+      ? (rawCapacity && validateEnterpriseCommunityCapacity("managed", rawCapacity) ? rawCapacity : getEnterpriseIncludedCommunities("managed"))
+      : getEnterpriseIncludedCommunities(communityMode);
   // enterprise_media_addon (migration 0097) -- see AccountEnterpriseEntitlement's
   // own doc comment for the grandfather-default rationale; a genuinely
   // NULL/unexpected stored value (should never happen post-migration, the
@@ -316,6 +337,16 @@ export interface AccountPaidPlan {
   currentPeriodEnd: string | null;
   expired: boolean;
   billingInterval: WatchBillingInterval;
+  /** A downgrade scheduled to take effect at the account's own next
+   *  renewal (migration 0111) -- the account keeps its CURRENT `tier`
+   *  above, unchanged, until then. `null` when nothing is scheduled. */
+  pendingTier: ModeratorPlanTier | null;
+  /** How the account's most recent successful payment was made --
+   *  `"innvil_credit"` accounts are eligible for automatic renewal from
+   *  their Innvil Credit balance (sweepWatchAutoRenewals); a
+   *  `"manual_crypto"` account is never auto-charged. `null` for a legacy
+   *  row that predates this signal, or one with no confirmed payment yet. */
+  renewalMode: "innvil_credit" | "manual_crypto" | null;
 }
 
 /** The account's most-recently-held paid tier, REGARDLESS of whether its
@@ -330,7 +361,7 @@ export async function getAccountPaidPlan(admin: SupabaseClient, accountId: strin
   if (!product) return null;
   const { data: entitlement } = await admin
     .from("product_entitlements")
-    .select("subscription_ref, current_period_end, billing_interval")
+    .select("subscription_ref, current_period_end, billing_interval, pending_tier, renewal_mode")
     .eq("account_id", accountId)
     .eq("product_id", product.id)
     .maybeSingle();
@@ -339,7 +370,9 @@ export async function getAccountPaidPlan(admin: SupabaseClient, accountId: strin
   if (!tier) return null;
   const currentPeriodEnd = (entitlement.current_period_end as string | null) ?? null;
   const billingInterval: WatchBillingInterval = entitlement.billing_interval === "annual" ? "annual" : "monthly";
-  return { tier, currentPeriodEnd, expired: periodHasExpired(currentPeriodEnd), billingInterval };
+  const pendingTier = parseEntitlementTier((entitlement.pending_tier as string | null) ?? null);
+  const renewalMode = entitlement.renewal_mode === "innvil_credit" || entitlement.renewal_mode === "manual_crypto" ? entitlement.renewal_mode : null;
+  return { tier, currentPeriodEnd, expired: periodHasExpired(currentPeriodEnd), billingInterval, pendingTier, renewalMode };
 }
 
 /** Synthesizes a `panels.settings`-shaped value carrying JUST the Virtual
@@ -757,6 +790,25 @@ export async function createAccountCommunity(admin: SupabaseClient, accountId: s
   };
 }
 
+/** Owner-facing control for the Community-level "Allow Solicitation / Allow
+ *  Promotion" override (see link-moderation.ts's decideLinkEnforcement +
+ *  communities.allow_solicitation). Same account-ownership pattern as
+ *  createAccountCommunity — verified via this account's own Projects,
+ *  never a client-supplied trust boundary. Conversational routing/collab
+ *  contact (community.collab_contact) is a separate, unrelated setting;
+ *  this only ever affects whether ordinary unsolicited promotion gets
+ *  deleted/warned for merely being promotional. */
+export async function setAccountCommunityAllowSolicitation(admin: SupabaseClient, accountId: string, communityId: string, allow: boolean): Promise<CreateResult<null>> {
+  const { data: accountProjects } = await admin.from("projects").select("id").eq("account_id", accountId);
+  const projectIds = (accountProjects ?? []).map((p: Record<string, unknown>) => p.id as string);
+  if (!projectIds.length) return { ok: false, error: "Community not found." };
+  const { data: community } = await admin.from("communities").select("id, project_id").eq("id", communityId).maybeSingle();
+  if (!community || !projectIds.includes(community.project_id as string)) return { ok: false, error: "Community not found." };
+  const { error } = await admin.from("communities").update({ allow_solicitation: allow }).eq("id", communityId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
 export interface AccountDeploymentRow {
   id: string;
   moderatorId: string;
@@ -894,7 +946,20 @@ export interface AccountCommunitySummary {
    *  channel and is explicitly EXCLUDED from both (see getAccountCapacity/
    *  getAccountSlotBreakdown/createAccountCommunity/deployAccountWatcher). */
   connectionType: "community" | "escalation_group";
-  watchers: Array<{ deploymentId: string; watcherId: string; watcherName: string; enabled: boolean }>;
+  /** communities.allow_solicitation (default false) -- the Community-level
+   *  "Allow Solicitation / Allow Promotion" override read by
+   *  link-moderation.ts's decideLinkEnforcement. When true, ordinary
+   *  unsolicited promotion is never deleted/warned for merely being
+   *  promotional; every other moderation check (flood-repeat, scam/
+   *  phishing, explicit content) stays fully independent and unaffected. */
+  allowSolicitation: boolean;
+  /** createdAt is additive -- purely so Watcher Role Separation (see
+   *  src/lib/moderator/watcher-roles.ts) can derive the same stable,
+   *  deterministic deployment ORDER for UI display (role label/chatter
+   *  duty) that the live runtime already uses for the same community. Every
+   *  existing consumer of this widely-shared type is unaffected by its
+   *  presence. */
+  watchers: Array<{ deploymentId: string; watcherId: string; watcherName: string; enabled: boolean; createdAt: string }>;
 }
 
 /** Every Community owned (via Project) by this account, with its assigned
@@ -919,7 +984,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   // (unavoidable: it's what scopes this whole read to THIS account).
   const { data: communities } = await admin
     .from("communities")
-    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, moderator_deployments ( id, moderator_id, enabled, virtual_moderators ( id, name ) )")
+    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
     .in("project_id", projectIds)
     .order("created_at", { ascending: true });
   // `as unknown as` -- without generated Database types, supabase-js infers
@@ -932,7 +997,8 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   const allRows = (communities ?? []) as unknown as Array<{
     id: string; project_id: string; platform: string; chat_id: string; title: string | null; chat_type: string | null;
     connection_type: "community" | "escalation_group" | null;
-    moderator_deployments: Array<{ id: string; moderator_id: string; enabled: boolean; virtual_moderators: { id: string; name: string } | null }> | null;
+    allow_solicitation: boolean | null;
+    moderator_deployments: Array<{ id: string; moderator_id: string; enabled: boolean; created_at: string; virtual_moderators: { id: string; name: string } | null }> | null;
   }>;
   // Excludes any row deterministically known to be a private Telegram 1:1
   // chat (a PERSON, not a Community) rather than filtering in the UI --
@@ -958,8 +1024,9 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     // never happen post-migration, since it's NOT NULL with a default) --
     // never fabricates "escalation_group" from an unexpected/null value.
     connectionType: c.connection_type === "escalation_group" ? "escalation_group" : "community",
+    allowSolicitation: c.allow_solicitation === true,
     watchers: (c.moderator_deployments ?? [])
-      .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: d.virtual_moderators?.name ?? "Watcher", enabled: d.enabled })),
+      .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: d.virtual_moderators?.name ?? "Watcher", enabled: d.enabled, createdAt: d.created_at })),
   }));
 }
 
@@ -1044,8 +1111,27 @@ export interface AccountCapacity {
   enterpriseSlots: number | null;
   /** True only when this Enterprise account's Media Moderation + has been
    *  explicitly granted (see AccountEnterpriseEntitlement.mediaAddonActive).
-   *  Always false for every non-enterprise tier. */
+   *  Always false for every non-enterprise tier. DEPRECATED alongside the
+   *  OLD add-on model this field describes -- kept only for backward
+   *  compatibility; mediaModerationBaseAllowance below is the real, current
+   *  source for what a display surface should show. */
   enterpriseMediaAddonActive: boolean;
+  /** REVISED (2026-08-27) -- the account's real, unconditionally-included
+   *  Media Moderation Units base allowance for its CURRENT Watch plan
+   *  (money.ts's MEDIA_MODERATION_BASE_ALLOWANCE / ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE),
+   *  a pure lookup with no extra I/O cost. `null` only for trial (which has
+   *  no representable Media Moderation Units concept and keeps running
+   *  media moderation unmetered) or when there's no entitlement at all --
+   *  every self-serve tier, byo20, and every Enterprise variant always
+   *  resolves a real, non-zero number here, unconditionally (no purchase
+   *  or grant required, unlike the deprecated fields above). Purchased
+   *  expansion-pack units and real usage for the CURRENT period are
+   *  intentionally NOT included here (they require extra I/O this broadly-
+   *  used function shouldn't pay for on every call) -- a caller that needs
+   *  them fetches getMediaModerationExpansionUnits/getWatchMediaModerationUsage
+   *  itself, the same way the Usage page already does for the AI Generation
+   *  pool's own usage number. */
+  mediaModerationBaseAllowance: number | null;
 }
 
 /** Real capacity/usage against the account's actual entitlement -- paid tier
@@ -1132,6 +1218,17 @@ export async function getAccountCapacity(
     hasByoCredential: byoCredentialStored,
     enterpriseSlots: ctx.tier === "enterprise" ? (enterprise?.slots ?? null) : null,
     enterpriseMediaAddonActive: ctx.tier === "enterprise" && (enterprise?.mediaAddonActive ?? false),
+    // REVISED (2026-08-27) -- a real, unconditional base allowance for every
+    // tier except trial (which has no Media Moderation Units concept at
+    // all and keeps running media moderation unmetered). A pure lookup,
+    // reusing the SAME resolveEnterpriseMediaAddonKey the runtime gate
+    // itself keys off of, so display and enforcement can never disagree.
+    mediaModerationBaseAllowance:
+      ctx.tier === "trial"
+        ? null
+        : ctx.tier === "enterprise"
+          ? ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE[resolveEnterpriseMediaAddonKey(enterprise?.apiSourceMode ?? "managed", enterprise?.slots ?? null)]
+          : MEDIA_MODERATION_BASE_ALLOWANCE[ctx.tier],
   };
 }
 

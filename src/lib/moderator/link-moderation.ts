@@ -89,6 +89,45 @@ export function extractLinks(text: string): string[] {
   return found;
 }
 
+/** A cheap, deterministic GATE for link-LESS unsolicited-promotion pitches
+ *  ("Hey Dev, looking for real investors & strong volume? I can promote
+ *  your project... DM me if you're ready to grow.") -- a real, live-caught
+ *  gap: a promotional pitch with NO url/handle at all (no scam link, no
+ *  t.me reference) never matched extractLinks(), so it silently bypassed
+ *  moderation entirely and fell through to ordinary chatter, which just
+ *  socially replied ("this looks like promo spam") without ever deleting
+ *  the message or recording a strike.
+ *
+ *  This function does NOT decide the violation -- it only decides whether
+ *  it's worth spending a real classifyLinkIntent() call on a message that
+ *  has no link at all (the overwhelming majority of ordinary messages,
+ *  which must stay a zero-cost regex scan). The actual verdict is still
+ *  made by the classifier + decideLinkEnforcement, exactly as for a
+ *  link-bearing message -- a false-positive match here just means one
+ *  extra classification call that resolves to ALLOW, never a fabricated
+ *  deletion. Mirrors the same cheap-gate-then-real-classification shape
+ *  already used for the ambient-greeting fallback
+ *  (isAmbientOpenerFallbackCandidate + classifyAmbientGreeting).
+ *
+ *  Deliberately a bounded, non-exhaustive signal set (a real promotional
+ *  pitch has endless phrasing) -- a missed phrasing here simply isn't
+ *  flagged, same as today; it never causes a false enforcement action. */
+const SOLICIT_CONTACT_RE = /\b(dm|pm|message|contact|reach out to|hit (me|us) up)\b.{0,20}\b(me|us)\b/i;
+const PROMOTION_SERVICE_RE = /\b(i can|we can|let('| a)?s)\b.{0,30}\b(promote|market|shill|pump|grow|boost|push)\b/i;
+const GROWTH_PITCH_RE = /\b(real investors|serious buyers|strong volume|active (crypto )?communities|guaranteed (growth|holders|volume)|organic growth)\b/i;
+const BOOST_TARGET_RE = /\b(grow|boost|push)\b.{0,25}\b(your|the)\b.{0,25}\b(project|community|channel|token|coin|followers|views|members|volume|exposure|market cap)\b/i;
+
+export function looksLikeUnsolicitedPitch(text: string): boolean {
+  const contactAsk = SOLICIT_CONTACT_RE.test(text);
+  const serviceOffer = PROMOTION_SERVICE_RE.test(text) || BOOST_TARGET_RE.test(text);
+  const growthLanguage = GROWTH_PITCH_RE.test(text);
+  // Require at least two independent signals -- a bare "DM me" alone (a
+  // completely ordinary thing to say in conversation) must never alone
+  // trigger a classification call; a real promotional pitch reliably
+  // combines a contact/service call-to-action with marketing language.
+  return [contactAsk, serviceOffer, growthLanguage].filter(Boolean).length >= 2;
+}
+
 /* --------------------------------------------------- self-mention exemption ---- */
 
 /** Canonical Telegram username normalization -- case-insensitive, optional
@@ -298,6 +337,19 @@ export function decideLinkEnforcement(input: {
   /** Already expiry-resolved via effectiveScamStrikeCount — this function
    *  stays pure and never reasons about time itself. */
   priorScamStrikeCount: number;
+  /** The Community's own "Allow Solicitation / Allow Promotion" override
+   *  (communities.allow_solicitation, default false). When true, ORDINARY
+   *  unsolicited promotion (UNSOLICITED_PROMOTION, and only that category)
+   *  is never deleted or warned for merely being promotional — the message
+   *  stays up, no strike is recorded. Every other moderation check remains
+   *  fully independent and unaffected: a flood-repeat burst (floodRepeat),
+   *  scam/phishing, and explicit content all still enforce exactly as
+   *  before regardless of this setting — a rapid repost burst is an abuse
+   *  signal, not "solicitation," so it is deliberately excluded from this
+   *  exemption the same way an admin's own exemption already excludes it
+   *  a few lines below. Applies consistently every time the category comes
+   *  back UNSOLICITED_PROMOTION, not just on a sender's first message. */
+  solicitationAllowed: boolean;
 }): ModerationEnforcement {
   if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_KICK", reason: "explicit_content", purge: true };
 
@@ -328,6 +380,16 @@ export function decideLinkEnforcement(input: {
   // Weak/ambiguous evidence never bans (spec §41) — irreversible enforcement
   // requires stronger confidence/history than "we're not sure."
   if (input.category === "UNKNOWN_OR_AMBIGUOUS") return { kind: "ALLOW" };
+
+  // Community-level "Allow Solicitation" override — exempted from ORDINARY
+  // ad enforcement ONLY (never LINK_SPAM_OR_FLOOD, never a flood-repeat
+  // burst, never scam/phishing/explicit content, all handled above/below
+  // this check completely independent of this setting). A community that
+  // allows solicitation simply never treats plain unsolicited promotion as
+  // a violation at all — checked before the admin-exemption below since it
+  // makes that check moot for this category, but the outcome is identical
+  // either way (both resolve to ALLOW).
+  if (input.category === "UNSOLICITED_PROMOTION" && input.solicitationAllowed && !input.floodRepeat) return { kind: "ALLOW" };
 
   // Admins/trusted roles may legitimately post partner/AMA/campaign links
   // (spec §43) — exempted from ORDINARY ad enforcement only, checked after

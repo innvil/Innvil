@@ -11,13 +11,13 @@ import { WatchLogoutButton } from "./WatchLogoutButton";
 import { WatchFooter } from "./WatchFooter";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
-import { MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
+import { MEDIA_MODERATION_BASE_ALLOWANCE } from "@/src/lib/money";
 // Client-safe canonical trial constants -- watch-trial.ts itself is
 // server-only (full of DB functions); moderator/plan.ts is the plain,
 // client-safe module those constants actually originate from, and is
 // already used this way by WatchPricingSection.tsx (a client component
 // rendered on this same page).
-import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
+import { TRIAL_DURATION_DAYS } from "@/src/lib/moderator/plan";
 
 /**
  * Innvil Watch's own public, standalone landing page — served on
@@ -39,6 +39,19 @@ import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
  * runtime (grepped event-types.ts/community-runtime.ts for
  * new_chat_member/left_chat_member/chat_member — zero matches), so no
  * "welcomes new members" claim is made anywhere on this page.
+ *
+ * REVISED (2026-08-29) — sharpened the differentiator: social PRESENCE,
+ * not Q&A. "Present in the room, not just on command" now appears right
+ * after the hero (PresenceCallout) instead of being buried lower on the
+ * page, and is repeated again with more detail in PersonaSection. Natural
+ * conversation/participation and project-aware answers are kept as two
+ * visibly separate capabilities throughout (comparison table, pillars,
+ * feature groups) rather than conflating "answers questions" with
+ * "talks/participates". BYO 20 moved out of the main narrative flow and
+ * down next to pricing, where it belongs commercially. The inline FAQ
+ * accordion was removed outright (real dedicated FAQ content already
+ * exists in the Help Center, linked from WatchFooter) rather than kept in
+ * parallel.
  */
 function WatchNav({ authenticated }: { authenticated: boolean }) {
   return (
@@ -99,6 +112,20 @@ function WatchOpsPanel() {
         <p className="text-sm w-text flex items-center gap-1.5"><Users size={13} className="w-text-dim" /> @samplecommunity</p>
       </div>
 
+      {/* A real chat example, not just activity metrics -- demonstrates
+          presence/participation, the actual differentiator, rather than
+          leaving the visual read as a support-ticket dashboard. */}
+      <div className="w-surface-raised rounded-lg p-3 mb-4 space-y-2">
+        <div className="flex items-start gap-2">
+          <span className="text-[11px] w-text-faint shrink-0 w-14">Member</span>
+          <span className="text-xs w-text-dim">gm</span>
+        </div>
+        <div className="flex items-start gap-2">
+          <span className="text-[11px] w-teal shrink-0 w-14">Kwan</span>
+          <span className="text-xs w-text">gm!! 👋 how&apos;s your morning going?</span>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <div className="w-surface-raised rounded-lg p-3">
           <p className="text-[11px] w-text-faint flex items-center gap-1"><ShieldCheck size={12} /> Spam blocked</p>
@@ -109,7 +136,7 @@ function WatchOpsPanel() {
           <p className="text-lg w-display w-text">3</p>
         </div>
         <div className="w-surface-raised rounded-lg p-3">
-          <p className="text-[11px] w-text-faint flex items-center gap-1"><MessageSquare size={12} /> Questions answered</p>
+          <p className="text-[11px] w-text-faint flex items-center gap-1"><MessageSquare size={12} /> Member interactions</p>
           <p className="text-lg w-display w-text">42</p>
         </div>
         <div className="w-surface-raised rounded-lg p-3">
@@ -124,15 +151,18 @@ function WatchOpsPanel() {
 /** The bot-vs-Watcher comparison — deliberately shorter/differently-worded
  *  from the 9-row table on /why-watchers (that page is the deep dive; this
  *  is the landing's quick-scan version). Every "Watcher" claim maps to a
- *  real, already-shipped capability. */
+ *  real, already-shipped capability. Ordered so the biggest differentiator
+ *  (presence) comes first, moderation last -- a Watcher is not primarily a
+ *  moderation bot with extra features. */
 const COMPARISON: Array<{ topic: string; bot: string; watcher: string }> = [
-  { topic: "Understanding a message", bot: "Matches fixed commands or keywords", watcher: "Understands questions by intent, however they're phrased" },
-  { topic: "Answering questions", bot: "Can't hold a real conversation", watcher: "Answers from your own Project Knowledge, grounded in real facts" },
-  { topic: "Personality", bot: "One generic voice, the same for everyone", watcher: "A configurable persona — tone, style, and role you define" },
-  { topic: "Working as a team", bot: "Each bot acts on its own", watcher: "Multiple Watchers coordinate so replies don't pile on" },
-  { topic: "When it doesn't know", bot: "Stays silent or gives a canned fallback", watcher: "Can forward the question to your team and relay the answer back" },
+  { topic: "Presence", bot: "Reacts to commands or individual messages", watcher: "Follows the conversation and participates when a moderator naturally should" },
+  { topic: "Conversation", bot: "Responds to predefined commands or canned flows", watcher: "Talks naturally with members in its configured persona" },
+  { topic: "Understanding", bot: "Matches fixed commands or keywords", watcher: "Understands messages and conversations by intent, not just commands or keywords" },
+  { topic: "Project Knowledge", bot: "Uses predefined answers or static commands", watcher: "Answers project-specific questions using the knowledge you provide" },
+  { topic: "Persona", bot: "One generic voice", watcher: "A configurable persona — tone, style, and role you define" },
+  { topic: "Team coordination", bot: "Each bot acts independently", watcher: "Multiple Watchers coordinate so they do not all respond to the same moment" },
+  { topic: "Escalation", bot: "Stays silent or gives a canned fallback", watcher: "Can forward the question to your team and relay the answer back" },
   { topic: "Moderation", bot: "Blunt keyword and regex filters", watcher: "Recognizes real violations by intent, not just banned words" },
-  { topic: "Presence", bot: "Reacts to commands, message by message", watcher: "Follows the conversation, so it stays present between them" },
 ];
 
 function WhyWatchersSection() {
@@ -143,8 +173,9 @@ function WhyWatchersSection() {
         Traditional moderation bots enforce rules.<br className="hidden sm:block" /> Watchers actually help run the community.
       </h2>
       <p className="w-text-dim text-center max-w-2xl mx-auto mb-10">
-        A Watcher is a Virtual Moderator — a persistent, persona-driven team member for your Telegram Community,
-        not a script that deletes messages when a keyword matches.
+        A Watcher is a persistent virtual member of your moderation team. It follows the conversation, talks with
+        members when appropriate, moderates with context, and knows when to stay quiet — not just when to react
+        to a command.
       </p>
       <div className="w-card overflow-hidden">
         <div className="grid grid-cols-[1fr_1fr_1fr] text-[11px] uppercase tracking-wide font-semibold w-text-faint border-b w-line-soft">
@@ -167,14 +198,33 @@ function WhyWatchersSection() {
   );
 }
 
+/** The strongest differentiator, moved much higher on the page (was buried
+ *  in PersonaSection further down, which still carries a fuller treatment
+ *  of the same idea -- repeating it, not replacing it, per the product
+ *  requirement to make this visible early and consistently). */
+function PresenceCallout() {
+  return (
+    <section className="max-w-5xl mx-auto px-6 pb-16">
+      <div className="w-card-raised p-6 sm:p-8 text-center max-w-3xl mx-auto">
+        <p className="text-xs w-mono uppercase w-teal tracking-wider mb-2">Present in the room, not just on command</p>
+        <p className="w-text-dim leading-relaxed">
+          A Watcher follows the conversation and decides when a moderator should actually speak. It can respond
+          to a &quot;gm,&quot; answer a member, step into a moderation issue, or stay quiet when nothing needs
+          its attention.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 /** The Four Pillars — a compact, quick-scan strip. Escalate references
  *  Smart Escalation, which is a real, currently-live capability (shipped
  *  as v1.47.73) -- stated plainly, not hedged as "coming soon". */
 const PILLARS: Array<{ icon: typeof ShieldCheck; title: string; body: string }> = [
   { icon: ShieldCheck, title: "Protect", body: "Graduated moderation for spam, scam links, and unsafe media — enforced by intent, not just keywords." },
-  { icon: HeartHandshake, title: "Engage", body: "Natural conversation in a persona you configure, present in the room between commands." },
-  { icon: LifeBuoy, title: "Support", body: "Answers grounded in your own Project Knowledge — never an invented claim about your project." },
-  { icon: Send, title: "Escalate", body: "When a Watcher genuinely can't answer, it forwards the question to your team — and reports its own moderation actions there too, so you always have a real audit trail." },
+  { icon: HeartHandshake, title: "Engage", body: "Joins conversations naturally when appropriate, using the persona and voice you configure." },
+  { icon: LifeBuoy, title: "Support", body: "Answers project-specific questions using the knowledge you provide, without inventing project facts." },
+  { icon: Send, title: "Escalate", body: "When something needs a human, the Watcher can bring your team in — while keeping a structured record of its moderation actions." },
 ];
 
 function PillarsSection() {
@@ -206,9 +256,13 @@ function ModerationResponsibilitySection() {
           <p className="text-xs w-mono uppercase w-teal tracking-wider mb-2">Knows the rules — and enforces them</p>
           <h2 className="w-display text-2xl mb-3">Judgment, not just a keyword filter.</h2>
           <p className="text-sm w-text-dim leading-relaxed mb-3">
-            Enforcement is graduated where it should be, and immediate where it has to be. Unsolicited promotion
-            and link spam get a real warning first — escalating only on repeat offenses. Phishing/scam links and
-            explicit content, at high confidence, are treated as safety issues and acted on immediately.
+            A Watcher can distinguish between behavior that deserves a warning and behavior that needs
+            immediate action.
+          </p>
+          <p className="text-sm w-text-dim leading-relaxed mb-3">
+            Unsolicited promotion and link spam get a real warning first — escalating only on repeat offenses.
+            Phishing/scam links and explicit content, at high confidence, are treated as safety issues and acted
+            on immediately.
           </p>
           <p className="text-sm w-text-dim leading-relaxed">
             Warnings are phrased naturally, in the Watcher&apos;s own configured voice — never a robotic
@@ -262,15 +316,12 @@ function CryptoNativeSection() {
           </p>
           <h2 className="w-display text-2xl mb-3">Understands the shorthand your community actually uses.</h2>
           <p className="text-sm w-text-dim leading-relaxed mb-3">
-            A Watcher recognizes real crypto and Telegram shorthand — &quot;ca?&quot;, &quot;wen distro?&quot;,
-            &quot;socials?&quot;, &quot;mc?&quot; — and common terms like TG, CEX, DEX, TGE, WL, LP, ATH, FUD,
-            GM, GN, AMA, tokenomics, vesting, and claim, without needing a member to spell everything out.
+            Members don&apos;t need to phrase things like support tickets. A Watcher understands the shorthand,
+            slang, and abbreviated questions common in Telegram and crypto communities.
           </p>
           <p className="text-sm w-text-dim leading-relaxed">
-            <strong className="w-text font-medium">Understanding a question is not the same as inventing an
-            answer.</strong> A Watcher still answers from your own configured Project Knowledge — it recognizes
-            what&apos;s being asked, it doesn&apos;t make up the contract address, the launch date, or the
-            market cap.
+            <strong className="w-text font-medium">Understanding what someone means isn&apos;t permission to
+            invent an answer.</strong> Project-specific facts still come from the knowledge you provide.
           </p>
         </div>
       </div>
@@ -293,17 +344,17 @@ function PersonaSection() {
             from scratch. &quot;Mr. Pres&quot; and &quot;Ms. VP&quot; can sound nothing alike — one calm and
             formal, the other playful and terse — while both stay grounded in the same rules and knowledge.
           </p>
-          <p className="text-xs w-text-faint">A Watcher&apos;s persona is its primary identity — being AI-powered is a fact it can acknowledge, never something that overrides how it&apos;s configured to sound.</p>
+          <p className="text-xs w-text-faint">A Watcher can acknowledge that it&apos;s AI without dropping the identity and personality you&apos;ve configured for it.</p>
         </div>
         <div className="w-card p-6">
           <Users size={18} className="w-teal mb-3" />
           <p className="w-display text-lg mb-1">Present in the room, not just on command</p>
           <p className="text-sm w-text-dim leading-relaxed mb-3">
-            A Watcher responds naturally when it&apos;s directly addressed, and more selectively to general
-            conversation — weighing what&apos;s already happened so it doesn&apos;t repeat what another Watcher
-            or a human just said. Silence is frequently the correct outcome, not a bug.
+            A Watcher responds naturally when addressed and participates more selectively in general
+            conversation. It considers what has already been said, who has already replied, and whether its
+            input is actually useful. Sometimes the right moderator response is no response at all.
           </p>
-          <p className="text-xs w-text-faint">Multiple Watchers deployed together coordinate so they don&apos;t pile on with several near-identical replies to the same message.</p>
+          <p className="text-xs w-text-faint">When multiple Watchers are present, they coordinate so the room doesn&apos;t fill with duplicate replies.</p>
         </div>
       </div>
     </section>
@@ -323,9 +374,9 @@ function ComplementarySection() {
         <div>
           <p className="w-display text-lg mb-1">Works alongside the tools you already use</p>
           <p className="text-sm w-text-dim leading-relaxed">
-            A Watcher isn&apos;t trying to replace your gatekeeping bot, your captcha bot, or a utility bot like
-            Rose. Those handle entry rules and utilities; a Watcher handles the part they don&apos;t — moderating
-            with judgment, answering real questions, and staying present in the conversation.
+            Gatekeeping and utility bots like Rose handle rules, entry checks, commands, and utilities. Watchers
+            handle the human side of community operations: conversation, context-aware moderation, member
+            support, and presence.
           </p>
         </div>
       </div>
@@ -344,15 +395,15 @@ const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldC
   {
     label: "Engage",
     items: [
-      { icon: MessageSquare, title: "Natural conversation", body: "Watchers chat naturally, in their own configured persona — not a generic support bot." },
-      { icon: ScrollText, title: "Project knowledge", body: "Ground every answer in facts you provide — Watchers never invent claims about your project." },
+      { icon: MessageSquare, title: "Natural participation", body: "Watchers follow the conversation and respond when appropriate — whether they're greeted, directly addressed, or have something useful to contribute." },
+      { icon: ScrollText, title: "Project-aware answers", body: "When members ask about your project, answers are grounded in the knowledge you provide." },
     ],
   },
   {
     label: "Operate",
     items: [
       { icon: Gauge, title: "Auto-Posting", body: "Schedule per-Watcher posting windows so your community stays active." },
-      { icon: Activity, title: "Activity & status", body: "See what your Watcher is doing — always on, always watching." },
+      { icon: Activity, title: "Activity & status", body: "Track your Watcher's status and activity from one place." },
       { icon: ShieldAlert, title: "Watcher Ops reports", body: "A private, structured record of every warning, mute, kick, and purge — who was actioned, why, and whether it succeeded." },
     ],
   },
@@ -360,9 +411,9 @@ const FEATURE_GROUPS: Array<{ label: string; items: Array<{ icon: typeof ShieldC
 
 const STEPS = [
   { n: "01", title: "Connect Telegram", body: "Verify your Telegram account, then try Watch with a Free Trial or a paid plan." },
-  { n: "02", title: "Create a Watcher", body: "Configure its persona and knowledge base." },
+  { n: "02", title: "Create a Watcher", body: "Give it a name, persona, role, and project knowledge." },
   { n: "03", title: "Deploy it", body: "Connect your Watcher's bot to your Telegram Community." },
-  { n: "04", title: "Let it operate", body: "Your Watcher moderates, answers, and posts on schedule." },
+  { n: "04", title: "Go live", body: "Your Watcher joins the community — participating, moderating, answering questions, and posting on schedule if enabled." },
 ];
 
 function StepCard({ step }: { step: (typeof STEPS)[number] }) {
@@ -433,39 +484,6 @@ function HowItWorksVerticalConnector({ flip }: { flip: boolean }) {
   );
 }
 
-const FAQ: Array<{ q: string; a: string }> = [
-  { q: "Is a Watcher just another moderation bot?", a: "No. A moderation bot enforces fixed rules. A Watcher is a Virtual Moderator — it moderates with judgment, answers real questions from your own Project Knowledge, holds a persona, and can escalate what it genuinely can't answer to your team." },
-  { q: "What is the Free Trial?", a: `A one-time, ${TRIAL_DURATION_DAYS}-day trial of Innvil Watch — ${TRIAL_CAPACITY.maxActiveSlots} Watcher slot and ${TRIAL_CAPACITY.maxCommunities} Community, no payment required. One-time Free Trial. Telegram verification required.` },
-  { q: "Do I need to pay to start?", a: "No. No payment is required for the Free Trial." },
-  { q: "Do I need Telegram?", a: "Yes. A verified Telegram account is required to activate the one-time Watch trial." },
-  { q: "What happens when the trial ends?", a: "Your Watch setup remains saved — nothing is deleted. Choose a paid plan to continue active Watch operations." },
-  { q: "How many Watchers can I deploy?", a: "Your plan sets a total Watcher-slot allowance shared across every community you connect. Each individual community also has its own cap of up to 5 active Watchers, independent of your plan's total." },
-  { q: "Can I use Watch in more than one community?", a: "Yes, up to your plan's community allowance — Bronze includes 1, Silver 2, Gold 3, Platinum 5. Each community is a separate connection with its own Watcher deployments." },
-  { q: "What happens if I reach my plan limit?", a: "Innvil tells you clearly and blocks the specific action (deploying another Watcher, connecting another community) rather than silently failing or bypassing the limit." },
-  { q: "Can I change my plan later?", a: "Yes — subscribing to a different plan updates your entitlement; nothing about your existing Projects, communities, or Watcher configuration is deleted." },
-  { q: "Does Watch work with my existing Innvil account?", a: "Yes. Every Innvil product you use lives on the same Innvil account — there's no separate Watch-only login." },
-  { q: "What's the difference between a Project, a Community, and a Watcher?", a: "A Project is your identity and knowledge base. A Community is a specific Telegram group or channel you connect. A Watcher is the AI-powered Virtual Moderator you deploy into a Community — one Project can have multiple Communities, and Watchers are deployed per Community." },
-];
-
-function WatchFaq() {
-  return (
-    <section id="faq" className="max-w-3xl mx-auto px-6 py-16">
-      <h2 className="w-display text-2xl text-center mb-10">Frequently asked questions</h2>
-      <div className="space-y-2.5">
-        {FAQ.map((f) => (
-          <details key={f.q} className="w-card px-4 py-3 group">
-            <summary className="cursor-pointer text-sm font-medium w-text list-none flex items-center justify-between gap-3">
-              {f.q}
-              <span className="w-teal text-xs shrink-0 group-open:rotate-180 transition-transform">▾</span>
-            </summary>
-            <p className="text-sm w-text-dim mt-2 leading-relaxed">{f.a}</p>
-          </details>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 export function WatchLanding({ authenticated }: { authenticated: boolean }) {
   const options = watchPlanOptions();
   const byo20 = options.find((o) => o.tier === "byo20")!;
@@ -481,20 +499,21 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
           <h1 className="w-display text-4xl sm:text-5xl leading-[1.08] mb-6">
             Traditional moderation bots enforce rules.<br />Watchers actually help run the community.
           </h1>
-          <p className="w-text-dim text-lg mb-4 max-w-md">
-            Deploy <strong className="w-text font-semibold">Watchers</strong> — AI-powered Virtual Moderators
-            with their own persona and knowledge — into your Telegram Communities. There is always a moderator
-            present, even when you&apos;re not online.
+          <p className="w-text-dim text-lg mb-2 max-w-md">
+            Deploy AI-powered <strong className="w-text font-semibold">Watchers</strong> that participate in
+            conversation, moderate with judgment, answer from your Project Knowledge, and help keep your Telegram
+            community running — even when your team is offline.
           </p>
+          <p className="w-text-dim text-lg mb-4 max-w-md">Each Watcher has its own persona, voice, and role.</p>
           <p className="text-sm w-teal flex items-center gap-1.5 mb-8">
-            <Clock size={14} /> Try it free for {TRIAL_DURATION_DAYS} days — no payment required.
+            <Clock size={14} /> Try a Watcher free for {TRIAL_DURATION_DAYS} days — no payment required.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Link href="/signup" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg flex items-center gap-1.5">
               Start Free Trial <ArrowRight size={14} />
             </Link>
             <a href="#why-watchers" className="text-sm px-5 py-3 rounded-lg border w-line-soft w-surface w-text-dim hover:w-text">
-              Why Watchers?
+              See how Watchers work
             </a>
           </div>
         </div>
@@ -502,6 +521,8 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
       </section>
 
       <WhyWatchersSection />
+
+      <PresenceCallout />
 
       <PillarsSection />
 
@@ -511,12 +532,15 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
             <p className="text-xs w-mono uppercase w-teal tracking-wider mb-2">What is a Watcher?</p>
             <h2 className="w-display text-2xl mb-3">An AI-powered Virtual Moderator you deploy to your Community.</h2>
             <p className="text-sm w-text-dim leading-relaxed mb-3">
-              Each Watcher has its own persona and settings, and can be deployed to one or more Communities.
-              Every active Watcher-to-Community deployment uses one <strong className="w-text font-medium">Watcher slot</strong>.
+              A Watcher is a virtual moderator with its own identity, voice, knowledge, and behavior. Once
+              deployed, it becomes an active presence in your Telegram community — participating in
+              conversation, helping members, moderating when necessary, and operating according to the settings
+              you choose.
             </p>
             <p className="text-sm w-text-dim leading-relaxed mb-4">
               A <strong className="w-text font-medium">Community</strong> is the actual Telegram group,
-              supergroup, or channel you connect — connect your Telegram Community, then deploy Watchers into it.
+              supergroup, or channel you connect. Each Watcher can be deployed to one or more Communities, and
+              every active Watcher-to-Community deployment uses one <strong className="w-text font-medium">Watcher slot</strong>.
             </p>
             <Link href="/why-watchers" className="text-sm w-teal font-semibold hover:underline inline-flex items-center gap-1">
               See the full Watcher vs. moderation-bot comparison <ArrowRight size={13} />
@@ -552,58 +576,6 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
 
       <ComplementarySection />
 
-      <section id="byo20" className="max-w-5xl mx-auto px-6 pb-16 scroll-mt-24">
-        <div className="w-card-raised border w-teal-border p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-8 items-center relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-40 h-40 rounded-full w-teal-soft-bg blur-3xl opacity-40 -translate-y-1/2 translate-x-1/3" aria-hidden="true" />
-          <div className="relative">
-            <span className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full mb-4 w-teal-soft-bg w-teal">
-              <Star size={11} /> Best value plan
-            </span>
-            <h2 className="w-display text-2xl sm:text-3xl mb-3">
-              BYO 20 — everything included. Bring your own AI.
-            </h2>
-            <p className="w-text-dim text-sm leading-relaxed mb-5 max-w-md">
-              One flat price for the most Watch offers as a self-serve plan. Connect your own AI provider
-              credential (Anthropic or an OpenAI-compatible provider) and Innvil never charges you for AI usage
-              on top of the plan price — self-serve, purchase it right now, no sales call required.
-            </p>
-            <ul className="space-y-2 mb-6 text-sm w-text-dim">
-              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {byo20.slots} Watcher slots</li>
-              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {byo20.communitiesIncluded} Communities — already the max, nothing more to unlock</li>
-              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} Media Moderation units/mo, bundled — never a separate purchase</li>
-              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> Same Innvil Credit discounts as every other plan</li>
-            </ul>
-            <a href="#pricing" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg inline-flex items-center gap-1.5">
-              Get BYO 20 <ArrowRight size={14} />
-            </a>
-            <p className="text-xs w-text-faint mt-3">
-              Not the same as Enterprise BYO — this is a self-serve plan; Enterprise BYO is manually provisioned for larger, custom deployments.
-            </p>
-          </div>
-          <div className="relative w-card p-6 text-center">
-            <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-2">BYO 20 · monthly</p>
-            <p className="w-display text-4xl mb-1">
-              ${byo20.price.toFixed(2)}<span className="text-base w-text-faint font-normal">/mo</span>
-            </p>
-            <p className="text-xs w-text-faint mb-5">Bring your own AI provider credential</p>
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="w-surface-raised rounded-lg p-2.5">
-                <p className="w-display text-lg w-teal">{byo20.slots}</p>
-                <p className="text-[10px] w-text-faint">slots</p>
-              </div>
-              <div className="w-surface-raised rounded-lg p-2.5">
-                <p className="w-display text-lg w-teal">{byo20.communitiesIncluded}</p>
-                <p className="text-[10px] w-text-faint">communities</p>
-              </div>
-              <div className="w-surface-raised rounded-lg p-2.5">
-                <p className="w-display text-lg w-teal">{(MODERATOR_MEDIA_ADDON.byo20.units / 1000).toFixed(0)}K</p>
-                <p className="text-[10px] w-text-faint">media units</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section id="features" className="max-w-6xl mx-auto px-6 py-16">
         <h2 className="w-display text-2xl text-center mb-2">What can a Watcher do?</h2>
         <p className="w-text-dim text-center max-w-lg mx-auto mb-10">Real, opt-in capabilities — nothing here is on by default that you didn&apos;t configure.</p>
@@ -631,14 +603,19 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
         </a>
       </div>
 
-      <section className="max-w-4xl mx-auto px-6 pb-16">
+      <section className="max-w-5xl mx-auto px-6 pb-16">
         <h2 className="w-display text-xl text-center mb-8">Who is Watch for?</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           {[
-            "Telegram Community owners", "Crypto & project communities", "Support communities",
-            "Creator communities", "Membership groups", "Teams running multiple Communities",
-          ].map((t) => (
-            <div key={t} className="w-card p-3 text-center w-text-dim">{t}</div>
+            { title: "Crypto & Web3 communities", body: "Keep conversation active while handling spam, scams, repetitive questions, and member engagement." },
+            { title: "Growing Telegram communities", body: "Add moderation coverage without relying on a human admin being online every hour." },
+            { title: "Projects with active member support", body: "Let members get project-aware help while the Watcher still behaves like part of the community." },
+            { title: "Teams running several communities", body: "Deploy distinct Watchers with different personas across multiple groups." },
+          ].map((u) => (
+            <div key={u.title} className="w-card p-4">
+              <p className="w-display text-sm mb-1">{u.title}</p>
+              <p className="text-xs w-text-dim leading-relaxed">{u.body}</p>
+            </div>
           ))}
         </div>
       </section>
@@ -646,8 +623,8 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
       <section id="free-trial-cta" className="max-w-3xl mx-auto px-6 pb-16 text-center">
         <div className="w-card-raised border w-teal-border p-8">
           <Rocket size={22} className="w-teal mx-auto mb-3" />
-          <h2 className="w-display text-xl mb-2">Ready to put a Watcher in your Community?</h2>
-          <p className="w-text-dim text-sm mb-5">Start with a {TRIAL_DURATION_DAYS}-day Free Trial — no payment required.</p>
+          <h2 className="w-display text-xl mb-2">See what it feels like to have a Watcher in your community.</h2>
+          <p className="w-text-dim text-sm mb-5">Deploy one free for {TRIAL_DURATION_DAYS} days. No payment required.</p>
           <Link href="/signup" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
             Start Free Trial <ArrowRight size={14} />
           </Link>
@@ -675,7 +652,19 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
         <HowItWorksFlow steps={STEPS} />
       </section>
 
-      <WatchOnboardingGuide />
+      {/* The full 8-step setup walkthrough is real documentation depth, not
+          primary sales copy -- collapsed by default (native <details>, no
+          client-side state needed on this server component) so it stays
+          available without competing with the sections above for
+          attention. The short 4-step "How it works" above already sells
+          the value; this explains the implementation. */}
+      <details className="group">
+        <summary className="cursor-pointer text-sm w-teal font-semibold text-center list-none flex items-center justify-center gap-1.5 py-4">
+          See the full setup guide, step by step
+          <span className="group-open:rotate-180 transition-transform">▾</span>
+        </summary>
+        <WatchOnboardingGuide />
+      </details>
 
       <section id="enterprise" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
         <p className="text-xs w-mono uppercase w-teal tracking-wider text-center mb-2">Enterprise</p>
@@ -711,9 +700,63 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
         </div>
       </section>
 
-      <WatchPricingSection options={options} authenticated={authenticated} />
+      {/* BYO 20 moved lower, into the pricing area -- it's a self-serve
+          plan promotion, not a core product differentiator, so it no
+          longer competes for attention with the earlier sections that
+          explain what a Watcher actually does. */}
+      <section id="byo20" className="max-w-5xl mx-auto px-6 pb-16 scroll-mt-24">
+        <div className="w-card-raised border w-teal-border p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-8 items-center relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-40 h-40 rounded-full w-teal-soft-bg blur-3xl opacity-40 -translate-y-1/2 translate-x-1/3" aria-hidden="true" />
+          <div className="relative">
+            <span className="inline-flex w-fit items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full mb-4 w-teal-soft-bg w-teal">
+              <Star size={11} /> Best value plan
+            </span>
+            <h2 className="w-display text-2xl sm:text-3xl mb-3">
+              BYO 20 — everything included. Bring your own AI.
+            </h2>
+            <p className="w-text-dim text-sm leading-relaxed mb-5 max-w-md">
+              One flat price for the most Watch offers as a self-serve plan. Connect your own AI provider
+              credential (Anthropic or an OpenAI-compatible provider) and Innvil never charges you for AI usage
+              on top of the plan price — self-serve, purchase it right now, no sales call required.
+            </p>
+            <ul className="space-y-2 mb-6 text-sm w-text-dim">
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {byo20.slots} Watcher slots</li>
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {byo20.communitiesIncluded} Communities — already the max, nothing more to unlock</li>
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> {MEDIA_MODERATION_BASE_ALLOWANCE.byo20.toLocaleString()} Media Moderation units/mo included, plus optional capacity packs</li>
+              <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> Same Innvil Credit discounts as every other plan</li>
+            </ul>
+            <a href="#pricing" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg inline-flex items-center gap-1.5">
+              Get BYO 20 <ArrowRight size={14} />
+            </a>
+            <p className="text-xs w-text-faint mt-3">
+              Not the same as Enterprise BYO — this is a self-serve plan; Enterprise BYO is manually provisioned for larger, custom deployments.
+            </p>
+          </div>
+          <div className="relative w-card p-6 text-center">
+            <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-2">BYO 20 · monthly</p>
+            <p className="w-display text-4xl mb-1">
+              ${byo20.price.toFixed(2)}<span className="text-base w-text-faint font-normal">/mo</span>
+            </p>
+            <p className="text-xs w-text-faint mb-5">Bring your own AI provider credential</p>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="w-surface-raised rounded-lg p-2.5">
+                <p className="w-display text-lg w-teal">{byo20.slots}</p>
+                <p className="text-[10px] w-text-faint">slots</p>
+              </div>
+              <div className="w-surface-raised rounded-lg p-2.5">
+                <p className="w-display text-lg w-teal">{byo20.communitiesIncluded}</p>
+                <p className="text-[10px] w-text-faint">communities</p>
+              </div>
+              <div className="w-surface-raised rounded-lg p-2.5">
+                <p className="w-display text-lg w-teal">{(MEDIA_MODERATION_BASE_ALLOWANCE.byo20 / 1000).toFixed(1).replace(/\.0$/, "")}K</p>
+                <p className="text-[10px] w-text-faint">media units</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-      <WatchFaq />
+      <WatchPricingSection options={options} authenticated={authenticated} />
 
       <WatchFooter />
     </div>

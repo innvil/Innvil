@@ -59,6 +59,19 @@ test("REQUIRED: classification routes to the hard Sonnet 5 default, never DeepSe
   });
 });
 
+test("REQUIRED (live bug repro): a link-LESS promotional pitch is classified via the SAME classifier, and the prompt explicitly covers link-less messages", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: UNSOLICITED_PROMOTION\nCONFIDENCE: high"), async (calls) => {
+      const text = "Hey Dev, Looking for real investors & strong volume? I can promote your project across active crypto communities and bring serious buyers. DM me if you're ready to grow.";
+      const result = await classifyLinkIntent(text, "");
+      assert.deepEqual(result, { category: "UNSOLICITED_PROMOTION", confidence: "high" });
+      const body = calls[0].body as { system: string };
+      assert.match(body.system, /most messages you're asked to classify contain an external link.*but some do not/i);
+      assert.match(body.system, /dm me if you're ready to grow/i); // the real link-less worked example is present
+    });
+  });
+});
+
 test("parses a legitimate collaboration classification", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("CATEGORY: COLLABORATION_REQUEST\nCONFIDENCE: medium"), async () => {

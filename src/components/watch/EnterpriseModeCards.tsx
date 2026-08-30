@@ -11,16 +11,18 @@ import {
 } from "@/src/lib/products/watch-enterprise";
 import {
   getEnterpriseIncludedCommunities, getEnterpriseCommunityExpansionOptions, getEnterpriseCommunityExpansionPrice,
-  nextByoUnlimitedCapacityStep, type EnterpriseCommunityMode,
+  type EnterpriseCommunityMode,
 } from "@/src/lib/products/watch-enterprise-community";
+import { formatSlotLimit } from "@/src/lib/products/watch-plans";
 
 const MODE_ICON: Record<EnterpriseMode, typeof Server> = { managed: Server, byo: KeyRound };
 
-/** A single-selected Community capacity package -- Managed/BYO 50 show the
- *  base + every fixed package as pills (never an infinite list, since both
- *  have a real hard maximum); BYO Unlimited adds a bounded "Add 10
- *  Communities" step control for capacity beyond its own last fixed
- *  package, since it genuinely has no ceiling to enumerate to. */
+/** A single-selected Community capacity package -- Managed still shows the
+ *  base + every real fixed paid package as pills. NEITHER BYO variant has a
+ *  paid expansion path anymore (bring-your-own means Innvil incurs no
+ *  marginal cost for extra Communities on a BYO account) -- BYO renders a
+ *  plain, static "included, free" line instead of a selector, since
+ *  there's nothing to choose. */
 function CommunityCapacitySelector({
   communityMode, value, onChange,
 }: {
@@ -29,6 +31,14 @@ function CommunityCapacitySelector({
   onChange: (capacity: number) => void;
 }) {
   const included = getEnterpriseIncludedCommunities(communityMode);
+  if (communityMode !== "managed") {
+    return (
+      <div className="mt-2.5">
+        <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">Community capacity</p>
+        <p className="text-[11px] w-teal">{formatSlotLimit(included)} Communities included — free, no expansion needed</p>
+      </div>
+    );
+  }
   const options = getEnterpriseCommunityExpansionOptions(communityMode);
   return (
     <div className="mt-2.5">
@@ -51,15 +61,6 @@ function CommunityCapacitySelector({
             {o.capacity} — +${o.price.toFixed(2)}
           </button>
         ))}
-        {communityMode === "byoUnlimited" && value >= 25 && (
-          <button
-            type="button"
-            onClick={() => onChange(nextByoUnlimitedCapacityStep(value))}
-            className="text-[11px] px-2.5 py-1 rounded-full border w-line-soft w-text-faint hover:w-teal-border"
-          >
-            + Add 10 Communities
-          </button>
-        )}
       </div>
       {value > included && (
         <p className="text-[10px] w-text-faint mt-1">

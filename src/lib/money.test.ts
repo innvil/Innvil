@@ -5,7 +5,9 @@ import {
   MODERATOR_ENTERPRISE_MIN_SLOTS, MODERATOR_COMMISSION_SHARE, MODERATOR_RENTAL_DISCOUNT,
   MODERATOR_COMMUNITY_CAPACITY, MODERATOR_ADDITIONAL_COMMUNITY_PRICE, MODERATOR_ADDITIONAL_COMMUNITY_WITH_AUTOPOST_PRICE,
   MODERATOR_AUTOPOST_INCLUDED_PER_DAY, MODERATOR_AUTOPOST_MAX_PER_DAY, MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE,
-  MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON,
+  MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON, ENTERPRISE_MEDIA_ADDON,
+  MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE,
+  MEDIA_MODERATION_EXPANSION_PACKS, mediaModerationExpansionPackByUnits,
   moderatorPlanPrice, moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, moderatorAutopostFrequencyAddonPrice,
   COMMUNITY_EXPANSION_ELIGIBLE_TIERS, COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier,
   type ModeratorPlanTier,
@@ -255,4 +257,100 @@ test("REQUIRED: BYO 20's AI Generations pool is N/A (0) by design -- it always r
 test("REQUIRED: Community Expansion capacity ceilings are the SAME MODERATOR_COMMUNITY_CAPACITY.maxWithAddons already shown on Plans -- never a duplicated number", () => {
   assert.equal(MODERATOR_COMMUNITY_CAPACITY.premium.maxWithAddons, 5, "Gold expands to 5");
   assert.equal(MODERATOR_COMMUNITY_CAPACITY.pro.maxWithAddons, 10, "Platinum expands to 10");
+});
+
+/* --------------------------------------------- Media Moderation Units, REVISED model ---- */
+// (2026-08-27) Every plan now gets a real, unconditionally-included base
+// allowance automatically. Revised again (same day) to the final canonical
+// table -- items 1-8 of the required test list.
+
+test("REQUIRED (1): Bronze resolves to 300 Media Moderation Units", () => {
+  assert.equal(MEDIA_MODERATION_BASE_ALLOWANCE.basic, 300);
+});
+
+test("REQUIRED (2): Silver resolves to 500 Media Moderation Units", () => {
+  assert.equal(MEDIA_MODERATION_BASE_ALLOWANCE.standard, 500);
+});
+
+test("REQUIRED (3): Gold resolves to 700 Media Moderation Units", () => {
+  assert.equal(MEDIA_MODERATION_BASE_ALLOWANCE.premium, 700);
+});
+
+test("REQUIRED (4): Platinum resolves to 1,000 Media Moderation Units", () => {
+  assert.equal(MEDIA_MODERATION_BASE_ALLOWANCE.pro, 1000);
+});
+
+test("REQUIRED (6, 7, 8): BYO 20, BYO 50, and BYO Unlimited all resolve to the SAME 2,000 Media Moderation Units", () => {
+  assert.equal(MEDIA_MODERATION_BASE_ALLOWANCE.byo20, 2000);
+  assert.equal(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byo50, 2000);
+  assert.equal(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byoUnlimited, 2000);
+});
+
+test("REQUIRED (5): Managed Enterprise resolves to 1,500 Media Moderation Units", () => {
+  assert.equal(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.managed50, 1500);
+});
+
+test("REQUIRED: the full canonical lineup sums to exactly 10,000 units (Bronze 300 + Silver 500 + Gold 700 + Platinum 1,000 + Managed Enterprise 1,500 + BYO 20/50/Unlimited 2,000 each)", () => {
+  const total =
+    MEDIA_MODERATION_BASE_ALLOWANCE.basic + MEDIA_MODERATION_BASE_ALLOWANCE.standard
+    + MEDIA_MODERATION_BASE_ALLOWANCE.premium + MEDIA_MODERATION_BASE_ALLOWANCE.pro
+    + MEDIA_MODERATION_BASE_ALLOWANCE.byo20
+    + ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.managed50 + ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byo50
+    + ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byoUnlimited;
+  assert.equal(total, 10000);
+});
+
+test("REQUIRED (12): revising Media Moderation Unit allowances leaves Watcher-slot entitlement (CAPACITY.maxActiveSlots) completely unchanged -- a structurally separate table, never derived from or coupled to media allowances", () => {
+  assert.deepEqual(
+    { basic: CAPACITY.basic.maxActiveSlots, standard: CAPACITY.standard.maxActiveSlots, premium: CAPACITY.premium.maxActiveSlots, pro: CAPACITY.pro.maxActiveSlots, byo20: CAPACITY.byo20.maxActiveSlots },
+    { basic: 2, standard: 5, premium: 10, pro: 20, byo20: 20 }
+  );
+});
+
+test("REQUIRED (13): revising Media Moderation Unit allowances leaves Community entitlement (MODERATOR_COMMUNITY_CAPACITY) completely unchanged", () => {
+  assert.deepEqual(
+    {
+      basic: MODERATOR_COMMUNITY_CAPACITY.basic, standard: MODERATOR_COMMUNITY_CAPACITY.standard,
+      premium: MODERATOR_COMMUNITY_CAPACITY.premium, pro: MODERATOR_COMMUNITY_CAPACITY.pro, byo20: MODERATOR_COMMUNITY_CAPACITY.byo20,
+    },
+    {
+      basic: { included: 1, maxWithAddons: 1 }, standard: { included: 2, maxWithAddons: 2 },
+      premium: { included: 3, maxWithAddons: 5 }, pro: { included: 5, maxWithAddons: 10 }, byo20: { included: 10, maxWithAddons: 10 },
+    }
+  );
+});
+
+test("REQUIRED (14): revising Media Moderation Unit allowances leaves conversational AI usage entitlement (MODERATOR_AI_GENERATION_POOL) completely unchanged", () => {
+  assert.deepEqual(
+    { basic: MODERATOR_AI_GENERATION_POOL.basic, standard: MODERATOR_AI_GENERATION_POOL.standard, premium: MODERATOR_AI_GENERATION_POOL.premium, pro: MODERATOR_AI_GENERATION_POOL.pro },
+    { basic: 2000, standard: 5000, premium: 10000, pro: 20000 }
+  );
+});
+
+test("every self-serve tier (incl. byo20) and every Enterprise variant has a real, non-zero base allowance -- no tier silently gets zero", () => {
+  for (const tier of Object.keys(MEDIA_MODERATION_BASE_ALLOWANCE) as ModeratorPlanTier[]) {
+    assert.ok(MEDIA_MODERATION_BASE_ALLOWANCE[tier] > 0, `${tier} must have a real base allowance`);
+  }
+  for (const key of Object.keys(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE) as Array<keyof typeof ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE>) {
+    assert.ok(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE[key] > 0, `${key} must have a real base allowance`);
+  }
+});
+
+test("REQUIRED: the six real expansion packs, exact units and prices, available to every plan", () => {
+  assert.deepEqual(
+    MEDIA_MODERATION_EXPANSION_PACKS.map((p) => [p.units, p.price]),
+    [[1000, 9.99], [2000, 14.99], [3000, 19.99], [5000, 24.99], [10000, 39.99], [20000, 59.99]],
+  );
+});
+
+test("mediaModerationExpansionPackByUnits resolves a real pack by its exact unit size, null for anything else -- never guesses a price for an arbitrary count", () => {
+  assert.deepEqual(mediaModerationExpansionPackByUnits(5000), { units: 5000, price: 24.99 });
+  assert.equal(mediaModerationExpansionPackByUnits(5001), null);
+  assert.equal(mediaModerationExpansionPackByUnits(0), null);
+  assert.equal(mediaModerationExpansionPackByUnits(-1000), null);
+});
+
+test("the OLD per-tier add-on model (MODERATOR_MEDIA_ADDON / ENTERPRISE_MEDIA_ADDON) is untouched, for the pre-existing backward-compatible purchase/removal functions that still reference it", () => {
+  assert.deepEqual(MODERATOR_MEDIA_ADDON.basic, { price: 9.99, units: 1000 });
+  assert.deepEqual(ENTERPRISE_MEDIA_ADDON.managed50, { price: 39.99, units: 8000 });
 });

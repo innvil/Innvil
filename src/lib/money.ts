@@ -196,12 +196,13 @@ export function managedEnterprisePriceAtSlots(slots: number): number {
   return totalCents / 100;
 }
 
-/** Optional Media Moderation + add-on for Enterprise -- layered on top of
- *  any of the three fixed packages above (never bundled into the base
- *  price, never a separate duplicated plan). Provider-neutral "Media
- *  Moderation Units" (see the media-moderation runtime's own unit
- *  semantics -- 1 classified photo or 1 sampled video frame = 1 unit),
- *  never Sightengine-specific terminology/economics exposed here. */
+/** DEPRECATED (2026-08-27, superseded by ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE
+ *  further down this file) -- the OLD devops-granted, fixed-size Enterprise
+ *  Media Moderation + add-on. Superseded by a real, unconditionally-included
+ *  base allowance per Enterprise variant -- kept only because it's still
+ *  referenced by the existing `enterprise_media_addon` devops grant/entitlement
+ *  column and its own tests; no longer read by the live media-moderation
+ *  runtime gate. Do not build new logic on top of this constant. */
 export interface EnterpriseMediaAddonPricing { price: number; units: number; }
 export const ENTERPRISE_MEDIA_ADDON: Record<"managed50" | "byo50" | "byoUnlimited", EnterpriseMediaAddonPricing> = {
   managed50: { price: 39.99, units: 8000 },
@@ -309,25 +310,18 @@ export const MODERATOR_AI_GENERATION_POOL: Record<ModeratorPlanTier, number> = {
   byo20: 0,
 };
 
-/** Self-serve "Media Moderation +" add-on (2026-08-22) -- an OPTIONAL layer
- *  on top of any of the 4 self-serve tiers (never bundled into the base
- *  price, available to all four, unlike Community Expansion's Gold/Platinum-
- *  only restriction). Real, provisioned via the SAME `watch_subscription_
- *  addons` table Community Expansion already uses (migration 0087,
- *  addon_type='media_moderation') -- never a duplicated add-on architecture
- *  or a separate "Bronze+/Silver+/Gold+/Platinum+" plan identity. Units are
- *  the same provider-neutral "Media Moderation Unit" concept used by
- *  Enterprise's own media add-on (ENTERPRISE_MEDIA_ADDON) -- 1 classified
- *  photo or 1 sampled video frame = 1 unit; never Sightengine-specific
- *  terminology/economics exposed to the customer. Worked totals (base +
- *  add-on): Bronze+ $29.99+$9.99=$39.98, Silver+ $59.99+$14.99=$74.98,
- *  Gold+ $99.99+$19.99=$119.98, Platinum+ $149.99+$24.99=$174.98.
- *  byo20 is the one EXCEPTION to "optional add-on, never bundled" -- its
- *  3,000 units are baked into the $199.99 base price by explicit product
- *  decision (the flagship "everything included" tier), never a separate
- *  purchase; `price: 0` documents that (never actually charged -- the
- *  purchase UI for this addon is hidden entirely for byo20, see
- *  MediaModerationAddonCard.tsx). */
+/** DEPRECATED (2026-08-27, superseded by MEDIA_MODERATION_BASE_ALLOWANCE /
+ *  MEDIA_MODERATION_EXPANSION_PACKS below) -- the OLD self-serve
+ *  "Media Moderation +" model: zero units included, a single fixed-size
+ *  block had to be purchased before ANY media moderation ran at all.
+ *  Superseded by a real INCLUDED base allowance on every plan plus
+ *  stackable expansion packs. Kept ONLY because the pre-existing purchase/
+ *  removal functions in innvil-credit.ts (`purchaseMediaModerationAddonWithCredit`
+ *  / `scheduleMediaModerationAddonRemoval`) and their action wrappers still
+ *  reference it and remain in place, unused by any live UI or the runtime
+ *  gate as of this revision -- do not build new UI/logic on top of this
+ *  constant; use MEDIA_MODERATION_BASE_ALLOWANCE / MEDIA_MODERATION_EXPANSION_PACKS
+ *  instead. */
 export interface MediaModerationAddonPricing { price: number; units: number; }
 export const MODERATOR_MEDIA_ADDON: Record<ModeratorPlanTier, MediaModerationAddonPricing> = {
   basic: { price: 9.99, units: 1000 },
@@ -337,12 +331,80 @@ export const MODERATOR_MEDIA_ADDON: Record<ModeratorPlanTier, MediaModerationAdd
   byo20: { price: 0, units: 3000 },
 };
 
-/** Total monthly price for a tier with Media Moderation + enabled -- plain
- *  addition, rounded to 2dp to avoid float display drift, matching the
- *  exact same pattern as `enterprisePackageTotalWithMedia` in
- *  watch-enterprise.ts. */
+/** Total monthly price for a tier with the OLD Media Moderation + add-on
+ *  enabled -- DEPRECATED alongside MODERATOR_MEDIA_ADDON above, kept only
+ *  for the same backward-compatibility reason. */
 export function moderatorPlanTotalWithMediaAddon(tier: ModeratorPlanTier): number {
   return Math.round((moderatorPlanPrice(tier) + MODERATOR_MEDIA_ADDON[tier].price) * 100) / 100;
+}
+
+/**
+ * Media Moderation Units -- REVISED model (2026-08-27). Every Watch plan
+ * (self-serve AND Enterprise/BYO) now gets a real, controlled INCLUDED
+ * allowance automatically, with no purchase required -- this supersedes
+ * both MODERATOR_MEDIA_ADDON above (the old self-serve "must buy a fixed
+ * block first" model) and ENTERPRISE_MEDIA_ADDON above (the old devops-
+ * granted fixed Enterprise add-on). A "unit" keeps its existing, unchanged
+ * meaning: 1 classified photo, or 1 representative video frame actually
+ * sent to the media-safety classifier (never a raw video/file count, and
+ * the allowance never determines how many frames are sampled -- see
+ * media-moderation.ts's bounded-sampling architecture, which this model
+ * does not touch). Provider-neutral terminology throughout -- never
+ * Sightengine-specific (Sightengine may remain the provider behind the
+ * existing abstraction, but this entitlement is independent of it).
+ *
+ * Media Moderation Units are a SEPARATE entitlement from Watcher slots,
+ * Community allowance, AI Generations, Auto-Posting, and the customer's own
+ * BYO provider/API source -- purchasing more capacity here never changes
+ * any of those, and BYO's own conversational-provider usage never affects
+ * (or is affected by) this allowance; Innvil still operates the media-
+ * safety classification pipeline itself, so it remains controlled even for
+ * BYO accounts.
+ */
+export const MEDIA_MODERATION_BASE_ALLOWANCE: Record<ModeratorPlanTier, number> = {
+  basic: 300,
+  standard: 500,
+  premium: 700,
+  pro: 1000,
+  byo20: 2000,
+};
+
+/** Enterprise's three commercial variants (Managed / BYO 50 / BYO Unlimited)
+ *  each get their own included base allowance too -- keyed the same way
+ *  `resolveEnterpriseMediaAddonKey` (watch-enterprise.ts) already resolves
+ *  an account's real provisioned package, so display and enforcement can
+ *  never disagree about which allowance applies. */
+export const ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE: Record<"managed50" | "byo50" | "byoUnlimited", number> = {
+  managed50: 1500,
+  byo50: 2000,
+  byoUnlimited: 2000,
+};
+
+/** Optional, stackable expansion packs -- available to EVERY plan (self-
+ *  serve, byo20, and every Enterprise variant), never gated to a subset of
+ *  tiers. Each purchase is a discrete, current-billing-period top-up (see
+ *  watch-media-moderation-expansion.ts) -- multiple packs, even of
+ *  different sizes, aggregate within the same period; a fresh period starts
+ *  back at just the base allowance, since a purchased pack is scoped to the
+ *  period it was bought in, never a permanent recurring increase. */
+export interface MediaModerationExpansionPack {
+  units: number;
+  price: number;
+}
+export const MEDIA_MODERATION_EXPANSION_PACKS: MediaModerationExpansionPack[] = [
+  { units: 1000, price: 9.99 },
+  { units: 2000, price: 14.99 },
+  { units: 3000, price: 19.99 },
+  { units: 5000, price: 24.99 },
+  { units: 10000, price: 39.99 },
+  { units: 20000, price: 59.99 },
+];
+
+/** Resolves a canonical pack by its exact unit size -- `null` for anything
+ *  that isn't one of the real, priced packs above (never guesses a price
+ *  for an arbitrary unit count). */
+export function mediaModerationExpansionPackByUnits(units: number): MediaModerationExpansionPack | null {
+  return MEDIA_MODERATION_EXPANSION_PACKS.find((p) => p.units === units) ?? null;
 }
 
 /** Suggested default for the customer-facing automator subscription. Owners can override

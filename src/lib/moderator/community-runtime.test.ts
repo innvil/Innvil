@@ -1225,7 +1225,7 @@ function buildLinkModerationEvent(text: string): CommunityEvent {
 }
 
 const MR_PRES_DEPLOYMENT: ChatterDeployment = {
-  deploymentId: "dep-1", moderatorId: "mod-1", moderatorName: "Mr Pres", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "mrpreswan_bot",
+  deploymentId: "dep-1", moderatorId: "mod-1", moderatorName: "Mr Pres", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "mrpreswan_bot", createdAt: "2026-01-01T00:00:00Z",
 };
 
 test("REQUIRED (live bug, NO HIDDEN FALLBACK): a message containing ONLY the Watcher's own @username + greeting never touches the DB or Telegram -- structurally proves no deletion/warning can happen", async () => {
@@ -1262,8 +1262,8 @@ test("REQUIRED: the same self-mention with different casing is still recognized 
 });
 
 test("REQUIRED (multi-Watcher, requirement 8): mentioning a DIFFERENT deployed Watcher's username is also exempt -- Test never treats Kwan's mention as its own scam signal", async () => {
-  const kwan: ChatterDeployment = { deploymentId: "dep-kwan", moderatorId: "mod-kwan", moderatorName: "Kwan", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "kwan_mod_bot" };
-  const test1: ChatterDeployment = { deploymentId: "dep-test", moderatorId: "mod-test", moderatorName: "Test", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "test1_mod_bot" };
+  const kwan: ChatterDeployment = { deploymentId: "dep-kwan", moderatorId: "mod-kwan", moderatorName: "Kwan", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "kwan_mod_bot", createdAt: "2026-01-01T00:00:00Z" };
+  const test1: ChatterDeployment = { deploymentId: "dep-test", moderatorId: "mod-test", moderatorName: "Test", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "test1_mod_bot", createdAt: "2026-01-01T00:00:01Z" };
   const admin = throwingAdmin();
   const result = await runLinkModeration(
     admin, null, { id: "community-1" }, "-1001",
@@ -1330,7 +1330,7 @@ function baseAiGateEvent(): CommunityEvent {
 }
 
 const AI_GATE_DEPLOYMENT: ChatterDeployment = {
-  deploymentId: "dep-1", moderatorId: "mod-1", moderatorName: "Mr Pres", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "mrpreswan_bot",
+  deploymentId: "dep-1", moderatorId: "mod-1", moderatorName: "Mr Pres", persona: DEFAULT_MODERATOR_PERSONA, botUsername: "mrpreswan_bot", createdAt: "2026-01-01T00:00:00Z",
 };
 
 test("REQUIRED: an exhausted AI response pool resolves to SILENCE for a paid account, structurally before any generation/send/increment", async () => {

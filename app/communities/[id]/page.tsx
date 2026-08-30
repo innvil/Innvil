@@ -15,6 +15,7 @@ import { getCommunityPresenceSchedule } from "@/src/lib/actions/watch-presence";
 import { AutoPostScheduleCard } from "@/src/components/watch/AutoPostScheduleCard";
 import { getAutoPostingEligibility } from "@/src/lib/actions/watch-autopost";
 import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
+import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
 
 export const metadata: Metadata = { title: "Community — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -177,6 +178,10 @@ export default async function CommunityDetailPage({
             To reconnect or add another Watcher to this Community, use the Connect flow on the{" "}
             <Link href="/watchers" className="w-teal hover:underline">Watchers page</Link>.
           </p>
+          <div className="mt-5 pt-5 border-t w-line-soft">
+            <SectionHeader icon={SettingsIcon} title="Moderation" />
+            <CommunitySolicitationToggle communityId={community.id} allowSolicitation={community.allowSolicitation} />
+          </div>
         </div>
       ),
     },

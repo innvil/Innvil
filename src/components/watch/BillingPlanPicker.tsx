@@ -7,13 +7,12 @@ import type { WatchPlanOption, WatchPlanDisplayName } from "@/src/lib/products/w
 import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
 import { WatchCheckout } from "./WatchCheckout";
 import { SlotInfoPopover, CommunityExpansionInfoPopover } from "./SlotInfoPopover";
-import { MediaModerationAddonCard } from "./MediaModerationAddonCard";
 import {
   creditPriceUsd, creditSavingsUsd, INNVIL_CREDIT_DISCOUNT, annualCreditPriceUsd,
   annualDirectPriceUsd, annualDirectEquivalentMonthlyUsd, annualDirectSavingsUsd, annualCreditExtraSavingsUsd,
 } from "@/src/lib/products/innvil-credit-pricing";
 import { Coins } from "lucide-react";
-import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
+import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_AI_GENERATION_POOL, MEDIA_MODERATION_BASE_ALLOWANCE } from "@/src/lib/money";
 
 type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
 
@@ -45,17 +44,11 @@ type SelfServePlan = Exclude<WatchPlanDisplayName, "Enterprise">;
  *  computed from the same canonical creditPriceUsd/annualCreditPriceUsd
  *  functions Billing/WatchCheckout already use, never a duplicated number. */
 export function BillingPlanPicker({
-  options, currentDisplayName, currentBillingInterval = "monthly", mediaAddon,
+  options, currentDisplayName, currentBillingInterval = "monthly",
 }: {
   options: WatchPlanOption[];
   currentDisplayName: string | null;
   currentBillingInterval?: WatchBillingInterval;
-  /** The account's REAL Media Moderation + state for its CURRENT self-serve
-   *  tier (if any) -- only the current-plan card can offer a real Add/Manage
-   *  action, since purchasing requires an active subscription on that exact
-   *  tier already. Optional so existing callers (e.g. the pre-authenticated
-   *  pricing preview, if any) don't need to supply it. */
-  mediaAddon?: { active: boolean; cancelAtPeriodEnd: boolean; units: number };
 }) {
   const [billingInterval, setBillingInterval] = useState<WatchBillingInterval>("monthly");
   const [checkoutPlan, setCheckoutPlan] = useState<SelfServePlan | null>(null);
@@ -196,39 +189,23 @@ export function BillingPlanPicker({
                 </div>
               </div>
 
-              {/* byo20's Media Moderation is BUNDLED into the base price -- never
-                  a separate purchase, unlike the other 4 tiers' optional add-on.
-                  No CTA at all here, just a plain "included" statement. */}
-              {o.tier === "byo20" ? (
-                <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="w-display text-xs w-teal">Media Moderation +</p>
-                    <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Included</span>
-                  </div>
-                  <p className="text-[11px] w-text-faint">
-                    Photo & video media safety — {MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} Media Moderation Units/mo, bundled at no extra cost.
-                  </p>
+              {/* Media Moderation -- REVISED model (2026-08-27): every plan
+                  gets this base allowance automatically, no purchase
+                  required (byo20 previously had its own "bundled" wording
+                  for the same idea; now every tier reads the same way).
+                  Additional capacity is purchased from Usage once
+                  subscribed -- never a second purchase surface duplicated
+                  here. */}
+              <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="w-display text-xs w-teal">Media Moderation</p>
+                  <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Included</span>
                 </div>
-              ) : isCurrentPlan && mediaAddon ? (
-                <div className="mb-4">
-                  <MediaModerationAddonCard
-                    tier={o.tier}
-                    billingInterval={billingInterval}
-                    active={mediaAddon.active}
-                    cancelAtPeriodEnd={mediaAddon.cancelAtPeriodEnd}
-                    units={mediaAddon.units || MODERATOR_MEDIA_ADDON[o.tier].units}
-                  />
-                </div>
-              ) : (
-                <div className="mb-4 w-surface-raised border w-teal-border rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="w-display text-xs w-teal">Media Moderation +</p>
-                    <span className="w-pill w-teal-soft-bg w-teal text-[10px]">Optional add-on</span>
-                  </div>
-                  <p className="text-[11px] w-text-faint mb-2">Photo & video media safety — {MODERATOR_MEDIA_ADDON[o.tier].units.toLocaleString()} Media Moderation Units/mo</p>
-                  <p className="w-display text-base w-text">+${MODERATOR_MEDIA_ADDON[o.tier].price.toFixed(2)}<span className="text-[11px] w-text-faint font-normal">/mo</span></p>
-                </div>
-              )}
+                <p className="text-[11px] w-text-faint">
+                  Photo & video media safety — {MEDIA_MODERATION_BASE_ALLOWANCE[o.tier].toLocaleString()} Media Moderation Units/mo included.{" "}
+                  <Link href="/usage" className="w-teal hover:underline">Add more from Usage</Link> after subscribing.
+                </p>
+              </div>
               {isCurrent ? (
                 <span className="mt-auto text-xs w-teal flex items-center gap-1"><CheckCircle2 size={13} /> Current plan</span>
               ) : (

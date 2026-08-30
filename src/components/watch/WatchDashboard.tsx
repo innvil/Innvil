@@ -165,9 +165,9 @@ export function WatchDashboard({
             <StatCard
               label="Communities"
               value={communities.length}
-              denominator={capacity ? String(capacity.communitiesTotal) : undefined}
-              note={capacity ? `${Math.max(0, capacity.communitiesTotal - capacity.communitiesUsed)} available` : undefined}
-              progress={capacity ? (capacity.communitiesUsed / Math.max(1, capacity.communitiesTotal)) * 100 : undefined}
+              denominator={capacity ? formatSlotLimit(capacity.communitiesTotal) : undefined}
+              note={capacity ? (Number.isFinite(capacity.communitiesTotal) ? `${Math.max(0, capacity.communitiesTotal - capacity.communitiesUsed)} available` : "unlimited available") : undefined}
+              progress={capacity ? (Number.isFinite(capacity.communitiesTotal) ? (capacity.communitiesUsed / Math.max(1, capacity.communitiesTotal)) * 100 : 4) : undefined}
             />
             <StatCard label="Moderation actions" value={moderationActionsLast7Days} note="last 7 days" />
           </div>

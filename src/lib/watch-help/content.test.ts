@@ -5,8 +5,12 @@ import {
   type HelpBlock,
 } from "./content";
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/moderator/plan";
-import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
+import {
+  MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL,
+  MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE, MEDIA_MODERATION_EXPANSION_PACKS,
+} from "@/src/lib/money";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
+import { getEnterpriseIncludedCommunities } from "@/src/lib/products/watch-enterprise-community";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
 import { annualCreditPriceUsd, annualDirectPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
 
@@ -147,13 +151,42 @@ test("REQUIRED: the Innvil Watch Enterprise article states the real, current fix
   assert.doesNotMatch(text, /\$599|\$799|\$829\.99/, "must never state the superseded pre-repricing figures");
 });
 
-test("REQUIRED: Plans and Billing article states the real per-tier AI Generations allowances and Media Moderation + pricing", () => {
+test("REQUIRED (2026-08-28): the Enterprise article states BYO's real, revised Community capacity model -- 25 free for BYO 50, unlimited free for BYO Unlimited, and that only Managed has a paid expansion path", () => {
+  const a = getArticle("innvil-watch-enterprise")!;
+  const text = a.body.join(" ");
+  assert.ok(text.includes(`${getEnterpriseIncludedCommunities("byo50")} Communities included automatically at no extra cost`), "BYO 50's real free included capacity");
+  assert.ok(text.includes("unlimited Communities"), "BYO Unlimited's real free unlimited capacity");
+  assert.ok(text.includes("only Managed Enterprise does"), "must state plainly that BYO has no paid Community Expansion at all");
+});
+
+test("REQUIRED: Plans and Billing article states the real per-tier AI Generations allowances and Media Moderation base allowances", () => {
   const a = getArticle("plans-and-billing")!;
   const text = a.body.join(" ");
   assert.ok(text.includes(MODERATOR_AI_GENERATION_POOL.basic.toLocaleString()));
   assert.ok(text.includes(MODERATOR_AI_GENERATION_POOL.pro.toLocaleString()));
-  assert.ok(text.includes(`$${MODERATOR_MEDIA_ADDON.basic.price.toFixed(2)}`));
-  assert.ok(text.includes(`$${MODERATOR_MEDIA_ADDON.pro.price.toFixed(2)}`));
+  assert.ok(text.includes(MEDIA_MODERATION_BASE_ALLOWANCE.basic.toLocaleString()));
+  assert.ok(text.includes(MEDIA_MODERATION_BASE_ALLOWANCE.pro.toLocaleString()));
+  assert.ok(text.includes(MEDIA_MODERATION_BASE_ALLOWANCE.byo20.toLocaleString()));
+});
+
+test("REQUIRED: Media Moderation article states the real base allowances, capacity-pack prices, and Enterprise allowances -- never the superseded per-tier add-on prices", () => {
+  const a = getArticle("plans-and-billing")!;
+  const text = a.body.join(" ");
+  for (const tier of ["basic", "standard", "premium", "pro", "byo20"] as const) {
+    assert.ok(text.includes(MEDIA_MODERATION_BASE_ALLOWANCE[tier].toLocaleString()), `must state ${tier}'s real base allowance`);
+  }
+  for (const pack of MEDIA_MODERATION_EXPANSION_PACKS) {
+    assert.ok(text.includes(`$${pack.price.toFixed(2)}`), `must state the real $${pack.price} capacity pack price`);
+  }
+  assert.doesNotMatch(text, /Media Moderation \+/, "must never reference the superseded 'Media Moderation +' add-on name");
+});
+
+test("REQUIRED: Innvil Watch Enterprise article states the real per-package Media Moderation base allowances", () => {
+  const a = getArticle("innvil-watch-enterprise")!;
+  const text = a.body.join(" ");
+  assert.ok(text.includes(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.managed50.toLocaleString()));
+  assert.ok(text.includes(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byo50.toLocaleString()));
+  assert.ok(text.includes(ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byoUnlimited.toLocaleString()));
 });
 
 test("REQUIRED: Plans and Billing article correctly states annual billing has TWO real discounts (5% direct, 10% Innvil Credit) -- never the superseded 'Innvil Credit only' claim", () => {

@@ -30,7 +30,7 @@ import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
-  filterOutOwnBotMentions, spamWarningMuteSentence,
+  filterOutOwnBotMentions, spamWarningMuteSentence, looksLikeUnsolicitedPitch,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
@@ -47,6 +47,10 @@ import {
 } from "@/src/lib/products/watch-runtime";
 import { recordByoUsageEvent } from "@/src/lib/products/watch-byo-usage";
 import { recordByoPolicyUsage } from "@/src/lib/products/watch-byo-usage-policy";
+import {
+  assignWatcherRoles, resolveModerationEnforcer, reconcileAmbientPick,
+  type WatcherRoleAssignment,
+} from "./watcher-roles";
 
 /** Fire-and-forget BYO usage telemetry + usage-POLICY accounting -- only
  *  ever called when `aiRouting.required` is true (a Managed account has
@@ -103,11 +107,9 @@ function recordByoCall(
   if (ok) void recordByoPolicyUsage(admin, accountId, communityId, deploymentId, "reactive", totalTokens);
 }
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
-import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
-import {
-  getWatchMediaModerationUsage, incrementWatchMediaModerationUsage, hasMediaModerationUnitsRemaining,
-} from "@/src/lib/products/watch-media-moderation-usage";
-import { ENTERPRISE_MEDIA_ADDON, MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
+import { getMediaModerationExpansionUnits, isMediaModerationLimitReached } from "@/src/lib/products/watch-media-moderation-expansion";
+import { getWatchMediaModerationUsage, incrementWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
+import { MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE, type ModeratorPlanTier } from "@/src/lib/money";
 import { resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
 import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage, sendModerationReport, type EscalationTarget } from "./escalation-runtime";
 import type { ModerationViolationCategory } from "./watcher-ops-report";
@@ -264,7 +266,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -285,7 +287,10 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
     .eq("id", data.id);
   if (updateError) console.error("[telegram/community] resolveCommunity metadata update failed", data.id, updateError.message);
 
-  return data as { id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null; connection_type: "community" | "escalation_group" };
+  return data as {
+    id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
+    connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
+  };
 }
 
 /* ---------------------------------------------------- community connect ---- */
@@ -1199,22 +1204,32 @@ export interface ChatterDeployment {
   moderatorName: string;
   persona: ModeratorPersona;
   botUsername: string | null;
+  /** moderator_deployments.created_at -- the SOLE source of stable,
+   *  deterministic "position" (W1/W2/.../W5) for Watcher role assignment +
+   *  chatter rotation (see watcher-roles.ts). Never re-derived from
+   *  incidental query-result order. */
+  createdAt: string;
 }
 
 /** All chatter-eligible deployments in this community — every ENABLED
  *  ModeratorDeployment, not just one. Selection among them happens in
  *  selectChatterAction (chatter-coordinator.ts): the Coordinator picks one
  *  social action and AT MOST ONE responder per human message, never runs a
- *  separate decision per deployment. */
+ *  separate decision per deployment. Ordered by created_at ascending — this
+ *  IS the stable "position" (W1, W2, ...) the Watcher role/chatter-rotation
+ *  system (watcher-roles.ts) is built on; never incidental Postgres row
+ *  order, which is not contractually guaranteed. */
 async function findChatterDeployments(admin: SupabaseClient, communityId: string): Promise<ChatterDeployment[]> {
   const { data: deployments } = await admin
     .from("moderator_deployments")
-    .select("id, moderator_id, virtual_moderators(name, persona)")
+    .select("id, moderator_id, created_at, virtual_moderators(name, persona)")
     .eq("community_id", communityId)
-    .eq("enabled", true);
+    .eq("enabled", true)
+    .order("created_at", { ascending: true });
   const rows = (deployments ?? []) as Array<{
     id: string;
     moderator_id: string;
+    created_at: string;
     virtual_moderators: { name: string; persona: unknown } | { name: string; persona: unknown }[] | null;
   }>;
   if (!rows.length) return [];
@@ -1233,8 +1248,24 @@ async function findChatterDeployments(admin: SupabaseClient, communityId: string
       moderatorName: vm?.name ?? "Moderator",
       persona: normalizeModeratorPersona(vm?.persona),
       botUsername: usernameByModeratorId.get(row.moderator_id) ?? null,
+      createdAt: row.created_at,
     };
   });
+}
+
+/** Single source of truth for Watcher role assignment + chatter-rotation
+ *  state, called once per triggering message (never per capability) so
+ *  every stage of handleHumanMessage (moderation, chatter selection) agrees
+ *  on the exact same role/duty snapshot. `continuityDeploymentIds` should be
+ *  every deployment currently mid an active exchange with a human
+ *  (wasLastSpeaker/recentlyParticipated) -- see watcher-roles.ts's own doc
+ *  comment for why that's what keeps chatter rotation from abruptly cutting
+ *  off a live conversation. */
+function computeRoleAssignments(deployments: ChatterDeployment[], now: Date, continuityDeploymentIds: Set<string> = new Set()): WatcherRoleAssignment[] {
+  return assignWatcherRoles(
+    deployments.map((d) => ({ deploymentId: d.deploymentId, createdAt: d.createdAt, enabled: true })),
+    { now, continuityDeploymentIds }
+  );
 }
 
 async function resolveRepliedToDeployment(admin: SupabaseClient, communityId: string, replyToMessageId: string | null): Promise<string | null> {
@@ -1724,16 +1755,17 @@ async function isSenderAdminOrTrusted(token: string, chatId: string, platformUse
 export async function runLinkModeration(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; project_id?: string | null },
+  community: { id: string; project_id?: string | null; allow_solicitation?: boolean | null },
   chatId: string,
   event: CommunityEvent,
   deployments: ChatterDeployment[],
   now: Date,
-  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING
+  aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
+  roleAssignments: WatcherRoleAssignment[] = []
 ): Promise<{ handled: boolean; collabRoutable: boolean }> {
-  const links = extractLinks(event.text);
-  if (!links.length || !deployments.length) return { handled: false, collabRoutable: false };
+  if (!deployments.length) return { handled: false, collabRoutable: false };
 
+  const links = extractLinks(event.text);
   // A bare mention of one of THIS community's own deployed Watcher bot
   // usernames is addressing, not a link/promotion candidate -- excluded
   // BEFORE anything else runs, using the SAME trusted runtime bot identity
@@ -1744,15 +1776,38 @@ export async function runLinkModeration(
   // Any OTHER link/handle in the same message (a real phishing URL, an
   // unrelated external @handle) is left untouched and still evaluated below
   // -- this narrowly exempts the self-mention, never the whole message.
-  const moderationCandidates = filterOutOwnBotMentions(links, deployments.map((d) => d.botUsername));
-  if (!moderationCandidates.length) return { handled: false, collabRoutable: false };
+  const moderationCandidates = links.length ? filterOutOwnBotMentions(links, deployments.map((d) => d.botUsername)) : [];
+  const hasRealLinkCandidate = moderationCandidates.length > 0;
+  // Live-caught gap: a promotional pitch with NO link/handle at all ("DM me,
+  // I can promote your project...") never matched any of the above, so it
+  // silently bypassed moderation entirely and fell through to ordinary
+  // chatter, which just socially commented on it instead of removing it.
+  // looksLikeUnsolicitedPitch is a cheap, narrow gate (never the verdict
+  // itself) -- classifyLinkIntent + decideLinkEnforcement still make the
+  // real decision below, exactly as for a link-bearing message.
+  const isTextSolicitationCandidate = !hasRealLinkCandidate && looksLikeUnsolicitedPitch(event.text);
+  if (!hasRealLinkCandidate && !isTextSolicitationCandidate) return { handled: false, collabRoutable: false };
 
-  const enforcer = deployments[0];
+  // Spam & Scam Moderator owns link/phishing/scam moderation events end to
+  // end (see watcher-roles.ts) -- detection AND every resulting action
+  // (delete/warn/mute/kick/ban) execute under THIS SAME deployment, never
+  // handed off to a different domain regardless of severity. Replaces the
+  // old arbitrary deployments[0] pick.
+  const enforcer = resolveModerationEnforcer(deployments, roleAssignments, "spam_scam");
   const senderPlatformId = event.sender.platformUserId;
 
   const priorState = await loadLinkWarningState(admin, community.id, senderPlatformId);
-  const observedState = recordLinkObservation(priorState, linkHash(moderationCandidates[0]), now);
-  const floodRepeat = isFloodRepeat(observedState);
+  // Flood-repeat tracking is inherently about the SAME link being reposted
+  // rapidly -- a link-less text pitch has nothing to hash/repost-track, so
+  // it's left out of the flood-window observation entirely (repeat text
+  // pitches still escalate normally via the ordinary warningCount-based
+  // 3-strike progression in decideLinkEnforcement, unrelated to flood
+  // detection).
+  const observedState = hasRealLinkCandidate ? recordLinkObservation(priorState, linkHash(moderationCandidates[0]), now) : priorState;
+  // Never derived from stale prior-link flood state for a text-only pitch --
+  // isFloodRepeat would otherwise read leftover flood-window data from an
+  // EARLIER, unrelated real link this same sender once posted.
+  const floodRepeat = hasRealLinkCandidate ? isFloodRepeat(observedState) : false;
 
   const recentContextSummary = (await loadRecentContext(admin, community.id, 6)).map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
   const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting);
@@ -1769,6 +1824,7 @@ export async function runLinkModeration(
     floodRepeat,
     priorWarningCount: priorState.warningCount,
     priorScamStrikeCount,
+    solicitationAllowed: community.allow_solicitation === true,
   });
 
   await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", enforcement.kind, classification.category, {
@@ -2054,11 +2110,12 @@ async function recordMediaDedup(admin: SupabaseClient, panelId: string | null, c
 }
 
 /** Same overall shape as runLinkModeration: a SEPARATE moderation decision,
- *  checked once per message via a SINGLE enforcer (deployments[0] — the
- *  SAME single-coordinated-actor pattern link moderation already uses, so
- *  an explicit upload never produces one action per deployed moderator).
- *  `handled: true` means the message was deleted (nothing left to
- *  task-route/chat about). */
+ *  checked once per message via a SINGLE enforcer (the community's Media
+ *  Safety Moderator role-holder, see watcher-roles.ts -- the SAME single-
+ *  coordinated-actor pattern link moderation already uses, so an explicit
+ *  upload never produces one action per deployed moderator). `handled:
+ *  true` means the message was deleted (nothing left to task-route/chat
+ *  about). */
 async function runMediaModeration(
   admin: SupabaseClient,
   panelId: string | null,
@@ -2070,17 +2127,28 @@ async function runMediaModeration(
   settings: unknown,
   now: Date,
   accountId: string | null = null,
-  paidTier: ModeratorPlanTier | null = null,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  // Renamed from enterpriseMediaAddon (2026-08-25) -- now also carries
-  // byo20's always-active BUNDLED 3,000-unit allowance (never a purchase,
-  // unlike the self-serve Media Moderation + add-on), resolved by the
-  // caller alongside the real Enterprise grant. This gating block's own
-  // logic needs zero changes either way -- it already does exactly the
-  // right thing for any always-active, non-purchase-gated allowance.
-  bundledMediaAddon: { active: boolean; units: number } | null = null
+  // REVISED (2026-08-27): the account's real, unconditionally-included
+  // Media Moderation Units base allowance for its current Watch plan --
+  // self-serve tier, byo20, or any Enterprise variant -- resolved ONCE by
+  // the caller (a plain constant lookup, no I/O). `null` means this account
+  // has no representable Watch plan at all (trial, or a legacy Panel-
+  // distributed deployment), which keeps running media moderation
+  // completely unmetered, exactly as before this gate existed. Supersedes
+  // the old `bundledMediaAddon`/per-tier-purchase-gate model -- see
+  // money.ts's MEDIA_MODERATION_BASE_ALLOWANCE for the full rationale.
+  mediaBaseAllowance: number | null = null,
+  roleAssignments: WatcherRoleAssignment[] = []
 ): Promise<{ handled: boolean }> {
   if (!virtualModMediaModeration(settings) || !deployments.length) return { handled: false };
+
+  // Media Safety Moderator owns media moderation events end to end (see
+  // watcher-roles.ts) -- detection AND every resulting action (delete/
+  // warn/mute/kick/ban) execute under THIS SAME deployment, never handed
+  // off to a different domain regardless of severity. Replaces the old
+  // arbitrary deployments[0] pick. Used for every log/enforcement call
+  // below, including the early skip-logs.
+  const roleEnforcer = resolveModerationEnforcer(deployments, roleAssignments, "media_safety");
 
   const media = detectSupportedMedia(message);
   if (!media) return { handled: false };
@@ -2098,62 +2166,55 @@ async function runMediaModeration(
 
   if (media.fileSize && media.fileSize > MEDIA_MAX_BYTES) {
     await recordMediaDedup(admin, panelId, community.id, media.fileUniqueId, "error", "ALLOW");
-    await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "too_large", { mediaKind: media.kind, fileSize: media.fileSize });
+    await logActivity(admin, panelId, community.id, roleEnforcer.deploymentId, "media_moderation", "SKIPPED", "too_large", { mediaKind: media.kind, fileSize: media.fileSize });
     return { handled: false };
   }
   if (media.kind !== "photo") {
     if (!virtualModVideoModeration(settings)) return { handled: false }; // video moderation not yet enabled -- skip silently, never treated as explicit
     if (media.durationS != null && media.durationS > MEDIA_MAX_VIDEO_DURATION_S) {
       await recordMediaDedup(admin, panelId, community.id, media.fileUniqueId, "error", "ALLOW");
-      await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "duration_exceeded", { mediaKind: media.kind, durationS: media.durationS });
+      await logActivity(admin, panelId, community.id, roleEnforcer.deploymentId, "media_moderation", "SKIPPED", "duration_exceeded", { mediaKind: media.kind, durationS: media.durationS });
       return { handled: false };
     }
   }
 
-  // Media Moderation + gate -- checked BEFORE any classification is
-  // attempted, self-serve and Enterprise mutually exclusive (an account is
-  // one or the other, never both). Trial and legacy Panel-distributed
-  // accounts hit neither branch and keep running media moderation
-  // unmetered exactly as before this gate existed. Either branch's "no
-  // active add-on" or "exhausted allowance" case gets a silent skip --
-  // never a fabricated explicit result, never a deleted message, matching
-  // every other "can't classify" case in this function. Deliberately NOT
-  // run through recordMediaDedup's cache: unlike too_large/duration_exceeded
-  // (permanent properties of the file), addon/allowance state is temporal
-  // -- caching it would incorrectly blacklist a file from ever being
-  // reclassified once the add-on is purchased/granted or the period rolls
-  // over.
+  // Media Moderation Units gate -- REVISED (2026-08-27), checked BEFORE any
+  // classification is attempted. Every real Watch plan now gets a real,
+  // controlled INCLUDED base allowance automatically (money.ts's
+  // MEDIA_MODERATION_BASE_ALLOWANCE / ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE)
+  // -- there is no more "no active add-on" state to report; the only way an
+  // account with a real plan can be blocked here is genuinely exhausting its
+  // available units (base + any purchased expansion packs) for the current
+  // period. `mediaBaseAllowance == null` means this account has no
+  // representable Watch plan at all (trial, or a legacy Panel-distributed
+  // deployment) -- media moderation keeps running completely unmetered for
+  // those, exactly as before this gate existed; a missing/untrackable
+  // billing period (a legacy pre-migration-0080 row) falls back the same
+  // way. This is a genuine capacity limit, not a content classification --
+  // reaching it never implies or logs anything about the media's actual
+  // content, and resolves to a silent skip, never a fabricated result or a
+  // deleted message, matching every other "can't classify" case in this
+  // function. Deliberately NOT run through recordMediaDedup's cache: unlike
+  // too_large/duration_exceeded (permanent properties of the file), the
+  // account's remaining allowance is temporal -- caching it would
+  // incorrectly blacklist a file from ever being reclassified once more
+  // capacity is purchased or the period rolls over.
   let mediaUsagePeriod: Awaited<ReturnType<typeof resolveAccountBillingPeriod>> = null;
-  if (bundledMediaAddon) {
-    if (!bundledMediaAddon.active) {
-      await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_addon_required", { mediaKind: media.kind });
-      return { handled: false };
-    }
-    mediaUsagePeriod = accountId ? await resolveAccountBillingPeriod(admin, accountId) : null;
-    if (mediaUsagePeriod && accountId) {
-      const used = await getWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod.start);
-      if (!hasMediaModerationUnitsRemaining(used, bundledMediaAddon.units)) {
-        await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_allowance_exhausted", { mediaKind: media.kind });
-        return { handled: false };
-      }
-    }
-  } else if (accountId && paidTier) {
-    const addon = await getMediaModerationAddonState(admin, accountId, paidTier);
-    if (!addon || !addon.active) {
-      await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_addon_required", { mediaKind: media.kind });
-      return { handled: false };
-    }
+  if (mediaBaseAllowance != null && accountId) {
     mediaUsagePeriod = await resolveAccountBillingPeriod(admin, accountId);
     if (mediaUsagePeriod) {
-      const used = await getWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod.start);
-      if (!hasMediaModerationUnitsRemaining(used, addon.units)) {
-        await logActivity(admin, panelId, community.id, deployments[0].deploymentId, "media_moderation", "SKIPPED", "media_allowance_exhausted", { mediaKind: media.kind });
+      const [used, expansionUnits] = await Promise.all([
+        getWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod.start),
+        getMediaModerationExpansionUnits(admin, accountId, mediaUsagePeriod.start),
+      ]);
+      if (isMediaModerationLimitReached(used, mediaBaseAllowance, expansionUnits)) {
+        await logActivity(admin, panelId, community.id, roleEnforcer.deploymentId, "media_moderation", "SKIPPED", "MEDIA_LIMIT_REACHED", { mediaKind: media.kind });
         return { handled: false };
       }
     }
   }
 
-  const enforcer = deployments[0];
+  const enforcer = roleEnforcer;
   const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
   if (!token) return { handled: false };
 
@@ -2299,7 +2360,7 @@ async function runMediaModeration(
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; collab_contact?: string | null; project_id?: string | null },
+  community: { id: string; collab_contact?: string | null; project_id?: string | null; allow_solicitation?: boolean | null },
   message: TelegramMessage,
   event: CommunityEvent,
   isTrialEntitlement: boolean,
@@ -2308,11 +2369,22 @@ async function handleHumanMessage(
   accountId: string | null = null,
   paidTier: ModeratorPlanTier | null = null,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  bundledMediaAddon: { active: boolean; units: number } | null = null
+  mediaBaseAllowance: number | null = null
 ) {
   const deployments = await findChatterDeployments(admin, community.id);
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
   if (!deployments.length) return; // no chatter-eligible deployment in this community
+
+  // Stable specialist-role assignment (Watcher Role Separation) -- computed
+  // once, immediately after resolving the deployment set, and reused by
+  // every moderation stage below. Chatter duty (which depends on
+  // wasLastSpeaker/recentlyParticipated continuity signals not yet
+  // available here) is recomputed separately, further down, right before
+  // ordinary chatter routing -- moderation only ever reads `.domains`,
+  // which never depends on continuity, so this single early computation is
+  // sufficient and correct for it. See watcher-roles.ts.
+  const roleAssignments = computeRoleAssignments(deployments, new Date());
+  timer.mark("watcher_role_assignment", { roles: roleAssignments.map((r) => r.roleLabel) });
 
   // Media moderation is a SEPARATE decision, checked BEFORE link moderation
   // -- a message that's a flagged photo/video has nothing left to check for
@@ -2320,10 +2392,13 @@ async function handleHumanMessage(
   // conversational paths -- only the specialized visual-safety classifier.
   // aiRouting only ever affects the WARNING TEXT (media-warning.ts) -- the
   // vision classifier itself (media-safety-provider.ts) is never BYO-routed
-  // (see watch-byo.ts's own scope note).
+  // (see watch-byo.ts's own scope note). The Media Safety Moderator role
+  // owns this event (see runMediaModeration's own enforcer selection) --
+  // still runs continuously for EVERY deployment count regardless of
+  // chatter duty, per the Watcher Role Separation spec.
   const chatId = String(message.chat.id);
   const mediaModeration = await runMediaModeration(
-    admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, paidTier, aiRouting, bundledMediaAddon
+    admin, panelId, community, chatId, message, event, deployments, settings, new Date(), accountId, aiRouting, mediaBaseAllowance, roleAssignments
   );
   timer.mark("media_moderation_check", { handled: mediaModeration.handled });
   if (mediaModeration.handled) return;
@@ -2332,7 +2407,9 @@ async function handleHumanMessage(
   // checked first, independent of and never disabled by the reactive
   // chatter quota (spec §45). If the message got deleted, there is nothing
   // left to task-route or chat about, so it short-circuits everything else.
-  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date(), aiRouting);
+  // The Spam & Scam Moderator role owns this event -- runs continuously
+  // regardless of chatter duty, per the Watcher Role Separation spec.
+  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date(), aiRouting, roleAssignments);
   timer.mark("link_moderation_check", { handled: moderation.handled });
   if (moderation.handled) return;
   const collabContact = moderation.collabRoutable ? (community.collab_contact ?? null) : null;
@@ -2393,7 +2470,11 @@ async function handleHumanMessage(
 
   // Picks the socially appropriate ACTION (SILENCE/REACT/SHORT_ACK/
   // CASUAL_CHAT/ANSWER) and AT MOST ONE responder across every eligible
-  // deployment — deterministic, no probability roll anywhere.
+  // deployment — deterministic, no probability roll anywhere. Chatter
+  // duty (Watcher Role Separation) does NOT change this function or its
+  // internals at all -- it's reconciled as a separate, explicit step right
+  // after, so chatter-coordinator.ts's own extensively-tested selection
+  // logic stays completely untouched by this feature.
   let action = selectChatterAction({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman });
   timer.mark("coordinator_action_selected", { actionType: action.type });
 
@@ -2411,6 +2492,28 @@ async function handleHumanMessage(
     if (classifyResult.ok && classifyResult.value.ok && classifyResult.value.isGreeting) {
       action = resolveAmbientOpenerFallback({ text: event.text, candidates, now, recentlyAnsweredByModerator, recentlyRespondedByHuman });
     }
+  }
+
+  // Watcher Role Separation: chatter duty is recomputed HERE (not reused
+  // from the moderation-time roleAssignments above) so it reflects the real
+  // continuity signals (wasLastSpeaker/recentlyParticipated) just computed
+  // into `candidates` -- a Watcher mid an active exchange stays
+  // ACTIVE_CHATTER even outside its rotation window, per the spec's
+  // explicit "do not abruptly switch identity mid-conversation"
+  // requirement. Only ever REPLACES the chosen deploymentId for ambient
+  // CASUAL_CHAT/SHORT_ACK (restricting to the current chatter-duty pool)
+  // or an undirected ANSWER (preferring the Knowledge role) -- a directed
+  // mention/reply, REACT, and SILENCE are all passed through unchanged.
+  // See watcher-roles.ts's own doc comment for the full contract.
+  const chatterRoleAssignments = computeRoleAssignments(
+    deployments, now,
+    new Set(candidates.filter((c) => c.wasLastSpeaker || c.recentlyParticipated).map((c) => c.deploymentId))
+  );
+  const preReconcileDeploymentId = "deploymentId" in action ? action.deploymentId : undefined;
+  action = reconcileAmbientPick(action, candidates, chatterRoleAssignments);
+  const postReconcileDeploymentId = "deploymentId" in action ? action.deploymentId : undefined;
+  if (postReconcileDeploymentId !== preReconcileDeploymentId) {
+    timer.mark("chatter_duty_reconciled", { from: preReconcileDeploymentId, to: postReconcileDeploymentId });
   }
 
   if (action.type === "SILENCE") {
@@ -3111,30 +3214,30 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // ceiling once it knows which Watcher is actually about to generate
     // (applyDeploymentUsagePolicy, Phase 4.V.1 item 2).
     const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, null, "reactive", entitlementSource === "byo20");
-    // Enterprise Media Moderation + (migration 0097) -- same gating shape:
-    // a real, explicit grant, resolved once here, only for an Enterprise
-    // account (the self-serve tiers' own add-on is resolved separately,
-    // inside runMediaModeration itself, keyed off `paidTier`). `null` means
-    // "not applicable" (not an Enterprise account -- trial/self-serve/
-    // legacy Panel-distributed all fall through to their own existing,
-    // unchanged logic); a real object means this account IS Enterprise --
-    // `active` is whether the add-on is granted at all, `units` is the
-    // REAL per-package allowance (resolveEnterpriseMediaAddonKey, the same
-    // resolver the Usage page reads, so consumption enforcement and display
-    // can never disagree about which package's allowance applies).
+    // Media Moderation Units base allowance -- REVISED (2026-08-27). Every
+    // real Watch plan now gets a real, controlled INCLUDED allowance
+    // automatically -- resolved ONCE here (a plain constant lookup, no I/O)
+    // from whichever tier this account actually has: an Enterprise variant
+    // (via resolveEnterpriseMediaAddonKey, the same resolver the Usage page
+    // reads, so display and enforcement can never disagree about which
+    // package's allowance applies), byo20, or a self-serve paidTier.
+    // Enterprise's OLD devops-granted `mediaAddonActive` flag is no longer
+    // read here -- every Enterprise account now gets its base allowance
+    // unconditionally, the same "included on every plan" rule every other
+    // tier gets (the flag/column still exist, just unused by this gate).
+    // `null` means "no representable Watch plan" (trial, or legacy Panel-
+    // distributed) -- those fall through to runMediaModeration's own
+    // existing, unchanged unmetered behavior.
     const enterpriseEntitlement = entitlementSource === "enterprise" && accountId ? await resolveAccountEnterpriseEntitlement(admin, accountId) : null;
-    // byo20's 3,000 units are ALWAYS active/bundled (never a purchase, and
-    // never gated on entitlementSource === "enterprise") -- resolved here
-    // alongside the real Enterprise grant so both flow through the SAME
-    // "always-active allowance" shape into runMediaModeration, which needs
-    // zero changes to its own gating logic either way.
-    const bundledMediaAddon: { active: boolean; units: number } | null = enterpriseEntitlement
-      ? { active: enterpriseEntitlement.mediaAddonActive, units: ENTERPRISE_MEDIA_ADDON[resolveEnterpriseMediaAddonKey(enterpriseEntitlement.apiSourceMode, enterpriseEntitlement.slots)].units }
+    const mediaBaseAllowance: number | null = enterpriseEntitlement
+      ? ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE[resolveEnterpriseMediaAddonKey(enterpriseEntitlement.apiSourceMode, enterpriseEntitlement.slots)]
       : entitlementSource === "byo20" && accountId
-        ? { active: true, units: MODERATOR_MEDIA_ADDON.byo20.units }
-        : null;
+        ? MEDIA_MODERATION_BASE_ALLOWANCE.byo20
+        : paidTier
+          ? MEDIA_MODERATION_BASE_ALLOWANCE[paidTier]
+          : null;
     await handleHumanMessage(
-      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, bundledMediaAddon
+      admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, mediaBaseAllowance
     );
     timer.mark("total_request_duration", { totalMs: timer.totalMs() });
     return;

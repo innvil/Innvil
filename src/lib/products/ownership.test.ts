@@ -328,31 +328,32 @@ test("a renewal that omits enterpriseCommunityCapacity never clobbers a previous
   assert.equal(row?.enterprise_community_capacity, 25, "omitting the parameter on renewal must never reset an already-provisioned Community package");
 });
 
-test("REGRESSION: a real BYO Unlimited Community capacity BEYOND 25 is persisted, not silently dropped", async () => {
-  // The exact live bug (2026-08-25): this used to validate EVERY mode's
-  // submitted capacity against "managed" (max 25) regardless of the real
-  // apiSourceMode/slots being persisted in the SAME call -- BYO Unlimited's
-  // own uncapped +10-block continuation beyond 25 would fail that check and
-  // be silently dropped from the write, even though it's a real, valid
-  // capacity for that mode.
+test("REVISED (2026-08-28): BYO Unlimited has no paid Community capacity path anymore -- a finite value beyond its own automatic (Infinity) base is never persisted, since it isn't a real state for that mode", async () => {
+  // Historically (until 2026-08-28) BYO Unlimited had a real +10-block
+  // continuation above 25 that WAS meant to persist. The business model
+  // changed: BYO Unlimited is now unconditionally, automatically unlimited
+  // for free -- there is no finite capacity left to purchase/persist for
+  // it at all, so a submitted 35 (a real value under the OLD model) is
+  // correctly dropped under the new one, exactly like any other invalid
+  // value for a mode with no matching package.
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", null, 35, "byo");
   const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
-  assert.equal(row?.enterprise_community_capacity, 35, "35 is a real BYO Unlimited Community capacity (25 + one +10 block) -- must be persisted, not dropped");
+  assert.equal(row?.enterprise_community_capacity, undefined, "BYO Unlimited has no purchasable Community capacity beyond its own free, automatic (Infinity) base -- 35 must be dropped, not persisted");
 });
 
-test("REGRESSION: BYO 50's own Community capacity is validated against ITS table, not Managed's", async () => {
+test("REVISED (2026-08-28): BYO 50's Community capacity is validated against ITS OWN table, not Managed's -- and its table now has no paid package at all (its free base IS its hard maximum, 25)", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", 50, 15, "byo");
   const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
-  assert.equal(row?.enterprise_community_capacity, 15, "15 is a real BYO 50 Community capacity package");
+  assert.equal(row?.enterprise_community_capacity, undefined, "15 is no longer a real BYO 50 Community capacity package (BYO 50's only valid capacity is its own free, included base -- 25) -- must be dropped");
 });
 
-test("a BYO Unlimited capacity beyond 25 that isn't a real +10 block is still rejected (validated against the REAL mode, not accepted just because it's BYO)", async () => {
+test("a BYO Unlimited capacity submission that isn't the mode's own automatic base is still rejected (validated against the REAL mode, not accepted just because it's BYO)", async () => {
   const admin = fakeAdmin({ products: [{ id: "product-watch", slug: WATCH_PRODUCT_SLUG }] });
   await activateWatchEntitlement(admin, "acct-1", "enterprise", "manual-1", "monthly", null, 40, "byo");
   const row = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
-  assert.equal(row?.enterprise_community_capacity, undefined, "40 is not a real +10 block above 25 (25, 35, 45, ...) -- must be dropped, not persisted verbatim");
+  assert.equal(row?.enterprise_community_capacity, undefined, "40 is not BYO Unlimited's own automatic capacity -- must be dropped, not persisted verbatim");
 });
 
 /* --------------------------------------- BYO Enterprise apiSourceMode (0092) ---- */

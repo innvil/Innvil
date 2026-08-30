@@ -35,11 +35,12 @@ export interface LinkClassificationResult {
   confidence: ClassificationConfidence;
 }
 
-const CLASSIFY_SYSTEM_PROMPT = `You classify a single Telegram community message that contains an external link or another group/channel reference, for moderation purposes.
+const CLASSIFY_SYSTEM_PROMPT = `You classify a single Telegram community message for moderation purposes. Most messages you're asked to classify contain an external link or another group/channel reference, but some do NOT — a message can be unsolicited advertising/self-promotion purely through its wording, with no url or @handle present at all (e.g. offering to "promote your project", "bring buyers/investors", or "grow your community/volume", and asking the reader to DM/message/contact the sender). Classify those exactly the same way you would a link-bearing advertisement.
 
 Context matters more than the link itself — the SAME url can be legitimate outreach or an advertisement depending on how it's framed. Examples:
 - "We're doing an AMA with these guys tomorrow: https://t.me/projectxyz" -> COLLABORATION_REQUEST or AMA_REQUEST (legitimate)
 - "Everyone leave this group and join: https://t.me/projectxyz" -> UNSOLICITED_PROMOTION (advertisement)
+- "Looking for real investors & strong volume? I can promote your project across active crypto communities. DM me if you're ready to grow." (no link at all) -> UNSOLICITED_PROMOTION (a self-promotion service pitch soliciting private contact, still an advertisement even with no url)
 
 A bare @username mention by itself, with no accompanying suspicious content (no urgent call to action, no promise of rewards/free money, no request for credentials/private keys/funds, no impersonation of a known project or official account), is NOT sufficient on its own to classify as PHISHING_OR_SCAM or UNSOLICITED_PROMOTION — someone addressing another person or bot by @username is ordinary conversation, not a link/promotion signal. Only classify a message as suspicious when the actual evidence (a scam-shaped URL, an urgent/impersonation pattern, a promotional call-to-action, etc.) is present.
 

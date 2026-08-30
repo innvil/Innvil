@@ -14,9 +14,13 @@
 
 import { TRIAL_DURATION_DAYS, TRIAL_CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 import { watchPlanOptions } from "@/src/lib/products/watch-plans";
-import { MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON } from "@/src/lib/money";
+import {
+  MODERATOR_COMMUNITY_CAPACITY, COMMUNITY_EXPANSION_MONTHLY_PRICE, MODERATOR_AI_GENERATION_POOL,
+  MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE, MEDIA_MODERATION_EXPANSION_PACKS,
+} from "@/src/lib/money";
 import { INNVIL_CREDIT_DISCOUNT, ANNUAL_CREDIT_DISCOUNT_BPS, ANNUAL_DIRECT_DISCOUNT_BPS, annualCreditPriceUsd, annualDirectPriceUsd } from "@/src/lib/products/innvil-credit-pricing";
 import { MANAGED_ENTERPRISE_50, WATCH_ENTERPRISE_BYO_TIERS } from "@/src/lib/products/watch-enterprise";
+import { getEnterpriseIncludedCommunities } from "@/src/lib/products/watch-enterprise-community";
 
 export type HelpCategoryId =
   | "getting-started" | "concepts" | "watchers" | "knowledge" | "moderation" | "escalation"
@@ -201,8 +205,8 @@ const plansAndBillingRichBody: HelpBlock[] = [
       type: "paragraph" as const,
       text:
         p.tier === "byo20"
-          ? `BYO 20 always requires your own AI provider credential (Anthropic or an OpenAI-compatible provider) — Innvil never charges you for AI usage on top of the $${p.price.toFixed(2)}/mo plan price. Media Moderation + is bundled in (${MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} units/mo, never a separate purchase). Communities are fixed at ${p.communitiesIncluded} — already the max, with no expansion path. Best for teams that already run their own AI provider and want the most included in one flat price.`
-          : `Media Moderation + is an optional add-on on ${p.displayName} — +$${MODERATOR_MEDIA_ADDON[p.tier].price.toFixed(2)}/mo for ${MODERATOR_MEDIA_ADDON[p.tier].units.toLocaleString()} Media Moderation Units per period, never bundled into the base price. ${
+          ? `BYO 20 always requires your own AI provider credential (Anthropic or an OpenAI-compatible provider) — Innvil never charges you for AI usage on top of the $${p.price.toFixed(2)}/mo plan price. ${MEDIA_MODERATION_BASE_ALLOWANCE.byo20.toLocaleString()} Media Moderation Units/mo are included automatically, with optional capacity packs available if you need more. Communities are fixed at ${p.communitiesIncluded} — already the max, with no expansion path. Best for teams that already run their own AI provider and want the most included in one flat price.`
+          : `${MEDIA_MODERATION_BASE_ALLOWANCE[p.tier].toLocaleString()} Media Moderation Units/mo are included on ${p.displayName} automatically — no purchase required — with optional capacity packs (see the Media Moderation article) if you need more. ${
               p.communitiesMax > p.communitiesIncluded
                 ? `Community Expansion can raise its Community allowance from ${p.communitiesIncluded} to ${p.communitiesMax} for an additional monthly fee — see the Community Expansion article.`
                 : "Its Community allowance is fixed — the only way to raise it is to upgrade to a plan with a higher allowance."
@@ -272,18 +276,24 @@ const plansAndBillingRichBody: HelpBlock[] = [
 
   { type: "heading", id: "media-moderation", text: "Media Moderation" },
   {
+    type: "paragraph",
+    text: "Every plan includes a real Media Moderation Units allowance automatically — no purchase required. A classified photo uses 1 unit; a video uses a few units for the representative frames actually checked, never one unit per video, and never all of them. If you need more than your plan's included allowance in a given billing period, you can add a capacity pack from the Usage page at any time — packs are stackable and apply to the current period only.",
+  },
+  {
     type: "table",
     headers: ["Media Feature", "Included / Add-on", "Allowance / Price"],
     rows: [
-      ["Photo moderation", "Part of Media Moderation +", "Shares the plan's Media Moderation Unit allowance"],
-      ["Video moderation", "Part of Media Moderation +", "Shares the plan's Media Moderation Unit allowance"],
+      ["Photo moderation", "Included in every plan", "Shares the plan's Media Moderation Unit allowance"],
+      ["Video moderation", "Included in every plan", "Shares the plan's Media Moderation Unit allowance"],
       [
-        "Media Moderation +",
-        "Optional add-on (Bronze–Platinum); bundled on BYO 20",
-        [
-          ...plans.filter((p) => p.tier !== "byo20").map((p) => `${p.displayName} +$${MODERATOR_MEDIA_ADDON[p.tier].price.toFixed(2)}/mo (${MODERATOR_MEDIA_ADDON[p.tier].units.toLocaleString()} units)`),
-          `BYO 20: ${MODERATOR_MEDIA_ADDON.byo20.units.toLocaleString()} units/mo included, no separate charge`,
-        ].join(" · "),
+        "Base allowance",
+        "Included automatically on every plan",
+        plans.map((p) => `${p.displayName}: ${MEDIA_MODERATION_BASE_ALLOWANCE[p.tier].toLocaleString()} units/mo`).join(" · "),
+      ],
+      [
+        "Capacity packs (optional, any plan)",
+        "Purchased from Usage, current period only",
+        MEDIA_MODERATION_EXPANSION_PACKS.map((pack) => `+${pack.units.toLocaleString()} for $${pack.price.toFixed(2)}`).join(" · "),
       ],
     ],
   },
@@ -485,8 +495,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     body: [
       `Enterprise is for accounts that need more than Platinum's ${watchPlanOptions().find((p) => p.displayName === "Platinum")!.slots} Watcher slots or ${watchPlanOptions().find((p) => p.displayName === "Platinum")!.communitiesMax} Communities. It's still the same Innvil Watch product — same CRM, Projects, Communities, and Watchers — never a separate dashboard or domain.`,
       `Managed Enterprise 50 — $${MANAGED_ENTERPRISE_50.price.toFixed(2)}/month, fixed. Includes ${MANAGED_ENTERPRISE_50.slots} Watcher slots, ${MANAGED_ENTERPRISE_50.communities} Communities, and ${MANAGED_ENTERPRISE_50.aiGenerations.toLocaleString()} pooled AI Generations per month, funded by Innvil. You never manage a provider credential yourself. A custom quote is available for more than ${MANAGED_ENTERPRISE_50.slots} slots.`,
-      `Bring Your Own Provider 50 — $${WATCH_ENTERPRISE_BYO_TIERS[0].price}/month, up to ${WATCH_ENTERPRISE_BYO_TIERS[0].maxSlots} licensed Watcher deployments. Bring Your Own Provider Unlimited — $${WATCH_ENTERPRISE_BYO_TIERS[1].price}/month, unlimited licensed Watcher deployments (never unlimited compute, storage, bandwidth, or provider usage — normal fair-use limits still apply). With either BYO package, you supply and pay for your own supported provider credentials directly — Innvil's fee is lower because it doesn't include that usage cost. This is never a guarantee your total spend (Innvil fee + your own provider usage) is lower overall.`,
-      "Both Managed and BYO packages can add the optional Media Moderation + add-on, priced separately per package.",
+      `Bring Your Own Provider 50 — $${WATCH_ENTERPRISE_BYO_TIERS[0].price}/month, up to ${WATCH_ENTERPRISE_BYO_TIERS[0].maxSlots} licensed Watcher deployments, and ${getEnterpriseIncludedCommunities("byo50")} Communities included automatically at no extra cost. Bring Your Own Provider Unlimited — $${WATCH_ENTERPRISE_BYO_TIERS[1].price}/month, unlimited licensed Watcher deployments AND unlimited Communities, also at no extra cost (never unlimited compute, storage, bandwidth, or provider usage — normal fair-use limits still apply). With either BYO package, you supply and pay for your own supported provider credentials directly — Innvil's fee is lower because it doesn't include that usage cost, and neither BYO package has a paid Community Expansion add-on at all (only Managed Enterprise does) since bringing your own infrastructure means Innvil has no additional marginal cost to cover as you connect more Communities. This is never a guarantee your total spend (Innvil fee + your own provider usage) is lower overall.`,
+      `Every Enterprise package includes a real Media Moderation Units allowance automatically — no add-on purchase required: Managed Enterprise ${ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.managed50.toLocaleString()}/mo, BYO 50 ${ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byo50.toLocaleString()}/mo, BYO Unlimited ${ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byoUnlimited.toLocaleString()}/mo. Any package can add optional capacity packs from the Usage page if you need more in a given period.`,
       "Enterprise is provisioned manually — reach out from the Plans page and it's finalized with you directly.",
     ],
     related: ["plans-and-billing", "community-capacity"],

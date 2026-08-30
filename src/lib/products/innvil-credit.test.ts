@@ -2,9 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   getInnvilCreditBalance, listInnvilCreditActivity, creditInnvilCreditTopUp, purchaseWatchWithCredit,
+  cancelPendingWatchDowngrade,
   purchaseCommunityExpansionWithCredit, scheduleCommunityExpansionRemoval,
   purchaseMediaModerationAddonWithCredit, scheduleMediaModerationAddonRemoval,
+  purchaseMediaModerationExpansion,
 } from "./innvil-credit";
+import { getMediaModerationExpansionUnits } from "./watch-media-moderation-expansion";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { getAccountCapacity } from "./watch-runtime";
 
@@ -457,7 +460,11 @@ test("a renewal of a DIFFERENT tier (plan change) does not fold in the add-on pr
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 14249, "only Platinum's own credit price -- no addon fold on a tier change");
+  // An UPGRADE (Gold $99.99 -> Platinum $149.99) charges only the
+  // DIFFERENCE between the two tiers' own credit prices ($142.49 -
+  // $94.99 = $47.50), never Platinum's full price on top of what this
+  // period already cost -- no addon fold on a tier change either way.
+  assert.equal(result.balanceCents, 100000 - 4750, "only the upgrade PRICE DIFFERENCE -- no addon fold on a tier change");
 });
 
 test("REQUIRED (renewal): a removal-pending add-on is NOT charged on the next renewal, and is finalized (removed) by it", async () => {
@@ -543,7 +550,9 @@ test("REQUIRED (plan change): Gold+expansion -> Platinum finalizes (removes) the
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 14249, "only Platinum's own base price -- the Gold-priced add-on is never carried over/re-charged");
+  // Upgrade delta ($142.49 - $94.99 = $47.50), never Platinum's full price
+  // stacked on top -- the Gold-priced add-on is never carried over/re-charged.
+  assert.equal(result.balanceCents, 100000 - 4750, "only the upgrade price difference -- the Gold-priced add-on is never carried over/re-charged");
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communityExpansionActive, false, "the add-on must be finalized (removed) on the tier change");
   assert.equal(capacity?.communitiesTotal, 5, "Platinum's own included cap -- no expansion carried over");
@@ -571,11 +580,11 @@ test("REQUIRED (plan change / downgrade safety): Platinum+expansion (10 cap, 8 c
   assert.equal(row?.status, "active", "the add-on must remain untouched -- never finalized for a change that was itself blocked");
 });
 
-test("REQUIRED (plan change / downgrade safety): the SAME Platinum+expansion -> Gold downgrade succeeds once usage is reduced within Gold's included cap", async () => {
+test("REQUIRED (downgrade deferral): a Platinum -> Gold downgrade request is SCHEDULED, not activated immediately -- no charge, current Platinum tier/capacity/addon all stay exactly as they are", async () => {
   const communities = [
     { id: "c0", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-0" },
     { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1" },
-  ]; // 2 connected -- fits Gold's included cap of 3
+  ]; // 2 connected -- fits Gold's included cap of 3, so scheduling is allowed
   const admin = fakeAdmin({
     product_entitlements: [{
       id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
@@ -589,10 +598,77 @@ test("REQUIRED (plan change / downgrade safety): the SAME Platinum+expansion -> 
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 9499, "Gold's own base price only");
+  assert.equal(result.scheduled, true, "a downgrade is scheduled, never activated on the spot");
+  assert.equal(result.balanceCents, 100000, "scheduling a downgrade charges nothing right now");
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(entitlement?.subscription_ref, "pro:dep-1", "the account stays on Platinum until the scheduled downgrade actually applies");
+  assert.equal(entitlement?.pending_tier, "premium", "the downgrade to Gold is recorded as pending");
   const capacity = await getAccountCapacity(admin, "acct-1");
-  assert.equal(capacity?.communityExpansionActive, false, "the Platinum-priced add-on must be finalized, not silently kept active under Gold");
-  assert.equal(capacity?.communitiesTotal, 3, "Gold's plain included cap");
+  assert.equal(capacity?.communityExpansionActive, true, "the Platinum-tier add-on stays fully active -- nothing is finalized until the downgrade actually applies");
+  assert.equal(capacity?.communitiesTotal, 10, "still Platinum's own expanded capacity -- unchanged today");
+});
+
+test("REQUIRED (downgrade deferral): renewing at the account's own current tier while a downgrade is pending APPLIES it -- charged the pending tier's own price, addon finalized, tier switches", async () => {
+  const communities = [
+    { id: "c0", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-0" },
+    { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1" },
+  ];
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "pro:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+      pending_tier: "premium",
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities,
+  });
+  // RenewWatchButton always passes the account's own CURRENT tier
+  // (Platinum) -- exactly what a real "Renew" click sends.
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.notEqual(result.scheduled, true, "applying an already-scheduled downgrade is a real activation, not a second scheduling step");
+  assert.equal(result.balanceCents, 100000 - 9499, "charged the PENDING tier's (Gold) own full price, not a delta off Platinum");
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(entitlement?.subscription_ref?.startsWith("premium:"), true, "the account has actually switched to Gold now");
+  assert.equal(entitlement?.pending_tier, null, "the scheduled downgrade is cleared once applied");
+  const capacity = await getAccountCapacity(admin, "acct-1");
+  assert.equal(capacity?.communityExpansionActive, false, "the Platinum-priced add-on is finalized once the downgrade actually takes effect");
+  assert.equal(capacity?.communitiesTotal, 3, "Gold's plain included cap, now in effect");
+});
+
+test("REQUIRED (downgrade deferral): a downgrade request is blocked (never scheduled) when current Community usage exceeds the target tier's included cap", async () => {
+  const communities = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: `-${i}` }));
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "pro:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    }],
+    watch_subscription_addons: [{ account_id: "acct-1", addon_type: "community_expansion", status: "active", cancel_at_period_end: false }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+    projects: [{ id: "proj-1", account_id: "acct-1", panel_id: null, name: "Mine" }],
+    communities,
+  });
+  const result = await purchaseWatchWithCredit(admin, "acct-1", "Gold");
+  assert.equal(result.ok, false);
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(entitlement?.pending_tier ?? null, null, "nothing is scheduled when the downgrade request itself is rejected");
+});
+
+test("REQUIRED: a customer can cancel an already-scheduled downgrade -- the account simply keeps renewing at its current tier", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e1", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "pro:dep-1", current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+      pending_tier: "premium",
+    }],
+  });
+  const result = await cancelPendingWatchDowngrade(admin, "acct-1");
+  assert.equal(result.ok, true);
+  const entitlement = admin.__store.product_entitlements.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(entitlement?.pending_tier, null);
 });
 
 test("a plan change with NO active add-on at all is completely unaffected by any of this logic", async () => {
@@ -606,7 +682,8 @@ test("a plan change with NO active add-on at all is completely unaffected by any
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Platinum");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.balanceCents, 100000 - 14249);
+  // Upgrade delta (Platinum $142.49 - Gold $94.99 = $47.50).
+  assert.equal(result.balanceCents, 100000 - 4750);
 });
 
 test("REQUIRED: un-cancelling a removal-pending add-on via a fresh purchase call never re-charges the customer", async () => {
@@ -730,8 +807,9 @@ test("REQUIRED: a plan CHANGE finalizes (removes) an active Media Moderation + a
   const result = await purchaseWatchWithCredit(admin, "acct-1", "Silver");
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  // Silver's own base price only -- the Bronze-priced media add-on is never carried over/re-charged.
-  assert.equal(result.balanceCents, 100000 - 5699);
+  // Upgrade delta (Silver $56.99 - Bronze $29.99 = $27.00) -- the
+  // Bronze-priced media add-on is never carried over/re-charged either way.
+  assert.equal(result.balanceCents, 100000 - 2700);
   const row = admin.__store.watch_subscription_addons.find((r: Row) => r.account_id === "acct-1" && r.addon_type === "media_moderation");
   assert.equal(row?.status, "removed", "the addon must be finalized on the tier change");
 });
@@ -744,4 +822,116 @@ test("REQUIRED: Community Expansion and Media Moderation + can BOTH be active on
   assert.equal(media.ok, true);
   const activeRows = admin.__store.watch_subscription_addons.filter((r: Row) => r.account_id === "acct-1" && r.status === "active");
   assert.equal(activeRows.length, 2, "both addon types coexist as two separate active rows");
+});
+
+/* ------------------------------------------------ Media Moderation capacity packs, REVISED model ---- */
+// (2026-08-27) Real, stackable, CURRENT-PERIOD top-ups -- a genuinely
+// separate table (watch_media_moderation_expansions, migration 0110) from
+// the recurring watch_subscription_addons rows above, so these purchases
+// never touch that table at all.
+
+const PERIOD_ENTITLEMENT = {
+  id: "e-period", account_id: "acct-1", product_id: "product-watch", status: "active",
+  subscription_ref: "premium:dep-1",
+  current_period_start: "2026-08-01T00:00:00Z",
+  current_period_end: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
+};
+
+test("REQUIRED: an arbitrary unit count that isn't a real canonical pack size is rejected -- never partially honored", async () => {
+  const admin = fakeAdmin({ product_entitlements: [PERIOD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseMediaModerationExpansion(admin, "acct-1", 1234);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.error, /valid/i);
+  assert.equal(admin.__store.innvil_credit_accounts[0].balance_cents, 100000, "nothing charged for a rejected purchase");
+});
+
+test("REQUIRED: an account with no resolvable Watch billing period cannot purchase capacity", async () => {
+  const admin = fakeAdmin({ innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseMediaModerationExpansion(admin, "acct-1", 1000);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.error, /active Watch subscription/i);
+});
+
+test("REQUIRED: a valid pack purchase debits the exact real price and returns the units added", async () => {
+  const admin = fakeAdmin({ product_entitlements: [PERIOD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  const result = await purchaseMediaModerationExpansion(admin, "acct-1", 5000);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.unitsAdded, 5000);
+  assert.equal(result.totalExpansionThisPeriod, 5000);
+  assert.equal(result.balanceCents, 100000 - 2499, "debits the exact $24.99 pack price");
+});
+
+test("REQUIRED (10): multiple, differently-sized purchases in the same period stack -- reflected immediately via getMediaModerationExpansionUnits", async () => {
+  const admin = fakeAdmin({ product_entitlements: [PERIOD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }] });
+  await purchaseMediaModerationExpansion(admin, "acct-1", 1000);
+  const second = await purchaseMediaModerationExpansion(admin, "acct-1", 20000);
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.totalExpansionThisPeriod, 21000);
+  assert.equal(await getMediaModerationExpansionUnits(admin, "acct-1", PERIOD_ENTITLEMENT.current_period_start), 21000);
+});
+
+test("REQUIRED: insufficient Innvil Credit rejects the purchase without adding any capacity", async () => {
+  const admin = fakeAdmin({ product_entitlements: [PERIOD_ENTITLEMENT], innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 500 }] });
+  const result = await purchaseMediaModerationExpansion(admin, "acct-1", 1000); // costs $9.99, more than the $5.00 balance
+  assert.equal(result.ok, false);
+  assert.equal(await getMediaModerationExpansionUnits(admin, "acct-1", PERIOD_ENTITLEMENT.current_period_start), 0);
+  assert.equal(admin.__store.innvil_credit_accounts[0].balance_cents, 500, "balance untouched on a rejected purchase");
+});
+
+test("REQUIRED (18, 19): a capacity-pack purchase never touches Watcher slots, Communities, or the base entitlement row -- it only ever writes to its own table", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [PERIOD_ENTITLEMENT],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+    projects: [{ id: "proj-1", account_id: "acct-1", name: "Proj" }],
+    communities: [{ id: "comm-1", project_id: "proj-1", connection_type: "community" }],
+    virtual_moderators: [{ id: "watcher-1", account_id: "acct-1" }],
+    moderator_deployments: [{ id: "dep-1", moderator_id: "watcher-1", community_id: "comm-1", enabled: true }],
+  });
+  const before = {
+    entitlement: { ...admin.__store.product_entitlements[0] },
+    projects: admin.__store.projects.length,
+    communities: admin.__store.communities.length,
+    moderators: admin.__store.virtual_moderators.length,
+    deployments: admin.__store.moderator_deployments.length,
+  };
+  const result = await purchaseMediaModerationExpansion(admin, "acct-1", 2000);
+  assert.equal(result.ok, true);
+  assert.deepEqual(admin.__store.product_entitlements[0], before.entitlement, "the base entitlement row is never touched");
+  assert.equal(admin.__store.projects.length, before.projects);
+  assert.equal(admin.__store.communities.length, before.communities);
+  assert.equal(admin.__store.virtual_moderators.length, before.moderators);
+  assert.equal(admin.__store.moderator_deployments.length, before.deployments, "Watcher slot/deployment count is unaffected by a media-capacity purchase");
+});
+
+test("REQUIRED (20): expansion purchases are isolated per account -- one account's purchase never appears in another's available capacity", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [
+      PERIOD_ENTITLEMENT,
+      { id: "e-2", account_id: "acct-2", product_id: "product-watch", status: "active", subscription_ref: "basic:dep-2", current_period_start: PERIOD_ENTITLEMENT.current_period_start, current_period_end: PERIOD_ENTITLEMENT.current_period_end },
+    ],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }, { account_id: "acct-2", balance_cents: 100000 }],
+  });
+  await purchaseMediaModerationExpansion(admin, "acct-1", 20000);
+  const acct2Purchase = await purchaseMediaModerationExpansion(admin, "acct-2", 1000);
+  assert.equal(acct2Purchase.ok, true);
+  if (!acct2Purchase.ok) return;
+  assert.equal(acct2Purchase.totalExpansionThisPeriod, 1000, "acct-2's own purchase never includes acct-1's units");
+  assert.equal(await getMediaModerationExpansionUnits(admin, "acct-1", PERIOD_ENTITLEMENT.current_period_start), 20000);
+});
+
+test("a capacity pack is purchasable for ANY resolvable Watch plan, including Enterprise -- never gated to a subset of self-serve tiers", async () => {
+  const admin = fakeAdmin({
+    product_entitlements: [{
+      id: "e-ent", account_id: "acct-1", product_id: "product-watch", status: "active",
+      subscription_ref: "enterprise:dep-1",
+      current_period_start: PERIOD_ENTITLEMENT.current_period_start, current_period_end: PERIOD_ENTITLEMENT.current_period_end,
+    }],
+    innvil_credit_accounts: [{ account_id: "acct-1", balance_cents: 100000 }],
+  });
+  const result = await purchaseMediaModerationExpansion(admin, "acct-1", 10000);
+  assert.equal(result.ok, true);
 });

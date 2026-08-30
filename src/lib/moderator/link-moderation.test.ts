@@ -4,7 +4,7 @@ import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SPAM_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
-  normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions,
+  normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -55,6 +55,33 @@ test("normalizeLink treats different paths on the same host as different destina
 test("linkHash is stable for the same normalized link and differs for different ones", () => {
   assert.equal(linkHash("https://example.com/a?utm_source=x"), linkHash("https://example.com/a?utm_medium=y"));
   assert.notEqual(linkHash("https://example.com/a"), linkHash("https://example.com/b"));
+});
+
+/* --------------------------------------------------- link-less pitch pre-filter ---- */
+
+test("REQUIRED (live bug repro): the exact reported link-less solicitation pitch is flagged", () => {
+  const text = "Hey Dev, Looking for real investors & strong volume? I can promote your project across active crypto communities and bring serious buyers. Let's push exposure, volume & market cap. DM me if you're ready to grow.";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+  // and it genuinely has no link/handle at all -- proving this really is the
+  // link-LESS case, not something extractLinks would have already caught.
+  assert.deepEqual(extractLinks(text), []);
+});
+
+test("a bare 'DM me' with nothing else is never flagged alone -- an ordinary, harmless thing to say", () => {
+  assert.equal(looksLikeUnsolicitedPitch("hey, dm me later about the meetup"), false);
+});
+
+test("a genuine request to grow something unrelated to marketing is never flagged", () => {
+  assert.equal(looksLikeUnsolicitedPitch("can you help me grow the invite list for the community call?"), false);
+});
+
+test("ordinary conversation is never flagged", () => {
+  assert.equal(looksLikeUnsolicitedPitch("gm everyone, hope you're all doing well today"), false);
+  assert.equal(looksLikeUnsolicitedPitch("what do you all think about the new update?"), false);
+});
+
+test("a self-promotion pitch phrased slightly differently is still flagged (two independent signals, not exact wording)", () => {
+  assert.equal(looksLikeUnsolicitedPitch("We can boost your channel's volume and bring you serious buyers, message us to get started"), true);
 });
 
 /* --------------------------------------------------------- self-mention exemption ---- */
@@ -187,6 +214,7 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
     floodRepeat: false,
     priorWarningCount: 0,
     priorScamStrikeCount: 0,
+    solicitationAllowed: false,
     ...over,
   });
 }
@@ -194,6 +222,54 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
 test("REQUIRED (§54.1): unsolicited promotion, no legitimate context -> DELETE_WARN, warning #1, muted for 10 minutes", () => {
   const result = decide({ category: "UNSOLICITED_PROMOTION" });
   assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
+});
+
+/* ------------------------------------ Community "Allow Solicitation" override ---- */
+
+test("REQUIRED: solicitationAllowed=true resolves ordinary unsolicited promotion to ALLOW -- no deletion, no warning", () => {
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: true }), { kind: "ALLOW" });
+});
+
+test("REQUIRED: solicitationAllowed=true applies consistently to REPEATED promotional posting -- every occurrence resolves ALLOW, not just the first", () => {
+  for (const priorWarningCount of [0, 1, 2, 5, 20]) {
+    assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: true, priorWarningCount }), { kind: "ALLOW" });
+  }
+});
+
+test("REQUIRED: solicitationAllowed=true never exempts a genuine flood-repeat burst -- still enforces as an abuse signal, not solicitation", () => {
+  const result = decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: true, floodRepeat: true });
+  assert.notEqual(result.kind, "ALLOW");
+  assert.equal(result.kind, "DELETE_KICK"); // flood forces straight past the warning grace period
+});
+
+test("REQUIRED: solicitationAllowed=true never exempts scam/phishing", () => {
+  assert.deepEqual(
+    decide({ category: "PHISHING_OR_SCAM", confidence: "high", solicitationAllowed: true }),
+    { kind: "DELETE_WARN", warningNumber: 1, reason: "scam_or_phishing", muteMinutes: 30 }
+  );
+});
+
+test("REQUIRED: solicitationAllowed=true never exempts explicit content", () => {
+  assert.deepEqual(
+    decide({ category: "EXPLICIT_CONTENT", confidence: "high", solicitationAllowed: true }),
+    { kind: "DELETE_KICK", reason: "explicit_content", purge: true }
+  );
+});
+
+test("solicitationAllowed=true never exempts a DIFFERENT category's own violation (LINK_SPAM_OR_FLOOD)", () => {
+  const result = decide({ category: "LINK_SPAM_OR_FLOOD", solicitationAllowed: true });
+  assert.notEqual(result.kind, "ALLOW");
+});
+
+test("solicitationAllowed=false (the real default) behaves byte-identically to before this setting existed", () => {
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: false }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
+});
+
+test("REQUIRED: solicitationAllowed never depends on admin/trusted status -- a non-admin gets the same ALLOW as an admin would", () => {
+  assert.deepEqual(
+    decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: true, isAdminOrTrusted: false }),
+    decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: true, isAdminOrTrusted: true })
+  );
 });
 
 test("REQUIRED (§54.2): a genuine AMA proposal -> ALLOW", () => {

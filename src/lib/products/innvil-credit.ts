@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { activateWatchEntitlement } from "./ownership";
+import { activateWatchEntitlement, setPendingWatchTier } from "./ownership";
 import { getAccountPaidPlan, listAccountCommunities, resolveAccountWatchTier } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { watchPlanOptions, watchPlanDisplayName, watchTierFromDisplayName, type WatchPlanDisplayName } from "./watch-plans";
@@ -9,7 +9,12 @@ import { creditPriceCents, annualCreditPriceCents, ANNUAL_ELIGIBLE_TIERS } from 
 import type { WatchBillingInterval } from "./watch-billing-period";
 import { getCommunityExpansionState, finalizeAddonsOnRenewal, finalizeAddonsOnTierChange } from "./watch-community-expansion";
 import { getMediaModerationAddonState } from "./watch-media-moderation-addon";
-import { COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_MEDIA_ADDON, type ModeratorPlanTier } from "@/src/lib/money";
+import { getMediaModerationExpansionUnits } from "./watch-media-moderation-expansion";
+import { resolveAccountBillingPeriod } from "./watch-ai-usage";
+import {
+  COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier, MODERATOR_MEDIA_ADDON,
+  mediaModerationExpansionPackByUnits, type ModeratorPlanTier,
+} from "@/src/lib/money";
 import { CAPACITY } from "@/src/lib/moderator/plan";
 
 /**
@@ -107,7 +112,21 @@ export async function creditInnvilCreditTopUp(admin: SupabaseClient, accountId: 
 }
 
 export type PurchaseWithCreditResult =
-  | { ok: true; paidThrough: string | null; balanceCents: number }
+  | {
+      ok: true;
+      paidThrough: string | null;
+      balanceCents: number;
+      /** True only when this call SCHEDULED a downgrade rather than
+       *  charging/activating anything right now -- see the "downgrades are
+       *  deferred" section below. `effectiveAt` is the account's current
+       *  `current_period_end`, i.e. when the scheduled tier actually takes
+       *  over. Omitted (undefined) for every other outcome (a fresh
+       *  purchase, an upgrade, a same-tier renewal, or a previously-
+       *  scheduled downgrade actually being applied), so an existing caller
+       *  checking only `ok`/`paidThrough`/`balanceCents` is unaffected. */
+      scheduled?: boolean;
+      effectiveAt?: string | null;
+    }
   | { ok: false; error: string };
 
 /**
@@ -124,6 +143,24 @@ export type PurchaseWithCreditResult =
  * ledger and product_entitlements isn't attempted here (they're two
  * separate tables mutated by two separate calls); this is a deliberate,
  * documented compensating-transaction choice, not full ACID atomicity.
+ *
+ * Also this function's own single entry point for BOTH plan changes:
+ *
+ * - An UPGRADE (the requested tier's regular price is higher than the
+ *   account's current tier) takes effect immediately, charged the
+ *   DIFFERENCE between the new tier's price and the current tier's price
+ *   at the SAME billing interval -- never the new tier's full price on top
+ *   of what was already paid this period. The period is still extended via
+ *   the existing activateWatchEntitlement/computeRenewedPeriod mechanics,
+ *   unchanged from before this pass -- only the CHARGED AMOUNT changed.
+ * - A DOWNGRADE (the requested tier's regular price is lower) is never
+ *   charged or activated immediately. It's recorded as `pending_tier`
+ *   (migration 0111) and takes effect automatically at the account's own
+ *   next renewal -- either the customer clicking "Renew" (RenewWatchButton
+ *   always passes the account's CURRENT tier, so that call lands in the
+ *   `applyingPendingDowngrade` branch below) or the automatic
+ *   sweepWatchAutoRenewals cron. At that point it's charged the pending
+ *   tier's OWN full price (never a delta off the higher tier it replaces).
  */
 export async function purchaseWatchWithCredit(
   admin: SupabaseClient,
@@ -131,30 +168,44 @@ export async function purchaseWatchWithCredit(
   planName: Exclude<WatchPlanDisplayName, "Enterprise">,
   billingInterval: WatchBillingInterval = "monthly"
 ): Promise<PurchaseWithCreditResult> {
-  const tier = watchTierFromDisplayName(planName);
-  const option = watchPlanOptions().find((o) => o.tier === tier);
-  if (!option) return { ok: false, error: "Unknown plan." };
-  if (billingInterval === "annual" && !ANNUAL_ELIGIBLE_TIERS.includes(tier)) {
-    return { ok: false, error: "Annual billing isn't available for this plan." };
-  }
+  const requestedTier = watchTierFromDisplayName(planName);
+  const requestedOption = watchPlanOptions().find((o) => o.tier === requestedTier);
+  if (!requestedOption) return { ok: false, error: "Unknown plan." };
 
   const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
   if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
 
   const existingPlan = await getAccountPaidPlan(admin, accountId);
+
+  // Renewing at the account's OWN current tier while a downgrade is
+  // already scheduled means renewal time has actually arrived -- the
+  // scheduled downgrade takes effect NOW, at ITS OWN price, instead of
+  // renewing the higher tier it's meant to replace. Every other case
+  // (a fresh purchase, an explicit upgrade, a brand-new downgrade request)
+  // resolves the tier from what the caller actually requested.
+  const applyingPendingDowngrade = !!(existingPlan && requestedTier === existingPlan.tier && existingPlan.pendingTier);
+  const tier = applyingPendingDowngrade ? (existingPlan!.pendingTier as ModeratorPlanTier) : requestedTier;
+  const option = applyingPendingDowngrade ? watchPlanOptions().find((o) => o.tier === tier)! : requestedOption;
+
+  if (billingInterval === "annual" && !ANNUAL_ELIGIBLE_TIERS.includes(tier)) {
+    return { ok: false, error: "Annual billing isn't available for this plan." };
+  }
+
   const type = existingPlan ? "subscription_renewal" : "subscription_purchase";
   let priceCents = billingInterval === "annual" ? annualCreditPriceCents(option.price) : creditPriceCents(option.price, tier);
 
   // Community Expansion renews TOGETHER with the base subscription, one
   // atomic combined debit -- never a second/independent charge. Only
-  // folded in on a RENEWAL of the SAME tier the addon is already active
-  // under (a brand-new purchase has no addon yet), and only when it's not
-  // scheduled for removal (cancel_at_period_end) -- a removal-pending
-  // addon is finalized (see finalizeAddonsOnRenewal below) and simply
-  // isn't charged for this final time.
+  // folded in on a genuine RENEWAL of the tier the account is already ON
+  // (never when applying a pending downgrade, which is itself a tier
+  // change -- addons never carry across one, see below), and only when
+  // it's not scheduled for removal (cancel_at_period_end) -- a removal-
+  // pending addon is finalized (see finalizeAddonsOnRenewal below) and
+  // simply isn't charged for this final time.
   const foldedAddonLabels: string[] = [];
   let addonToFinalizeOnTierChange = false;
-  if (existingPlan && existingPlan.tier === tier && isCommunityExpansionEligibleTier(tier)) {
+  const isGenuineSameTierRenewal = !!existingPlan && existingPlan.tier === tier && !applyingPendingDowngrade;
+  if (isGenuineSameTierRenewal && isCommunityExpansionEligibleTier(tier)) {
     const expansion = await getCommunityExpansionState(admin, accountId);
     if (expansion && !expansion.cancelAtPeriodEnd) {
       const addonRegular = COMMUNITY_EXPANSION_MONTHLY_PRICE[tier];
@@ -167,7 +218,7 @@ export async function purchaseWatchWithCredit(
   // like Community Expansion), so this check runs independently of the
   // eligibility branch above; both addons can be folded into the SAME
   // combined debit simultaneously.
-  if (existingPlan && existingPlan.tier === tier) {
+  if (isGenuineSameTierRenewal) {
     const media = await getMediaModerationAddonState(admin, accountId, tier);
     if (media && !media.cancelAtPeriodEnd) {
       const addonRegular = MODERATOR_MEDIA_ADDON[tier].price;
@@ -175,13 +226,46 @@ export async function purchaseWatchWithCredit(
       foldedAddonLabels.push("Media Moderation +");
     }
   }
-  if (existingPlan && existingPlan.tier !== tier) {
-    // A plan CHANGE to a different tier never carries an active Community
-    // Expansion OR Media Moderation + add-on across tiers -- see
-    // finalizeAddonsOnTierChange's own doc comment for why. Blocked here
-    // (not just hidden in UI) if current Community usage would exceed the
-    // NEW tier's plain INCLUDED capacity -- the effective capacity the
-    // account will have once the add-on is finalized below. Media
+
+  const isTierChange = !!existingPlan && existingPlan.tier !== tier;
+  if (isTierChange) {
+    const currentOption = watchPlanOptions().find((o) => o.tier === existingPlan!.tier);
+    const isDowngrade = !!currentOption && option.price < currentOption.price;
+
+    if (isDowngrade && !applyingPendingDowngrade) {
+      // A NEW downgrade request -- never charged, never activated right
+      // now. Validated against the SAME community-capacity guard an
+      // immediate tier change already used, checked here at SCHEDULING
+      // time (not re-validated at the moment the downgrade actually
+      // applies -- a small, documented limitation: the worst case is the
+      // downgrade taking effect while the account is still over the new
+      // tier's Community cap, which is exactly the same "connected
+      // resources are never force-disconnected" behavior this codebase
+      // already has everywhere else once a plan's limits are exceeded).
+      const communities = await listAccountCommunities(admin, accountId);
+      const includedCap = CAPACITY[tier as ModeratorPlanTier].maxCommunities;
+      if (communities.length > includedCap) {
+        return {
+          ok: false,
+          error: `You have ${communities.length} Communities connected — more than the ${includedCap} included in ${option.displayName}. Disconnect down to ${includedCap} or fewer before scheduling this downgrade.`,
+        };
+      }
+      await setPendingWatchTier(admin, accountId, tier);
+      return {
+        ok: true,
+        paidThrough: existingPlan!.currentPeriodEnd,
+        balanceCents: (await getInnvilCreditBalance(admin, accountId)).balanceCents,
+        scheduled: true,
+        effectiveAt: existingPlan!.currentPeriodEnd,
+      };
+    }
+
+    // An upgrade, or a previously-scheduled downgrade finally taking
+    // effect at its own renewal moment. Neither carries an active
+    // Community Expansion OR Media Moderation + add-on across the tier
+    // change -- see finalizeAddonsOnTierChange's own doc comment for why.
+    // Blocked here (not just hidden in UI) if current Community usage
+    // would exceed the NEW tier's plain INCLUDED capacity. Media
     // Moderation + has no equivalent usage-safety check (no per-request
     // consumption metering exists to check against yet) -- it's simply
     // finalized/removed on any tier change, same as Community Expansion.
@@ -197,34 +281,73 @@ export async function purchaseWatchWithCredit(
       }
       addonToFinalizeOnTierChange = true;
     }
-    const existingMedia = await getMediaModerationAddonState(admin, accountId, existingPlan.tier);
+    const existingMedia = await getMediaModerationAddonState(admin, accountId, existingPlan!.tier);
     if (existingMedia) addonToFinalizeOnTierChange = true;
+
+    // Upgrade pricing -- charge only the DIFFERENCE between the new
+    // tier's price and what the account is already paying for its
+    // current tier, at the SAME billing interval, never the new tier's
+    // full price stacked on top of what this period already cost. An
+    // already-scheduled downgrade actually taking effect is priced at
+    // the pending tier's OWN full price (computed above, unchanged) --
+    // it isn't a delta off the higher tier it's replacing.
+    if (!applyingPendingDowngrade && currentOption) {
+      const currentTierPriceCents = billingInterval === "annual" ? annualCreditPriceCents(currentOption.price) : creditPriceCents(currentOption.price, existingPlan!.tier);
+      priceCents = Math.max(0, priceCents - currentTierPriceCents);
+    }
   }
 
-  const debit = await applyCreditChange(admin, accountId, -priceCents, type, {
-    productId: product.id as string,
-    description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}${foldedAddonLabels.length ? ` (incl. ${foldedAddonLabels.join(" + ")})` : ""}`.replace(/\s+/g, " ").trim(),
-  });
-  if (!debit.ok) return { ok: false, error: debit.error };
+  let debitId: string | null = null;
+  let balanceAfterCents: number;
+  if (priceCents > 0) {
+    const debit = await applyCreditChange(admin, accountId, -priceCents, type, {
+      productId: product.id as string,
+      description: `${option.displayName} — ${billingInterval === "annual" ? "annual" : ""} ${type === "subscription_renewal" ? "renewal" : "subscription"}${foldedAddonLabels.length ? ` (incl. ${foldedAddonLabels.join(" + ")})` : ""}`.replace(/\s+/g, " ").trim(),
+    });
+    if (!debit.ok) return { ok: false, error: debit.error };
+    debitId = debit.data.id;
+    balanceAfterCents = debit.data.balance_after_cents;
+  } else {
+    // A $0 charge (an upgrade whose price difference rounds to nothing, or
+    // two tiers priced identically) -- never a debit for zero, still a
+    // real activation. `subscriptionRef` still needs a unique-looking
+    // pointer, so a plain timestamp stands in for a real deposit/ledger id.
+    debitId = `free:${Date.now()}`;
+    balanceAfterCents = (await getInnvilCreditBalance(admin, accountId)).balanceCents;
+  }
 
   try {
-    await activateWatchEntitlement(admin, accountId, tier, `credit:${debit.data.id}`, billingInterval, undefined, undefined, undefined, undefined, true);
+    await activateWatchEntitlement(admin, accountId, tier, `credit:${debitId}`, billingInterval, undefined, undefined, undefined, undefined, true);
     await finalizeAddonsOnRenewal(admin, accountId);
     if (addonToFinalizeOnTierChange) await finalizeAddonsOnTierChange(admin, accountId);
   } catch (e) {
-    // Compensating reversal -- the debit already committed; refund it in
-    // full rather than leave the customer charged with no active
-    // subscription to show for it.
-    await applyCreditChange(admin, accountId, priceCents, "adjustment", {
-      productId: product.id as string,
-      paymentRef: `reversal:${debit.data.id}`,
-      description: "Reversal: subscription activation failed",
-    });
+    // Compensating reversal -- the debit (if any) already committed;
+    // refund it in full rather than leave the customer charged with no
+    // active subscription to show for it.
+    if (priceCents > 0) {
+      await applyCreditChange(admin, accountId, priceCents, "adjustment", {
+        productId: product.id as string,
+        paymentRef: `reversal:${debitId}`,
+        description: "Reversal: subscription activation failed",
+      });
+    }
     return { ok: false, error: e instanceof Error ? e.message : "Could not activate the subscription. Your credit was refunded." };
   }
 
   const paidPlan = await getAccountPaidPlan(admin, accountId);
-  return { ok: true, paidThrough: paidPlan?.currentPeriodEnd ?? null, balanceCents: debit.data.balance_after_cents };
+  return { ok: true, paidThrough: paidPlan?.currentPeriodEnd ?? null, balanceCents: balanceAfterCents };
+}
+
+/** Clears a scheduled downgrade set by purchaseWatchWithCredit -- the
+ *  account simply keeps renewing at its current tier going forward, same
+ *  as if the downgrade had never been requested. A no-op if nothing is
+ *  scheduled. */
+export async function cancelPendingWatchDowngrade(admin: SupabaseClient, accountId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await getAccountPaidPlan(admin, accountId);
+  if (!plan) return { ok: false, error: "No active Watch subscription found." };
+  if (!plan.pendingTier) return { ok: true };
+  await setPendingWatchTier(admin, accountId, null);
+  return { ok: true };
 }
 
 export type CommunityExpansionPurchaseResult =
@@ -415,4 +538,69 @@ export async function scheduleMediaModerationAddonRemoval(admin: SupabaseClient,
   await admin.from("watch_subscription_addons").update({ cancel_at_period_end: true, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("addon_type", "media_moderation").eq("status", "active");
   return { ok: true };
+}
+
+export type PurchaseMediaModerationExpansionResult =
+  | { ok: true; unitsAdded: number; totalExpansionThisPeriod: number; balanceCents: number }
+  | { ok: false; error: string };
+
+/**
+ * Purchases one Media Moderation Units expansion pack (money.ts's
+ * MEDIA_MODERATION_EXPANSION_PACKS) via Innvil Credit -- a real, one-time,
+ * CURRENT-PERIOD top-up (migration 0110), deliberately NOT the recurring
+ * `watch_subscription_addons` shape the two functions above use, since this
+ * feature needs multiple, differently-sized purchases to stack within one
+ * period (see watch-media-moderation-expansion.ts's own doc comment).
+ * Available to EVERY plan with a resolvable current billing period --
+ * self-serve, byo20, and every Enterprise variant alike (Enterprise/byo20
+ * both already resolve a real period via resolveAccountBillingPeriod, the
+ * exact same function their own media-moderation usage tracking already
+ * relies on) -- never gated to a subset of tiers, matching the base
+ * allowance's own "every plan" scope. `units` must be an EXACT canonical
+ * pack size; an arbitrary number is rejected outright, never partially
+ * honored or rounded to the nearest real pack.
+ */
+export async function purchaseMediaModerationExpansion(admin: SupabaseClient, accountId: string, units: number): Promise<PurchaseMediaModerationExpansionResult> {
+  const pack = mediaModerationExpansionPackByUnits(units);
+  if (!pack) return { ok: false, error: "That isn't a valid Media Moderation capacity pack." };
+
+  const period = await resolveAccountBillingPeriod(admin, accountId);
+  if (!period) return { ok: false, error: "An active Watch subscription is required to add media capacity." };
+
+  const { data: product } = await admin.from("products").select("id").eq("slug", WATCH_PRODUCT_SLUG).maybeSingle();
+  if (!product) return { ok: false, error: "Innvil Watch is not available right now." };
+
+  const priceCents = Math.round(pack.price * 100);
+  const debit = await applyCreditChange(admin, accountId, -priceCents, "subscription_purchase", {
+    productId: product.id as string,
+    description: `Media Moderation capacity +${pack.units.toLocaleString()} units`,
+  });
+  if (!debit.ok) return { ok: false, error: debit.error };
+
+  const { error } = await admin.from("watch_media_moderation_expansions").insert({
+    account_id: accountId,
+    period_start: period.start,
+    period_end: period.end,
+    units: pack.units,
+    price_usd: pack.price,
+    payment_ref: debit.data.id,
+  });
+  if (error) {
+    // A genuine insert failure after a successful debit -- reverse it
+    // rather than leave the customer charged with nothing to show for it.
+    // No duplicate-purchase race to tolerate here (unlike the single-active-
+    // row addons above) -- every purchase is its own new row, so a
+    // concurrent purchase simply inserts its own separate row too, both
+    // valid and both correctly summed by getMediaModerationExpansionUnits.
+    await applyCreditChange(admin, accountId, priceCents, "adjustment", {
+      productId: product.id as string,
+      paymentRef: `reversal:${debit.data.id}`,
+      description: "Reversal: media capacity purchase failed",
+    });
+    return { ok: false, error: "Could not add media capacity. Your credit was refunded." };
+  }
+
+  const totalExpansionThisPeriod = await getMediaModerationExpansionUnits(admin, accountId, period.start);
+  const balance = await getInnvilCreditBalance(admin, accountId);
+  return { ok: true, unitsAdded: pack.units, totalExpansionThisPeriod, balanceCents: balance.balanceCents };
 }

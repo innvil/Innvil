@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CreditCard, ShieldCheck, LifeBuoy } from "lucide-react";
 import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
-import { getMediaModerationAddonState } from "@/src/lib/products/watch-media-moderation-addon";
 import { getWatchTrialState, TRIAL_DURATION_DAYS, TRIAL_CAPACITY } from "@/src/lib/products/watch-trial";
 import { watchPlanOptions, watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
 import { WatchShell } from "@/src/components/watch/WatchShell";
@@ -34,17 +33,9 @@ export default async function PlansPage() {
   const currentDisplayName = capacity
     ? watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })
     : null;
-  // byo20 is excluded here too -- its 3,000-unit allowance is always
-  // bundled/active (never a purchased row), so there's nothing for
-  // getMediaModerationAddonState to find; the plan card renders its own
-  // "included" statement for byo20 without ever reading this prop.
-  const mediaAddonState =
-    capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" && capacity.tier !== "byo20"
-      ? await getMediaModerationAddonState(admin, accountId, capacity.tier)
-      : null;
   const platinum = options.find((o) => o.displayName === "Platinum")!;
   const enterpriseInquiryBody = capacity
-    ? `Current plan: ${currentDisplayName}\nWatcher slots used: ${capacity.activeDeploymentCount}/${formatSlotLimit(capacity.slotsTotal)}\nCommunities used: ${capacity.communitiesUsed}/${capacity.communitiesTotal}\n\n`
+    ? `Current plan: ${currentDisplayName}\nWatcher slots used: ${capacity.activeDeploymentCount}/${formatSlotLimit(capacity.slotsTotal)}\nCommunities used: ${capacity.communitiesUsed}/${formatSlotLimit(capacity.communitiesTotal)}\n\n`
     : "";
 
   return (
@@ -74,7 +65,6 @@ export default async function PlansPage() {
             options={options}
             currentDisplayName={capacity?.tier !== "trial" ? currentDisplayName : null}
             currentBillingInterval={capacity && capacity.tier !== "trial" ? capacity.billingInterval : "monthly"}
-            mediaAddon={mediaAddonState ? { active: true, cancelAtPeriodEnd: mediaAddonState.cancelAtPeriodEnd, units: mediaAddonState.units } : { active: false, cancelAtPeriodEnd: false, units: 0 }}
           />
         </div>
 
