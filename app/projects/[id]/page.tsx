@@ -15,6 +15,7 @@ import { ProjectAddWatcherCta } from "@/src/components/watch/ProjectAddWatcherCt
 import { ProjectAddCommunityCta } from "@/src/components/watch/ProjectAddCommunityCta";
 import { ProjectAddEscalationGroupCta } from "@/src/components/watch/ProjectAddEscalationGroupCta";
 import { ProjectEscalationsTab } from "@/src/components/watch/ProjectEscalationsTab";
+import { assignWatcherRoles } from "@/src/lib/moderator/watcher-roles";
 
 export const metadata: Metadata = { title: "Project — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -219,25 +220,37 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             <EmptyRow text="No Watchers assigned to a Community in this Project yet." />
           ) : (
             <div className="overflow-x-auto -mx-1">
-              <table className="w-full text-sm min-w-[480px]">
+              <table className="w-full text-sm min-w-[560px]">
                 <thead>
                   <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
                     <th className="font-semibold pb-2 px-1">Watcher</th>
                     <th className="font-semibold pb-2 px-1">Community</th>
+                    <th className="font-semibold pb-2 px-1">Role</th>
                     <th className="font-semibold pb-2 px-1">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {detail.communities.flatMap((c) => c.watchers.map((w) => (
-                    <tr key={w.deploymentId} className="border-t w-line-soft">
-                      <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
-                      <td className="py-2.5 px-1 w-text-dim">
-                        {c.title ?? c.chatId}
-                        {c.connectionType === "escalation_group" && <span className="ml-1.5 text-[10px] uppercase tracking-wide w-text-faint">(Escalation Group)</span>}
-                      </td>
-                      <td className="py-2.5 px-1"><StatusDot on={w.enabled} /></td>
-                    </tr>
-                  )))}
+                  {detail.communities.flatMap((c) => {
+                    // Role is scoped to THIS community's own deployment set
+                    // (Watcher Role Separation is automatic, computed from
+                    // deployment order+count within one Community) --
+                    // recomputed per community, never shared across them.
+                    const roles = assignWatcherRoles(c.watchers.map((w) => ({ deploymentId: w.deploymentId, createdAt: w.createdAt, enabled: w.enabled })));
+                    return c.watchers.map((w) => {
+                      const role = roles.find((r) => r.deploymentId === w.deploymentId);
+                      return (
+                        <tr key={w.deploymentId} className="border-t w-line-soft">
+                          <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
+                          <td className="py-2.5 px-1 w-text-dim">
+                            {c.title ?? c.chatId}
+                            {c.connectionType === "escalation_group" && <span className="ml-1.5 text-[10px] uppercase tracking-wide w-text-faint">(Escalation Group)</span>}
+                          </td>
+                          <td className="py-2.5 px-1 w-text-dim text-xs">{w.enabled ? role?.roleLabel : "—"}</td>
+                          <td className="py-2.5 px-1"><StatusDot on={w.enabled} /></td>
+                        </tr>
+                      );
+                    });
+                  })}
                 </tbody>
               </table>
             </div>

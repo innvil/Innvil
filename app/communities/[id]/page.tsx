@@ -16,6 +16,7 @@ import { AutoPostScheduleCard } from "@/src/components/watch/AutoPostScheduleCar
 import { getAutoPostingEligibility } from "@/src/lib/actions/watch-autopost";
 import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
 import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
+import { assignWatcherRoles } from "@/src/lib/moderator/watcher-roles";
 
 export const metadata: Metadata = { title: "Community — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -43,6 +44,12 @@ export default async function CommunityDetailPage({
 
   const status = communityOperationalStatus(community);
   const watchersForFilter = community.watchers.map((w) => ({ id: w.watcherId, name: w.watcherName }));
+  // Watcher Role Separation is fully automatic (no manual "set role" control
+  // exists, or should exist -- it's deterministic, computed from deployment
+  // order + count) -- but it must still be VISIBLE wherever an owner
+  // naturally looks at a Community's Watchers, not only on the separate
+  // global /deployments page.
+  const roleAssignments = assignWatcherRoles(community.watchers.map((w) => ({ deploymentId: w.deploymentId, createdAt: w.createdAt, enabled: w.enabled })));
   const presenceResult = await getCommunityPresenceSchedule(id);
   const autoPostEligibility = AUTO_POSTING_ENABLED ? await getAutoPostingEligibility(id) : null;
 
@@ -53,22 +60,40 @@ export default async function CommunityDetailPage({
         <EmptyRow text="No Watchers deployed to this Community." />
       ) : (
         <div className="overflow-x-auto -mx-1">
-          <table className="w-full text-sm min-w-[420px]">
+          <table className="w-full text-sm min-w-[540px]">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
                 <th className="font-semibold pb-2 px-1">Watcher</th>
+                <th className="font-semibold pb-2 px-1">Role</th>
                 <th className="font-semibold pb-2 px-1">Status</th>
                 <th className="font-semibold pb-2 px-1"></th>
               </tr>
             </thead>
             <tbody>
-              {community.watchers.map((w) => (
-                <tr key={w.deploymentId} className="border-t w-line-soft">
-                  <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
-                  <td className="py-2.5 px-1">{w.enabled ? <span className="text-xs w-green">Active</span> : <span className="text-xs w-text-faint">Paused</span>}</td>
-                  <td className="py-2.5 px-1 text-right"><DeploymentToggle moderatorId={w.watcherId} deploymentId={w.deploymentId} enabled={w.enabled} /></td>
-                </tr>
-              ))}
+              {community.watchers.map((w) => {
+                const role = roleAssignments.find((r) => r.deploymentId === w.deploymentId);
+                return (
+                  <tr key={w.deploymentId} className="border-t w-line-soft">
+                    <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
+                    <td className="py-2.5 px-1">
+                      {w.enabled ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-xs w-text-dim">{role?.roleLabel}</span>
+                          {role?.chatterDuty === "ACTIVE_CHATTER" ? (
+                            <span className="text-[10px] w-teal flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full w-teal-bg shrink-0" /> Active chatter now</span>
+                          ) : (
+                            <span className="text-[10px] w-text-faint">Specialist duty only right now</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs w-text-faint">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-1">{w.enabled ? <span className="text-xs w-green">Active</span> : <span className="text-xs w-text-faint">Paused</span>}</td>
+                    <td className="py-2.5 px-1 text-right"><DeploymentToggle moderatorId={w.watcherId} deploymentId={w.deploymentId} enabled={w.enabled} /></td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
