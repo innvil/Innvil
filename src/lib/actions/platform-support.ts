@@ -339,6 +339,17 @@ async function listUntouchedDraftOwners(admin: SupabaseClient): Promise<OwnerDra
   return rows;
 }
 
+/** Delivers an automated draft-onboarding nudge/follow-up to the owner's
+ *  in-app "Contact support" inbox ONLY -- per explicit product decision,
+ *  this does NOT email the owner. The `platform_support_messages` insert
+ *  below is the real delivery: `listOwnerSupportMessages()` (the same query
+ *  behind OwnerContactSupport's "Your messages" list) reads every row for
+ *  this owner_id with no `kind` filter, so an inserted row here shows up
+ *  there immediately, tagged "From Innvil". Never call sendEmail() here --
+ *  that's a deliberate scope boundary of THIS automated-sweep helper only;
+ *  the separate manual super-admin one-off message
+ *  (sendSuperAdminOwnerMessage) is an intentional human decision and keeps
+ *  its own, unrelated email delivery. */
 async function sendOutreachMessage(admin: SupabaseClient, params: {
   ownerId: string;
   ownerEmail: string | null;
@@ -357,22 +368,7 @@ async function sendOutreachMessage(admin: SupabaseClient, params: {
     sender_id: params.senderId ?? null,
     status: "open",
   });
-  if (error) return false;
-
-  if (params.ownerEmail) {
-    try {
-      await sendEmail({
-        to: params.ownerEmail,
-        subject: `[Innvil] ${params.subject}`,
-        html: simpleEmail("Message from Innvil", [escapeHtml(params.body).replace(/\n/g, "<br/>")]),
-        text: params.body,
-      });
-    } catch {
-      // best-effort email
-    }
-  }
-
-  return true;
+  return !error;
 }
 
 /** Automatic first-panel draft outreach — one-time onboarding nudge per owner. */

@@ -795,7 +795,7 @@ function SupportTab() {
                 {outBusy ? "Running…" : "One-click auto send"}
               </button>
             </div>
-            <p className="fp-text-faint text-xs">Daily automatic follow-up also runs for still-draft owners.</p>
+            <p className="fp-text-faint text-xs">Delivered to the owner&apos;s in-app Contact support inbox (not email). Daily automatic follow-up also runs for still-draft owners.</p>
           </>
         )}
       </div>
