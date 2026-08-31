@@ -3,7 +3,7 @@
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { scrapeTlgrmCategories } from "@/src/lib/marketing/telegram-directory-fetch";
-import { isKnownTlgrmCategory } from "@/src/lib/marketing/telegram-directory";
+import { isKnownTlgrmCategory, isWithinLeadMemberRange } from "@/src/lib/marketing/telegram-directory";
 
 /**
  * Super-admin-only Telegram lead RESEARCH tool for Innvil's own marketing
@@ -74,6 +74,7 @@ export async function listTelegramLeads(filters?: { status?: TelegramLeadStatus;
 export interface ScrapeSummary {
   added: number;
   updated: number;
+  outOfRange: number;
   perCategory: Array<{ category: string; found: number; pagesFetched: number; error?: string }>;
 }
 
@@ -81,7 +82,26 @@ export interface ScrapeSummary {
  *  by username (globally unique) -- a re-scrape UPDATES subscriber_count/
  *  description/category/source on an already-known lead, but never
  *  touches its status/notes/contacted_at, so manual outreach progress is
- *  never clobbered by a later scrape. */
+ *  never clobbered by a later scrape.
+ *
+ *  Only entries reporting a member/subscriber count within
+ *  [TELEGRAM_LEAD_MIN_MEMBERS, TELEGRAM_LEAD_MAX_MEMBERS] are kept -- an
+ *  entry outside that range, or with no reported count at all, is skipped
+ *  entirely (never inserted, never updated) rather than added and filtered
+ *  out later in the UI.
+ *
+ *  IMPORTANT, honestly disclosed rather than silently ignored: tlgrm.eu
+ *  (this scraper's only wired source) lists Telegram CHANNELS only -- its
+ *  own markup labels every entry "channel" (aria-label="Verified channel",
+ *  button text "Preview channel"), it has no /groups/ section, and its nav
+ *  only offers "Channels". Verified directly against the live site before
+ *  writing this comment, not assumed. There is currently no reliable signal
+ *  anywhere in the scraped data to determine "this is a public GROUP, not a
+ *  channel" -- so this pass does NOT add a fake/guessed group/channel field.
+ *  Every lead this tool currently produces is, in reality, a channel. If
+ *  public-group-only leads are still needed, a genuinely different,
+ *  verified directory source is required -- flag this back rather than
+ *  building against a source that can't satisfy it. */
 export async function runTelegramLeadScrape(categories: string[], maxPagesPerCategory?: number): Promise<Result<ScrapeSummary>> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
@@ -97,10 +117,12 @@ export async function runTelegramLeadScrape(categories: string[], maxPagesPerCat
 
   let added = 0;
   let updated = 0;
+  let outOfRange = 0;
   const perCategory: ScrapeSummary["perCategory"] = [];
   for (const result of results) {
     perCategory.push({ category: result.category, found: result.entries.length, pagesFetched: result.pagesFetched, error: result.error });
     for (const entry of result.entries) {
+      if (!isWithinLeadMemberRange(entry.subscriberCount)) { outOfRange++; continue; }
       const { data: existing } = await admin.from("telegram_leads").select("id").eq("username", entry.username).maybeSingle();
       const nowIso = new Date().toISOString();
       if (existing) {
@@ -121,7 +143,7 @@ export async function runTelegramLeadScrape(categories: string[], maxPagesPerCat
       }
     }
   }
-  return { ok: true, data: { added, updated, perCategory } };
+  return { ok: true, data: { added, updated, outOfRange, perCategory } };
 }
 
 export async function setTelegramLeadStatus(id: string, status: TelegramLeadStatus): Promise<Result<null>> {

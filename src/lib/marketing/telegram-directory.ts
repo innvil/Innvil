@@ -40,6 +40,20 @@ export function isKnownTlgrmCategory(value: string): value is TlgrmCategory {
   return (TLGRM_CATEGORIES as readonly string[]).includes(value);
 }
 
+/** Innvil's own lead-qualification range for this tool, per explicit
+ *  instruction: only communities in the 5,000-50,000 member band are real
+ *  leads (too small = low outreach value, too large = usually run by teams
+ *  who won't read a cold message from an unknown account). A subscriber
+ *  count the site itself didn't report (`null`) is NEVER treated as
+ *  in-range -- an unknown count is not a verified match, so it's excluded
+ *  rather than guessed to qualify. */
+export const TELEGRAM_LEAD_MIN_MEMBERS = 5_000;
+export const TELEGRAM_LEAD_MAX_MEMBERS = 50_000;
+
+export function isWithinLeadMemberRange(subscriberCount: number | null): boolean {
+  return subscriberCount != null && subscriberCount >= TELEGRAM_LEAD_MIN_MEMBERS && subscriberCount <= TELEGRAM_LEAD_MAX_MEMBERS;
+}
+
 const CARD_MARKER = '<div class="channel-card">';
 const PROMO_RE = /channel-card__promo-label/;
 const TITLE_RE = /<h3 class="channel-card__title">\s*<a[^>]*>\s*([^<]+?)\s*<\/a>/;

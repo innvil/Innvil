@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseTlgrmDirectoryHtml, parseTlgrmLastPage, tlgrmCategoryUrl,
   isKnownTlgrmCategory, TLGRM_CATEGORIES,
+  isWithinLeadMemberRange, TELEGRAM_LEAD_MIN_MEMBERS, TELEGRAM_LEAD_MAX_MEMBERS,
 } from "./telegram-directory";
 
 // Fixture mirrors the REAL markup shape confirmed live against
@@ -168,4 +169,27 @@ test("isKnownTlgrmCategory accepts every real category this feature actually off
 test("isKnownTlgrmCategory rejects an arbitrary unrecognized string", () => {
   assert.equal(isKnownTlgrmCategory("not-a-real-category"), false);
   assert.equal(isKnownTlgrmCategory(""), false);
+});
+
+test("isWithinLeadMemberRange: the boundary values themselves are inclusive", () => {
+  assert.equal(isWithinLeadMemberRange(TELEGRAM_LEAD_MIN_MEMBERS), true);
+  assert.equal(isWithinLeadMemberRange(TELEGRAM_LEAD_MAX_MEMBERS), true);
+});
+
+test("isWithinLeadMemberRange rejects just below the minimum and just above the maximum", () => {
+  assert.equal(isWithinLeadMemberRange(TELEGRAM_LEAD_MIN_MEMBERS - 1), false);
+  assert.equal(isWithinLeadMemberRange(TELEGRAM_LEAD_MAX_MEMBERS + 1), false);
+});
+
+test("isWithinLeadMemberRange rejects a value well outside the range in either direction", () => {
+  assert.equal(isWithinLeadMemberRange(50), false);
+  assert.equal(isWithinLeadMemberRange(1_000_000), false);
+});
+
+test("isWithinLeadMemberRange never treats an unknown (null) count as in-range", () => {
+  assert.equal(isWithinLeadMemberRange(null), false);
+});
+
+test("isWithinLeadMemberRange accepts a real value comfortably inside the range", () => {
+  assert.equal(isWithinLeadMemberRange(25_000), true);
 });

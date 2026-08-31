@@ -8,6 +8,7 @@ import {
   deleteTelegramLead, importTelegramLeadsCsv,
   type TelegramLead, type TelegramLeadStatus, type ScrapeSummary,
 } from "@/src/lib/actions/telegram-leads";
+import { TELEGRAM_LEAD_MIN_MEMBERS, TELEGRAM_LEAD_MAX_MEMBERS } from "@/src/lib/marketing/telegram-directory";
 
 /**
  * Super-admin Telegram lead-research tool. Scrapes a PUBLIC third-party
@@ -165,10 +166,21 @@ export function TelegramLeadsAdmin() {
           <Users size={16} className="fp-gold" />
           <h2 className="fp-display text-base">Find Telegram communities</h2>
         </div>
-        <p className="fp-text-dim text-xs mb-4">
-          Pulls publicly-listed channels/groups from tlgrm.eu&apos;s own public directory pages — real, already-
+        <p className="fp-text-dim text-xs mb-1">
+          Pulls publicly-listed communities from tlgrm.eu&apos;s own public directory pages — real, already-
           public data (name, @username, subscriber count, description). This never messages anyone; it only
           builds a lead list for your team to research and reach out to manually.
+        </p>
+        <p className="fp-text-dim text-xs mb-1">
+          Only kept as a lead when the site reports{" "}
+          <span className="fp-text font-semibold">{TELEGRAM_LEAD_MIN_MEMBERS.toLocaleString()}–{TELEGRAM_LEAD_MAX_MEMBERS.toLocaleString()} members</span> —
+          anything smaller, larger, or with no reported count is skipped automatically, not added and hidden later.
+        </p>
+        <p className="text-amber-400/90 text-xs mb-4">
+          Heads up: tlgrm.eu only lists Telegram <span className="font-semibold">channels</span> (its own pages
+          label every entry &quot;channel&quot; and it has no groups section) — every lead from this scraper is a
+          channel, not a public group. If you need public-group-only leads specifically, a different directory
+          source would need to be found and verified first.
         </p>
 
         <div className="flex flex-wrap gap-2 mb-3">
@@ -210,7 +222,10 @@ export function TelegramLeadsAdmin() {
         {scrapeError && <p className="text-xs text-red-400 mt-3">{scrapeError}</p>}
         {scrapeSummary && (
           <div className="mt-3 text-xs fp-text-dim space-y-1">
-            <p>Added {scrapeSummary.added}, updated {scrapeSummary.updated} existing lead(s).</p>
+            <p>
+              Added {scrapeSummary.added}, updated {scrapeSummary.updated} existing lead(s)
+              {scrapeSummary.outOfRange > 0 ? `, skipped ${scrapeSummary.outOfRange} outside the ${TELEGRAM_LEAD_MIN_MEMBERS.toLocaleString()}–${TELEGRAM_LEAD_MAX_MEMBERS.toLocaleString()} member range` : ""}.
+            </p>
             {scrapeSummary.perCategory.map((c) => (
               <p key={c.category}>
                 {c.category}: {c.found} found across {c.pagesFetched} page(s){c.error ? ` — ${c.error}` : ""}
