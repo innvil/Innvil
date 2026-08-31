@@ -1092,6 +1092,7 @@ export function OwnerPanelSupport() {
             <input value={outSubject} onChange={(e) => setOutSubject(e.target.value)} placeholder="Need help launching your panel?" className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border" maxLength={200} />
             <label className="fp-text-dim text-xs fp-mono uppercase">Message</label>
             <textarea value={outBody} onChange={(e) => setOutBody(e.target.value)} rows={4} placeholder="Hi — we can guide you through setup and launch if you need help." className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border resize-y" maxLength={5000} />
+            <p className="fp-text-faint text-xs">Leave subject/message blank to send the default onboarding message shown above as a placeholder.</p>
             {outMsg && (
               <p className={`text-xs flex items-center gap-1.5 ${outMsg.error ? "text-red-400" : "fp-safe"}`}>
                 {outMsg.error ? <AlertTriangle size={12} /> : <CheckCircle2 size={12} />} {outMsg.text}

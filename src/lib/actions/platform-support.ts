@@ -243,15 +243,20 @@ export async function listInnvilOwnerContacts(): Promise<InnvilOwnerContact[]> {
 }
 
 /** Super admin outbound message to an Innvil customer (panel owner). */
+// Matches this form's own placeholder text exactly (OwnerSections.tsx /
+// SuperAdminDashboard.tsx "Contact Innvil customers" card) -- an admin who
+// leaves the fields blank and clicks Send gets exactly what the placeholder
+// already visually implied would be sent, instead of a validation error.
+const DEFAULT_OUTREACH_SUBJECT = "Need help launching your panel?";
+const DEFAULT_OUTREACH_BODY = "Hi — we can guide you through setup and launch if you need help. Just reply here and the Innvil team will walk you through it.";
+
 export async function sendSuperAdminOwnerMessage(ownerId: string, subject: string, body: string): Promise<Result> {
   const { user, admin } = await getAuthedAdmin();
   if (!user || !(await isSuperAdmin())) return { ok: false, error: "Super admin only." };
   const id = (ownerId ?? "").trim();
-  const s = (subject ?? "").trim();
-  const b = (body ?? "").trim();
+  const s = (subject ?? "").trim() || DEFAULT_OUTREACH_SUBJECT;
+  const b = (body ?? "").trim() || DEFAULT_OUTREACH_BODY;
   if (!id) return { ok: false, error: "Choose a customer." };
-  if (!s) return { ok: false, error: "Add a subject." };
-  if (!b) return { ok: false, error: "Write a message." };
   if (s.length > 200) return { ok: false, error: "Subject is too long (200 characters max)." };
   if (b.length > 5000) return { ok: false, error: "Message is too long (5000 characters max)." };
 
