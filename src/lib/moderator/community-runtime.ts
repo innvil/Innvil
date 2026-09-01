@@ -30,7 +30,7 @@ import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
-  filterOutOwnBotMentions, spamWarningMuteSentence, looksLikeUnsolicitedPitch,
+  filterOutOwnBotMentions, spamWarningMuteSentence, looksLikeUnsolicitedPitch, promotionContactSentence,
 } from "./link-moderation";
 import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
 import {
@@ -1970,12 +1970,27 @@ export async function runLinkModeration(
   // this violation includes one, is likewise ALWAYS a deterministic
   // sentence appended after the model's own text -- the exact number must
   // never be left to the model to state.
+  // For an ordinary (non-scam) promotion warning, direct the offender to the
+  // Project's own configured Partnerships contact -- the same structured
+  // contact preset already used to answer a genuine "who do I contact about
+  // a partnership?" question (project-profile.ts). Reused verbatim, never a
+  // second contact model. Deterministic, appended AFTER the model's own
+  // generated text -- same discipline as the mute-duration sentence above:
+  // an exact fact (a real handle/email) must never be left to the model to
+  // state or invent. Omitted entirely when the Project has no partnerships
+  // contact configured -- never fabricates one.
+  const isPromotionEnforcement = enforcement.reason === "unsolicited_promotion" || enforcement.reason === "repeated_unsolicited_promotion";
+  const promotionContact = isPromotionEnforcement && community.project_id
+    ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.partnerships ?? null
+    : null;
+  const promotionContactLine = promotionContactSentence(promotionContact);
+
   const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
   const warningText = isScamEnforcement
     ? scamFirstOffenseWarningHtml(mention)
     : `${mention}, ${await generateModerationWarning(
         enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting
-      )}${enforcement.muteMinutes ? ` ${spamWarningMuteSentence(enforcement.muteMinutes)}` : ""}`;
+      )}${enforcement.muteMinutes ? ` ${spamWarningMuteSentence(enforcement.muteMinutes)}` : ""}${promotionContactLine}`;
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",

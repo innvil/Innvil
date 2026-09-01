@@ -484,3 +484,12 @@ export function scamRepeatOffenseWarningHtml(mentionHtml: string): string {
 export function spamWarningMuteSentence(muteMinutes: number): string {
   return `You've been muted for ${muteMinutes} minutes.`;
 }
+
+/** Appended to an ordinary (non-scam) promotion warning, directing the
+ *  offender to the Project's own configured Partnerships contact --
+ *  deterministic, never model-generated, so a real handle/email can never
+ *  be garbled or invented. Empty string (never a fabricated placeholder)
+ *  when no contact is configured for this Project. */
+export function promotionContactSentence(contact: string | null): string {
+  return contact ? ` For promotion inquiries, please contact ${contact}.` : "";
+}

@@ -5,6 +5,7 @@ import {
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SPAM_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
+  promotionContactSentence,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -502,4 +503,21 @@ test("REQUIRED (false-positive guard): a software version number is never extrac
 
 test("a bare domain with an unrecognized/non-allowlisted TLD is not extracted (avoids over-broad matching)", () => {
   assert.deepEqual(extractLinks("check out somefile.exe or randomword.zzz"), []);
+});
+
+/* ---------------------------------------------------------- live-bug repro: link-less pitch ---- */
+
+test("REQUIRED: the exact live-reported message (curly-apostrophe emoji pitch, no link/handle) is caught as an unsolicited pitch", () => {
+  const text = `🚀 Hey Dev,\n\nLooking for real investors & strong volume?\nI can promote your project across active crypto communities and bring serious buyers.\n\n📈 Let’s push exposure, volume & market cap.\n\nDM me if you’re ready to grow. 🔥`;
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+/* ---------------------------------------------------------- promotionContactSentence ---- */
+
+test("promotionContactSentence includes the configured Partnerships contact verbatim", () => {
+  assert.equal(promotionContactSentence("@innvil_partnerships"), " For promotion inquiries, please contact @innvil_partnerships.");
+});
+
+test("promotionContactSentence is empty when no contact is configured -- never fabricates one", () => {
+  assert.equal(promotionContactSentence(null), "");
 });
