@@ -550,7 +550,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
             <Zap size={12} /> Virtual Moderators for Telegram
           </span>
           <h1 className="w-display text-4xl sm:text-5xl leading-[1.08] mb-6">
-            Watchers that do more than watch.
+            Watchers — your virtual Telegram moderators that do more than just moderate.
           </h1>
           <p className="w-text-dim text-lg mb-2 max-w-md">
             <strong className="w-text font-semibold">Watchers</strong> are virtual moderators that talk with

@@ -127,6 +127,12 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-01 — Watch landing hero headline update (v1.49.11)
+- `WatchLanding.tsx`'s hero `<h1>` changed from "Watchers that do more than watch." to explicit user-requested
+  copy: **"Watchers — your virtual Telegram moderators that do more than just moderate."** Pure copy change,
+  verified live via the dev server on the Watch host (`watch.localhost`) — no other landing content, layout,
+  or logic touched. 1975 tests pass (unaffected), `tsc --noEmit` clean, production build clean.
+
 ### 2026-09-01 — VC lead scraper re-sourced to Wikipedia after vcsheet.com's AI-crawler exclusion (v1.49.10)
 - **Root cause investigated, not routed around.** v1.49.9's fix (a realistic browser User-Agent + real
   diagnostic error capture) still returned `HTTP 403` for every category in production. Checking
