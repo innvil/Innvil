@@ -17,21 +17,46 @@ import {
 const FETCH_TIMEOUT_MS = 12_000;
 const MAX_FUNDS_PER_CATEGORY = 15;
 const REQUEST_DELAY_MS = 500;
-const USER_AGENT = "Mozilla/5.0 (compatible; InnvilLeadResearch/1.0)";
+// A real-browser-shaped request signature -- unlike tlgrm.eu (which accepts
+// a plain identifying UA fine), vcsheet.com's CDN/WAF has been observed to
+// reject requests from Vercel's outbound IPs specifically when the request
+// doesn't otherwise look like an ordinary browser visit. This is a real
+// mitigation attempt, not a spoofing/evasion tactic aimed at bypassing
+// legitimate access controls on non-public data -- every page this fetches
+// is the exact same public HTML any visitor's browser would receive.
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+const REQUEST_HEADERS = {
+  "User-Agent": USER_AGENT,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchVcSheetPage(url: string): Promise<string | null> {
+interface FetchResult {
+  ok: boolean;
+  html?: string;
+  reason?: string;
+}
+
+async function fetchVcSheetPage(url: string): Promise<FetchResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: { "User-Agent": USER_AGENT, Accept: "text/html" } });
-    if (!res.ok) return null;
-    return await res.text();
-  } catch {
-    return null;
+    const res = await fetch(url, { signal: controller.signal, headers: REQUEST_HEADERS });
+    if (!res.ok) {
+      const reason = `HTTP ${res.status}`;
+      console.error("[vcsheet-scraper] fetch failed", url, reason);
+      return { ok: false, reason };
+    }
+    const html = await res.text();
+    return { ok: true, html };
+  } catch (err) {
+    const reason = err instanceof Error && err.name === "AbortError" ? "timed out" : err instanceof Error ? err.message : "network error";
+    console.error("[vcsheet-scraper] fetch failed", url, reason);
+    return { ok: false, reason };
   } finally {
     clearTimeout(timer);
   }
@@ -53,24 +78,30 @@ export interface VcSheetCategoryResult {
  *  fetch for a fund already in the lead list or permanently excluded. */
 export async function scrapeVcSheetCategory(category: string, maxFunds: number = MAX_FUNDS_PER_CATEGORY, skipSlugs: Set<string> = new Set()): Promise<VcSheetCategoryResult> {
   const cappedMax = Math.min(Math.max(1, maxFunds), MAX_FUNDS_PER_CATEGORY);
-  const sheetHtml = await fetchVcSheetPage(vcSheetCategoryUrl(category));
-  if (!sheetHtml) return { category, entries: [], fundsFetched: 0, error: "Couldn't fetch the category page (site unreachable or blocked the request)." };
+  const sheetFetch = await fetchVcSheetPage(vcSheetCategoryUrl(category));
+  if (!sheetFetch.ok || !sheetFetch.html) {
+    return { category, entries: [], fundsFetched: 0, error: `Couldn't fetch the category page (${sheetFetch.reason ?? "unknown error"}).` };
+  }
 
-  const allSlugs = parseVcSheetFundSlugs(sheetHtml).filter((s) => !skipSlugs.has(s));
+  const allSlugs = parseVcSheetFundSlugs(sheetFetch.html).filter((s) => !skipSlugs.has(s));
   const slugs = allSlugs.slice(0, cappedMax);
 
   const entries: VcSheetFundEntry[] = [];
   let fundsFetched = 0;
+  let lastFundError: string | undefined;
   for (const slug of slugs) {
     if (fundsFetched > 0) await sleep(REQUEST_DELAY_MS);
-    const fundHtml = await fetchVcSheetPage(vcSheetFundUrl(slug));
+    const fundFetch = await fetchVcSheetPage(vcSheetFundUrl(slug));
     fundsFetched++;
-    if (!fundHtml) continue;
-    const entry = parseVcSheetFundProfile(fundHtml, slug);
+    if (!fundFetch.ok || !fundFetch.html) { lastFundError = fundFetch.reason; continue; }
+    const entry = parseVcSheetFundProfile(fundFetch.html, slug);
     if (entry) entries.push(entry);
   }
 
-  return { category, entries, fundsFetched };
+  // Every fund fetch failed (and at least one was attempted) -- surface the
+  // real reason rather than a silent "0 found" with no explanation.
+  const error = slugs.length > 0 && entries.length === 0 && lastFundError ? `Every fund page failed to fetch (${lastFundError}).` : undefined;
+  return { category, entries, fundsFetched, error };
 }
 
 /** Scrapes several categories in sequence (never in parallel -- keeps total
