@@ -9,7 +9,6 @@ import {
   type TelegramLead, type TelegramLeadStatus, type ScrapeSummary, type VcScrapeSummary, type LeadPlatform,
 } from "@/src/lib/actions/telegram-leads";
 import { TELEGRAM_LEAD_MIN_MEMBERS, TELEGRAM_LEAD_MAX_MEMBERS } from "@/src/lib/marketing/telegram-directory";
-import { VC_SHEET_CATEGORIES } from "@/src/lib/marketing/vcsheet-directory";
 
 /**
  * Super-admin lead-research tool -- currently focused on VC (venture
@@ -17,9 +16,10 @@ import { VC_SHEET_CATEGORIES } from "@/src/lib/marketing/vcsheet-directory";
  * public sources feed one shared lead list:
  *  - Telegram communities (tlgrm.eu's own public directory pages) -- never
  *    Telegram itself, never private/joined-group data.
- *  - VC funds (vcsheet.com's own public fund-profile pages) -- real fund
- *    name/website/description/location, plus each fund's own publicly-
- *    listed X/LinkedIn handles where it has them.
+ *  - VC firms (Wikipedia's "List of venture capital firms" + each firm's
+ *    own article) -- real firm name/website/headquarters/founding year,
+ *    from a source with no AI-crawler exclusion (unlike the retired
+ *    vcsheet.com source, whose robots.txt explicitly disallows AI agents).
  * This tool never sends a message anywhere -- it only helps a human on
  * Innvil's team find and track real leads to reach out to manually.
  * Removal is PERMANENT: a deleted lead's identifier is recorded so it can
@@ -40,10 +40,7 @@ const CATEGORY_OPTIONS = [
 ];
 
 const VC_CATEGORY_LABELS: Record<string, string> = {
-  "web3-funds": "Web3", "fintech-funds": "Fintech", "ai-funds": "AI", "gaming-funds": "Gaming",
-  "consumer-funds": "Consumer", "enterprise-funds": "Enterprise", "funds-that-lead-pre-seeds": "Leads pre-seed",
-  "funds-that-lead-seeds": "Leads seed", "funds-that-lead-series-a": "Leads Series A",
-  "most-prolific-pre-seed-funds": "Most active pre-seed", "deeptech-funds": "Deeptech",
+  vc_firm: "VC firm",
 };
 
 const STATUS_TONE: Record<TelegramLeadStatus, "gold" | "violet" | "safe" | "danger" | "muted"> = {
@@ -111,8 +108,7 @@ export function TelegramLeadsAdmin() {
   const [scrapeSummary, setScrapeSummary] = useState<ScrapeSummary | null>(null);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
 
-  const [selectedVcCategories, setSelectedVcCategories] = useState<string[]>(["web3-funds", "fintech-funds"]);
-  const [maxFunds, setMaxFunds] = useState(15);
+  const [maxFirms, setMaxFirms] = useState(25);
   const [vcScraping, setVcScraping] = useState(false);
   const [vcScrapeSummary, setVcScrapeSummary] = useState<VcScrapeSummary | null>(null);
   const [vcScrapeError, setVcScrapeError] = useState<string | null>(null);
@@ -156,7 +152,7 @@ export function TelegramLeadsAdmin() {
     setVcScraping(true);
     setVcScrapeError(null);
     setVcScrapeSummary(null);
-    const res = await runVcSheetScrape(selectedVcCategories, maxFunds);
+    const res = await runVcSheetScrape(maxFirms);
     setVcScraping(false);
     if (!res.ok) { setVcScrapeError(res.error); return; }
     setVcScrapeSummary(res.data);
@@ -199,47 +195,32 @@ export function TelegramLeadsAdmin() {
       <div className="fp-panel-raised border fp-line-soft rounded-xl p-5">
         <div className="flex items-center gap-2 mb-1">
           <Landmark size={16} className="fp-gold" />
-          <h2 className="fp-display text-base">Find VC funds</h2>
+          <h2 className="fp-display text-base">Find VC firms</h2>
         </div>
         <p className="fp-text-dim text-xs mb-1">
-          Pulls real, publicly-listed VC funds from vcsheet.com&apos;s own public fund-profile pages — real name,
-          website, description, location, and (when the fund has one) its own public X and LinkedIn handles. This
+          Pulls real, publicly-listed VC firms from Wikipedia&apos;s &quot;List of venture capital firms&quot; page
+          and each firm&apos;s own article — real name, website, headquarters, and founding year, when known. This
           never messages anyone; it only builds a lead list for your team to research and reach out to manually.
         </p>
         <p className="text-amber-400/90 text-xs mb-4">
           X/Twitter itself can&apos;t be scraped directly (it has no public, unauthenticated search — that would
-          need a paid X API key). vcsheet.com already surfaces each fund&apos;s real X handle where one exists, which
-          is folded into its description below.
+          need a paid X API key), and this source has no reliable X-handle field to surface. A firm&apos;s Wikipedia
+          article that isn&apos;t genuinely tagged &quot;Venture capital&quot; as its industry (a city, an unrelated
+          organization, etc.) is automatically rejected, never added as a fake lead.
         </p>
-
-        <div className="flex flex-wrap gap-2 mb-3">
-          {VC_SHEET_CATEGORIES.map((c) => {
-            const active = selectedVcCategories.includes(c);
-            return (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setSelectedVcCategories((prev) => (active ? prev.filter((v) => v !== c) : [...prev, c]))}
-                className={`text-xs px-3 py-1.5 rounded-full border ${active ? "fp-gold-soft-bg fp-gold fp-gold-border" : "fp-line-soft fp-text-dim"}`}
-              >
-                {VC_CATEGORY_LABELS[c] ?? c}
-              </button>
-            );
-          })}
-        </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <label className="text-xs fp-text-dim flex items-center gap-2">
-            Max funds per category
+            Max firms this run
             <input
-              type="number" min={1} max={15} value={maxFunds}
-              onChange={(e) => setMaxFunds(Math.max(1, Math.min(15, Number(e.target.value) || 1)))}
+              type="number" min={1} max={40} value={maxFirms}
+              onChange={(e) => setMaxFirms(Math.max(1, Math.min(40, Number(e.target.value) || 1)))}
               className="w-16 fp-panel-raised border fp-line-soft rounded-lg px-2 py-1"
             />
           </label>
           <button
             onClick={() => void runVcScrape()}
-            disabled={vcScraping || selectedVcCategories.length === 0}
+            disabled={vcScraping}
             className="fp-btn-primary rounded-lg px-4 py-2 text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"
           >
             <RefreshCw size={13} className={vcScraping ? "animate-spin" : ""} /> {vcScraping ? "Scraping…" : "Run scrape"}
@@ -253,11 +234,11 @@ export function TelegramLeadsAdmin() {
               Added {vcScrapeSummary.added}, updated {vcScrapeSummary.updated} existing lead(s)
               {vcScrapeSummary.excluded > 0 ? `, skipped ${vcScrapeSummary.excluded} previously removed` : ""}.
             </p>
-            {vcScrapeSummary.perCategory.map((c) => (
-              <p key={c.category}>
-                {VC_CATEGORY_LABELS[c.category] ?? c.category}: {c.found} found, {c.fundsFetched} fund page(s) fetched{c.error ? ` — ${c.error}` : ""}
-              </p>
-            ))}
+            <p>
+              {vcScrapeSummary.candidatesFound} firm(s) found on the list page, {vcScrapeSummary.firmsFetched} article(s)
+              fetched, {vcScrapeSummary.rejected} rejected (not a genuine VC firm article or failed to fetch)
+              {vcScrapeSummary.error ? ` — ${vcScrapeSummary.error}` : ""}.
+            </p>
           </div>
         )}
       </div>
@@ -384,7 +365,7 @@ export function TelegramLeadsAdmin() {
             </div>
             <select value={platformFilter} onChange={(e) => setPlatformFilter(e.target.value as LeadPlatform | "")} className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs">
               <option value="">All sources</option>
-              <option value="website">VC funds</option>
+              <option value="website">VC firms</option>
               <option value="telegram">Telegram</option>
             </select>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as TelegramLeadStatus | "")} className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs">
@@ -394,7 +375,7 @@ export function TelegramLeadsAdmin() {
             <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="fp-panel-raised border fp-line-soft rounded-lg px-2 py-1.5 text-xs">
               <option value="">All categories</option>
               {CATEGORY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              {VC_SHEET_CATEGORIES.map((c) => <option key={c} value={c}>{VC_CATEGORY_LABELS[c] ?? c}</option>)}
+              <option value="vc_firm">{VC_CATEGORY_LABELS.vc_firm}</option>
             </select>
             <button onClick={() => void runSearch()} className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 text-xs">Search</button>
             <button onClick={() => downloadCsv(leads)} disabled={leads.length === 0} className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 text-xs flex items-center gap-1 disabled:opacity-50">
@@ -431,7 +412,7 @@ export function TelegramLeadsAdmin() {
                       <p className="fp-text-faint">{l.platform === "website" ? l.link.replace(/^https?:\/\//, "") : `@${l.username}`}</p>
                       {l.description && <p className="fp-text-faint mt-0.5 max-w-xs">{l.description}</p>}
                     </td>
-                    <td className="py-2 pr-3"><Pill tone={l.platform === "website" ? "violet" : "muted"}>{l.platform === "website" ? "VC fund" : "Telegram"}</Pill></td>
+                    <td className="py-2 pr-3"><Pill tone={l.platform === "website" ? "violet" : "muted"}>{l.platform === "website" ? "VC firm" : "Telegram"}</Pill></td>
                     <td className="py-2 pr-3">{formatCount(l.subscriberCount)}</td>
                     <td className="py-2 pr-3">{VC_CATEGORY_LABELS[l.category ?? ""] ?? l.category ?? "—"}</td>
                     <td className="py-2 pr-3">

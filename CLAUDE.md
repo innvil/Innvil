@@ -127,6 +127,69 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-01 — VC lead scraper re-sourced to Wikipedia after vcsheet.com's AI-crawler exclusion (v1.49.10)
+- **Root cause investigated, not routed around.** v1.49.9's fix (a realistic browser User-Agent + real
+  diagnostic error capture) still returned `HTTP 403` for every category in production. Checking
+  `vcsheet.com/robots.txt` directly revealed an explicit Cloudflare-managed policy — `User-agent: ClaudeBot` →
+  `Disallow: /`, alongside GPTBot/Google-Extended/Amazonbot/Bytespider/CCBot/Applebot-Extended/
+  meta-externalagent/CloudflareBrowserRenderingCrawler — a deliberate statement that the site does not want
+  AI agents/crawlers scraping it. **Treated as a hard ethical stop, not a technical obstacle**: no further
+  workaround (residential proxies, deeper UA spoofing, etc.) was attempted, even though the generic wildcard
+  rule nominally still permits scraping and this tool's own UA never claims to be ClaudeBot. Presented three
+  options to the user; **the user chose "find a different VC directory that doesn't have this restriction."**
+- **New source: Wikipedia's official REST content API** (`https://en.wikipedia.org/api/rest_v1/page/html/<Title>`)
+  — confirmed via `en.wikipedia.org/robots.txt` to carry **no AI-crawler exclusion at all**, and it's the
+  documented, sanctioned way to consume Wikipedia content programmatically (not a workaround). Sourced from
+  **"List of venture capital firms"** (three ranked `wikitable`s, each firm name linking to its own article) +
+  each firm's own **Infobox company** (`class="infobox ib-company"`), which carries real Industry/Headquarters/
+  Founded/Website fields — verified directly against the live, rendered Andreessen Horowitz article before
+  writing any parsing code, not guessed.
+- **Real quality gate replaces the retired scraper's heuristics**: the list page's own ranking tables
+  occasionally link something that isn't actually a firm (a bare city, an unrelated government agency
+  mentioned in the same table). Rather than filtering that out at the list-parsing stage, the per-firm
+  **infobox parser itself** is the filter — an entry is only accepted when its own Wikipedia article has a
+  genuine company infobox AND an `Industry` field that says "venture capital" (case-insensitive); a city's
+  `ib-settlement` infobox or a government agency's non-VC Industry both correctly reject with `null`, never a
+  fabricated VC lead. Confirmed live against real noise the list page actually contains ("San Francisco",
+  "Enterprise Ireland") — both correctly rejected once fetched as candidate firm pages.
+- **New `src/lib/marketing/wikipedia-vc-directory.ts`** (pure) — `parseWikipediaVcFirmCandidates` (extracts
+  every `rel="mw:WikiLink"` firm-name-cell link across the three `wikitable`s, dedupes by slug, strips a
+  Wikipedia disambiguation suffix like `(company)` from the display name only — the fetch-key slug stays
+  untouched) + `parseWikipediaVcFirmProfile` (the infobox parser/quality gate above; extracts
+  website/headquarters/founded, never fabricates a missing field). **New
+  `src/lib/marketing/wikipedia-vc-directory-fetch.ts`** (server-only I/O) — `scrapeWikipediaVcFirms`, same
+  bounded-on-every-axis shape as the retired scraper (`MAX_FIRMS_PER_RUN = 40`, 12s per-request timeout, 300ms
+  courtesy delay between requests), a plain honestly-identifying User-Agent (Wikipedia's REST API has no
+  bot-blocking WAF to work around, unlike vcsheet.com — no need to mimic a browser here).
+- **`src/lib/actions/telegram-leads.ts`**: `runVcSheetScrape` (name kept for the smallest diff, now backed by
+  Wikipedia) dropped its category-list parameter entirely — Wikipedia has one real source page, not vcsheet's
+  11 category "sheets" — now takes a single `maxFirms` cap. `VcScrapeSummary` gained `candidatesFound`/
+  `firmsFetched`/`rejected` (real counts, not per-category breakdowns) in place of the old `perCategory` array.
+  A firm's headquarters/founding-year (when known) are folded into `description`, matching the existing
+  no-new-column convention. `category: "vc_firm"` replaces vcsheet's 11 sub-categories (there's no equivalent
+  sub-taxonomy in this source).
+- **`src/components/superadmin/TelegramLeadsAdmin.tsx`** ("Find VC firms" card): the 11 category-toggle
+  buttons are replaced with a single "Max firms this run" number input (1–40); the summary line now shows
+  real candidates-found/articles-fetched/rejected counts instead of a per-category breakdown; copy updated to
+  disclose the Industry-based rejection gate and Wikipedia's own lack of a reliable X-handle field (the retired
+  vcsheet.com source could fold in real X/LinkedIn handles from its JSON-LD `sameAs` array — this source
+  genuinely cannot, honestly stated in the UI rather than fabricated). "VC funds"/"VC fund" labels renamed "VC
+  firms"/"VC firm" throughout for consistency with the new source's own terminology.
+- **Removed outright**: `src/lib/marketing/vcsheet-directory.ts`, `vcsheet-directory-fetch.ts`,
+  `vcsheet-directory.test.ts` — confirmed non-functional in production (403 on every real request) and now
+  ethically ruled out regardless of workaround feasibility; no remaining import references anywhere in `src/`.
+- New tests: `wikipedia-vc-directory.test.ts` (+18, new file — candidate extraction across multiple tables
+  incl. flag-icon/headquarters-link exclusion and cross-table dedup, disambiguation-suffix stripping, and the
+  full quality-gate matrix: a genuine VC firm's real website/headquarters/founded extracted correctly, a city's
+  infobox rejected, a non-VC company's infobox rejected, no-infobox-at-all rejected, a missing Website field
+  left honestly `null` rather than fabricated, a non-http `url` value never treated as a real website).
+  Verified additionally against the REAL, live-fetched Wikipedia HTML (both the list page and the Andreessen
+  Horowitz article) via a throwaway script before writing the fixture-based tests — 24 real candidate firms
+  extracted from the actual list page, correct real field extraction from the actual infobox — removed after
+  confirming correctness, not part of the permanent suite (same convention as v1.47.72's live-verification
+  step for the original Telegram scraper). 1975 tests pass, `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically until confirmed working locally, per this session's standing discipline.**
+
 ### 2026-08-27 — Cache-first / stale-while-revalidate navigation for Overview, Watchers, Communities (v1.48.0)
 - **Explicit feature request, distinct from the v1.47.82-84 server-side perf work**: those passes made each
   page's OWN data-fetch faster, but every page was still a Server Component that re-fetches everything fresh

@@ -4,21 +4,21 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { scrapeTlgrmCategories } from "@/src/lib/marketing/telegram-directory-fetch";
 import { isKnownTlgrmCategory, isWithinLeadMemberRange } from "@/src/lib/marketing/telegram-directory";
-import { scrapeVcSheetCategories } from "@/src/lib/marketing/vcsheet-directory-fetch";
-import { isKnownVcSheetCategory } from "@/src/lib/marketing/vcsheet-directory";
+import { scrapeWikipediaVcFirms } from "@/src/lib/marketing/wikipedia-vc-directory-fetch";
 
 /**
  * Super-admin-only lead RESEARCH tool for Innvil's own marketing outreach.
  * Every export is gated on the super_admin role, mirroring blog-admin.ts's
  * exact pattern. This is lead collection only -- nothing in this file (or
  * anything it calls) sends a message anywhere, to Telegram, X, email, or
- * otherwise. See telegram-directory.ts and vcsheet-directory.ts's own doc
- * comments for the full per-source scope/safety statement.
+ * otherwise. See telegram-directory.ts and wikipedia-vc-directory.ts's own
+ * doc comments for the full per-source scope/safety statement.
  *
  * Two sources feed the SAME `telegram_leads` table (migration 0107 + 0113):
- * Telegram communities (tlgrm.eu, `platform: 'telegram'`) and VC funds
- * (vcsheet.com, `platform: 'website'`). `link` carries the real destination
- * URL for a non-Telegram row -- toLead() falls back to the historical
+ * Telegram communities (tlgrm.eu, `platform: 'telegram'`) and VC firms
+ * (Wikipedia's "List of venture capital firms" + each firm's own article,
+ * `platform: 'website'`). `link` carries the real destination URL for a
+ * non-Telegram row -- toLead() falls back to the historical
  * `https://t.me/<username>` construction only when `link` is null, so every
  * existing Telegram-sourced row keeps working unchanged.
  *
@@ -27,13 +27,24 @@ import { isKnownVcSheetCategory } from "@/src/lib/marketing/vcsheet-directory";
  * (both scrapers + the manual CSV import) checks that table first -- a
  * removed lead is never silently re-added by a later run.
  *
+ * NOTE on source history: an earlier version of the VC scraper sourced
+ * vcsheet.com. That was retired -- vcsheet.com's own robots.txt explicitly
+ * disallows AI-agent crawlers (User-agent: ClaudeBot -> Disallow: /,
+ * alongside GPTBot/Google-Extended/etc.), confirmed live before this
+ * change, and it also returned HTTP 403 for every real request from
+ * production regardless of that policy. Wikipedia carries no such
+ * AI-crawler exclusion and publishes an official REST content API intended
+ * for exactly this kind of programmatic reuse -- see
+ * wikipedia-vc-directory.ts's own doc comment for the full detail.
+ *
  * X/Twitter is deliberately NOT scraped directly here -- X has no public,
  * unauthenticated way to search/list accounts, and scraping it without the
- * official (paid) API would be unreliable and against its ToS. vcsheet.com
- * already surfaces each fund's own real, publicly-listed X handle (and its
- * partners') as part of its structured data, which is folded into the
- * description text below -- that's the real, safe way this tool reaches X
- * presence data for VCs today.
+ * official (paid) API would be unreliable and against its ToS. A VC firm's
+ * own Wikipedia infobox occasionally links a real social/website presence,
+ * which flows through as `link` when it's the firm's own official site --
+ * that's the real, safe way this tool reaches web presence data for VCs
+ * today; there is currently no reliable, unauthenticated way to also pull a
+ * dedicated X handle for each firm.
  */
 
 async function requireSuperAdmin(): Promise<{ ok: boolean; userId?: string }> {
@@ -189,56 +200,58 @@ export interface VcScrapeSummary {
   added: number;
   updated: number;
   excluded: number;
-  perCategory: Array<{ category: string; found: number; fundsFetched: number; error?: string }>;
+  rejected: number;
+  candidatesFound: number;
+  firmsFetched: number;
+  error?: string;
 }
 
-/** Runs the real VC-fund directory scrape (vcsheet.com) for the given
- *  categories. Same upsert-by-username / never-touch-status-or-notes /
- *  permanent-exclusion discipline as runTelegramLeadScrape above, adapted
- *  to a fund's own real website as its `link` (never a fabricated t.me
- *  URL) and `platform: 'website'`. Each fund's real X/LinkedIn handles
- *  (when it has them) are folded into `description` -- there's no
- *  separate column for them, and this keeps them visible in the existing
- *  leads table without a UI change. */
-export async function runVcSheetScrape(categories: string[], maxFundsPerCategory?: number): Promise<Result<VcScrapeSummary>> {
+/** Runs the real VC-firm scrape (Wikipedia's "List of venture capital
+ *  firms" + each firm's own article). Same upsert-by-username / never-
+ *  touch-status-or-notes / permanent-exclusion discipline as
+ *  runTelegramLeadScrape above, adapted to a firm's own real website as its
+ *  `link` (never a fabricated t.me URL) and `platform: 'website'`. A
+ *  firm's headquarters/founding-year (when known) are folded into
+ *  `description` -- there's no separate column for them, and this keeps
+ *  them visible in the existing leads table without a UI change. There is
+ *  only one real source page, so this has no category concept -- just a
+ *  cap on how many firms to fetch this run. */
+export async function runVcSheetScrape(maxFirms?: number): Promise<Result<VcScrapeSummary>> {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return { ok: false, error: "Super admin only." };
 
-  const clean = [...new Set(categories.map((c) => c.trim().toLowerCase()))].filter(isKnownVcSheetCategory);
-  if (clean.length === 0) return { ok: false, error: "No valid categories selected." };
-
   const admin = createAdminClient();
   const excluded = await getExcludedUsernames(admin);
-  const results = await scrapeVcSheetCategories(clean, maxFundsPerCategory, excluded);
+  const result = await scrapeWikipediaVcFirms(maxFirms, excluded);
+  if (result.error && result.entries.length === 0) return { ok: false, error: result.error };
 
   let added = 0;
   let updated = 0;
   let excludedCount = 0;
-  const perCategory: VcScrapeSummary["perCategory"] = [];
-  for (const result of results) {
-    perCategory.push({ category: result.category, found: result.entries.length, fundsFetched: result.fundsFetched, error: result.error });
-    for (const entry of result.entries) {
-      if (excluded.has(entry.slug.toLowerCase())) { excludedCount++; continue; }
-      const description = [entry.description, entry.twitter ? `X: ${entry.twitter}` : null, entry.linkedin ? `LinkedIn: ${entry.linkedin}` : null]
-        .filter((v): v is string => Boolean(v)).join(" · ") || null;
-      const { data: existing } = await admin.from("telegram_leads").select("id").eq("username", entry.slug).maybeSingle();
-      const nowIso = new Date().toISOString();
-      if (existing) {
-        await admin.from("telegram_leads").update({
-          name: entry.name, category: result.category, link: entry.website, description,
-          source: "vcsheet.com", updated_at: nowIso,
-        }).eq("id", existing.id);
-        updated++;
-      } else {
-        const { error: insertError } = await admin.from("telegram_leads").insert({
-          source: "vcsheet.com", platform: "website", category: result.category, name: entry.name, username: entry.slug,
-          link: entry.website, description, status: "new",
-        });
-        if (!insertError) added++;
-      }
+  for (const entry of result.entries) {
+    if (excluded.has(entry.slug.toLowerCase())) { excludedCount++; continue; }
+    const description = [entry.headquarters, entry.founded ? `Founded ${entry.founded}` : null]
+      .filter((v): v is string => Boolean(v)).join(" · ") || null;
+    const { data: existing } = await admin.from("telegram_leads").select("id").eq("username", entry.slug).maybeSingle();
+    const nowIso = new Date().toISOString();
+    if (existing) {
+      await admin.from("telegram_leads").update({
+        name: entry.name, category: "vc_firm", link: entry.website, description,
+        source: "wikipedia.org", updated_at: nowIso,
+      }).eq("id", existing.id);
+      updated++;
+    } else {
+      const { error: insertError } = await admin.from("telegram_leads").insert({
+        source: "wikipedia.org", platform: "website", category: "vc_firm", name: entry.name, username: entry.slug,
+        link: entry.website, description, status: "new",
+      });
+      if (!insertError) added++;
     }
   }
-  return { ok: true, data: { added, updated, excluded: excludedCount, perCategory } };
+  return {
+    ok: true,
+    data: { added, updated, excluded: excludedCount, rejected: result.rejected, candidatesFound: result.candidatesFound, firmsFetched: result.firmsFetched, error: result.error },
+  };
 }
 
 export async function setTelegramLeadStatus(id: string, status: TelegramLeadStatus): Promise<Result<null>> {
