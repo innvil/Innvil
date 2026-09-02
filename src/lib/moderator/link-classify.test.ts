@@ -72,6 +72,27 @@ test("REQUIRED (live bug repro): a link-LESS promotional pitch is classified via
   });
 });
 
+// Live feedback (2026-09-02): "LETS GO, SHILL RAID IN @cryptomoonshots_chat
+// and spread the word" (an existing member rallying fellow members to go
+// ADDITIONALLY support/engage another crypto project's group) is ordinary,
+// culturally normal crypto-community camaraderie -- not advertising. The
+// classifier's own pre-existing worked example ("everyone leave this group
+// and join X") frames external-group mentions negatively; without an
+// explicit carve-out, a shill raid risks being misread as the same thing.
+// The decisive distinction: does it ask people to LEAVE/ABANDON this
+// community, or just to additionally support another one while staying?
+test("REQUIRED (live feedback): the prompt explicitly distinguishes a 'shill raid' (ordinary camaraderie, SAFE_RELEVANT_LINK) from urging people to leave/abandon this community (UNSOLICITED_PROMOTION)", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: SAFE_RELEVANT_LINK\nCONFIDENCE: high"), async (calls) => {
+      await classifyLinkIntent("LETS GO, SHILL RAID IN @cryptomoonshots_chat and spread the word", "");
+      const body = calls[0].body as { system: string };
+      assert.match(body.system, /shill raid/i);
+      assert.match(body.system, /never asks anyone to abandon or leave this community/i);
+      assert.match(body.system, /does not include a "shill raid" rally/i);
+    });
+  });
+});
+
 test("parses a legitimate collaboration classification", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("CATEGORY: COLLABORATION_REQUEST\nCONFIDENCE: medium"), async () => {

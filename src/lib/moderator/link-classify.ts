@@ -39,8 +39,9 @@ const CLASSIFY_SYSTEM_PROMPT = `You classify a single Telegram community message
 
 Context matters more than the link itself — the SAME url can be legitimate outreach or an advertisement depending on how it's framed. Examples:
 - "We're doing an AMA with these guys tomorrow: https://t.me/projectxyz" -> COLLABORATION_REQUEST or AMA_REQUEST (legitimate)
-- "Everyone leave this group and join: https://t.me/projectxyz" -> UNSOLICITED_PROMOTION (advertisement)
+- "Everyone leave this group and join: https://t.me/projectxyz" -> UNSOLICITED_PROMOTION (advertisement -- it asks people to ABANDON this community)
 - "Looking for real investors & strong volume? I can promote your project across active crypto communities. DM me if you're ready to grow." (no link at all) -> UNSOLICITED_PROMOTION (a self-promotion service pitch soliciting private contact, still an advertisement even with no url)
+- "LETS GO, SHILL RAID IN @othercrypto_chat and spread the word" / "go show @alliedproject some love, let's help them grow" -> SAFE_RELEVANT_LINK, NOT UNSOLICITED_PROMOTION. This is a "shill raid" -- an existing member rallying fellow members to go ADDITIONALLY support/engage/promote another (often friendly/allied) crypto project's group. This is ordinary, culturally normal crypto-community camaraderie between communities, not advertising. The decisive distinction from the "everyone leave this group" example above: a shill raid never asks anyone to abandon or leave THIS community -- it's an extra activity alongside staying here. Only treat it as UNSOLICITED_PROMOTION if it explicitly or effectively asks people to leave/abandon this community instead, or if it's actually a cold pitch for the SENDER's own unrelated project/service (see the self-promotion-service pattern below) dressed up as a "raid."
 
 A bare @username mention by itself, with no accompanying suspicious content (no urgent call to action, no promise of rewards/free money, no request for credentials/private keys/funds, no impersonation of a known project or official account), is NOT sufficient on its own to classify as PHISHING_OR_SCAM or UNSOLICITED_PROMOTION — someone addressing another person or bot by @username is ordinary conversation, not a link/promotion signal. Only classify a message as suspicious when the actual evidence (a scam-shaped URL, an urgent/impersonation pattern, a promotional call-to-action, etc.) is present.
 
@@ -52,7 +53,7 @@ Categories (choose exactly one):
 - COLLABORATION_REQUEST: genuine outreach proposing to work together (not asking to join another group instead).
 - AMA_REQUEST: proposing or referencing an AMA (Ask Me Anything) session.
 - PARTNERSHIP_REQUEST: asking who handles partnerships, or proposing a partnership.
-- UNSOLICITED_PROMOTION: advertising another project/group/channel with no legitimate relevance to this community, especially urging people to leave/join elsewhere.
+- UNSOLICITED_PROMOTION: advertising another project/group/channel with no legitimate relevance to this community, especially urging people to leave/abandon THIS community and join elsewhere. Does NOT include a "shill raid" rally (see the worked example above) -- members organizing to ADDITIONALLY support another community, without being asked to leave this one, is not this category.
 
 IMPORTANT — a common spam evasion tactic dresses up an unsolicited marketing-service pitch in "partnership"/"collaboration" wording specifically to be misread as COLLABORATION_REQUEST or PARTNERSHIP_REQUEST. A message is still UNSOLICITED_PROMOTION, not a genuine collaboration/partnership request, when it:
 - is a cold, unprompted pitch offering a GENERIC growth/marketing/exposure SERVICE (e.g. "I can bring you investors/buyers/volume/exposure", "we help projects grow through KOL marketing", "boost your trading volume/market cap") rather than proposing a SPECIFIC, concrete joint activity between two named parties;

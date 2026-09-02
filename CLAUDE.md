@@ -127,6 +127,29 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Classifier now distinguishes a "shill raid" (ordinary crypto camaraderie) from urging people to abandon this community (v1.49.24)
+- **Live feedback, correctly flagged as a real false-positive risk, not yet an actual live miss.** "LETS GO,
+  SHILL RAID IN @cryptomoonshots_chat and spread the word" — an existing member rallying fellow members to go
+  ADDITIONALLY support/engage another crypto project's Telegram group — is ordinary, culturally normal
+  crypto-community mutual support, not advertising. The classifier's own pre-existing worked example ("everyone
+  leave this group and join X") frames any external-group rally negatively; without an explicit carve-out, a
+  message like this risked being misread as the same thing and deleted/warned as `UNSOLICITED_PROMOTION`.
+- **Fix, in `link-classify.ts`'s system prompt** — added a fourth worked example right alongside the existing
+  three, and updated the `UNSOLICITED_PROMOTION` category definition itself, drawing the decisive line
+  explicitly: a shill raid never asks anyone to abandon or leave THIS community — it's an extra activity
+  alongside staying here — versus "everyone leave this group and join elsewhere," which still is
+  `UNSOLICITED_PROMOTION`. Also explicitly guards the obvious evasion: a cold pitch for the SENDER's own
+  unrelated project dressed up as a "raid" is still caught (falls back to the existing self-promotion-service
+  pattern already defined in the prompt).
+- **No pre-filter (`looksLikeUnsolicitedPitch`) change was needed** — the reported message always carries a real
+  `@handle`, so it reaches the real classifier regardless of the link-less-text pre-filter; the fix belongs
+  entirely in the classifier's own judgment, which is what actually decides the category here.
+- New test (`link-classify.test.ts`, +1): asserts the shill-raid worked example, the leave-vs-stay distinction,
+  and the category-definition carve-out are all present in the ACTUAL outgoing prompt sent to the model (fetch-
+  spy verified, not just the parsed result). 2147 tests pass (up from 2146), `tsc --noEmit` clean, production
+  build clean.
+- **Deployed to production.**
+
 ### 2026-09-02 — Fix: a request for feedback on shared visual media (gif/image/video) got a fabricated excuse instead of silence (v1.49.23)
 - **Live bug**: a member shared a GIF and asked "What do you think about this gif sample guys" — the Watcher
   replied "hey nikki, gifs not loading on my end — can you resend or describe it?", inventing a fake technical
