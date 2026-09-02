@@ -107,6 +107,25 @@ export function isConversationalOpener(text: string): boolean {
   return COMMUNITY_CHECK_IN_RE.test(t) || RE_ENTRY_RE.test(t) || GREETING_RE.test(t);
 }
 
+// Live bug: "What do you think about this gif sample guys" (a member sharing
+// a GIF/image/video and asking the room for feedback on it) got a fabricated
+// reply -- "gifs not loading on my end, can you resend or describe it?" --
+// inventing a fake technical failure. Root cause: nothing in this pipeline
+// ever sees the actual media (chatter generation is text-only; media
+// MODERATION is a separate, safety-only classifier whose verdict never
+// reaches conversational reply generation) -- so a genuine request to
+// evaluate/critique attached visual content can never be answered honestly.
+// The correct behavior is silence, not a fabricated excuse or a probing
+// "can you describe it" that itself reveals the bot never saw the media.
+// Two independent signals required (a media-referencing noun AND a
+// feedback-request cue) so an unrelated message that happens to mention
+// "photo" or "thoughts" alone is never silenced.
+const MEDIA_REFERENCE_RE = /\b(gif|gifs|image|images|photo|photos|pic|pics|picture|pictures|video|videos|sticker|stickers|meme|memes|design|artwork|sample|samples|mockup|thumbnail|banner|logo)\b/i;
+const MEDIA_FEEDBACK_REQUEST_RE = /\b(what do you think|thoughts on|any thoughts|any feedback|how does (it|this) look|how('s| is) (it|this)|rate (it|this)|like it|check (it|this) out)\b/i;
+function isMediaFeedbackRequest(text: string): boolean {
+  return MEDIA_REFERENCE_RE.test(text) && MEDIA_FEEDBACK_REQUEST_RE.test(text);
+}
+
 const RESOLVED_ACK_RE = /\b(fixed|solved|working now|got it working|nvm|figured it out)\b/i;
 const LAUGH_RE = /\b(lol|lmao|haha+|lel|rofl)\b/i;
 const THANKS_RE = /\b(thanks|thank\s*you|thx|ty)\b/i;
@@ -825,6 +844,14 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   // message kind (TRIVIAL/CASUAL_CHAT/GREETING/QUESTION/SUBSTANTIVE alike).
   if (input.suppressAcknowledgementForSender) {
     return { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] };
+  }
+
+  // A request to evaluate/critique visual media ("what do you think of this
+  // gif?") is unanswerable honestly -- checked before any other
+  // classification (including QUESTION, which this would otherwise route
+  // to), so it can never be misrouted into a fabricated ANSWER.
+  if (isMediaFeedbackRequest(trimmed)) {
+    return { type: "SILENCE", reasons: ["cannot_evaluate_media"] };
   }
 
   const kind = classifyMessageKind(trimmed);

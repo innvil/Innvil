@@ -769,6 +769,36 @@ test('a bare "nice" alone still reacts, same as the other positive words', () =>
   assert.equal(result.type, "REACT");
 });
 
+/* ---------------------------------------- cannot honestly evaluate visual media ---- */
+// Live bug: "What do you think about this gif sample guys" (a member sharing
+// a GIF and asking for feedback on it) got a fabricated reply -- "gifs not
+// loading on my end, can you resend?" -- inventing a fake technical failure.
+// Chatter generation is text-only and has no access to attached media at
+// all, so a request to evaluate/critique visual content can never be
+// answered honestly. Silence is the correct outcome, checked before any
+// other classification so it can never be misrouted into ANSWER.
+
+test('REQUIRED (live bug repro): "What do you think about this gif sample guys" -> SILENCE, never a fabricated reply', () => {
+  const result = single({ text: "What do you think about this gif sample guys" });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["cannot_evaluate_media"]);
+});
+
+test("a request for feedback on a design/logo/artwork is also silenced, not just gifs", () => {
+  assert.equal(single({ text: "thoughts on the new logo design guys" }).type, "SILENCE");
+  assert.equal(single({ text: "check this sticker out, any feedback?" }).type, "SILENCE");
+});
+
+test("takes priority over directed address, continuity, and community-opener detection -- it's unanswerable regardless of who it's aimed at", () => {
+  assert.equal(single({ text: "what do you think about this image", isDirectedAtBot: true }).type, "SILENCE");
+  assert.equal(single({ text: "what do you think about this photo", wasLastSpeaker: true }).type, "SILENCE");
+});
+
+test("an unrelated substantive question that merely mentions a media-reference word is NOT silenced (both signals required)", () => {
+  assert.notEqual(single({ text: "what is the tokenomics design of the project" }).type, "SILENCE");
+  assert.notEqual(single({ text: "any feedback on the roadmap timeline?" }).type, "SILENCE");
+});
+
 test('REQUIRED: a positive closing with LONGER words still reacts, not just short ones -- "that\'s fantastic!" is 17 chars but only 2 words, and must not fall through to a text reply the way a raw character cap would cause', () => {
   const result = single({ text: "that's fantastic!", wasLastSpeaker: true });
   assert.equal(result.type, "REACT");

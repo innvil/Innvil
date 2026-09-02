@@ -127,6 +127,38 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Fix: a request for feedback on shared visual media (gif/image/video) got a fabricated excuse instead of silence (v1.49.23)
+- **Live bug**: a member shared a GIF and asked "What do you think about this gif sample guys" — the Watcher
+  replied "hey nikki, gifs not loading on my end — can you resend or describe it?", inventing a fake technical
+  failure. **Root cause, confirmed architecturally, not assumed**: chatter generation is text-only and has no
+  access to attached media at all — Media Moderation (Sightengine's `nudity-2.1` model, real, already live)
+  splices video into sampled frames and returns a real SAFETY verdict (safe/uncertain/explicit + confidence),
+  but never a content description — it can determine "is this explicit," never "what does this show" or "is
+  this good." Since no vision/content-understanding capability is wired into conversational reply generation at
+  all, a genuine request to evaluate/critique visual content can never be answered honestly — silence is the
+  correct outcome, not a fabricated excuse.
+- **Fix**: new `isMediaFeedbackRequest()` (`chatter-coordinator.ts`) — requires TWO independent signals (a
+  media-referencing noun: gif/image/photo/video/sticker/meme/design/artwork/sample/mockup/etc., AND a
+  feedback-request cue: "what do you think"/"thoughts on"/"how does it look"/"rate this"/etc.) so an unrelated
+  question that merely mentions "design" or "feedback" alone is never silenced. Checked at the very top of
+  `selectChatterAction`, before any other classification (including QUESTION, which this would otherwise route
+  to) — resolves directly to `SILENCE` (`reason: "cannot_evaluate_media"`), taking priority over directed
+  address, continuity, and community-opener detection, since it's unanswerable regardless of who it's aimed at.
+- **Media safety enforcement itself is completely unaffected and already correct, unrelated to this fix** — a
+  photo/video/gif genuinely classified unsafe is deleted immediately, with the existing graduated response
+  (high-confidence explicit → delete + kick with message purge; borderline → delete + warn, escalating to
+  delete + kick on repeated offenses). This fix only concerns the separate, non-safety "can the bot opine on
+  content it can't see" question.
+- New tests (`chatter-coordinator.test.ts`, +4): the exact live-bug repro, feedback requests about a design/
+  logo/artwork/sticker (not just gifs) also silenced, priority over directed-address/continuity, and a guard
+  that an unrelated question merely mentioning a media-reference word alone is never silenced. 2146 tests pass
+  (up from 2142), `tsc --noEmit` clean, production build clean.
+- **Deployed to production this pass**, alongside v1.49.20–v1.49.22 (the Project/Communities/Watchers IA
+  correction, the trial-moderation-quota-headroom fix, the "Nice project" reaction fix, the unsolicited-
+  promotion pitch widening, the language-agnostic pitch-classification fallback, and the promotion-channel
+  name-vs-link fix) — all five releases pushed and deployed together. **Run migrations `0122` and `0123`**
+  against production if not already applied (promotion channel link + name columns).
+
 ### 2026-09-02 — Language-agnostic pitch detection + promotion redirect speaks a NAME not a link + never exposes a raw topic ID + confirmed moderation already runs independent of the 45s reply scheduler (v1.49.22)
 - **Verified, with live evidence, that moderation is NOT gated by the human-priority 45-second reply
   scheduler — no code change was needed here, only confirmation.** Live concern: "the ishandled should be
@@ -191,8 +223,7 @@ innvil/
   test** — consistent with this exact function's own long-established convention (verified via typecheck +
   build + code review instead); every new PURE piece it now calls (`classifyPitchLikelihood`,
   `topicDisplayName`'s corrected fallback) is independently, directly tested.
-- **Not deployed automatically this pass** — pending confirmation before pushing to production, alongside
-  v1.49.20/v1.49.21 (neither has been pushed/deployed yet either).
+- **Deployed to production** in the same combined push as v1.49.20/v1.49.21/v1.49.23.
 
 ### 2026-09-02 — Investigated "moderation only acts every 3-5 hours" against live production data + widened the pitch pre-filter once more (v1.49.21)
 - **Root-caused with real evidence, not speculation.** Pulled `moderator_activity_log` + `community_messages`
@@ -227,8 +258,7 @@ innvil/
 - New tests (`link-moderation.test.ts`, +3): the exact live-miss message now flagged, the compliment
   false-positive guard, the in-community-announcement false-positive guard. 2137 tests pass (up from 2134),
   `tsc --noEmit` clean, production build clean.
-- **Not deployed automatically this pass** — pending confirmation before pushing to production, alongside
-  v1.49.20 (not yet pushed either).
+- **Deployed to production** in the same combined push as v1.49.20/v1.49.22/v1.49.23.
 
 ### 2026-09-03 — Corrected Project/Communities/Watchers IA (drop the redundant Watchers table from the Project's "Community" tab, restore the Communities sidebar destination with a real "+ Add Community") + trial moderation now shares the reactive-generation quota's headroom + ambient compliments get a reaction (v1.49.20)
 - **IA correction, per explicit user feedback with a screenshot.** The 2026-09-02 "Project/Community dashboard
@@ -293,7 +323,7 @@ innvil/
   established convention for this class of orchestrator; the pure `hasReactiveQuotaRemaining`/`reactiveQuotaDay`
   logic it calls was already fully unit-tested, and the change itself is verified via typecheck + build + code
   review.
-- **Not deployed automatically this pass** — pending confirmation before pushing to production.
+- **Deployed to production** in the same combined push as v1.49.21/v1.49.22/v1.49.23.
 
 ### 2026-09-02 — Fix: unsolicited-promotion pitches with no link were bypassing moderation entirely + persona-voiced solicitation warnings + a plain-group Promotion-channel fallback (v1.49.19)
 - **Live investigation of "it moderated a spam message ~3 hours ago, but nothing since"** — traced end-to-end
