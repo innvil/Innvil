@@ -115,8 +115,14 @@ const THANKS_RE = /\b(thanks|thank\s*you|thx|ty)\b/i;
 // "perfect!", they don't write a whole new sentence back. Distinct from a
 // neutral closing (CLOSING_ACK_RE alone, e.g. "I see, okay.") which stays
 // SILENCE — this one specifically carries positive sentiment worth
-// acknowledging with an emoji.
-const POSITIVE_WORD_RE = /\b(perfect|awesome|amazing|excellent|fantastic|sweet|love\s*it|nice\s*one|great)\b/i;
+// acknowledging with an emoji. "nice" is bare (not just "nice one") so a
+// short ambient compliment like "Nice project" also qualifies -- this is
+// unconditional (see the TRIVIAL branch below: it never requires the
+// reacting moderator to have recently spoken), matching the product
+// decision that a positive remark about the community/project deserves at
+// least a reaction even with no directed address or prior exchange to
+// react to.
+const POSITIVE_WORD_RE = /\b(perfect|awesome|amazing|excellent|fantastic|sweet|love\s*it|nice|great)\b/i;
 const LOVE_RE = /\blove(?:d|s)?\b/i;
 // Bounded by WORD COUNT only, not character length -- a raw character cap
 // was the fragile heuristic that missed "okay, perfect!" originally, and

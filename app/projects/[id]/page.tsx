@@ -192,7 +192,6 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             </div>
           ) : (
             customerFacingCommunities.map((c) => {
-              const roles = assignWatcherRoles(c.watchers.map((w) => ({ deploymentId: w.deploymentId, createdAt: w.createdAt, enabled: w.enabled })));
               return (
                 <div key={c.id} className="w-card p-5">
                   <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
@@ -203,43 +202,12 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     <OperationalStatusBadge status={communityOperationalStatus(c)} />
                   </div>
 
-                  <SectionHeader icon={Bot} title="Watchers deployed here" />
-                  {c.watchers.length === 0 ? (
-                    <div className="mb-4"><EmptyRow text="No Watchers deployed to this Community." /></div>
-                  ) : (
-                    <div className="overflow-x-auto -mx-1 mb-4">
-                      <table className="w-full text-sm min-w-[540px]">
-                        <thead>
-                          <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
-                            <th className="font-semibold pb-2 px-1">Watcher</th>
-                            <th className="font-semibold pb-2 px-1">Role</th>
-                            <th className="font-semibold pb-2 px-1">Status</th>
-                            <th className="font-semibold pb-2 px-1"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {c.watchers.map((w) => {
-                            const role = roles.find((r) => r.deploymentId === w.deploymentId);
-                            return (
-                              <tr key={w.deploymentId} className="border-t w-line-soft">
-                                <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
-                                <td className="py-2.5 px-1 w-text-dim text-xs">{w.enabled ? role?.roleLabel : "—"}</td>
-                                <td className="py-2.5 px-1">{w.enabled ? <span className="text-xs w-green">Active</span> : <span className="text-xs w-text-faint">Paused</span>}</td>
-                                <td className="py-2.5 px-1 text-right"><DeploymentToggle moderatorId={w.watcherId} deploymentId={w.deploymentId} enabled={w.enabled} /></td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  {detail.communities.length > 0 && (
-                    <div className="mb-4">
-                      <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={[{ id: c.id, title: c.title, chatId: c.chatId }]} />
-                    </div>
-                  )}
-
-                  <div className="pt-4 border-t w-line-soft">
+                  {/* Watcher listing/pause-resume/Add-Watcher for this Community lives
+                      exclusively on this page's own separate "Watchers" tab -- showing
+                      it here too was a real, reported redundancy (removed 2026-09-03).
+                      This tab is Community CONFIGURATION only: identity above, moderation
+                      settings below. */}
+                  <div className="pt-1">
                     <SectionHeader icon={SettingsIcon} title="Moderation" />
                     <CommunitySolicitationToggle communityId={c.id} allowSolicitation={c.allowSolicitation} />
                     <p className="text-[11px] w-text-faint mt-1.5">{SOLICITATION_TOGGLE_HELPER_TEXT}</p>

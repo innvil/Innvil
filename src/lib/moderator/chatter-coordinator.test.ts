@@ -752,6 +752,23 @@ test("an upbeat closing reacts even when NOT directed and NOT mid a continuity t
   assert.equal(result.type, "REACT");
 });
 
+// Live bug: an ambient compliment about the community/project ("Nice
+// project") from a member who never addressed the Watcher and whom no
+// moderator had recently spoken to got completely silenced. "nice" (bare,
+// not just "nice one") is now part of POSITIVE_WORD_RE, so a short
+// ("<=4 words") compliment like this classifies as an upbeat closing and
+// reacts unconditionally, the same as "awesome"/"great"/"perfect" already
+// did -- never requiring prior relevance (wasLastSpeaker/recentlyParticipated).
+test('REQUIRED (live bug): "Nice project" reacts even with zero prior context (no directed address, no continuity, no recent moderator activity)', () => {
+  const result = single({ text: "Nice project" });
+  assert.equal(result.type, "REACT");
+});
+
+test('a bare "nice" alone still reacts, same as the other positive words', () => {
+  const result = single({ text: "nice" });
+  assert.equal(result.type, "REACT");
+});
+
 test('REQUIRED: a positive closing with LONGER words still reacts, not just short ones -- "that\'s fantastic!" is 17 chars but only 2 words, and must not fall through to a text reply the way a raw character cap would cause', () => {
   const result = single({ text: "that's fantastic!", wasLastSpeaker: true });
   assert.equal(result.type, "REACT");

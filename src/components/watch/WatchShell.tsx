@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  LayoutGrid, FolderKanban, Bot, Activity, Network,
+  LayoutGrid, FolderKanban, Bot, Activity, Network, Users,
   CreditCard, Layers, Settings, LogOut, Menu, X, Plus, User, HelpCircle, ShieldCheck,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
@@ -24,22 +24,24 @@ interface NavItem {
   implemented: boolean;
 }
 
+// Reversed 2026-09-03, per explicit correction -- "Communities" belongs in
+// Workspace as its own top-level destination: a place to TRACK every
+// Community the account has and to ADD new ones, distinct from a specific
+// Project's own dashboard (where that Project's Community gets fully
+// CONFIGURED). Removing it entirely (the 2026-09-02 attempt) collapsed two
+// different jobs -- "browse/track my Communities" vs. "configure THIS
+// Project's Community" -- into one page, which is exactly what made the
+// Project page's own "Community" tab grow a redundant Watchers list that
+// already lives on that page's separate "Watchers" tab. See that tab for
+// the fix. /communities and /communities/[id] were never removed as
+// routes, only unlinked from the sidebar in that attempt -- this restores
+// the direct link.
 const WORKSPACE_NAV: NavItem[] = [
   { id: "projects", label: "Projects", icon: FolderKanban, href: "/projects", implemented: true },
+  { id: "communities", label: "Communities", icon: Users, href: "/communities", implemented: true },
   { id: "watchers", label: "Watchers", icon: Bot, href: "/watchers", implemented: true },
 ];
 
-// "Communities" was removed as its own top-level destination (2026-09-02) --
-// a Project holds its one Community's full settings/watchers/moderation
-// controls directly on the Project's own dashboard now (app/projects/[id]/
-// page.tsx's "Community" tab), so a separate "click into Communities, then
-// click into this specific one" hop no longer serves a purpose for the
-// common single-community-per-project case. The /communities and
-// /communities/[id] routes still exist (still linked from Activity items,
-// and still the fallback view for the rare project with more than one
-// Community) -- only the always-visible sidebar entry into the bare list is
-// gone.
-//
 // Knowledge is real, but it's PROJECT-scoped (a tab inside each Project's own
 // detail page, see app/projects/[id]/page.tsx), never a single global
 // destination -- there's nothing meaningful for a top-level "Knowledge" link

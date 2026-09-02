@@ -127,6 +127,71 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-03 — Corrected Project/Communities/Watchers IA (drop the redundant Watchers table from the Project's "Community" tab, restore the Communities sidebar destination with a real "+ Add Community") + trial moderation now shares the reactive-generation quota's headroom + ambient compliments get a reaction (v1.49.20)
+- **IA correction, per explicit user feedback with a screenshot.** The 2026-09-02 "Project/Community dashboard
+  consolidation" over-corrected: it removed "Communities" from the Workspace sidebar entirely AND duplicated
+  the Project page's own separate "Watchers" tab (Watcher/Community/Role/Status/pause-resume table + "+ Add
+  Watcher") inside the new "Community" tab too — the exact same table rendered twice on the same page. The
+  correct model, restated: **Workspace = Projects · Communities · Watchers**, three real top-level
+  destinations. **Communities** is the account-wide TRACKER (browse every Community across every Project, add
+  new ones). A **Project's own dashboard** is where THAT Project's Community gets fully CONFIGURED — its
+  "Community" tab holds ONLY community identity + moderation settings (Solicitation, Acknowledge Admin/Mod,
+  Topic Policies, Promotion Channel Link, Reply Delay); the "watcher setting per community" (listing, role,
+  status, pause/resume) belongs exclusively to that page's pre-existing, separate **"Watchers"** tab, never
+  duplicated onto "Community" again. **Watchers** (top-level) tracks total Watchers + persona config —
+  unchanged, already correct.
+- **`WatchShell.tsx`**: `WORKSPACE_NAV` restored to Projects · Communities · Watchers (re-added the "Communities"
+  item + its `Users` icon import, both dropped in the prior pass) — `/communities`/`/communities/[id]` already
+  passed `active="communities"`, so highlighting works immediately with zero changes needed there.
+- **`app/projects/[id]/page.tsx`**: removed the "Watchers deployed here" table + `ProjectAddWatcherCta` from
+  the "Community" tab's per-community render (and the now-dead `assignWatcherRoles` call that fed it) — the
+  tab now renders only the community header (name/platform/chatId/status badge) and the Moderation section.
+  The separate "Watchers" tab (Watcher/Community/Role/Status/pause-resume, `ProjectAddWatcherCta`) was already
+  correct and untouched — confirmed it already satisfies "watcher setting per community, nested in the
+  Watchers tab" exactly as specified.
+- **`/communities` gained a real "+ Add Community" action**, closing the other half of the original complaint
+  ("this is where one can track the communities it has and also it is where one can add more communities" —
+  previously there was no add-community control at all outside the empty state, which only pointed at
+  `/watchers`). New `CommunitiesAddCta.tsx` — a thin Project-picker in front of the SAME real, Telegram-
+  membership-verified `ProjectAddCommunityModal` every Project detail page's own "Add Community" already uses
+  (never a second/parallel connect flow); zero Projects yet falls back to the same `CreateProjectButton` the
+  Projects list page uses. `getCommunitiesPageData` (`watch-dashboard.ts`) now also returns the account's
+  `projects` and a `deployableWatchers` subset (same `DEPLOYABLE_PROVISIONING_STATUSES` filter the Project page
+  already uses) so the list page can drive this without a second data-fetching path. Shown both as a persistent
+  header action and inside the zero-Communities empty state.
+- **Trial moderation now shares headroom with the reactive-generation quota, instead of running forever
+  independent of it.** Explicit product correction: spam/scam (and media) moderation must keep enforcing for a
+  trial Community for as long as the day's `TRIAL_REACTIVE_DAILY_LIMIT` (20/day) reactive-chatter quota still
+  has ANY headroom left — even though moderation itself has never spent a unit of that quota
+  (`recordReactiveQuotaUse` is only ever called from the conversational-reply path, never from
+  `runMediaModeration`/`runLinkModeration`). Only once the quota is FULLY exhausted (20/20 used) for the day
+  does moderation pause too, alongside chat (which was already independently silenced by the identical check
+  inside `respondAsDeployment`) — so a trial Community goes quiet as a whole for the rest of that day, rather
+  than leaving safety enforcement running indefinitely after chat alone stopped. New gate at the top of
+  `handleHumanMessage` (`community-runtime.ts`, checked once, before role assignment/media/link moderation even
+  start) — paid/Enterprise accounts are unaffected (`isTrialEntitlement` is only ever true for the trial
+  entitlement source). Corrected the section-header doc comment above the link-moderation block, which
+  previously stated moderation is "never disabled by the reactive chatter quota" — now accurately states this
+  is true only while headroom remains.
+- **Ambient compliments now get a reaction, not silence.** Live example: "Nice project" (no @mention, no prior
+  moderator activity in the room) was completely ignored. Root cause: `POSITIVE_WORD_RE` (the regex behind the
+  unconditional "an upbeat short remark reacts regardless of directed-ness/relevance" rule already used for
+  "great"/"perfect"/"awesome"/etc.) only matched "nice**one**", never bare "nice" — so "Nice project" (2 words)
+  never classified as the TRIVIAL-positive case at all and fell through to ordinary SUBSTANTIVE handling, which
+  silenced it (`low_social_priority`, no directed address, no continuity). Widened `POSITIVE_WORD_RE` to match
+  bare "nice" (still matches "nice one" too, since "nice" is its own word there) — "Nice project" and similar
+  short (`<=4`-word) compliments now react the same, unconditional way "awesome, thanks!"/"that's fantastic!"
+  already do.
+- New tests: `chatter-coordinator.test.ts` (+2 — the exact live-bug repro for "Nice project" with zero prior
+  context, and a bare "nice" alone), confirmed the pre-existing `TRIVIAL_CONTROLS`/positive-closing test suite
+  (incl. "haha nice one") is unaffected. 2134 tests pass (up from 2132), `tsc --noEmit` clean, production build
+  clean. No migration (pure in-code changes only). **The moderation-quota gate's wiring inside
+  `handleHumanMessage` has no dedicated DB-mocked integration test** — consistent with this codebase's
+  established convention for this class of orchestrator; the pure `hasReactiveQuotaRemaining`/`reactiveQuotaDay`
+  logic it calls was already fully unit-tested, and the change itself is verified via typecheck + build + code
+  review.
+- **Not deployed automatically this pass** — pending confirmation before pushing to production.
+
 ### 2026-09-02 — Fix: unsolicited-promotion pitches with no link were bypassing moderation entirely + persona-voiced solicitation warnings + a plain-group Promotion-channel fallback (v1.49.19)
 - **Live investigation of "it moderated a spam message ~3 hours ago, but nothing since"** — traced end-to-end
   via production data (`community_messages`, `moderator_activity_log`, `watch_pending_replies`). Root cause

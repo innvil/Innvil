@@ -283,17 +283,29 @@ export interface CommunitiesPageData {
   expansionActive: boolean;
   expansionCancelAtPeriodEnd: boolean;
   gateways: string[];
+  /** The account's own Projects (for the "+ Add Community" project picker,
+   *  see CommunitiesPageClient) and the subset of Watchers that are
+   *  actually bot-ready enough to verify a new Telegram connection --
+   *  identical shape/filter to the one the Project detail page's own
+   *  ProjectAddCommunityCta already uses, so this list-page "Add Community"
+   *  reuses that exact same connect flow rather than a second one. */
+  projects: AccountProjectRow[];
+  deployableWatchers: AccountWatcherRow[];
 }
 
 const EMPTY_COMMUNITIES_PAGE: CommunitiesPageData = {
   communities: [], capacity: null, attentionCount: 0, communityStats: {}, expansionActive: false, expansionCancelAtPeriodEnd: false, gateways: [],
+  projects: [], deployableWatchers: [],
 };
 
 export async function getCommunitiesPageData(): Promise<CommunitiesPageData> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return EMPTY_COMMUNITIES_PAGE;
   const communities = await listAccountCommunities(admin, user.id);
-  const watchers = await listAccountWatchers(admin, user.id, communities);
+  const [watchers, projects] = await Promise.all([
+    listAccountWatchers(admin, user.id, communities),
+    listAccountProjects(admin, user.id),
+  ]);
   const [capacity, expansion, gateways, statsMap] = await Promise.all([
     getAccountCapacity(admin, user.id, { communities, watchers }),
     getCommunityExpansionState(admin, user.id),
@@ -307,6 +319,8 @@ export async function getCommunitiesPageData(): Promise<CommunitiesPageData> {
     expansionActive: expansion != null,
     expansionCancelAtPeriodEnd: expansion?.cancelAtPeriodEnd ?? false,
     gateways,
+    projects,
+    deployableWatchers: watchers.filter((w) => DEPLOYABLE_PROVISIONING_STATUSES.has(w.provisioningStatus)),
   };
 }
 

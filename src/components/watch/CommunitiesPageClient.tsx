@@ -9,6 +9,7 @@ import { WATCH_SWR_KEYS } from "@/src/lib/watch-swr-keys";
 import { communityOperationalStatus, type CommunityOperationalStatus } from "@/src/lib/products/watch-status";
 import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier } from "@/src/lib/money";
 import { WatchShell } from "./WatchShell";
+import { CommunitiesAddCta } from "./CommunitiesAddCta";
 import { CommunityExpansionCard } from "./CommunityExpansionCard";
 import { EmptyRow, OperationalStatusBadge, CapacityRow, relTime, WatcherNamesCell } from "./WatchUI";
 import { TableSkeleton } from "./DashboardSkeletons";
@@ -41,7 +42,7 @@ export function CommunitiesPageClient() {
     );
   }
 
-  const { communities, capacity, communityStats, expansionActive, expansionCancelAtPeriodEnd, gateways } = data;
+  const { communities, capacity, communityStats, expansionActive, expansionCancelAtPeriodEnd, gateways, projects, deployableWatchers } = data;
   const filtered = status ? communities.filter((c) => communityOperationalStatus(c) === status) : communities;
 
   return (
@@ -50,18 +51,21 @@ export function CommunitiesPageClient() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h1 className="w-display text-xl mb-1">Communities</h1>
-            <p className="text-sm w-text-dim">Every Telegram community connected across your Projects.</p>
+            <p className="text-sm w-text-dim">Track every Telegram community connected across your Projects, and connect new ones.</p>
           </div>
-          <div className="flex items-center gap-1.5">
-            {STATUS_FILTERS.map((f) => (
-              <Link
-                key={f.value || "all"}
-                href={f.value ? `/communities?status=${f.value}` : "/communities"}
-                className={`text-xs px-2.5 py-1.5 rounded-lg border ${status === f.value ? "w-teal-border w-teal" : "w-line-soft w-text-dim hover:w-text"}`}
-              >
-                {f.label}
-              </Link>
-            ))}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              {STATUS_FILTERS.map((f) => (
+                <Link
+                  key={f.value || "all"}
+                  href={f.value ? `/communities?status=${f.value}` : "/communities"}
+                  className={`text-xs px-2.5 py-1.5 rounded-lg border ${status === f.value ? "w-teal-border w-teal" : "w-line-soft w-text-dim hover:w-text"}`}
+                >
+                  {f.label}
+                </Link>
+              ))}
+            </div>
+            <CommunitiesAddCta projects={projects} deployableWatchers={deployableWatchers} />
           </div>
         </div>
 
@@ -99,10 +103,9 @@ export function CommunitiesPageClient() {
           <div className="w-card p-10 text-center">
             <Users size={28} className="w-teal mx-auto mb-3" />
             <EmptyRow text="No Communities connected yet." />
-            <p className="text-xs w-text-faint">
-              Connect one from a deployable Watcher on the{" "}
-              <Link href="/watchers" className="w-teal hover:underline">Watchers page</Link>.
-            </p>
+            <div className="mt-3 flex justify-center">
+              <CommunitiesAddCta projects={projects} deployableWatchers={deployableWatchers} />
+            </div>
           </div>
         ) : filtered.length === 0 ? (
           <div className="w-card p-10 text-center"><EmptyRow text="No Communities match this filter." /></div>

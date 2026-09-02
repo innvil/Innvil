@@ -2074,9 +2074,14 @@ async function routeConversationTask(
 /* --------------------------------------------------------- link moderation ---- */
 // Phase 4.M (C)-(F). Moderation asks a SEPARATE question from chatter (spec
 // §18/§50): "does this message violate community policy?" — it runs
-// independent of, and is never disabled by, the reactive chatter quota
-// (spec §45), and needs no @mention (spec §46). See link-moderation.ts for
-// the pure classification/policy layer this section persists state for and
+// independent of the reactive chatter quota (spec §45) for as long as a
+// trial community's daily quota still has headroom left (checked once in
+// handleHumanMessage, before this stage is ever reached), and needs no
+// @mention (spec §46). Corrected 2026-09-03: once that daily quota is
+// FULLY exhausted, moderation pauses alongside chatter for the rest of the
+// day, rather than continuing to run forever independent of it — see the
+// gate at the top of handleHumanMessage. See link-moderation.ts for the
+// pure classification/policy layer this section persists state for and
 // executes enforcement from.
 
 async function loadLinkWarningState(admin: SupabaseClient, communityId: string, platformUserId: string): Promise<LinkWarningState> {
@@ -2889,6 +2894,28 @@ async function handleHumanMessage(
   timer.mark("chatter_deployment_lookup", { deploymentCount: deployments.length });
   if (!deployments.length) return; // no chatter-eligible deployment in this community
 
+  // Phase 4.M (B), corrected 2026-09-03 -- moderation must keep running for
+  // as long as the trial's daily reactive-chatter quota (TRIAL_REACTIVE_
+  // DAILY_LIMIT/day) has ANY headroom left, even though moderation itself
+  // never spends a unit of that quota (recordReactiveQuotaUse is only ever
+  // called from the conversational-reply path in respondAsDeployment, never
+  // from runMediaModeration/runLinkModeration). Only once the quota is
+  // FULLY exhausted for today does moderation pause too -- at that point
+  // ordinary chatter/Q&A is already independently silenced by the identical
+  // check inside respondAsDeployment, so this makes the whole community
+  // (both safety enforcement and chat) go quiet together for the rest of
+  // that day, rather than leaving spam/scam moderation running indefinitely
+  // on a trial that's stopped generating for the day. Paid/Enterprise
+  // accounts are unaffected (isTrialEntitlement is only ever true for the
+  // trial entitlement source).
+  if (isTrialEntitlement && !(await hasReactiveQuotaRemaining(admin, community.id, reactiveQuotaDay(new Date())))) {
+    await logActivity(admin, panelId, community.id, deployments[0]?.deploymentId ?? null, "human_message", "SILENCE", "trial_reactive_quota_exhausted", {
+      reasons: ["trial_reactive_quota_exhausted"],
+      stage: "moderation_and_chat_paused",
+    });
+    return;
+  }
+
   // Stable specialist-role assignment (Watcher Role Separation) -- computed
   // once, immediately after resolving the deployment set, and reused by
   // every moderation stage below. Chatter duty (which depends on
@@ -2918,11 +2945,14 @@ async function handleHumanMessage(
   if (mediaModeration.handled) return;
 
   // Link moderation is a SEPARATE decision from chatter (spec §18/§50) --
-  // checked first, independent of and never disabled by the reactive
-  // chatter quota (spec §45). If the message got deleted, there is nothing
-  // left to task-route or chat about, so it short-circuits everything else.
-  // The Spam & Scam Moderator role owns this event -- runs continuously
-  // regardless of chatter duty, per the Watcher Role Separation spec.
+  // checked first, independent of chatter's own quota-exhaustion gate
+  // inside respondAsDeployment (spec §45) as long as the trial's daily
+  // quota (checked once, above, before this whole function's moderation
+  // stage even starts) still has headroom left. If the message got
+  // deleted, there is nothing left to task-route or chat about, so it
+  // short-circuits everything else. The Spam & Scam Moderator role owns
+  // this event -- runs continuously regardless of chatter duty, per the
+  // Watcher Role Separation spec.
   const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date(), aiRouting, roleAssignments, message.chat.username ?? null);
   timer.mark("link_moderation_check", { handled: moderation.handled });
   if (moderation.handled) return;
