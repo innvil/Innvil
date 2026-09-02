@@ -127,6 +127,22 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Fix: migration 0119's inline unique constraint used invalid SQL (v1.49.16)
+- **Live migration-run failure**: `ERROR: 42601: syntax error at or near "(" ... LINE 27: unique(community_id,
+  platform_message_id, coalesce(url, ''))`. A plain `unique(...)` TABLE CONSTRAINT can only list bare column
+  names — Postgres rejects a function call like `coalesce(url, '')` inside it. This constraint needed
+  `coalesce` specifically because `url` is nullable (a plain text fact extracted from a link-less message has
+  none) and Postgres treats every `NULL` as distinct in an ordinary unique constraint, which would otherwise
+  let duplicate text-fact rows accumulate for the same message.
+- **Fix**: replaced it with an equivalent expression-based `create unique index ... (community_id,
+  platform_message_id, coalesce(url, ''))` — valid Postgres syntax for exactly this case. `upsertCommunityResource`
+  (`community-runtime.ts`) already never relied on `ON CONFLICT` targeting this constraint (it does a real
+  select-then-insert/update, precisely BECAUSE PostgREST can't target an expression index via `onConflict` —
+  the same lesson already documented elsewhere in this codebase's history for an identical nullable-column
+  uniqueness case) — no application code needed to change.
+- **Migration `0119` was amended in place, not renumbered** — it had never successfully run anywhere (this was
+  the exact failure being fixed), so there's nothing live to migrate away from. **Re-run migration `0119`.**
+
 ### 2026-09-02 — Human-priority engagement overhaul: real 120s pending-reply scheduler, admin-engagement lockout, topic-aware solicitation, slash-command silence, mention-only fallback, community-message knowledge grounding (v1.49.15)
 - **Urgent product-direction correction, delivered as one combined patch.** The Watcher was over-engaging —
   jumping into conversations an admin/mod was already handling, acknowledging admins/mods when it shouldn't,

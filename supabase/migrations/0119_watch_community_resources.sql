@@ -23,9 +23,18 @@ create table if not exists watch_community_resources (
   url                 text,
   text                text not null,
   created_at          timestamptz not null default now(),
-  updated_at          timestamptz not null default now(),
-  unique(community_id, platform_message_id, coalesce(url, ''))
+  updated_at          timestamptz not null default now()
 );
+
+-- A plain `unique(...)` table constraint can only list bare columns --
+-- Postgres rejects a function call like coalesce(url, '') there (the exact
+-- "syntax error at or near (" this fixes). An expression-based UNIQUE
+-- INDEX is the correct way to express "one row per (community, message,
+-- url-or-no-url)" -- url is nullable (a plain text fact has none), and
+-- without the coalesce, Postgres would treat every NULL url as distinct,
+-- letting duplicate text-fact rows accumulate for the same message.
+create unique index if not exists idx_watch_community_resources_unique
+  on watch_community_resources (community_id, platform_message_id, coalesce(url, ''));
 
 create index if not exists idx_watch_community_resources_recent
   on watch_community_resources(community_id, created_at desc);
