@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  LayoutGrid, FolderKanban, Users, Bot, Activity, Network,
+  LayoutGrid, FolderKanban, Bot, Activity, Network,
   CreditCard, Layers, Settings, LogOut, Menu, X, Plus, User, HelpCircle, ShieldCheck,
 } from "lucide-react";
 import { signOutAction } from "@/src/lib/actions/auth";
@@ -26,10 +26,20 @@ interface NavItem {
 
 const WORKSPACE_NAV: NavItem[] = [
   { id: "projects", label: "Projects", icon: FolderKanban, href: "/projects", implemented: true },
-  { id: "communities", label: "Communities", icon: Users, href: "/communities", implemented: true },
   { id: "watchers", label: "Watchers", icon: Bot, href: "/watchers", implemented: true },
 ];
 
+// "Communities" was removed as its own top-level destination (2026-09-02) --
+// a Project holds its one Community's full settings/watchers/moderation
+// controls directly on the Project's own dashboard now (app/projects/[id]/
+// page.tsx's "Community" tab), so a separate "click into Communities, then
+// click into this specific one" hop no longer serves a purpose for the
+// common single-community-per-project case. The /communities and
+// /communities/[id] routes still exist (still linked from Activity items,
+// and still the fallback view for the rare project with more than one
+// Community) -- only the always-visible sidebar entry into the bare list is
+// gone.
+//
 // Knowledge is real, but it's PROJECT-scoped (a tab inside each Project's own
 // detail page, see app/projects/[id]/page.tsx), never a single global
 // destination -- there's nothing meaningful for a top-level "Knowledge" link

@@ -9,6 +9,7 @@ import {
 import { resolveEnterpriseMediaAddonKey } from "./watch-enterprise";
 import { validateEnterpriseCommunityCapacity, getEnterpriseIncludedCommunities, communityModeFor } from "./watch-enterprise-community";
 import { CAPACITY, communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage } from "@/src/lib/moderator/plan";
+import { clampPendingReplyDelaySeconds } from "@/src/lib/moderator/pending-reply";
 import { hasActiveCommunityExpansion } from "./watch-community-expansion";
 import { getMediaModerationAddonState } from "./watch-media-moderation-addon";
 import { normalizeModeratorPersona, DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "@/src/lib/moderator/domain";
@@ -868,6 +869,27 @@ export async function setAccountCommunityTopicPolicy(
   const { error } = await admin.from("watch_community_topics").update({ policy }).eq("community_id", communityId).eq("message_thread_id", messageThreadId);
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: null };
+}
+
+/** Owner-configurable human-priority reply delay for this community (see
+ *  pending-reply.ts's clampPendingReplyDelaySeconds — 15-120s, default
+ *  45s). Clamped server-side regardless of what the client sends, so an
+ *  out-of-range value can never be persisted even if the UI's own input
+ *  bounds were somehow bypassed. */
+export async function getAccountCommunityPendingReplyDelay(admin: SupabaseClient, accountId: string, communityId: string): Promise<number | null> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return null;
+  const { data } = await admin.from("communities").select("pending_reply_delay_seconds").eq("id", communityId).maybeSingle();
+  return clampPendingReplyDelaySeconds(data?.pending_reply_delay_seconds ?? null);
+}
+
+export async function setAccountCommunityPendingReplyDelay(
+  admin: SupabaseClient, accountId: string, communityId: string, delaySeconds: number
+): Promise<CreateResult<{ delaySeconds: number }>> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return { ok: false, error: "Community not found." };
+  const clamped = clampPendingReplyDelaySeconds(delaySeconds);
+  const { error } = await admin.from("communities").update({ pending_reply_delay_seconds: clamped }).eq("id", communityId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: { delaySeconds: clamped } };
 }
 
 export interface AccountDeploymentRow {

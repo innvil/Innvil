@@ -127,6 +127,129 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Human-priority engagement corrections (11-point verification pass) + owner/admin/mod full suppression + configurable delay + Project/Community dashboard consolidation (v1.49.17)
+- **Behavioral corrections against the v1.49.15 spec, verified item-by-item, per explicit instruction not to
+  change intended behavior without confirming it against the original rules.**
+- **(1) @mention no longer bypasses human/admin priority.** `chatter-coordinator.ts`'s `selectChatterAction`
+  previously exempted a directly-@mentioned/replied-to message from the `recentlyRespondedByAdminOrMod`
+  deferral in QUESTION, SUBSTANTIVE, and the directed branch of COMMUNITY_OPENER — removed in all three; the
+  admin-priority check now applies uniformly regardless of directed status. `community-runtime.ts`'s scheduling
+  gate (`!primaryIsDirected && ...`) was removed entirely — **every** ANSWER/CASUAL_CHAT, directed or not, now
+  goes through the persisted pending-reply scheduler; directed-ness still decides WHO answers, never whether
+  the wait applies. A genuine multi-target address ("Kwan and Test, thoughts?", "everyone") now schedules one
+  independent pending-reply row per targeted deployment (migration `0121` widens `watch_pending_replies`'
+  unique constraint to `(community_id, trigger_platform_message_id, deployment_id)`) rather than answering the
+  additional targets immediately — each still respects human/admin priority on its own. Known, documented
+  simplification: a deferred additional responder no longer sees what another target already replied
+  (`priorResponsesToThisMessage` is no longer threaded across separately-scheduled rows) — multiple relevant
+  moderators still each eventually answer, just without cross-awareness of exact wording. The decline-fallback
+  reroute (retry with a differently-named moderator when the model declines) moved from `handleHumanMessage`
+  into `processDuePendingReply`, firing immediately at fire time (no additional wait — the human already
+  waited their full delay for this already-approved response).
+- **(2) Conversation-specific cancellation, not topic-wide.** `cancelPendingRepliesForTopic` rewritten from a
+  blanket "cancel every pending reply in this topic" into a per-row evaluation using new
+  `isAdminMessageHandlingConversation()` (`pending-reply.ts`) — an admin/mod message only cancels a SPECIFIC
+  pending reply when it (a) is a direct Telegram reply to that reply's trigger message or any other message
+  from the same asker, or (b) is the uncontested next message in the topic after the trigger (nothing else
+  said in between). Topic id alone is never sufficient. The fire-time belt-and-suspenders re-check in
+  `processDuePendingReply` uses the identical definition. `ChatterContextMessage`/`loadRecentContext` gained
+  `platformMessageId`/`replyToPlatformMessageId` to support this.
+- **(3) Deterministic admin-solicited-content backstop, implemented (was deferred).** New
+  `looksLikeAdminInformationRequest`/`findRecentAdminInformationRequest` (`link-moderation.ts`) — detects a
+  real admin/mod request pattern ("send me your project link", "what's your telegram?") within a bounded
+  10-minute window (`ADMIN_REQUEST_EXEMPTION_WINDOW_MS`), scoped to the specific requesting admin (verified via
+  a live Telegram admin-status check), the specific responding user (when the request itself replied to one),
+  and the same community — feeds a new `adminSolicitedExemption` flag into `decideLinkEnforcement`, which
+  ALLOWs the otherwise-flagged UNSOLICITED_PROMOTION content. The existing AI classifier's own admin-context
+  instruction is kept alongside this, not replaced — a real code-level backstop, never the sole safeguard.
+  Never a standing exemption — it stops applying the instant the request scrolls out of the window.
+- **(4) Unpin reconciliation wired into the live retrieval path.** `loadCommunityKnowledgeGrounding` now calls
+  `syncCurrentPinnedMessage` (best-effort) before ranking, using the bot token already resolved by its one
+  remaining caller (`processDuePendingReply` — all generation now happens at fire time, see (1)).
+- **(5) Verified/tested: a natural persona-voiced contact answer ("who handles promotions?") stays structurally
+  distinct from the bare-mention-only `MENTION_ADMIN_REQUIRED` fallback** — the former is answered from the
+  Project's own structured Partnerships/Support contact preset (already-existing `resolveContactIntent`
+  injection into `projectKnowledge`), which resolves BEFORE the "no knowledge at all" branch that offers the
+  mention-only fallback could ever be reached.
+- **(6) Confirmed via code review: no plan/tier gate exists anywhere around pending-reply scheduling** — applies
+  uniformly to every subscription tier, pinned by a new structural test.
+- **(7) Original-message-still-exists revalidation: `PendingReplyCancelReason` gained `"message_deleted"` and
+  `revalidatePendingReply` gained `originalMessageStillExists` (default assumed-true, fail-safe).** Honestly
+  documented limitation: the Telegram Bot API has no supported way for a bot to check whether an arbitrary
+  user-sent message still exists without a real side effect (no `getMessage`, and every workaround has a
+  visible consequence) — this field exists so the contract is real/testable, ready for a future signal, but
+  nothing currently populates it as `false`.
+- **(8) Confirmed via code structure: `bot_ack_mode`'s gating is unaffected** — `handleHumanMessage` (where
+  scheduling lives) is only ever reached for `senderType === "HUMAN"`; `INNVIL_MODERATOR`/`EXTERNAL_BOT`
+  senders are routed through the entirely separate bot-ack branch in `handleCommunityUpdate`, which never
+  creates a pending reply.
+- **(9) Solicitation warning-count expiry — explicit decision made and documented: 30 days**, mirroring the
+  existing scam-strike precedent exactly (`SOLICITATION_WARNING_WINDOW_MS`, new `effectiveWarningCount()` +
+  `moderator_link_warning_state.warning_at` column, migration `0121`) — previously persisted indefinitely by
+  omission, never a deliberate choice; now consistent with the only other precedent in this file.
+- **(10)/(11) Regression tests added** across `chatter-coordinator.test.ts`, `pending-reply.test.ts`,
+  `link-moderation.test.ts` covering the named scenarios (directed-still-waits, unrelated-admin-message-
+  doesn't-cancel, admin-takeover-does-cancel, admin-solicited-link-allowed, unpin reconciliation, natural
+  contact answer vs. mention-only vs. silence for unknown-CA-no-admin, `/ca`/`/audit` silence, deleted-message
+  cancellation contract, bot_ack_mode structural isolation, plan-agnostic scheduling, and the full Promotion-
+  topic redirect suite).
+- **Separate bug investigation (mid-session report): "first solicitation offense is muting when it should only
+  warn."** Traced `decideLinkEnforcement`'s full ladder math, the `community-runtime.ts` call site's
+  `priorWarningCount` derivation, and the persisted `nextState` computation — all verified CORRECT for a
+  genuinely fresh sender (`priorWarningCount:0` → `warningNumber:1` → `muteMinutes:undefined`, matching the
+  intended 1st=warn-only/2nd=10min/3rd=30min/4th=60min/5th=kick ladder exactly, confirmed by pre-existing
+  passing tests). No code bug found — most likely explanation is stale `warning_count` already on that
+  Telegram user+community pair from earlier live testing in this same session. Added the full 9-point
+  regression suite requested anyway (now pinning the correct behavior explicitly), and fixed two real
+  consistency gaps found along the way: the ALLOW branch's persisted state didn't carry `warningAt` forward,
+  and the DELETE_KICK branch recomputed the next count from the RAW (non-expiry-resolved) stored value instead
+  of the effective one — both corrected.
+- **Owner/admin/mod conversational-engagement suppression widened to ALL engagement, not just trivial
+  acknowledgement.** `suppressAcknowledgementForSender` (governs `communities.acknowledge_admin_mod`, default
+  OFF) moved to the very top of `selectChatterAction` — now silences a suppressed sender's message regardless
+  of classification (TRIVIAL/CASUAL_CHAT/GREETING/QUESTION/SUBSTANTIVE alike), never bypassed by a directed
+  @mention. Confirmed `isSenderAdminOrTrusted` already checks Telegram's `creator` status (the real community
+  OWNER) alongside `administrator` — no code change needed there, already correct.
+- **Default human-priority delay changed from 120s to 45s, now owner-configurable per community (15-120s).**
+  New `communities.pending_reply_delay_seconds` column (migration `0121`, default 45) + `clampPendingReplyDelaySeconds()`;
+  `pendingReplyScheduledFor`/`isWithinPendingReplyWindow` both take an explicit delay/window parameter instead
+  of a hardcoded constant. New owner action pair (`getCommunityPendingReplyDelay`/`setCommunityPendingReplyDelay`)
+  + `PendingReplyDelayControl.tsx`, mounted on the Community Settings tab (and inline on the Project dashboard,
+  see below). Cancellation/conversation-ownership detection is completely unaffected by the delay length.
+- **Confirmed (already true, no change needed): moderation/solicitation enforcement runs BEFORE and is
+  structurally independent of the human-priority scheduler.** `handleHumanMessage` already checks media then
+  link moderation first and `return`s immediately when either handles the message — the scheduler code is
+  never even reached for a deleted/warned message. This means a restricted-topic promotion is deleted +
+  warned + redirected to the configured Promotion topic (by real name, with a real deep link when derivable)
+  immediately, every time, never deferred through the 45s wait and never waiting to see if a human moderator
+  handles it first — verified via code trace, not a new mechanism.
+- **Dashboard**: Community page's Settings tab gained visible, directly-clickable "Solicitation Settings" /
+  "Configure Promotion Topic" shortcuts (new `community-guidance.ts`, pure copy/anchor-href module) at the top
+  of the Overview tab — real in-page anchors (`?tab=settings#solicitation-settings` /
+  `#promotion-topic`), never a generic Settings link, plus inline helper text next to each control stating the
+  default-OFF behavior and what enabling it does.
+- **Project/Community dashboard consolidation.** Per explicit product direction: a Project normally holds
+  exactly one customer-facing Community, so clicking into a separate Communities tab before reaching that
+  Community's actual settings was one unnecessary hop. The Project detail page's "Communities" tab is replaced
+  with a **"Community"** tab that renders the full settings block INLINE for every real Community in the
+  Project (Watchers with pause/resume via the existing `DeploymentToggle`, Solicitation toggle, Acknowledge
+  Admin/Mod toggle, Topic Policies, and the human-priority delay control) — normally just one block, but a
+  Project with more than one Community still gets every one shown, never a bare list requiring a further
+  click. The Project's own "Watchers" tab also gained pause/resume directly. `/communities` and
+  `/communities/[id]` still exist as routes (deep-linked from Activity items, and the fallback for a connected
+  Escalation Group), but **"Communities" was removed from the main sidebar nav** (`WatchShell.tsx`) — it no
+  longer serves a purpose as an always-visible top-level destination now that a Project's dashboard IS the
+  Community's settings surface.
+- New tests: `pending-reply.test.ts` (+16 — clamp range, explicit-delay scheduling, conversation-ownership's
+  full signal matrix, message-deletion contract, plan-agnosticism), `chatter-coordinator.test.ts` (rewrote 7
+  tests to the corrected behavior + added 3 new ones — suppression-is-total, directed-no-longer-bypasses-
+  admin-priority), `link-moderation.test.ts` (+9 — the full solicitation-ladder regression suite),
+  `community-guidance.test.ts` (+9, new file). 2115 tests pass (up from 2086), `tsc --noEmit` clean, production
+  build clean.
+- **Run migration `0121`** (widens the pending-reply unique constraint, adds `communities.pending_reply_delay_seconds`
+  and `moderator_link_warning_state.warning_at`) before this governs anything live — alongside the still-
+  outstanding `0115`-`0120` from the prior release.
+
 ### 2026-09-02 — Fix: migration 0119's inline unique constraint used invalid SQL (v1.49.16)
 - **Live migration-run failure**: `ERROR: 42601: syntax error at or near "(" ... LINE 27: unique(community_id,
   platform_message_id, coalesce(url, ''))`. A plain `unique(...)` TABLE CONSTRAINT can only list bare column

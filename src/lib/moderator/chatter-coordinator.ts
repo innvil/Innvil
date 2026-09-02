@@ -693,18 +693,27 @@ export interface ChatterActionInput {
    *  piling another CASUAL_CHAT opener onto a room that already engaged
    *  with it themselves. */
   recentlyRespondedByHuman?: boolean;
-  /** True when this message's SENDER is a real Telegram admin/creator of
-   *  the community AND the community has not opted in to acknowledging
-   *  admins/mods the same way it acknowledges an ordinary member
-   *  (communities.acknowledge_admin_mod, default false — see
-   *  community-runtime.ts). Scoped ONLY to the lightweight acknowledgement
-   *  mechanism below (REACT/SHORT_ACK for genuinely trivial content) — a
-   *  substantive ANSWER/CASUAL_CHAT reply to an admin/mod's real question or
-   *  statement is completely unaffected by this flag; only the "got it 👍"
-   *  -style casual reaction is what's gated. Undefined/false preserves
-   *  every existing behavior exactly (every trivial sender is acknowledged
-   *  the same way, matching how this coordinator worked before this flag
-   *  existed) — this is purely additive. */
+  /** True when this message's SENDER is a real Telegram admin/creator
+   *  (i.e. the community OWNER — Telegram's own "creator" getChatMember
+   *  status — or an administrator/moderator; see
+   *  community-runtime.ts's isSenderAdminOrTrusted) AND the community has
+   *  not opted in to conversational engagement with admins/mods/the owner
+   *  (communities.acknowledge_admin_mod, default false). When true, this
+   *  gates EVERY form of conversational engagement toward that sender —
+   *  no reaction, no short acknowledgement, no substantive ANSWER, no
+   *  CASUAL_CHAT commentary, no joining a conversation just because they
+   *  spoke — regardless of whether the message classifies as TRIVIAL, a
+   *  COMMUNITY_OPENER/greeting, a real QUESTION, or a plain SUBSTANTIVE
+   *  statement, and regardless of whether the message directly @mentions/
+   *  replies to/names the Watcher. Checked as the very first thing in
+   *  selectChatterAction (right after the slash-command check), so it can
+   *  never be bypassed by directed address, an active conversational
+   *  continuity signal, or a moderator-handoff request. This does NOT
+   *  affect moderation/safety enforcement — link/media moderation are
+   *  entirely separate code paths in community-runtime.ts that never call
+   *  selectChatterAction, so a prohibited message from an admin/owner is
+   *  still moderated exactly as it would be from anyone else. Undefined/
+   *  false preserves every existing behavior exactly. */
   suppressAcknowledgementForSender?: boolean;
   /** True when a real Telegram admin/creator is the most recent OTHER
    *  speaker in THIS topic/thread (within the 120-second pending-reply
@@ -802,6 +811,16 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   // in slash commands at all, full stop.
   if (trimmed.startsWith("/")) return { type: "SILENCE", reasons: ["slash_command"] };
 
+  // Owner/admin/mod conversational engagement is suppressed ENTIRELY while
+  // acknowledge_admin_mod is OFF (default) -- see this field's own doc
+  // comment above. Checked before classification/candidate resolution even
+  // runs, so it can never be bypassed by a directed @mention, a moderator-
+  // handoff request, an active conversational continuity signal, or any
+  // message kind (TRIVIAL/CASUAL_CHAT/GREETING/QUESTION/SUBSTANTIVE alike).
+  if (input.suppressAcknowledgementForSender) {
+    return { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] };
+  }
+
   const kind = classifyMessageKind(trimmed);
 
   if (kind === "EMPTY") return { type: "SILENCE", reasons: ["empty_message"] };
@@ -828,14 +847,6 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   }
 
   if (kind === "TRIVIAL") {
-    // Checked before every sub-branch below (RESOLVED_ACK/POSITIVE_WORD/
-    // DISMISSIVE_CLOSING/directed/ambient) — a real Telegram admin/mod's
-    // trivial remark simply gets no acknowledgement at all by default,
-    // rather than selectively suppressing only some of the several
-    // acknowledgement shapes this branch can produce.
-    if (input.suppressAcknowledgementForSender) {
-      return { type: "SILENCE", reasons: ["acknowledgement_suppressed_for_sender"] };
-    }
     if (RESOLVED_ACK_RE.test(trimmed)) {
       const picked = pickCandidate(eligible);
       if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
@@ -905,11 +916,21 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     // change: the underlying per-message claim (recordCommunityMessage) and
     // per-update dedup (isDuplicateUpdate) are untouched and still guarantee
     // each distinct Telegram message is only ever considered once.
+    // Admin-priority deferral (gap 1, 2026-09-02) is checked BEFORE the
+    // directed override -- an @mention no longer exempts a community
+    // opener from human/admin priority either. The "already_handled"
+    // check right after is a DIFFERENT, unrelated concept (the room
+    // already got a reply from a moderator/human) and keeps its original,
+    // deliberate directed-overrides-it behavior from the earlier bug fix
+    // documented above.
+    if (input.recentlyRespondedByAdminOrMod) {
+      return { type: "SILENCE", reasons: ["deferring_to_active_admin"] };
+    }
     const directed = eligible.find((c) => c.isDirectedAtBot);
     if (directed) {
       return { type: "CASUAL_CHAT", deploymentId: directed.deploymentId, reasons: ["directed_opener"] };
     }
-    if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman || input.recentlyRespondedByAdminOrMod) {
+    if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman) {
       return { type: "SILENCE", reasons: ["already_handled"] };
     }
     const picked = pickCandidate(eligible);
@@ -925,14 +946,16 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     // would. Explicit direction always overrides this (an @mention/reply/
     // configured-name match means the human asked THIS moderator directly,
     // which still gets answered regardless of who else is in the room).
-    const directedCandidate = eligible.find((c) => c.isDirectedAtBot);
-    if (!directedCandidate && input.recentlyRespondedByAdminOrMod) {
+    // Per explicit correction (gap 1, 2026-09-02): an @mention of the
+    // Watcher does not itself grant permission to skip human/admin
+    // priority for a normal conversational question -- this check now
+    // applies regardless of whether the message directly addresses a
+    // candidate. Directed status still decides WHO answers once the
+    // Watcher is actually cleared to engage (pickCandidate's directed >
+    // continuity > quietest-longest ordering, unchanged).
+    if (input.recentlyRespondedByAdminOrMod) {
       return { type: "SILENCE", reasons: ["deferring_to_active_admin"] };
     }
-    // Directed (an explicit @mention of THIS candidate) wins over mere
-    // continuity — a deliberate signal from the human beats "who was
-    // already talking." pickCandidate already orders directed > continuity
-    // > quietest-longest.
     const picked = pickCandidate(eligible);
     if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };
     return { type: "ANSWER", deploymentId: picked.deploymentId, reasons: ["substantive_question", "requires_information"] };
@@ -951,8 +974,9 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   // An admin/mod actively handling THIS topic still defers the Watcher's own
   // UNDIRECTED engagement (continuing a chat via wasLastSpeaker) -- a
   // directed message always overrides, same precedent as QUESTION above.
-  const directedSubstantive = eligible.find((c) => c.isDirectedAtBot);
-  if (!directedSubstantive && input.recentlyRespondedByAdminOrMod) {
+  // Same correction as QUESTION above -- an explicit @mention no longer
+  // exempts a SUBSTANTIVE statement from admin-priority deferral either.
+  if (input.recentlyRespondedByAdminOrMod) {
     return { type: "SILENCE", reasons: ["deferring_to_active_admin"] };
   }
   const picked = pickCandidate(eligible);

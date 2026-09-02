@@ -1424,7 +1424,7 @@ test("a dismissive reply that ends in '?' is still handled as a real question, n
 test("REQUIRED: a directed trivial ack from a suppressed sender resolves to SILENCE, not SHORT_ACK", () => {
   const result = single({ text: "ok", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
   assert.equal(result.type, "SILENCE");
-  assert.deepEqual(result.reasons, ["acknowledgement_suppressed_for_sender"]);
+  assert.deepEqual(result.reasons, ["engagement_suppressed_for_sender"]);
 });
 
 test("REQUIRED: the SAME message from a NOT-suppressed sender still resolves to SHORT_ACK -- the toggle is per-message, not a global change", () => {
@@ -1458,23 +1458,32 @@ test("REQUIRED: an ambient (not directed) relevant reaction is also suppressed",
   assert.equal(allowed.type, "REACT");
   const suppressed = single({ text: "lol", recentlyParticipated: true, suppressAcknowledgementForSender: true });
   assert.equal(suppressed.type, "SILENCE");
-  assert.deepEqual(suppressed.reasons, ["acknowledgement_suppressed_for_sender"]);
+  assert.deepEqual(suppressed.reasons, ["engagement_suppressed_for_sender"]);
 });
 
-test("REQUIRED: suppression does NOT affect a real question -- a substantive ANSWER still happens for a suppressed sender", () => {
+test("REQUIRED (owner/admin/mod suppression, revised 2026-09-02): a REAL QUESTION from a suppressed sender is now ALSO silenced -- suppression is no longer scoped to trivial acknowledgement only", () => {
   const result = single({ text: "what services do you offer?", suppressAcknowledgementForSender: true });
-  assert.equal(result.type, "ANSWER");
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] });
+  // Confirmed unaffected when NOT suppressed, so this is genuinely a
+  // sender-specific gate, not a change to question-handling itself.
+  assert.equal(single({ text: "what services do you offer?" }).type, "ANSWER");
 });
 
-test("REQUIRED: suppression does NOT affect a directed substantive statement -- CASUAL_CHAT still happens for a suppressed sender", () => {
+test("REQUIRED (revised 2026-09-02): a directed SUBSTANTIVE statement from a suppressed sender is now ALSO silenced, even though it's explicitly directed at the Watcher", () => {
   const result = single({ text: "we just launched our new product today", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
-  assert.notEqual(result.type, "SILENCE");
-  assert.notEqual(result.type, "SHORT_ACK");
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] });
 });
 
-test("suppression does not affect a COMMUNITY_OPENER (a greeting is not the trivial-acknowledgement path)", () => {
+test("REQUIRED (revised 2026-09-02): a directed COMMUNITY_OPENER/greeting from a suppressed sender is now ALSO silenced -- an @mention from the owner/admin/mod does not bypass suppression", () => {
   const result = single({ text: "hey @mrpreswan_bot", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
-  assert.equal(result.type, "CASUAL_CHAT");
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] });
+  // Unaffected when not suppressed.
+  assert.equal(single({ text: "hey @mrpreswan_bot", isDirectedAtBot: true }).type, "CASUAL_CHAT");
+});
+
+test("REQUIRED: suppression is checked before EMPTY/TOO_SHORT/slash-command classification too -- it never depends on message kind at all", () => {
+  assert.deepEqual(single({ text: "", suppressAcknowledgementForSender: true }), { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] });
+  assert.deepEqual(single({ text: "/audit", suppressAcknowledgementForSender: true }), { type: "SILENCE", reasons: ["slash_command"] });
 });
 
 test("suppression is a no-op when omitted -- every existing caller/test that never passes it is completely unaffected", () => {
@@ -1541,13 +1550,23 @@ test("REQUIRED: an undirected SUBSTANTIVE continuity reply defers to an active a
   assert.deepEqual(result, { type: "SILENCE", reasons: ["deferring_to_active_admin"] });
 });
 
-test("a DIRECTED substantive message still engages even when an admin/mod is active -- explicit direction always overrides", () => {
+test("REQUIRED (gap 1 correction, 2026-09-02): a DIRECTED substantive message NO LONGER bypasses admin-priority deferral -- an @mention is not a grant of permission to skip human/admin priority", () => {
   const result = single({ text: "the deployment finished rolling out just now", isDirectedAtBot: true, recentlyRespondedByAdminOrMod: true });
-  assert.equal(result.type, "CASUAL_CHAT");
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["deferring_to_active_admin"] });
+});
+
+test("REQUIRED (gap 1 correction, 2026-09-02): a DIRECTED COMMUNITY_OPENER also defers to an active admin/mod -- an explicit @mention no longer exempts it either", () => {
+  const result = single({ text: "hey @mrpreswan_bot", isDirectedAtBot: true, recentlyRespondedByAdminOrMod: true });
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["deferring_to_active_admin"] });
 });
 
 test("REQUIRED: an undirected COMMUNITY_OPENER also defers to an active admin/mod", () => {
   const result = single({ text: "hey everyone", recentlyRespondedByAdminOrMod: true });
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["deferring_to_active_admin"] });
+});
+
+test("an undirected COMMUNITY_OPENER's OWN, unrelated already_handled suppression (a moderator already replied) still works once no admin is active", () => {
+  const result = single({ text: "hey everyone", recentlyAnsweredByModerator: true });
   assert.deepEqual(result, { type: "SILENCE", reasons: ["already_handled"] });
 });
 

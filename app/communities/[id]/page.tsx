@@ -18,7 +18,14 @@ import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
 import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
 import { AcknowledgeAdminModToggle } from "@/src/components/watch/AcknowledgeAdminModToggle";
 import { CommunityTopicPolicies } from "@/src/components/watch/CommunityTopicPolicies";
+import { PendingReplyDelayControl } from "@/src/components/watch/PendingReplyDelayControl";
 import { assignWatcherRoles } from "@/src/lib/moderator/watcher-roles";
+import {
+  SOLICITATION_DEFAULT_OFF_GUIDANCE, SOLICITATION_TOGGLE_HELPER_TEXT,
+  PROMOTION_TOPIC_HELPER_TEXT, SOLICITATION_SETTINGS_ANCHOR_ID, PROMOTION_TOPIC_ANCHOR_ID,
+  solicitationSettingsHref, promotionTopicHref,
+} from "@/src/lib/moderator/community-guidance";
+import { ShieldAlert } from "lucide-react";
 
 export const metadata: Metadata = { title: "Community — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -109,6 +116,21 @@ export default async function CommunityDetailPage({
       label: "Overview",
       content: (
         <div className="space-y-6">
+          <div className="w-card p-5 border w-amber-border">
+            <SectionHeader icon={ShieldAlert} title="Solicitation &amp; promotion" />
+            <p className="text-sm w-text-dim mt-1">{SOLICITATION_DEFAULT_OFF_GUIDANCE}</p>
+            <p className="text-sm w-text-dim mt-2">
+              If you want to allow solicitation across your entire community, enable it in{" "}
+              <Link href={solicitationSettingsHref()} className="w-teal hover:underline font-medium">Solicitation Settings</Link>.
+              Otherwise, we recommend creating or assigning a dedicated{" "}
+              <Link href={promotionTopicHref()} className="w-teal hover:underline font-medium">Promotion topic</Link>.
+              When a Promotion topic is configured, the Watcher can direct members there when they try to promote in General, Announcements, or other non-promotion topics.
+            </p>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <Link href={solicitationSettingsHref()} className="w-pill text-xs w-teal-border w-teal-soft-bg w-teal">Solicitation Settings</Link>
+              <Link href={promotionTopicHref()} className="w-pill text-xs w-teal-border w-teal-soft-bg w-teal">Configure Promotion Topic</Link>
+            </div>
+          </div>
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             <div className="w-card p-4">
               <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-1.5">Active deployments</p>
@@ -207,9 +229,16 @@ export default async function CommunityDetailPage({
           </p>
           <div className="mt-5 pt-5 border-t w-line-soft">
             <SectionHeader icon={SettingsIcon} title="Moderation" />
-            <CommunitySolicitationToggle communityId={community.id} allowSolicitation={community.allowSolicitation} />
+            <div id={SOLICITATION_SETTINGS_ANCHOR_ID} className="scroll-mt-24">
+              <CommunitySolicitationToggle communityId={community.id} allowSolicitation={community.allowSolicitation} />
+              <p className="text-[11px] w-text-faint mt-1.5">{SOLICITATION_TOGGLE_HELPER_TEXT}</p>
+            </div>
             <AcknowledgeAdminModToggle communityId={community.id} acknowledgeAdminMod={community.acknowledgeAdminMod} />
-            <CommunityTopicPolicies communityId={community.id} />
+            <div id={PROMOTION_TOPIC_ANCHOR_ID} className="scroll-mt-24 mt-4">
+              <CommunityTopicPolicies communityId={community.id} />
+              <p className="text-[11px] w-text-faint mt-1.5">{PROMOTION_TOPIC_HELPER_TEXT}</p>
+            </div>
+            <PendingReplyDelayControl communityId={community.id} />
           </div>
         </div>
       ),

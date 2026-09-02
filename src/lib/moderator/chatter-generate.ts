@@ -34,6 +34,15 @@ export interface ChatterContextMessage {
    *  another message and got no reply." Optional for callers that don't
    *  have it (e.g. tests). */
   senderPlatformId?: string | null;
+  /** This message's own Telegram platform message id, and the id it
+   *  replies to (if any) — used for conversation-ownership detection (see
+   *  pending-reply.ts's isAdminMessageHandlingConversation): a direct
+   *  Telegram reply relationship is the strongest available signal that an
+   *  admin's message is actually responding to a SPECIFIC prior exchange,
+   *  as opposed to merely posting something else in the same topic.
+   *  Optional for callers that don't have it (e.g. tests). */
+  platformMessageId?: string | null;
+  replyToPlatformMessageId?: string | null;
   /** Telegram Forum topic/thread id this message was posted in -- used to
    *  scope "is an admin/mod actively handling THIS topic right now" to the
    *  right sub-channel rather than the community's whole flat history.

@@ -16,6 +16,14 @@ import { ProjectAddCommunityCta } from "@/src/components/watch/ProjectAddCommuni
 import { ProjectAddEscalationGroupCta } from "@/src/components/watch/ProjectAddEscalationGroupCta";
 import { ProjectEscalationsTab } from "@/src/components/watch/ProjectEscalationsTab";
 import { assignWatcherRoles } from "@/src/lib/moderator/watcher-roles";
+import { DeploymentToggle } from "@/src/components/watch/DeploymentToggle";
+import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
+import { AcknowledgeAdminModToggle } from "@/src/components/watch/AcknowledgeAdminModToggle";
+import { CommunityTopicPolicies } from "@/src/components/watch/CommunityTopicPolicies";
+import { PendingReplyDelayControl } from "@/src/components/watch/PendingReplyDelayControl";
+import {
+  SOLICITATION_DEFAULT_OFF_GUIDANCE, SOLICITATION_TOGGLE_HELPER_TEXT, PROMOTION_TOPIC_HELPER_TEXT,
+} from "@/src/lib/moderator/community-guidance";
 
 export const metadata: Metadata = { title: "Project — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
 
@@ -149,52 +157,108 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       ),
     },
     {
-      id: "communities",
-      label: "Communities",
+      // A Project is meant to hold exactly one customer-facing Community in
+      // the common case, so its settings live directly on the Project
+      // dashboard now (2026-09-02) -- no separate click into a Community
+      // page is needed to reach them. This tab renders the FULL settings
+      // block (Watchers with pause/resume, Solicitation, Acknowledge Admin/
+      // Mod, Topic Policies, human-priority reply delay) inline for every
+      // real (non-escalation-group) Community in the Project -- normally
+      // just one, but a Project with more than one still gets every
+      // Community's full settings shown, never a bare list requiring a
+      // further click. /communities/[id] still exists as a fallback/deep
+      // link (e.g. from Activity items).
+      id: "community",
+      label: "Community",
       content: (
-        <div className="w-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <SectionHeader icon={Users} title="Communities" />
-            <div className="flex items-center gap-2">
-              <ProjectAddCommunityCta projectId={detail.id} deployableWatchers={deployableWatchers} />
-              <ProjectAddEscalationGroupCta projectId={detail.id} deployableWatchers={deployableWatchers} />
-            </div>
+        <div className="space-y-6">
+          <div className="w-card p-4 border w-amber-border">
+            <p className="text-sm w-text-dim">{SOLICITATION_DEFAULT_OFF_GUIDANCE}</p>
           </div>
-          {detail.communities.length === 0 ? (
-            <div className="text-center py-8">
-              <EmptyRow text="No Communities connected to this Project yet." />
-              <p className="text-xs w-text-faint">
-                Use Add Community above to connect one to this Project.
-              </p>
+          {customerFacingCommunities.length === 0 ? (
+            <div className="w-card p-5">
+              <div className="flex items-center justify-between mb-3">
+                <SectionHeader icon={Users} title="Community" />
+                <div className="flex items-center gap-2">
+                  <ProjectAddCommunityCta projectId={detail.id} deployableWatchers={deployableWatchers} />
+                  <ProjectAddEscalationGroupCta projectId={detail.id} deployableWatchers={deployableWatchers} />
+                </div>
+              </div>
+              <div className="text-center py-8">
+                <EmptyRow text="No Community connected to this Project yet." />
+                <p className="text-xs w-text-faint">Use Add Community above to connect one to this Project.</p>
+              </div>
             </div>
           ) : (
-            <div className="overflow-x-auto -mx-1">
-              <table className="w-full text-sm min-w-[520px]">
-                <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
-                    <th className="font-semibold pb-2 px-1">Community</th>
-                    <th className="font-semibold pb-2 px-1">Watchers</th>
-                    <th className="font-semibold pb-2 px-1">Status</th>
-                    <th className="font-semibold pb-2 px-1"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.communities.map((c) => (
-                    <tr key={c.id} className="border-t w-line-soft">
-                      <td className="py-2.5 px-1 w-text">{c.title ?? c.chatId}</td>
-                      <td className="py-2.5 px-1 w-text-dim">{c.watchers.length}</td>
-                      <td className="py-2.5 px-1">
-                        {c.connectionType === "escalation_group" ? (
-                          <span className="text-[11px] font-semibold uppercase tracking-wide w-text-faint">Escalation Group</span>
-                        ) : (
-                          <OperationalStatusBadge status={communityOperationalStatus(c)} />
-                        )}
-                      </td>
-                      <td className="py-2.5 px-1 text-right"><Link href={`/communities/${c.id}`} className="text-xs w-teal hover:underline">Open</Link></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            customerFacingCommunities.map((c) => {
+              const roles = assignWatcherRoles(c.watchers.map((w) => ({ deploymentId: w.deploymentId, createdAt: w.createdAt, enabled: w.enabled })));
+              return (
+                <div key={c.id} className="w-card p-5">
+                  <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                    <div>
+                      <h2 className="w-display text-base w-text">{c.title ?? c.chatId}</h2>
+                      <p className="text-xs w-text-dim capitalize">{c.platform} · <span className="w-mono">{c.chatId}</span></p>
+                    </div>
+                    <OperationalStatusBadge status={communityOperationalStatus(c)} />
+                  </div>
+
+                  <SectionHeader icon={Bot} title="Watchers deployed here" />
+                  {c.watchers.length === 0 ? (
+                    <div className="mb-4"><EmptyRow text="No Watchers deployed to this Community." /></div>
+                  ) : (
+                    <div className="overflow-x-auto -mx-1 mb-4">
+                      <table className="w-full text-sm min-w-[540px]">
+                        <thead>
+                          <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
+                            <th className="font-semibold pb-2 px-1">Watcher</th>
+                            <th className="font-semibold pb-2 px-1">Role</th>
+                            <th className="font-semibold pb-2 px-1">Status</th>
+                            <th className="font-semibold pb-2 px-1"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {c.watchers.map((w) => {
+                            const role = roles.find((r) => r.deploymentId === w.deploymentId);
+                            return (
+                              <tr key={w.deploymentId} className="border-t w-line-soft">
+                                <td className="py-2.5 px-1"><Link href={`/watchers/${w.watcherId}`} className="w-text hover:w-teal flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> {w.watcherName}</Link></td>
+                                <td className="py-2.5 px-1 w-text-dim text-xs">{w.enabled ? role?.roleLabel : "—"}</td>
+                                <td className="py-2.5 px-1">{w.enabled ? <span className="text-xs w-green">Active</span> : <span className="text-xs w-text-faint">Paused</span>}</td>
+                                <td className="py-2.5 px-1 text-right"><DeploymentToggle moderatorId={w.watcherId} deploymentId={w.deploymentId} enabled={w.enabled} /></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {detail.communities.length > 0 && (
+                    <div className="mb-4">
+                      <ProjectAddWatcherCta projectId={detail.id} deployableWatchers={deployableWatchers} communities={[{ id: c.id, title: c.title, chatId: c.chatId }]} />
+                    </div>
+                  )}
+
+                  <div className="pt-4 border-t w-line-soft">
+                    <SectionHeader icon={SettingsIcon} title="Moderation" />
+                    <CommunitySolicitationToggle communityId={c.id} allowSolicitation={c.allowSolicitation} />
+                    <p className="text-[11px] w-text-faint mt-1.5">{SOLICITATION_TOGGLE_HELPER_TEXT}</p>
+                    <AcknowledgeAdminModToggle communityId={c.id} acknowledgeAdminMod={c.acknowledgeAdminMod} />
+                    <div className="mt-4">
+                      <CommunityTopicPolicies communityId={c.id} />
+                      <p className="text-[11px] w-text-faint mt-1.5">{PROMOTION_TOPIC_HELPER_TEXT}</p>
+                    </div>
+                    <PendingReplyDelayControl communityId={c.id} />
+                  </div>
+                </div>
+              );
+            })
+          )}
+          {detail.communities.some((c) => c.connectionType === "escalation_group") && (
+            <div className="w-card p-4">
+              <p className="text-xs w-text-faint">
+                This Project also has a connected Escalation Group — manage it on the{" "}
+                <Link href="/communities" className="w-teal hover:underline">Communities</Link> page.
+              </p>
             </div>
           )}
         </div>
@@ -214,7 +278,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           {detail.communities.length === 0 ? (
             <div className="text-center py-8">
               <EmptyRow text="No Watchers assigned to a Community in this Project yet." />
-              <p className="text-xs w-text-faint">Add a Community first (Communities tab), then deploy a Watcher to it here.</p>
+              <p className="text-xs w-text-faint">Add a Community first (Community tab), then deploy a Watcher to it here.</p>
             </div>
           ) : watchersInProject.length === 0 ? (
             <EmptyRow text="No Watchers assigned to a Community in this Project yet." />
@@ -227,6 +291,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     <th className="font-semibold pb-2 px-1">Community</th>
                     <th className="font-semibold pb-2 px-1">Role</th>
                     <th className="font-semibold pb-2 px-1">Status</th>
+                    <th className="font-semibold pb-2 px-1"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -247,6 +312,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                           </td>
                           <td className="py-2.5 px-1 w-text-dim text-xs">{w.enabled ? role?.roleLabel : "—"}</td>
                           <td className="py-2.5 px-1"><StatusDot on={w.enabled} /></td>
+                          <td className="py-2.5 px-1 text-right"><DeploymentToggle moderatorId={w.watcherId} deploymentId={w.deploymentId} enabled={w.enabled} /></td>
                         </tr>
                       );
                     });

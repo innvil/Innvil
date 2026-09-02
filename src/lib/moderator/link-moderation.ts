@@ -128,6 +128,87 @@ export function looksLikeUnsolicitedPitch(text: string): boolean {
   return [contactAsk, serviceOffer, growthLanguage].filter(Boolean).length >= 2;
 }
 
+/* ------------------------------------------- admin-solicited backstop (gap 3) ---- */
+// The AI classifier (link-classify.ts) already carries a system-prompt
+// instruction about admin-requested content, but per explicit product
+// decision this is NEVER trusted as the sole safeguard for a content-safe
+// exemption -- a real, deterministic, code-level check runs alongside it
+// (decideLinkEnforcement is still the ONE place enforcement is actually
+// decided; this only supplies one more input to it, exactly like the
+// existing solicitationAllowed/isAdminOrTrusted flags). Deliberately
+// bounded on every axis so this can never become a standing/permanent
+// exemption: scoped to the SPECIFIC admin/mod request, the SPECIFIC
+// responding user (when the request itself named one via a Telegram reply
+// relationship), the SAME community/topic, and a short, fixed recent
+// window -- once the request scrolls out of that window it simply stops
+// applying, by construction, without needing a "consumed" flag anywhere.
+
+/** How long an admin/mod's information request stays "live" -- long enough
+ *  for a human to reasonably type/find a link, short enough that this can
+ *  never plausibly become a permanent solicitation exemption. */
+export const ADMIN_REQUEST_EXEMPTION_WINDOW_MS = 10 * 60_000;
+
+const ADMIN_INFO_REQUEST_RE =
+  /\b(send|share|drop|post|give|dm|message|paste)\s+(me\s+)?(your|the)\s+(project\s+)?(link|website|url|ca\b|contract(\s+address)?|token(\s+address)?|username|handle|telegram|@|whitepaper)\b|\bwhat('?s|\s+is)\s+your\s+(username|handle|telegram|@)\b|\bwhat('?s|\s+is)\s+the\s+(ca|contract(\s+address)?|token(\s+address)?)\b/i;
+
+/** Does this admin/mod message read as a real request for the responding
+ *  user's own information (a link, handle, CA/token address, etc.)? A
+ *  narrow, explicit pattern set -- never a broad "any mention of a link
+ *  word" match, since that would swallow ordinary admin chatter unrelated
+ *  to actually soliciting a response. */
+export function looksLikeAdminInformationRequest(text: string): boolean {
+  return ADMIN_INFO_REQUEST_RE.test(text);
+}
+
+export interface AdminRequestCandidateMessage {
+  senderType: "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT";
+  text: string;
+  createdAt: string | null | undefined;
+  senderPlatformId: string | null | undefined;
+  platformMessageId?: string | null;
+  replyToPlatformMessageId?: string | null;
+}
+
+export interface RecentAdminInformationRequest {
+  requesterPlatformId: string;
+  /** The specific user this request targets, when the admin's own message
+   *  was itself a reply to a specific person -- null means an OPEN request
+   *  ("someone drop the link"), which any responder within the window may
+   *  fulfill. Never guessed beyond what the reply relationship actually
+   *  shows. */
+  targetPlatformUserId: string | null;
+}
+
+/** Scans recent HUMAN messages for the most recent one that (a) reads as
+ *  an information request (looksLikeAdminInformationRequest) and (b) is
+ *  still within the exemption window relative to `now`. Does NOT itself
+ *  verify the sender is actually an admin -- that requires a live Telegram
+ *  lookup, which the caller (community-runtime.ts) performs only for this
+ *  ONE candidate (never for every message in the window), keeping the
+ *  extra cost bounded to the rare case a plausible request shape is even
+ *  found. Returns null when nothing recent matches. */
+export function findRecentAdminInformationRequest(
+  context: AdminRequestCandidateMessage[], now: Date
+): { candidate: AdminRequestCandidateMessage; targetPlatformUserId: string | null } | null {
+  for (let i = context.length - 1; i >= 0; i--) {
+    const m = context[i];
+    if (m.senderType !== "HUMAN" || !m.senderPlatformId || !m.createdAt) continue;
+    if (now.getTime() - new Date(m.createdAt).getTime() > ADMIN_REQUEST_EXEMPTION_WINDOW_MS) break; // context is chronological -- nothing earlier can be in-window either
+    if (!looksLikeAdminInformationRequest(m.text)) continue;
+    // If this request itself replies to a specific person's message,
+    // resolve THAT person as the sole intended target (scoping per gap 3's
+    // explicit "the intended/responding user" requirement); otherwise it's
+    // an open request any responder in the window may fulfill.
+    let targetPlatformUserId: string | null = null;
+    if (m.replyToPlatformMessageId) {
+      const target = context.find((c) => c.platformMessageId === m.replyToPlatformMessageId);
+      targetPlatformUserId = target?.senderPlatformId ?? null;
+    }
+    return { candidate: m, targetPlatformUserId };
+  }
+  return null;
+}
+
 /* --------------------------------------------------- self-mention exemption ---- */
 
 /** Canonical Telegram username normalization -- case-insensitive, optional
@@ -219,6 +300,14 @@ export interface LinkWarningState {
    *  counter split (see mediaWarningCount below). Never incremented by a
    *  media-moderation violation, and never reset by one either. */
   warningCount: number;
+  /** Timestamp of the most recent SOLICITATION warning (gap 9, explicit
+   *  product decision, 2026-09-02): this counter now expires after 30 days
+   *  of inactivity, mirroring scamStrikeAt/SCAM_STRIKE_WINDOW_MS exactly —
+   *  chosen for consistency with the only other precedent in this file,
+   *  rather than persisting indefinitely as it silently did before this
+   *  decision (a real behavior CHANGE, made deliberately, not left
+   *  accidental). See effectiveWarningCount. */
+  warningAt: string | null;
   recentLinkHash: string | null;
   recentLinkAt: string | null;
   recentLinkCountInWindow: number;
@@ -243,9 +332,21 @@ export interface LinkWarningState {
 }
 
 export const EMPTY_WARNING_STATE: LinkWarningState = {
-  warningCount: 0, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0,
+  warningCount: 0, warningAt: null, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0,
   scamStrikeCount: 0, scamStrikeAt: null, mediaWarningCount: 0,
 };
+
+/** Same 30-day expiry pattern as effectiveScamStrikeCount below -- a
+ *  solicitation offense more than SOLICITATION_WARNING_WINDOW_MS old no
+ *  longer counts toward the ladder; the caller reads 0 (a fresh first
+ *  offense) rather than the stale stored count. */
+export const SOLICITATION_WARNING_WINDOW_MS = 30 * 24 * 60 * 60_000;
+
+export function effectiveWarningCount(storedCount: number, storedAt: string | null, now: Date): number {
+  if (!storedAt) return 0;
+  if (now.getTime() - new Date(storedAt).getTime() >= SOLICITATION_WARNING_WINDOW_MS) return 0;
+  return storedCount;
+}
 
 /** Finite strike window, not a permanent lifetime punishment (spec: "no
  *  further scam within 30 days -> strike expires/resets"). */
@@ -383,6 +484,19 @@ export function decideLinkEnforcement(input: {
    *  a few lines below. Applies consistently every time the category comes
    *  back UNSOLICITED_PROMOTION, not just on a sender's first message. */
   solicitationAllowed: boolean;
+  /** Gap 3 backstop (2026-09-02): true when this exact message was very
+   *  recently, and specifically, SOLICITED by a real admin/mod's own
+   *  information request (see findRecentAdminInformationRequest) — e.g.
+   *  "send me your project link" followed by the target user's own link.
+   *  Deterministic, code-level, and independent of the AI classifier's own
+   *  judgment (which may already correctly classify such a reply as
+   *  SAFE_RELEVANT_LINK on its own -- this flag is a backstop for when it
+   *  doesn't). Scoped to UNSOLICITED_PROMOTION only, same as
+   *  solicitationAllowed above -- never exempts LINK_SPAM_OR_FLOOD, a
+   *  flood-repeat burst, or anything scam/explicit. Never a standing/
+   *  permanent exemption -- the caller only ever sets this true for the
+   *  narrow recent window a real request stays "live" in. */
+  adminSolicitedExemption: boolean;
 }): ModerationEnforcement {
   if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_KICK", reason: "explicit_content", purge: true };
 
@@ -423,6 +537,12 @@ export function decideLinkEnforcement(input: {
   // makes that check moot for this category, but the outcome is identical
   // either way (both resolve to ALLOW).
   if (input.category === "UNSOLICITED_PROMOTION" && input.solicitationAllowed && !input.floodRepeat) return { kind: "ALLOW" };
+
+  // Gap 3 deterministic backstop: content directly solicited by a real,
+  // recent admin/mod request never counts as unsolicited promotion,
+  // regardless of the community's solicitation toggle. Same
+  // never-exempt-a-flood-burst carve-out as every other exemption above.
+  if (input.category === "UNSOLICITED_PROMOTION" && input.adminSolicitedExemption && !input.floodRepeat) return { kind: "ALLOW" };
 
   // Admins/trusted roles may legitimately post partner/AMA/campaign links
   // (spec §43) — exempted from ORDINARY ad enforcement only, checked after

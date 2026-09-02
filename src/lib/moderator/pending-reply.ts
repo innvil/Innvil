@@ -1,5 +1,5 @@
 /* =========================================================
-   Pending Watcher replies — real, persisted "wait 120 seconds, give a human
+   Pending Watcher replies — real, persisted "wait N seconds, give a human
    the first opportunity" scheduling. Pure logic only (types + the decision
    functions the runtime/cron layer calls) — no I/O, no Supabase, no
    Telegram. The DB-facing orchestration lives in community-runtime.ts
@@ -10,20 +10,48 @@
    immediately, in the same Telegram-webhook invocation, with no
    opportunity for a human admin/mod to answer first. Per explicit product
    decision (2026-09-02), a normal user's question/conversational opener now
-   creates a PERSISTED pending reply, waits 120 seconds, and is cancelled the
-   moment an admin/mod engages the same topic during that window — never an
-   in-memory timer (must survive a server restart / new invocation, since
-   Telegram webhooks are one-shot and stateless).
+   creates a PERSISTED pending reply, waits before sending, and is cancelled
+   the moment an admin/mod TAKES OVER THAT SPECIFIC CONVERSATION during that
+   window — never an in-memory timer (must survive a server restart / new
+   invocation, since Telegram webhooks are one-shot and stateless).
+
+   This applies uniformly to EVERY conversational engagement path,
+   including a message that directly @mentions/replies-to/names the
+   Watcher — an explicit mention is a signal for WHO should eventually
+   answer, it is not itself a grant of permission to bypass a human's first
+   opportunity to respond. The only thing that ever pre-empts this wait
+   entirely is moderation/safety enforcement (link/media moderation,
+   solicitation policy) — see community-runtime.ts's handleHumanMessage,
+   where moderation runs first and short-circuits before this scheduler is
+   ever reached, so a prohibited/unsolicited-promotion message is deleted
+   and warned about IMMEDIATELY, never deferred through this wait.
 
    Applies uniformly to every plan/tier — this is not a paid-tier gate. */
 
-/** How long a normal user's question/opener waits for a human to answer
- *  first, before the Watcher may respond. Also reused as the "how recent
- *  counts as an admin/mod actively handling this topic right now" window —
- *  the two concepts are the same duration by design (an admin who spoke in
- *  the last 120s is exactly as "active" as the window we'd otherwise make a
- *  fresh question wait through). */
-export const PENDING_REPLY_DELAY_MS = 120_000;
+/** Default wait before a normal user's question/opener may be answered by
+ *  the Watcher, absent an admin/mod taking over first. Configurable PER
+ *  COMMUNITY (communities.pending_reply_delay_seconds, migration 0121) —
+ *  this constant is only the fallback used when a community has no value
+ *  set, and the seed default every new community starts with. */
+export const DEFAULT_PENDING_REPLY_DELAY_MS = 45_000;
+
+/** Allowed configurable range for the per-community delay, in seconds. */
+export const MIN_PENDING_REPLY_DELAY_SECONDS = 15;
+export const MAX_PENDING_REPLY_DELAY_SECONDS = 120;
+
+/** Clamps an owner-configured (or DB-read) delay into the allowed range,
+ *  falling back to the default for anything missing/non-finite — never lets
+ *  a corrupted/out-of-range stored value produce an absurd wait. */
+export function clampPendingReplyDelaySeconds(seconds: number | null | undefined): number {
+  const fallback = DEFAULT_PENDING_REPLY_DELAY_MS / 1000;
+  if (seconds == null || !Number.isFinite(seconds)) return fallback;
+  return Math.min(MAX_PENDING_REPLY_DELAY_SECONDS, Math.max(MIN_PENDING_REPLY_DELAY_SECONDS, Math.round(seconds)));
+}
+
+/** @deprecated kept only as the historical/default constant some older call
+ *  sites' default parameters reference — real scheduling should always pass
+ *  an explicit, per-community-resolved delay (see clampPendingReplyDelaySeconds). */
+export const PENDING_REPLY_DELAY_MS = DEFAULT_PENDING_REPLY_DELAY_MS;
 
 /** How long PAST its scheduled fire time a pending reply may still be sent
  *  once the sweep actually reaches it (e.g. after a period of downtime).
@@ -39,7 +67,17 @@ export type PendingReplyCancelReason =
   | "already_answered"
   | "user_left"
   | "expired"
-  | "duplicate";
+  | "duplicate"
+  /** The original triggering message can no longer be confirmed to exist
+   *  (e.g. the asker deleted it during the wait). Best-effort only — the
+   *  Telegram Bot API has no supported way to check whether an arbitrary
+   *  user-authored message still exists without a side effect, so this
+   *  reason is reachable only if a future signal (e.g. an update_id for a
+   *  deleted-message event, should Telegram ever expose one for ordinary
+   *  chats) becomes available. Kept in the enum now so the revalidation
+   *  contract is honest about the concept even though nothing populates it
+   *  today — see revalidatePendingReply's originalMessageStillExists. */
+  | "message_deleted";
 
 /** The kind of chatter action that was deferred — governs how the sweep
  *  regenerates the reply (ANSWER re-runs the knowledge-grounded Q&A path,
@@ -76,18 +114,74 @@ export function isPendingReplyStale(row: Pick<PendingReplyRow, "scheduledFor">, 
   return now.getTime() - new Date(row.scheduledFor).getTime() > PENDING_REPLY_STALE_AFTER_MS;
 }
 
-export function pendingReplyScheduledFor(now: Date): string {
-  return new Date(now.getTime() + PENDING_REPLY_DELAY_MS).toISOString();
+export function pendingReplyScheduledFor(now: Date, delayMs: number = DEFAULT_PENDING_REPLY_DELAY_MS): string {
+  return new Date(now.getTime() + delayMs).toISOString();
 }
 
 /** "Is a human message, posted at `candidateAt`, recent enough right now to
  *  count as 'someone is actively handling this topic'?" — the SAME window
  *  used both to decide "don't even bother scheduling, an admin just spoke"
- *  and, implicitly, to size the wait itself. Pure/testable independent of
- *  real time. */
-export function isWithinPendingReplyWindow(candidateAt: string | null | undefined, now: Date): boolean {
+ *  and, implicitly, to size the wait itself. `windowMs` should be the
+ *  community's own configured delay (see clampPendingReplyDelaySeconds) —
+ *  defaults to the platform default only for callers/tests that don't have
+ *  a specific community's value handy. Pure/testable independent of real
+ *  time. */
+export function isWithinPendingReplyWindow(candidateAt: string | null | undefined, now: Date, windowMs: number = DEFAULT_PENDING_REPLY_DELAY_MS): boolean {
   if (!candidateAt) return false;
-  return now.getTime() - new Date(candidateAt).getTime() < PENDING_REPLY_DELAY_MS;
+  return now.getTime() - new Date(candidateAt).getTime() < windowMs;
+}
+
+/** Conversation-ownership check (gap 2): whether a real admin/mod/owner
+ *  message actually TAKES OVER the specific pending user's conversation —
+ *  never "any admin message anywhere in this topic". A topic can hold
+ *  several unrelated pending replies (two different users each asked
+ *  something) at once; cancelling every one of them just because ANY
+ *  admin posted ANYTHING in that topic is too broad and would silence the
+ *  Watcher for users an admin never actually addressed.
+ *
+ *  Two independent, deterministic signals, either one sufficient:
+ *   (a) a direct Telegram reply relationship — the admin's message replies
+ *       to the pending reply's own trigger message, or to any other
+ *       message the SAME asker sent in the recent window (an admin
+ *       replying to a DIFFERENT message from that user is still clearly
+ *       part of the same conversation with them);
+ *   (b) conversational continuity — the admin's message is the very NEXT
+ *       message in this topic after the trigger, with nothing else (from
+ *       anyone) said in between. An admin chiming in immediately, uncontested,
+ *       reads as responding to that exact exchange; any intervening message
+ *       breaks that chain and correctly makes this signal NOT fire, so an
+ *       admin posting something unrelated later in a busy topic never
+ *       falsely cancels someone else's still-pending question.
+ *
+ *  Topic id alone is never sufficient on its own — both signals require the
+ *  admin's message to genuinely relate to THIS asker's exchange. */
+export interface ConversationOwnershipInput {
+  triggerPlatformMessageId: string;
+  triggerCreatedAt: string;
+  /** Every message id (in the recent window) known to have been sent by
+   *  the original asker — lets (a) recognize a reply to an EARLIER message
+   *  from the same person, not only the literal trigger. */
+  askerMessageIds: string[];
+  adminMessage: {
+    replyToPlatformMessageId: string | null;
+    createdAt: string;
+  };
+  /** True when at least one OTHER message (any sender) exists strictly
+   *  between the trigger and the admin's message, in the same topic — the
+   *  caller resolves this from real message history (see
+   *  community-runtime.ts's hasInterveningMessage). */
+  hasInterveningMessage: boolean;
+}
+
+export function isAdminMessageHandlingConversation(input: ConversationOwnershipInput): boolean {
+  const { replyToPlatformMessageId } = input.adminMessage;
+  if (replyToPlatformMessageId) {
+    if (replyToPlatformMessageId === input.triggerPlatformMessageId) return true;
+    if (input.askerMessageIds.includes(replyToPlatformMessageId)) return true;
+  }
+  const adminAfterTrigger = new Date(input.adminMessage.createdAt).getTime() > new Date(input.triggerCreatedAt).getTime();
+  if (adminAfterTrigger && !input.hasInterveningMessage) return true;
+  return false;
 }
 
 /** Revalidation the SWEEP runs right before actually sending a due reply —
@@ -113,6 +207,19 @@ export interface PendingReplyRevalidationInput {
   /** The original asker is confirmed to have left/been removed from the
    *  community — answering someone no longer present is pointless. */
   senderStillPresent: boolean;
+  /** Best-effort signal that the ORIGINAL triggering message has been
+   *  positively confirmed deleted. Defaults to `true` (assumed to still
+   *  exist) when omitted/undefined — same fail-safe philosophy as
+   *  senderStillPresent: a real answer is never withheld on a mere absence
+   *  of proof. The Telegram Bot API has no supported way for a bot to
+   *  query whether an arbitrary user-sent message still exists without a
+   *  side effect (no getMessage endpoint, and every workaround — e.g.
+   *  forwardMessage/copyMessage — has a real, visible side effect on the
+   *  chat) — this field exists so the CONTRACT is honest and testable, and
+   *  so a future real signal (should one become available) can be wired in
+   *  without changing this function's shape. Only ever set to `false` when
+   *  a caller has a genuine, confirmed signal — never guessed. */
+  originalMessageStillExists?: boolean;
 }
 
 export function revalidatePendingReply(input: PendingReplyRevalidationInput): { ok: true } | { ok: false; reason: PendingReplyCancelReason } {
@@ -120,5 +227,6 @@ export function revalidatePendingReply(input: PendingReplyRevalidationInput): { 
   if (input.adminRespondedSinceScheduling) return { ok: false, reason: "admin_replied" };
   if (input.alreadyAnsweredByModerator) return { ok: false, reason: "already_answered" };
   if (!input.senderStillPresent) return { ok: false, reason: "user_left" };
+  if (input.originalMessageStillExists === false) return { ok: false, reason: "message_deleted" };
   return { ok: true };
 }

@@ -31,11 +31,13 @@ import {
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   filterOutOwnBotMentions, looksLikeUnsolicitedPitch, promotionContactSentence,
+  looksLikeAdminInformationRequest, findRecentAdminInformationRequest,
+  effectiveWarningCount,
 } from "./link-moderation";
 import { classifyLinkIntent } from "./link-classify";
 import {
-  PENDING_REPLY_DELAY_MS, pendingReplyScheduledFor, isPendingReplyDue, isPendingReplyStale,
-  isWithinPendingReplyWindow, revalidatePendingReply, type DeferredActionKind, type PendingReplyRow,
+  DEFAULT_PENDING_REPLY_DELAY_MS, clampPendingReplyDelaySeconds, pendingReplyScheduledFor, isPendingReplyDue, isPendingReplyStale,
+  isWithinPendingReplyWindow, revalidatePendingReply, isAdminMessageHandlingConversation, type DeferredActionKind, type PendingReplyRow,
 } from "./pending-reply";
 import {
   topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicSolicitationWarningText,
@@ -299,7 +301,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -323,7 +325,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
-    acknowledge_admin_mod: boolean | null;
+    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
   };
 }
 
@@ -497,6 +499,11 @@ async function schedulePendingReply(admin: SupabaseClient, input: {
   messageThreadId: number | null; triggerPlatformMessageId: string; senderPlatformId: string;
   senderDisplayName: string | null; senderUsername: string | null; messageText: string;
   actionKind: DeferredActionKind; now: Date;
+  /** This community's own resolved, clamped delay in ms -- see
+   *  clampPendingReplyDelaySeconds. Defaults to the platform default when
+   *  omitted (kept optional so any pre-existing/test call site without a
+   *  resolved community delay handy is unaffected). */
+  delayMs?: number;
 }): Promise<void> {
   const { error } = await admin.from("watch_pending_replies").insert({
     community_id: input.communityId, panel_id: input.panelId, deployment_id: input.deploymentId,
@@ -504,25 +511,86 @@ async function schedulePendingReply(admin: SupabaseClient, input: {
     trigger_platform_message_id: input.triggerPlatformMessageId, sender_platform_id: input.senderPlatformId,
     sender_display_name: input.senderDisplayName, sender_username: input.senderUsername,
     message_text: input.messageText, action_kind: input.actionKind, status: "pending",
-    scheduled_for: pendingReplyScheduledFor(input.now),
+    scheduled_for: pendingReplyScheduledFor(input.now, input.delayMs),
   });
-  // A 23505 conflict means this EXACT trigger message already has a pending
-  // reply scheduled (a duplicate webhook delivery racing past the primary
-  // community_messages claim, or a genuine retry) -- a safe no-op, never a
-  // second competing row for the same real message.
+  // A 23505 conflict means this EXACT (trigger message, deployment) pair
+  // already has a pending reply scheduled (a duplicate webhook delivery
+  // racing past the primary community_messages claim, or a genuine retry)
+  // -- a safe no-op, never a second competing row for the same real
+  // message/deployment pair (the unique index now also includes
+  // deployment_id, migration 0121, so a genuine multi-target address can
+  // schedule more than one row for the SAME trigger message without
+  // colliding).
   if (error && error.code !== "23505") console.error("[telegram/community] schedulePendingReply failed", error.message);
 }
 
-/** Cancels every still-PENDING reply scheduled for this (community, topic)
- *  -- called the instant an admin/mod's own message arrives there (rule 8),
- *  synchronously, never waiting for the next cron sweep. A row already
- *  claimed by the sweep (status='sending') or already resolved is left
- *  alone -- only a genuinely still-waiting row is cancelled. */
-async function cancelPendingRepliesForTopic(admin: SupabaseClient, communityId: string, messageThreadId: number | null, reason: "admin_replied"): Promise<void> {
-  const patch = { status: "cancelled", cancel_reason: reason, resolved_at: new Date().toISOString() };
-  const base = admin.from("watch_pending_replies").update(patch).eq("community_id", communityId).eq("status", "pending");
-  if (messageThreadId == null) await base.is("message_thread_id", null);
-  else await base.eq("message_thread_id", messageThreadId);
+/** Cancels only the still-PENDING replies whose SPECIFIC conversation this
+ *  admin/mod message actually takes over (gap 2, 2026-09-02 correction) --
+ *  called the instant an admin/mod's own message arrives (rule 8),
+ *  synchronously, never waiting for the next cron sweep. A topic may hold
+ *  several unrelated pending replies (two different users each asked
+ *  something) at once; this NEVER treats "topic id matches" alone as
+ *  sufficient ownership -- see isAdminMessageHandlingConversation
+ *  (pending-reply.ts) for the exact two signals (direct Telegram reply
+ *  relationship, or uncontested conversational continuity) that decide it
+ *  per-row. A row already claimed by the sweep (status='sending') or
+ *  already resolved is left alone -- only a genuinely still-waiting row is
+ *  ever a candidate. Bounded to a small, constant number of queries
+ *  regardless of how many pending rows the topic holds. */
+async function cancelPendingRepliesForTopic(
+  admin: SupabaseClient, communityId: string, messageThreadId: number | null,
+  adminMessage: { replyToPlatformMessageId: string | null; createdAt: string }
+): Promise<void> {
+  const pendingBase = admin
+    .from("watch_pending_replies")
+    .select("id, trigger_platform_message_id, sender_platform_id, created_at")
+    .eq("community_id", communityId)
+    .eq("status", "pending");
+  const { data: pendingRows } = await (messageThreadId == null ? pendingBase.is("message_thread_id", null) : pendingBase.eq("message_thread_id", messageThreadId));
+  if (!pendingRows || !pendingRows.length) return;
+
+  const earliestCreatedAt = pendingRows.reduce((min, r) => (r.created_at < min ? r.created_at : min), pendingRows[0].created_at);
+  const betweenBase = admin
+    .from("community_messages")
+    .select("created_at")
+    .eq("community_id", communityId)
+    .gt("created_at", earliestCreatedAt)
+    .lt("created_at", adminMessage.createdAt);
+  const { data: between } = await (messageThreadId == null ? betweenBase.is("message_thread_id", null) : betweenBase.eq("message_thread_id", messageThreadId));
+  const betweenMessages = (between ?? []) as { created_at: string }[];
+
+  const askerIds = [...new Set(pendingRows.map((r) => r.sender_platform_id))];
+  const { data: askerMsgs } = await admin
+    .from("community_messages")
+    .select("platform_message_id, sender_platform_id")
+    .eq("community_id", communityId)
+    .in("sender_platform_id", askerIds)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const askerMessageIdsByUser = new Map<string, string[]>();
+  for (const m of (askerMsgs ?? []) as { platform_message_id: string; sender_platform_id: string }[]) {
+    const list = askerMessageIdsByUser.get(m.sender_platform_id) ?? [];
+    list.push(m.platform_message_id);
+    askerMessageIdsByUser.set(m.sender_platform_id, list);
+  }
+
+  const toCancel: string[] = [];
+  for (const row of pendingRows) {
+    const hasInterveningMessage = betweenMessages.some((m) => new Date(m.created_at).getTime() > new Date(row.created_at).getTime());
+    const owns = isAdminMessageHandlingConversation({
+      triggerPlatformMessageId: row.trigger_platform_message_id,
+      triggerCreatedAt: row.created_at,
+      askerMessageIds: askerMessageIdsByUser.get(row.sender_platform_id) ?? [row.trigger_platform_message_id],
+      adminMessage,
+      hasInterveningMessage,
+    });
+    if (owns) toCancel.push(row.id);
+  }
+  if (!toCancel.length) return;
+  await admin
+    .from("watch_pending_replies")
+    .update({ status: "cancelled", cancel_reason: "admin_replied", resolved_at: new Date().toISOString() })
+    .in("id", toCancel);
 }
 
 /** Loads this community's indexed knowledge for ranking -- deliberately
@@ -561,8 +629,17 @@ async function loadCommunityKnowledgeItems(admin: SupabaseClient, communityId: s
  *  and the pending-reply sweep, both of which resolve it strictly AFTER
  *  every engagement/deference/scheduling decision, never before. */
 async function loadCommunityKnowledgeGrounding(
-  admin: SupabaseClient, communityId: string, messageThreadId: number | null, chatId: string, chatUsername: string | null, query: string
+  admin: SupabaseClient, communityId: string, messageThreadId: number | null, chatId: string, chatUsername: string | null, query: string,
+  token: string | null = null
 ): Promise<CommunityKnowledgeGrounding | null> {
+  // Gap 4 (2026-09-02): reconcile any stale unpin BEFORE ranking, so a
+  // message that's been unpinned since it was indexed is never ranked as
+  // "the community's currently pinned reference" (see
+  // syncCurrentPinnedMessage's own doc comment for why Telegram gives no
+  // direct unpin event to react to instead). Best-effort -- a failed sync
+  // (missing token, transient Telegram error) never blocks generation, it
+  // just means this one call falls back to whatever was last indexed.
+  if (token) await syncCurrentPinnedMessage(admin, token, communityId, chatId);
   const items = await loadCommunityKnowledgeItems(admin, communityId);
   if (!items.length) return null;
   const pinned = items.find((i) => i.isAdminAuthor && i.isPinned);
@@ -1583,7 +1660,7 @@ async function recordBotSpoke(admin: SupabaseClient, deploymentId: string, now: 
 async function loadRecentContext(admin: SupabaseClient, communityId: string, limit = 10): Promise<ChatterContextMessage[]> {
   const { data } = await admin
     .from("community_messages")
-    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at, message_thread_id")
+    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at, message_thread_id, platform_message_id, reply_to_platform_message_id")
     .eq("community_id", communityId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -1596,6 +1673,8 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       deployment_id: string | null;
       created_at: string;
       message_thread_id: number | null;
+      platform_message_id: string | null;
+      reply_to_platform_message_id: string | null;
     }>
   )
     .reverse()
@@ -1607,6 +1686,8 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       createdAt: r.created_at,
       senderPlatformId: r.sender_platform_id,
       messageThreadId: r.message_thread_id ?? null,
+      platformMessageId: r.platform_message_id ?? null,
+      replyToPlatformMessageId: r.reply_to_platform_message_id ?? null,
     }));
 }
 
@@ -1990,13 +2071,14 @@ async function routeConversationTask(
 async function loadLinkWarningState(admin: SupabaseClient, communityId: string, platformUserId: string): Promise<LinkWarningState> {
   const { data } = await admin
     .from("moderator_link_warning_state")
-    .select("warning_count, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count")
+    .select("warning_count, warning_at, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count")
     .eq("community_id", communityId)
     .eq("platform_user_id", platformUserId)
     .maybeSingle();
   if (!data) return EMPTY_WARNING_STATE;
   return {
     warningCount: data.warning_count ?? 0,
+    warningAt: data.warning_at ?? null,
     recentLinkHash: data.recent_link_hash ?? null,
     recentLinkAt: data.recent_link_at ?? null,
     recentLinkCountInWindow: data.recent_link_count_in_window ?? 0,
@@ -2020,6 +2102,7 @@ async function persistLinkWarningState(
       community_id: communityId,
       platform_user_id: platformUserId,
       warning_count: state.warningCount,
+      warning_at: state.warningAt,
       recent_link_hash: state.recentLinkHash,
       recent_link_at: state.recentLinkAt,
       recent_link_count_in_window: state.recentLinkCountInWindow,
@@ -2124,11 +2207,31 @@ export async function runLinkModeration(
   // EARLIER, unrelated real link this same sender once posted.
   const floodRepeat = hasRealLinkCandidate ? isFloodRepeat(observedState) : false;
 
-  const recentContextSummary = (await loadRecentContext(admin, community.id, 6)).map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
+  const linkModerationContext = await loadRecentContext(admin, community.id, 8);
+  const recentContextSummary = linkModerationContext.map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
   const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting);
 
   const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
   const isAdminOrTrusted = token ? await isSenderAdminOrTrusted(token, chatId, senderPlatformId) : false;
+
+  // Gap 3 deterministic backstop: was THIS message directly solicited by a
+  // real, recent admin/mod request ("send me your project link")? Only
+  // ever checked when a plausible request-shaped message actually exists
+  // in the recent window (findRecentAdminInformationRequest is pure/cheap)
+  // -- the extra Telegram admin-status lookup only runs on that ONE
+  // candidate, never on every message in the window.
+  let adminSolicitedExemption = false;
+  const requestCandidate = findRecentAdminInformationRequest(
+    linkModerationContext.map((m) => ({
+      senderType: m.senderType, text: m.text, createdAt: m.createdAt, senderPlatformId: m.senderPlatformId,
+      platformMessageId: m.platformMessageId, replyToPlatformMessageId: m.replyToPlatformMessageId,
+    })),
+    now
+  );
+  if (requestCandidate && (requestCandidate.targetPlatformUserId == null || requestCandidate.targetPlatformUserId === senderPlatformId)) {
+    const requesterId = requestCandidate.candidate.senderPlatformId;
+    adminSolicitedExemption = requesterId && token ? await isSenderAdminOrTrusted(token, chatId, requesterId) : false;
+  }
 
   const priorScamStrikeCount = effectiveScamStrikeCount(priorState.scamStrikeCount, priorState.scamStrikeAt, now);
 
@@ -2149,9 +2252,10 @@ export async function runLinkModeration(
     confidence: classification.confidence,
     isAdminOrTrusted,
     floodRepeat,
-    priorWarningCount: priorState.warningCount,
+    priorWarningCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now),
     priorScamStrikeCount,
     solicitationAllowed: solicitationAllowedHere,
+    adminSolicitedExemption,
   });
 
   await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", enforcement.kind, classification.category, {
@@ -2167,7 +2271,7 @@ export async function runLinkModeration(
     // strike state on an ALLOW.
     await persistLinkWarningState(
       admin, panelId, community.id, senderPlatformId,
-      { ...observedState, warningCount: priorState.warningCount, scamStrikeCount: priorState.scamStrikeCount, scamStrikeAt: priorState.scamStrikeAt },
+      { ...observedState, warningCount: priorState.warningCount, warningAt: priorState.warningAt, scamStrikeCount: priorState.scamStrikeCount, scamStrikeAt: priorState.scamStrikeAt },
       null
     );
     return { handled: false, collabRoutable: COLLAB_ROUTABLE_CATEGORIES.has(classification.category) };
@@ -2218,7 +2322,7 @@ export async function runLinkModeration(
     // function run at most once per real message).
     const nextState: LinkWarningState = isScamEnforcement
       ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
-      : { ...observedState, warningCount: priorState.warningCount + 1 };
+      : { ...observedState, warningCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now) + 1, warningAt: now.toISOString() };
     await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
 
     let purgeResult: { attempted: number; purged: number; failed: boolean } = { attempted: 0, purged: 0, failed: false };
@@ -2284,7 +2388,7 @@ export async function runLinkModeration(
   // malicious URL).
   const nextState: LinkWarningState = isScamEnforcement
     ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
-    : { ...observedState, warningCount: enforcement.warningNumber };
+    : { ...observedState, warningCount: enforcement.warningNumber, warningAt: now.toISOString() };
   await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
 
   // Every DELETE_WARN now explicitly mentions the offender -- deterministic
@@ -2731,7 +2835,7 @@ async function runMediaModeration(
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; collab_contact?: string | null; project_id?: string | null; allow_solicitation?: boolean | null; acknowledge_admin_mod?: boolean | null },
+  community: { id: string; collab_contact?: string | null; project_id?: string | null; allow_solicitation?: boolean | null; acknowledge_admin_mod?: boolean | null; pending_reply_delay_seconds?: number | null },
   message: TelegramMessage,
   event: CommunityEvent,
   isTrialEntitlement: boolean,
@@ -2876,13 +2980,15 @@ async function handleHumanMessage(
   const suppressAcknowledgementForSender = community.acknowledge_admin_mod !== true && senderIsAdminOrTrusted;
 
   // Rule 8: the instant an admin/mod's own message lands in a topic, any
-  // Watcher reply still pending (scheduled but not yet fired) for that SAME
-  // topic is cancelled synchronously -- never waiting for the next cron
-  // tick. "Same topic" is the whole conversation-ownership scope this
-  // codebase can reliably observe (see findMostRecentMessageInTopic) --
-  // never inferred from "an admin exists in the group" or "is online".
+  // Watcher reply that this SPECIFIC message actually takes over is
+  // cancelled synchronously -- never waiting for the next cron tick, and
+  // never a blanket "cancel every pending reply in this topic" (gap 2,
+  // 2026-09-02 correction) -- see cancelPendingRepliesForTopic's own doc
+  // comment for the exact conversation-ownership signals used.
   if (senderIsAdminOrTrusted) {
-    await cancelPendingRepliesForTopic(admin, community.id, event.messageThreadId, "admin_replied");
+    await cancelPendingRepliesForTopic(admin, community.id, event.messageThreadId, {
+      replyToPlatformMessageId: event.replyToMessageId, createdAt: event.timestamp,
+    });
   }
 
   // Whether a real Telegram admin/mod is the most recent OTHER speaker in
@@ -2903,7 +3009,8 @@ async function handleHumanMessage(
   const mostRecentOtherHuman = findMostRecentMessageInTopic(recentContext, event.messageThreadId, {
     senderType: "HUMAN", excludePlatformId: event.sender.platformUserId,
   });
-  if (mostRecentOtherHuman && isWithinPendingReplyWindow(mostRecentOtherHuman.createdAt, now) && mostRecentOtherHuman.senderPlatformId && engagementCheckToken) {
+  const communityDelayMs = clampPendingReplyDelaySeconds(community.pending_reply_delay_seconds) * 1000;
+  if (mostRecentOtherHuman && isWithinPendingReplyWindow(mostRecentOtherHuman.createdAt, now, communityDelayMs) && mostRecentOtherHuman.senderPlatformId && engagementCheckToken) {
     recentlyRespondedByAdminOrMod = await isSenderAdminOrTrusted(engagementCheckToken, chatId, mostRecentOtherHuman.senderPlatformId);
   }
 
@@ -2997,201 +3104,64 @@ async function handleHumanMessage(
     return;
   }
 
-  // Rule 1: an UNDIRECTED ANSWER/CASUAL_CHAT (the Watcher volunteering to
-  // engage, picked via continuity or quietest-longest -- nobody explicitly
-  // asked IT) gives a human the first opportunity, per explicit product
-  // decision (2026-09-02). Instead of sending now, a real, PERSISTED
-  // pending reply is scheduled (watch_pending_replies, never an in-memory
-  // timer -- survives a restart/new invocation by construction) and the
-  // cron sweep (pending-reply-runtime.ts) fires it in ~120s, unless an
-  // admin/mod takes over this exact topic first (cancelled synchronously
-  // above, the instant that happens). A DIRECTED message (an explicit
-  // @mention/reply/name-address) is the human choosing to talk to the
-  // Watcher right now and is answered immediately, exactly as before this
-  // change -- this only defers when the Watcher would otherwise be
-  // volunteering. Applies uniformly to every plan/tier. Never applies to
-  // the multi-target/room-wide fan-out or the decline-fallback reroute
-  // below (both are already-approved, explicitly-addressed continuations
-  // of an already-cleared primary response, not the Watcher volunteering).
-  const primaryIsDirected = candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false;
-  if (!primaryIsDirected && (action.type === "ANSWER" || action.type === "CASUAL_CHAT")) {
+  // Rule 1 (revised, gap 1 correction 2026-09-02): EVERY ANSWER/CASUAL_CHAT
+  // -- whether the Watcher was explicitly mentioned/replied-to/named or is
+  // volunteering on its own via continuity/quietest-longest -- gives a
+  // human the first opportunity before it may respond. An explicit mention
+  // is a signal for WHO should eventually answer, never a grant of
+  // permission to bypass human/admin priority. Instead of sending now, a
+  // real, PERSISTED pending reply is scheduled per targeted deployment
+  // (watch_pending_replies, never an in-memory timer -- survives a
+  // restart/new invocation by construction) and the cron sweep
+  // (pending-reply-runtime.ts) fires it after this community's own
+  // configured delay (communities.pending_reply_delay_seconds, default
+  // 45s, owner-adjustable 15-120s), unless an admin/mod takes over that
+  // SPECIFIC conversation first (cancelled synchronously above the moment
+  // that happens -- see cancelPendingRepliesForTopic). Applies uniformly
+  // to every plan/tier. The only thing that ever pre-empts this wait
+  // entirely is moderation/safety enforcement, which already ran earlier
+  // in this function and returns before this point is ever reached.
+  //
+  // A genuine multi-target address (e.g. two moderators named together, or
+  // a room-wide address) schedules ONE independent pending-reply row per
+  // targeted deployment (all sharing this same trigger message + scheduled
+  // time) -- each still respects human/admin priority on its own, and each
+  // fires independently once due. Deliberate simplification versus the
+  // previous synchronous fan-out: a deferred additional responder no
+  // longer sees what the other already replied -- multiple relevant
+  // moderators still each eventually answer, just without cross-awareness
+  // of each other's exact wording.
+  if (action.type === "ANSWER" || action.type === "CASUAL_CHAT") {
+    const communityDelayMs = clampPendingReplyDelaySeconds(community.pending_reply_delay_seconds) * 1000;
     await schedulePendingReply(admin, {
       communityId: community.id, panelId, deploymentId: deployment.deploymentId, chatId: String(message.chat.id),
       messageThreadId: event.messageThreadId, triggerPlatformMessageId: event.messageId,
       senderPlatformId: event.sender.platformUserId, senderDisplayName: event.sender.displayName,
-      senderUsername: event.sender.username ?? null, messageText: event.text, actionKind: action.type, now,
+      senderUsername: event.sender.username ?? null, messageText: event.text, actionKind: action.type, now, delayMs: communityDelayMs,
     });
     await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "SILENCE", "deferred_pending_reply", { actionKind: action.type });
-    return;
-  }
 
-  // Phase 4.N — retrieved ONCE per triggering message (not per responder),
-  // only for ANSWER (substantive Q&A never grounds casual chatter in
-  // project facts). Empty when nothing relevant matches -- passed through
-  // as undefined so generateChatterReply's prompt correctly omits the
-  // "Project knowledge" block entirely rather than injecting an empty one.
-  const projectKnowledge = action.type === "ANSWER" ? await loadRelevantKnowledge(admin, panelId, community.id, event.text) : undefined;
-  // Community message knowledge (pinned posts/announcements/official
-  // links from this community's OWN admin/mod messages) -- resolved ONLY
-  // here, strictly AFTER every engagement/deference/scheduling decision
-  // above, per the explicit "finding a pinned post never grants early
-  // permission to respond" requirement. ANSWER only, same scoping as
-  // Project Knowledge above.
-  const communityKnowledge = action.type === "ANSWER"
-    ? await loadCommunityKnowledgeGrounding(admin, community.id, event.messageThreadId, chatId, message.chat.username ?? null, event.text)
-    : undefined;
-  // Silence/command/fallback policy (§15) -- the configured general
-  // fallback contact (reuses the existing structured "support" contact
-  // preset, project-profile.ts) offered as a MENTION-ONLY handoff when
-  // ANSWER genuinely has no reliable answer and no escalation group is
-  // configured. Resolved ONCE per message, ANSWER only.
-  const fallbackAdminMention = action.type === "ANSWER" && community.project_id
-    ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.support ?? null
-    : null;
-  // Shared Escalation Group (Phase 1) — resolved ONCE per message, ANSWER
-  // only (escalation only ever applies to a genuine informational
-  // question), and only when this community actually belongs to a Project
-  // (standalone-Watch communities always do; a legacy Panel-distributed
-  // community may not have one resolved here, in which case escalation is
-  // simply unavailable — the existing plain "I don't have that
-  // information" behavior applies unchanged). null when no escalation
-  // group is connected for the project (or none has a Watcher deployed
-  // into it yet) — generateChatterReply's prompt never offers
-  // ESCALATE_REQUIRED in that case.
-  const escalationTarget =
-    action.type === "ANSWER" && community.project_id ? await resolveProjectEscalationTarget(admin, community.project_id) : null;
-
-  let primaryResult = await respondAsDeployment({
-    admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
-    deployment, actionType: action.type, reasons: action.reasons, isTrialEntitlement, accountId, paidTier, now,
-    recentContext,
-    isDirectedAtBot: candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false,
-    addressedWithTypo: directedMatch?.isTypo === true && directedMatch.deploymentId === deployment.deploymentId,
-    otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
-    collabContact,
-    projectKnowledge,
-    communityKnowledge,
-    fallbackAdminMention,
-    aiRouting,
-    projectId: community.project_id ?? null,
-    escalationTarget,
-    timer,
-  });
-  let respondingDeployment = deployment;
-
-  // ---- decline-fallback reroute (explicit product decision, 2026-08-20) ----
-  // The primary responder was picked by continuity/quietest-longest (this
-  // message didn't clearly ADDRESS anyone -- if it had, `deployment` above
-  // would already BE the named moderator). If that pick's own model
-  // declines to answer (a reasoned "this isn't really about/for me", not an
-  // infra failure -- generation timeouts/failures/quota exhaustion are a
-  // different problem a reroute wouldn't fix), and a DIFFERENT deployed
-  // moderator's name appears anywhere in the message ("how about Ms VP?"),
-  // retry with that moderator once, treating it as directed. Bounded to a
-  // SINGLE retry -- never chains further even if the reroute also declines.
-  if (!primaryResult.replied && primaryResult.modelDeclined) {
-    const lowerText = event.text.toLowerCase();
-    const named = deployments.find(
-      (d) => d.deploymentId !== deployment.deploymentId && d.moderatorName.trim() && lowerText.includes(d.moderatorName.trim().toLowerCase())
-    );
-    if (named) {
-      const rerouted = await respondAsDeployment({
-        admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
-        deployment: named, actionType: action.type, reasons: [...action.reasons, "decline_fallback_reroute"], isTrialEntitlement, accountId, paidTier, now,
-        recentContext,
-        isDirectedAtBot: true,
-        addressedWithTypo: false,
-        otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== named.deploymentId).map((d) => d.moderatorName),
-        collabContact,
-        projectKnowledge,
-        communityKnowledge,
-        fallbackAdminMention,
-        aiRouting,
-        projectId: community.project_id ?? null,
-        escalationTarget,
-        timer,
-      });
-      if (rerouted.replied) {
-        primaryResult = rerouted;
-        respondingDeployment = named;
-      }
-    }
-  }
-
-  // ---- explicit multi-target address: additional independent responders ----
-  // Human group conversation is not turn-based -- the primary moderator
-  // answering above does not consume the human's turn. Only ever consulted
-  // when the PRIMARY action was already a real reply (never for
-  // REACT/SHORT_ACK/SILENCE, both of which returned before this point, or
-  // for SHORT_ACK, which carries no generation to independently vary by
-  // persona anyway). Each additional responder gets its OWN independent
-  // generation call (own persona/own prompt) -- never a copy of the
-  // primary's reply -- and is sent serialized, within this SAME
-  // handleHumanMessage invocation triggered by the one claimed human event
-  // (never a new webhook delivery or recursive bot-observation path), so no
-  // new loop-safety code is needed: the bot-ack branch in
-  // handleCommunityUpdate is a separate, untouched code path gated on
-  // senderType === "INNVIL_MODERATOR".
-  if (action.type === "CASUAL_CHAT" || action.type === "ANSWER") {
     const multiTargets = resolveMultiTargetAddress(
       event.text,
       deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername }))
     );
     if (multiTargets) {
-      // A genuine room-wide address ("everyone"/"everybody") engages every
-      // currently deployed moderator (not the fixed small-group cap used
-      // for "you both"/"you guys") -- capped at MAX_ROOM_WIDE_RESPONDERS
-      // for a very large deployment. See roomWideResponderCount's own doc
-      // comment (chatter-coordinator.ts).
       const additionalCap = isRoomWideAddress(event.text)
         ? Math.max(0, roomWideResponderCount(deployments.length) - 1)
         : undefined;
-      const additionalIds = resolveAdditionalResponderIds(respondingDeployment.deploymentId, multiTargets, additionalCap);
-      // Whether the human's request is inherently per-person ("tell me about
-      // yourself") vs. a shared/collective one a single sufficient answer
-      // already covers ("why are you two replying like that?") -- decided
-      // once per message, not per responder, since it's a property of the
-      // QUESTION, not of who's answering it.
-      const individualContributionExpected = requiresIndividualContribution(event.text);
-      // Accumulates every reply actually sent to THIS message so far, so a
-      // second additional responder (when the cap allows one) sees BOTH
-      // prior replies, not just the primary's.
-      const priorResponses: { moderatorName: string; text: string }[] = primaryResult.replied
-        ? [{ moderatorName: respondingDeployment.moderatorName, text: primaryResult.text }]
-        : [];
+      const additionalIds = resolveAdditionalResponderIds(deployment.deploymentId, multiTargets, additionalCap);
       for (const id of additionalIds) {
         const additionalDeployment = deployments.find((d) => d.deploymentId === id);
         if (!additionalDeployment) continue;
-        const result = await respondAsDeployment({
-          admin, panelId, communityId: community.id, chatId: String(message.chat.id), event,
-          deployment: additionalDeployment, actionType: action.type, reasons: ["multi_target_address"], isTrialEntitlement, accountId, paidTier, now,
-          recentContext,
-          // Each additional responder answers on its own merit, not because
-          // it was @mentioned individually -- but a genuine multi-target
-          // address ("Kwan and Test, thoughts?") is directed at both, so it
-          // should bypass pacing/cooldown the same way a single directed
-          // mention would (see chatter-coordinator.ts bypassesPacing).
-          isDirectedAtBot: true,
-          addressedWithTypo: false,
-          otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== additionalDeployment.deploymentId).map((d) => d.moderatorName),
-          // Distinct-contribution rule (chatter-generate.ts's
-          // obligationContextLines): grounds "did someone already cover
-          // this?" in what was actually said, and tells the model whether
-          // its own contribution is still individually required.
-          priorResponsesToThisMessage: priorResponses,
-          individualContributionExpected,
-          collabContact,
-          projectKnowledge,
-          communityKnowledge,
-          fallbackAdminMention,
-          aiRouting,
-          projectId: community.project_id ?? null,
-          escalationTarget,
-          timer,
+        await schedulePendingReply(admin, {
+          communityId: community.id, panelId, deploymentId: additionalDeployment.deploymentId, chatId: String(message.chat.id),
+          messageThreadId: event.messageThreadId, triggerPlatformMessageId: event.messageId,
+          senderPlatformId: event.sender.platformUserId, senderDisplayName: event.sender.displayName,
+          senderUsername: event.sender.username ?? null, messageText: event.text, actionKind: action.type, now, delayMs: communityDelayMs,
         });
-        if (result.replied) priorResponses.push({ moderatorName: additionalDeployment.moderatorName, text: result.text });
       }
     }
+    return;
   }
 }
 
@@ -3841,13 +3811,13 @@ interface PendingReplyDbRow {
 async function loadCommunityById(admin: SupabaseClient, communityId: string) {
   const { data } = await admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds")
     .eq("id", communityId)
     .maybeSingle();
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
-    acknowledge_admin_mod: boolean | null;
+    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
   } | null;
 }
 
@@ -3891,19 +3861,38 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
   const alreadyAnsweredByModerator = recentContext.some(
     (m) => m.senderType === "INNVIL_MODERATOR" && (m.messageThreadId ?? null) === row.message_thread_id && m.createdAt && new Date(m.createdAt) > rowCreatedAt
   );
-  const laterOtherHuman = recentContext.find(
-    (m) =>
-      m.senderType === "HUMAN" &&
-      (m.messageThreadId ?? null) === row.message_thread_id &&
-      m.senderPlatformId &&
-      m.senderPlatformId !== row.sender_platform_id &&
-      m.createdAt &&
-      new Date(m.createdAt) > rowCreatedAt
+  // Gap 2-consistent belt-and-suspenders check: the SAME conversation-
+  // ownership definition as the synchronous cancel-on-arrival path
+  // (isAdminMessageHandlingConversation), not merely "any different human
+  // spoke in this topic afterward" -- an unrelated later message in a busy
+  // topic must not falsely cancel this row here either. hasInterveningMessage
+  // is derived from this already-loaded 25-message window (a bounded,
+  // secondary check -- the primary defense is the synchronous path, this
+  // only matters if that was somehow missed).
+  const laterOtherHumans = recentContext.filter(
+    (m) => m.senderType === "HUMAN" && (m.messageThreadId ?? null) === row.message_thread_id && m.senderPlatformId && m.senderPlatformId !== row.sender_platform_id && m.createdAt && new Date(m.createdAt) > rowCreatedAt
   );
   const token = await getBotTokenForDeployment(admin, deployment.deploymentId);
   let adminRespondedSinceScheduling = false;
-  if (laterOtherHuman?.senderPlatformId && token) {
-    adminRespondedSinceScheduling = await isSenderAdminOrTrusted(token, row.chat_id, laterOtherHuman.senderPlatformId);
+  for (const candidate of laterOtherHumans) {
+    const hasInterveningMessage = recentContext.some(
+      (m) =>
+        m.createdAt &&
+        candidate.createdAt &&
+        new Date(m.createdAt).getTime() > rowCreatedAt.getTime() &&
+        new Date(m.createdAt).getTime() < new Date(candidate.createdAt).getTime()
+    );
+    const owns = isAdminMessageHandlingConversation({
+      triggerPlatformMessageId: row.trigger_platform_message_id,
+      triggerCreatedAt: row.created_at,
+      askerMessageIds: recentContext.filter((m) => m.senderPlatformId === row.sender_platform_id && m.platformMessageId).map((m) => m.platformMessageId as string),
+      adminMessage: { replyToPlatformMessageId: candidate.replyToPlatformMessageId ?? null, createdAt: candidate.createdAt as string },
+      hasInterveningMessage,
+    });
+    if (owns && candidate.senderPlatformId && token && (await isSenderAdminOrTrusted(token, row.chat_id, candidate.senderPlatformId))) {
+      adminRespondedSinceScheduling = true;
+      break;
+    }
   }
   // "Is the user still in the community?" -- a lookup failure (network
   // hiccup, transient Telegram error) fails SAFE by assuming still present:
@@ -3945,7 +3934,7 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
 
   const projectKnowledge = row.action_kind === "ANSWER" ? await loadRelevantKnowledge(admin, row.panel_id, row.community_id, row.message_text) : undefined;
   const communityKnowledge = row.action_kind === "ANSWER"
-    ? await loadCommunityKnowledgeGrounding(admin, row.community_id, row.message_thread_id, row.chat_id, null, row.message_text)
+    ? await loadCommunityKnowledgeGrounding(admin, row.community_id, row.message_thread_id, row.chat_id, null, row.message_text, token)
     : undefined;
   const fallbackAdminMention = row.action_kind === "ANSWER" && community.project_id
     ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.support ?? null
@@ -3967,7 +3956,7 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
     causationMessageId: null,
   };
 
-  const result = await respondAsDeployment({
+  let result = await respondAsDeployment({
     admin, panelId: row.panel_id, communityId: row.community_id, chatId: row.chat_id, event,
     deployment, actionType: row.action_kind, reasons: ["deferred_pending_reply_fired"], isTrialEntitlement, accountId, paidTier, now,
     recentContext,
@@ -3983,6 +3972,39 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
     escalationTarget,
     timer: createRequestTimer(row.deployment_id),
   });
+
+  // Decline-fallback reroute (ported to fire time, same shape as the
+  // original synchronous version): the picked responder's own model
+  // declined to answer (a reasoned "this isn't for me", never an infra
+  // failure) and a DIFFERENT deployed moderator's name appears in the
+  // message -- retry once with that moderator, treated as directed. The
+  // human already waited their full delay for this already-approved
+  // response, so the reroute itself runs immediately, no additional wait.
+  // Bounded to a single retry, same as before.
+  if (!result.replied && result.modelDeclined) {
+    const lowerText = row.message_text.toLowerCase();
+    const named = deployments.find(
+      (d) => d.deploymentId !== deployment.deploymentId && d.moderatorName.trim() && lowerText.includes(d.moderatorName.trim().toLowerCase())
+    );
+    if (named) {
+      result = await respondAsDeployment({
+        admin, panelId: row.panel_id, communityId: row.community_id, chatId: row.chat_id, event,
+        deployment: named, actionType: row.action_kind, reasons: ["deferred_pending_reply_fired", "decline_fallback_reroute"], isTrialEntitlement, accountId, paidTier, now,
+        recentContext,
+        isDirectedAtBot: true,
+        addressedWithTypo: false,
+        otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== named.deploymentId).map((d) => d.moderatorName),
+        collabContact: null,
+        projectKnowledge,
+        communityKnowledge,
+        fallbackAdminMention,
+        aiRouting,
+        projectId: community.project_id ?? null,
+        escalationTarget,
+        timer: createRequestTimer(named.deploymentId),
+      });
+    }
+  }
   await finishPendingReply(admin, row.id, result.replied ? "sent" : "failed");
 }
 

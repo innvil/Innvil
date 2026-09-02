@@ -15,6 +15,7 @@ import {
   createAccountWatcher, listAccountWatchers, createAccountCommunity, deployAccountWatcher,
   setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
   listAccountCommunityTopics, setAccountCommunityTopicPolicy, type AccountCommunityTopicRow,
+  getAccountCommunityPendingReplyDelay, setAccountCommunityPendingReplyDelay,
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   listAccountAttentionItems, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountProjectDetail, getAccountWatcherDetail, getAccountPaidPlan,
@@ -203,6 +204,20 @@ export async function setCommunityTopicPolicy(
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return setAccountCommunityTopicPolicy(admin, user.id, communityId, messageThreadId, policy);
+}
+
+export async function getCommunityPendingReplyDelay(communityId: string): Promise<number | null> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return null;
+  return getAccountCommunityPendingReplyDelay(admin, user.id, communityId);
+}
+
+export async function setCommunityPendingReplyDelay(
+  communityId: string, delaySeconds: number
+): Promise<{ ok: true; data: { delaySeconds: number } } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return setAccountCommunityPendingReplyDelay(admin, user.id, communityId, delaySeconds);
 }
 
 /* ============================================================
