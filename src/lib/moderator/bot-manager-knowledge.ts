@@ -100,7 +100,7 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     kind: "faq",
     title: "Innvil Watch Free Trial",
     content:
-      "Innvil Watch offers a one-time, 7-day Free Trial: 1 Watcher slot, 1 Community, no payment required. Starting it requires connecting and verifying a real Telegram account first (a genuine anti-abuse identity check, not optional). Each verified Telegram identity may only claim the trial once, even across different Innvil accounts. After the trial ends, existing Projects/Communities/Watchers are preserved (nothing is deleted) but stop being active until a paid plan is chosen.",
+      "Innvil Watch offers a one-time, 7-day Free Trial: 1 Watcher slot, 1 Community, no payment required. Starting it requires connecting and verifying a real Telegram account first (a genuine anti-abuse identity check, not optional). Each verified Telegram identity may only claim the trial once, even across different Innvil accounts. The trial also includes real photo/video Media Moderation, capped at 30 units for the whole trial (10% of Bronze's own monthly allowance, a one-time cap rather than a recurring one). After the trial ends, existing Projects/Communities/Watchers are preserved (nothing is deleted) but stop being active until a paid plan is chosen.",
     active: true,
   },
   {
@@ -134,9 +134,9 @@ export const INNVIL_PRODUCT_KNOWLEDGE: KnowledgeSource[] = [
     projectId: null,
     communityId: null,
     kind: "fact",
-    title: "Innvil Watch Media Moderation + add-on",
+    title: "Innvil Watch Media Moderation",
     content:
-      "Media Moderation + is a paid add-on, available on any self-serve tier, that adds real photo/video safety classification (explicit-content/unsafe-media detection) with a monthly unit allowance: Bronze +$9.99/mo for 1,000 units, Silver +$14.99/mo for 2,000, Gold +$19.99/mo for 3,000, Platinum +$24.99/mo for 4,000. One classified photo, or one sampled video frame, is one unit.",
+      "Real photo/video safety classification (explicit-content/unsafe-media detection) is INCLUDED automatically on every plan at no extra charge — never a separate paid add-on. Monthly unit allowance included: Bronze 300, Silver 500, Gold 700, Platinum 1,000 units/month (Enterprise and BYO variants get their own larger included allowances). The Free Trial also includes it, capped at 30 units for the whole trial. One classified photo, or one sampled video frame, is one unit. If a plan's monthly allowance runs out, optional stackable top-up packs are available (from 1,000 units for $9.99 up to 20,000 units for $59.99) for the current billing period only.",
     active: true,
   },
   {

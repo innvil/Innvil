@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Free Trial gets a real Media Moderation cap (10% of Bronze) + stale AI knowledge sources corrected (v1.49.13)
+- **Explicit product decision: the Free Trial's photo/video Media Moderation, previously completely unmetered,
+  now has a real cap — 10% of Bronze's own monthly allowance (300 units → 30 units for the trial).** Kept as a
+  DERIVED constant (`TRIAL_MEDIA_MODERATION_ALLOWANCE = Math.round(MEDIA_MODERATION_BASE_ALLOWANCE.basic *
+  0.1)`, `money.ts`) rather than a second hardcoded number, so it can never drift out of its stated "10% of
+  Bronze" relationship if Bronze's own allowance ever changes.
+- **Root cause of "trial was unmetered": `mediaBaseAllowance` was hardcoded to `null` for trial** (Media
+  Moderation Units gate, `community-runtime.ts`) — the doc comment explicitly said so ("trial... keeps running
+  media moderation completely unmetered"). Fixed at the exact same computation site: `mediaBaseAllowance` now
+  resolves to `TRIAL_MEDIA_MODERATION_ALLOWANCE` when `isTrialEntitlement && accountId`, before falling through
+  to `null` (still correctly unmetered only for a genuinely unrepresentable plan — a legacy Panel-distributed
+  deployment).
+- **A trial has no recurring billing period to meter against — used its own one-time dates instead.**
+  `resolveAccountBillingPeriod` reads `product_entitlements`, a table a trial account has no row in at all (trial
+  state lives entirely in `watch_trial_claims`). New pure, exported `trialMediaModerationPeriod(trial)`
+  (`community-runtime.ts`) builds the metering "period" straight from the trial's own real `started_at`/`ends_at`
+  (read off the already-resolved `settings` object via the existing `readModeratorAddon`, zero new DB query) —
+  the cap applies ONCE across the whole 7-day trial, never resetting monthly the way a paid subscription's
+  allowance does. Falls back to `resolveAccountBillingPeriod` for every non-trial case, unchanged.
+- **Fixed two stale AI-facing knowledge sources found while investigating a user-reported bad blog draft** — both
+  were still describing the OLD, deprecated "Media Moderation +" commercial model (a paid per-tier add-on:
+  Bronze +$9.99/1,000 units, Silver +$14.99/2,000, Gold +$19.99/3,000, Platinum +$24.99/4,000 — `money.ts`'s
+  `MODERATOR_MEDIA_ADDON`, explicitly marked DEPRECATED since 2026-08-27 and superseded by
+  `MEDIA_MODERATION_BASE_ALLOWANCE`, which makes it INCLUDED automatically on every plan at no extra charge).
+  Neither knowledge source had ever been updated when that pricing model changed, and the trial's own entry
+  additionally said the add-on "requires a paid add-on even after you upgrade" / "is not available on the free
+  trial" — both now false per the fix above.
+  - `src/lib/ai/blog-writer.ts`'s `PRODUCT_FACTS` (the fact set the AI blog writer is hard-constrained to) —
+    rewrote the Media Moderation fact to state the real included-by-default model with real per-tier allowances
+    and the real optional stackable top-up-pack pricing, and updated the Free Trial fact to state its new real
+    30-unit one-time Media Moderation cap.
+  - `src/lib/moderator/bot-manager-knowledge.ts` (the separate `innvil_bot_manager` reactive-support bot's own
+    static knowledge base) — same two entries corrected identically, so a customer asking the support bot gets
+    the same accurate answer the blog writer would now produce.
+  - **The specific already-generated stale blog draft the user reported is a live database row this sandbox has
+    no network access to reach** (`blog_posts`, migration 0025) — the underlying facts are now correct for any
+    NEW "Generate now" draft, but the existing draft itself needs to be manually deleted/regenerated via the
+    Blog admin tab (Superadmin → Blog) now that the source facts are fixed; it was not silently left in the
+    review queue without flagging this.
+- New tests: `money.test.ts` (+2 — the exact 10%-of-Bronze derivation and value, trial strictly smaller than
+  every real paid tier), `community-runtime.test.ts` (+4 — `trialMediaModerationPeriod`'s active/inactive/no-
+  trial/missing-date cases), `bot-manager-knowledge.test.ts` (+2 — pinned assertions that the corrected facts
+  are present and the old "requires a paid add-on"/"not available on the trial" claims are gone). 1992 tests
+  pass (up from 1984), `tsc --noEmit` clean, production build clean. No migration (no schema change — reuses
+  the existing `watch_media_moderation_usage`/`watch_media_moderation_expansions` tables and the trial's own
+  already-existing `watch_trial_claims` dates).
+
 ### 2026-09-02 — Change connected Telegram identity — trial continues/never re-grants (v1.49.12)
 - **New capability: an account can change WHICH Telegram identity is connected in Profile.** Previously the
   Connect Telegram card was read-only once verified (explicitly deferred per the 2026-08-18 v1.37.0 entry's

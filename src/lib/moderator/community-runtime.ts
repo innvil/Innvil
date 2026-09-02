@@ -5,7 +5,7 @@ import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { telegramApiCall, getTelegramFile, downloadTelegramFileBuffer, TELEGRAM_MAX_DOWNLOADABLE_BYTES } from "./telegram-client";
 import {
   virtualModBotAcknowledgement, virtualModNaturalChatterActive, virtualModMediaModeration, virtualModVideoModeration,
-  moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT,
+  moderatorEntitlementSource, TRIAL_REACTIVE_DAILY_LIMIT, readModeratorAddon, type ModeratorTrialState,
   hasVirtualModerator, moderatorCapacity, TRIAL_DURATION_DAYS,
   communityCountExceeded, checkDeploymentSlotCaps, deploymentSlotCheckErrorMessage,
 } from "./plan";
@@ -109,7 +109,7 @@ function recordByoCall(
 import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, incrementWatchAiGenerationUsage, hasAiGenerationPoolRemaining } from "@/src/lib/products/watch-ai-usage";
 import { getMediaModerationExpansionUnits, isMediaModerationLimitReached } from "@/src/lib/products/watch-media-moderation-expansion";
 import { getWatchMediaModerationUsage, incrementWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
-import { MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE, type ModeratorPlanTier } from "@/src/lib/money";
+import { MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE, TRIAL_MEDIA_MODERATION_ALLOWANCE, type ModeratorPlanTier } from "@/src/lib/money";
 import { resolveEnterpriseMediaAddonKey } from "@/src/lib/products/watch-enterprise";
 import { resolveProjectEscalationTarget, createEscalation, handleEscalationGroupMessage, sendModerationReport, type EscalationTarget } from "./escalation-runtime";
 import type { ModerationViolationCategory } from "./watcher-ops-report";
@@ -2124,6 +2124,17 @@ async function recordMediaDedup(admin: SupabaseClient, panelId: string | null, c
   );
 }
 
+/** Pure -- the trial's own Media Moderation Units "period" (its real,
+ *  one-time started_at/ends_at, never a recurring monthly window like a
+ *  paid subscription's), or null when there's no active trial to derive one
+ *  from. Kept separate from resolveAccountBillingPeriod (which reads
+ *  product_entitlements -- a table a trial account has no row in at all)
+ *  so a trial's real dates are used instead of silently resolving to
+ *  "no period, unmetered". */
+export function trialMediaModerationPeriod(trial: ModeratorTrialState): { start: string; end: string } | null {
+  return trial.active && trial.startedAt && trial.endsAt ? { start: trial.startedAt, end: trial.endsAt } : null;
+}
+
 /** Same overall shape as runLinkModeration: a SEPARATE moderation decision,
  *  checked once per message via a SINGLE enforcer (the community's Media
  *  Safety Moderator role-holder, see watcher-roles.ts -- the SAME single-
@@ -2143,11 +2154,12 @@ async function runMediaModeration(
   now: Date,
   accountId: string | null = null,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  // REVISED (2026-08-27): the account's real, unconditionally-included
-  // Media Moderation Units base allowance for its current Watch plan --
-  // self-serve tier, byo20, or any Enterprise variant -- resolved ONCE by
-  // the caller (a plain constant lookup, no I/O). `null` means this account
-  // has no representable Watch plan at all (trial, or a legacy Panel-
+  // REVISED (2026-08-27, trial capped 2026-09-02): the account's real,
+  // unconditionally-included Media Moderation Units base allowance for its
+  // current Watch plan -- self-serve tier, byo20, any Enterprise variant,
+  // or the Free Trial's own TRIAL_MEDIA_MODERATION_ALLOWANCE -- resolved
+  // ONCE by the caller (a plain constant lookup, no I/O). `null` means this
+  // account has no representable Watch plan at all (a legacy Panel-
   // distributed deployment), which keeps running media moderation
   // completely unmetered, exactly as before this gate existed. Supersedes
   // the old `bundledMediaAddon`/per-tier-purchase-gate model -- see
@@ -2200,23 +2212,31 @@ async function runMediaModeration(
   // -- there is no more "no active add-on" state to report; the only way an
   // account with a real plan can be blocked here is genuinely exhausting its
   // available units (base + any purchased expansion packs) for the current
-  // period. `mediaBaseAllowance == null` means this account has no
-  // representable Watch plan at all (trial, or a legacy Panel-distributed
-  // deployment) -- media moderation keeps running completely unmetered for
-  // those, exactly as before this gate existed; a missing/untrackable
-  // billing period (a legacy pre-migration-0080 row) falls back the same
-  // way. This is a genuine capacity limit, not a content classification --
-  // reaching it never implies or logs anything about the media's actual
-  // content, and resolves to a silent skip, never a fabricated result or a
-  // deleted message, matching every other "can't classify" case in this
-  // function. Deliberately NOT run through recordMediaDedup's cache: unlike
-  // too_large/duration_exceeded (permanent properties of the file), the
-  // account's remaining allowance is temporal -- caching it would
-  // incorrectly blacklist a file from ever being reclassified once more
-  // capacity is purchased or the period rolls over.
+  // period. The Free Trial ALSO has a real, metered allowance now
+  // (TRIAL_MEDIA_MODERATION_ALLOWANCE = 10% of Bronze -- see money.ts, kept
+  // as a DERIVED constant so it can never drift from Bronze's own value) --
+  // its "period" is the trial's own started_at/ends_at (read straight off
+  // the already-resolved `settings` object via readModeratorAddon, never a
+  // second DB query), since a one-time 7-day trial has no recurring
+  // subscription period to reuse resolveAccountBillingPeriod against. Only a
+  // genuinely UNREPRESENTABLE plan (a legacy Panel-distributed deployment,
+  // or a legacy pre-migration-0080 row with an untrackable billing period)
+  // still runs completely unmetered here. This is a genuine capacity limit,
+  // not a content classification -- reaching it never implies or logs
+  // anything about the media's actual content, and resolves to a silent
+  // skip, never a fabricated result or a deleted message, matching every
+  // other "can't classify" case in this function. Deliberately NOT run
+  // through recordMediaDedup's cache: unlike too_large/duration_exceeded
+  // (permanent properties of the file), the account's remaining allowance
+  // is temporal -- caching it would incorrectly blacklist a file from ever
+  // being reclassified once more capacity is purchased or the period rolls
+  // over (for trial: once the trial itself is over, this gate no longer
+  // applies at all -- moderation stops being reachable once entitlement
+  // expires, same as every other trial capability).
   let mediaUsagePeriod: Awaited<ReturnType<typeof resolveAccountBillingPeriod>> = null;
   if (mediaBaseAllowance != null && accountId) {
-    mediaUsagePeriod = await resolveAccountBillingPeriod(admin, accountId);
+    const trial = readModeratorAddon(settings).trial;
+    mediaUsagePeriod = trialMediaModerationPeriod(trial) ?? await resolveAccountBillingPeriod(admin, accountId);
     if (mediaUsagePeriod) {
       const [used, expansionUnits] = await Promise.all([
         getWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod.start),
@@ -3248,20 +3268,24 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // ceiling once it knows which Watcher is actually about to generate
     // (applyDeploymentUsagePolicy, Phase 4.V.1 item 2).
     const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", community.id, null, "reactive", entitlementSource === "byo20");
-    // Media Moderation Units base allowance -- REVISED (2026-08-27). Every
-    // real Watch plan now gets a real, controlled INCLUDED allowance
-    // automatically -- resolved ONCE here (a plain constant lookup, no I/O)
-    // from whichever tier this account actually has: an Enterprise variant
-    // (via resolveEnterpriseMediaAddonKey, the same resolver the Usage page
-    // reads, so display and enforcement can never disagree about which
-    // package's allowance applies), byo20, or a self-serve paidTier.
-    // Enterprise's OLD devops-granted `mediaAddonActive` flag is no longer
-    // read here -- every Enterprise account now gets its base allowance
-    // unconditionally, the same "included on every plan" rule every other
-    // tier gets (the flag/column still exist, just unused by this gate).
-    // `null` means "no representable Watch plan" (trial, or legacy Panel-
-    // distributed) -- those fall through to runMediaModeration's own
-    // existing, unchanged unmetered behavior.
+    // Media Moderation Units base allowance -- REVISED (2026-08-27, trial
+    // capped 2026-09-02). Every real Watch plan now gets a real, controlled
+    // INCLUDED allowance automatically -- resolved ONCE here (a plain
+    // constant lookup, no I/O) from whichever tier this account actually
+    // has: an Enterprise variant (via resolveEnterpriseMediaAddonKey, the
+    // same resolver the Usage page reads, so display and enforcement can
+    // never disagree about which package's allowance applies), byo20, a
+    // self-serve paidTier, or -- per explicit product decision -- the Free
+    // Trial's own TRIAL_MEDIA_MODERATION_ALLOWANCE (10% of Bronze's
+    // allowance, kept DERIVED from money.ts's canonical Bronze value rather
+    // than a second hardcoded number). Enterprise's OLD devops-granted
+    // `mediaAddonActive` flag is no longer read here -- every Enterprise
+    // account now gets its base allowance unconditionally, the same
+    // "included on every plan" rule every other tier gets (the flag/column
+    // still exist, just unused by this gate). `null` means "no
+    // representable Watch plan" (a legacy Panel-distributed deployment) --
+    // that falls through to runMediaModeration's own existing, unchanged
+    // unmetered behavior; trial no longer falls into this bucket.
     const enterpriseEntitlement = entitlementSource === "enterprise" && accountId ? await resolveAccountEnterpriseEntitlement(admin, accountId) : null;
     const mediaBaseAllowance: number | null = enterpriseEntitlement
       ? ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE[resolveEnterpriseMediaAddonKey(enterpriseEntitlement.apiSourceMode, enterpriseEntitlement.slots)]
@@ -3269,7 +3293,9 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
         ? MEDIA_MODERATION_BASE_ALLOWANCE.byo20
         : paidTier
           ? MEDIA_MODERATION_BASE_ALLOWANCE[paidTier]
-          : null;
+          : isTrialEntitlement && accountId
+            ? TRIAL_MEDIA_MODERATION_ALLOWANCE
+            : null;
     await handleHumanMessage(
       admin, integration.panel_id, community, message, event, isTrialEntitlement, timer, settings, accountId, paidTier, aiRouting, mediaBaseAllowance, chatterActive
     );

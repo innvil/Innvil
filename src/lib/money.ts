@@ -369,6 +369,14 @@ export const MEDIA_MODERATION_BASE_ALLOWANCE: Record<ModeratorPlanTier, number> 
   byo20: 2000,
 };
 
+/** The Free Trial's own Media Moderation Units allowance -- a real cap,
+ *  never unmetered. Deliberately DERIVED from Bronze's (basic) base
+ *  allowance rather than a second hardcoded number, so it can never drift
+ *  out of its intended "10% of Bronze" relationship if Bronze's own
+ *  allowance ever changes. Rounded to the nearest whole unit. */
+export const TRIAL_MEDIA_MODERATION_ALLOWANCE_RATE = 0.1;
+export const TRIAL_MEDIA_MODERATION_ALLOWANCE = Math.round(MEDIA_MODERATION_BASE_ALLOWANCE.basic * TRIAL_MEDIA_MODERATION_ALLOWANCE_RATE);
+
 /** Enterprise's three commercial variants (Managed / BYO 50 / BYO Unlimited)
  *  each get their own included base allowance too -- keyed the same way
  *  `resolveEnterpriseMediaAddonKey` (watch-enterprise.ts) already resolves

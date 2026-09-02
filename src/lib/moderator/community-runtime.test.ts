@@ -6,6 +6,7 @@ import {
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
   finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
+  trialMediaModerationPeriod,
 } from "./community-runtime";
 import type { CommunityEvent } from "./event-types";
 import { DEFAULT_MODERATOR_PERSONA } from "./domain";
@@ -917,6 +918,35 @@ test("photo takes precedence when (hypothetically) multiple media fields are pre
     video: { file_id: "v1", file_unique_id: "uv1", duration: 10, file_size: 10000, mime_type: "video/mp4" },
   });
   assert.equal(detectSupportedMedia(msg)?.kind, "photo");
+});
+
+/* ------------------------------------- trial Media Moderation cap (2026-09-02) ---- */
+// The Free Trial is no longer unmetered for media moderation -- it gets a
+// real, capped allowance (money.ts's TRIAL_MEDIA_MODERATION_ALLOWANCE),
+// tracked against the trial's OWN one-time started_at/ends_at rather than a
+// recurring subscription period (a trial account has no product_entitlements
+// row for resolveAccountBillingPeriod to read at all). trialMediaModerationPeriod
+// is the pure decision this pass adds; the surrounding DB-heavy orchestration
+// (runMediaModeration's usage lookup/increment/gate) is verified via
+// typecheck + build + code review, consistent with this file's own
+// established convention for that function (see its neighboring comments).
+
+test("REQUIRED: an active trial resolves to a period built from its own started_at/ends_at", () => {
+  const period = trialMediaModerationPeriod({ active: true, startedAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-08T00:00:00.000Z" });
+  assert.deepEqual(period, { start: "2026-09-01T00:00:00.000Z", end: "2026-09-08T00:00:00.000Z" });
+});
+
+test("an inactive/expired trial resolves to null -- never a stale period", () => {
+  assert.equal(trialMediaModerationPeriod({ active: false, startedAt: "2026-09-01T00:00:00.000Z", endsAt: "2026-09-08T00:00:00.000Z" }), null);
+});
+
+test("no trial at all (paid tier, or no entitlement) resolves to null", () => {
+  assert.equal(trialMediaModerationPeriod({ active: false, startedAt: null, endsAt: null }), null);
+});
+
+test("an active trial with a missing start or end date safely resolves to null rather than a half-built period", () => {
+  assert.equal(trialMediaModerationPeriod({ active: true, startedAt: null, endsAt: "2026-09-08T00:00:00.000Z" }), null);
+  assert.equal(trialMediaModerationPeriod({ active: true, startedAt: "2026-09-01T00:00:00.000Z", endsAt: null }), null);
 });
 
 /* ------------------------------------------------- Phase 4.O: /start ---- */

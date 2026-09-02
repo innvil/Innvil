@@ -7,6 +7,7 @@ import {
   MODERATOR_AUTOPOST_INCLUDED_PER_DAY, MODERATOR_AUTOPOST_MAX_PER_DAY, MODERATOR_AUTOPOST_EXTRA_DAILY_POST_PRICE,
   MODERATOR_AI_GENERATION_POOL, MODERATOR_MEDIA_ADDON, ENTERPRISE_MEDIA_ADDON,
   MEDIA_MODERATION_BASE_ALLOWANCE, ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE,
+  TRIAL_MEDIA_MODERATION_ALLOWANCE, TRIAL_MEDIA_MODERATION_ALLOWANCE_RATE,
   MEDIA_MODERATION_EXPANSION_PACKS, mediaModerationExpansionPackByUnits,
   moderatorPlanPrice, moderatorEnterpriseSlotPrice, moderatorEnterpriseIncludedCommunities, moderatorAutopostFrequencyAddonPrice,
   COMMUNITY_EXPANSION_ELIGIBLE_TIERS, COMMUNITY_EXPANSION_MONTHLY_PRICE, isCommunityExpansionEligibleTier,
@@ -298,6 +299,24 @@ test("REQUIRED: the full canonical lineup sums to exactly 10,000 units (Bronze 3
     + ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.managed50 + ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byo50
     + ENTERPRISE_MEDIA_MODERATION_BASE_ALLOWANCE.byoUnlimited;
   assert.equal(total, 10000);
+});
+
+/* --------------------------------------- Free Trial Media Moderation cap ---- */
+// (2026-09-02) The Free Trial is no longer unmetered -- it gets a real,
+// capped allowance derived from Bronze's own base allowance, so it can never
+// silently drift out of its intended "10% of Bronze" relationship.
+
+test("REQUIRED: the trial's Media Moderation allowance is exactly 10% of Bronze's base allowance", () => {
+  assert.equal(TRIAL_MEDIA_MODERATION_ALLOWANCE_RATE, 0.1);
+  assert.equal(TRIAL_MEDIA_MODERATION_ALLOWANCE, Math.round(MEDIA_MODERATION_BASE_ALLOWANCE.basic * 0.1));
+  assert.equal(TRIAL_MEDIA_MODERATION_ALLOWANCE, 30, "Bronze is currently 300 units -- 10% is 30");
+});
+
+test("the trial allowance is strictly smaller than every real paid tier's own allowance, incl. Bronze itself", () => {
+  assert.ok(TRIAL_MEDIA_MODERATION_ALLOWANCE < MEDIA_MODERATION_BASE_ALLOWANCE.basic);
+  assert.ok(TRIAL_MEDIA_MODERATION_ALLOWANCE < MEDIA_MODERATION_BASE_ALLOWANCE.standard);
+  assert.ok(TRIAL_MEDIA_MODERATION_ALLOWANCE < MEDIA_MODERATION_BASE_ALLOWANCE.premium);
+  assert.ok(TRIAL_MEDIA_MODERATION_ALLOWANCE < MEDIA_MODERATION_BASE_ALLOWANCE.pro);
 });
 
 test("REQUIRED (12): revising Media Moderation Unit allowances leaves Watcher-slot entitlement (CAPACITY.maxActiveSlots) completely unchanged -- a structurally separate table, never derived from or coupled to media allowances", () => {

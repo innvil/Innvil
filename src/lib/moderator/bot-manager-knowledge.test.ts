@@ -39,6 +39,13 @@ test("REQUIRED: retrieveProductKnowledge finds the Watch Free Trial entry for a 
   assert.match(hit!.content, /7-day/);
 });
 
+test("REQUIRED (2026-09-02): the Free Trial entry states it includes a REAL, capped Media Moderation allowance -- never 'not included'", () => {
+  const entry = INNVIL_PRODUCT_KNOWLEDGE.find((r) => r.id === "innvil-watch-free-trial")!;
+  assert.match(entry.content, /30 units/);
+  assert.doesNotMatch(entry.content, /does not include media moderation/i);
+  assert.doesNotMatch(entry.content, /media moderation.*not (available|included)/i);
+});
+
 test("REQUIRED: Watch pricing is never conflated with Forge's 5% commission model", () => {
   const watchPricing = INNVIL_PRODUCT_KNOWLEDGE.find((r) => r.id === "innvil-watch-pricing")!;
   assert.doesNotMatch(watchPricing.content, /5% commission/);
@@ -64,9 +71,18 @@ test("REQUIRED: retrieveProductKnowledge finds Community Expansion for a Gold/Pl
   assert.match(hit!.content, /\$14\.99/);
 });
 
-test("REQUIRED: retrieveProductKnowledge finds Media Moderation + for a photo/video safety question", () => {
+test("REQUIRED: retrieveProductKnowledge finds Media Moderation for a photo/video safety question", () => {
   const results = retrieveProductKnowledge("does watch moderate unsafe photo and video content?");
   assert.ok(results.some((r) => r.id === "innvil-watch-media-moderation-addon"));
+});
+
+test("REQUIRED (2026-09-02): Media Moderation is stated as INCLUDED on every plan, never as a paid add-on requiring a separate purchase", () => {
+  const entry = INNVIL_PRODUCT_KNOWLEDGE.find((r) => r.id === "innvil-watch-media-moderation-addon")!;
+  assert.match(entry.content, /INCLUDED automatically on every plan/i);
+  assert.doesNotMatch(entry.content, /is a paid add-on/i);
+  assert.match(entry.content, /Bronze 300/);
+  assert.match(entry.content, /Platinum 1,000/);
+  assert.match(entry.content, /capped at 30 units/);
 });
 
 test("REQUIRED: retrieveProductKnowledge finds annual billing / Innvil Credit for a discount question", () => {
