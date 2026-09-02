@@ -127,6 +127,42 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Investigated "moderation only acts every 3-5 hours" against live production data + widened the pitch pre-filter once more (v1.49.21)
+- **Root-caused with real evidence, not speculation.** Pulled `moderator_activity_log` + `community_messages`
+  for the live community the user is testing in. Two separate things were true at once: (1) `runLinkModeration`
+  only ever writes a log entry (even an `ALLOW`) when a message has SOMETHING link-shaped or pitch-shaped in it
+  (`extractLinks`/`looksLikeUnsolicitedPitch`) — an early return with **zero log entry** for anything else,
+  since `handled:false` is returned before the classifier or `logActivity` ever run. Ordinary chat never shows
+  up in the moderation log at all, so a `link_moderation` cadence of "every few hours" mostly just reflects how
+  often something spam-shaped actually arrives — that's expected, not a bug. (2) BUT several real spam pitches
+  in the SAME window genuinely never reached the classifier at all — cross-checked their exact `created_at`
+  timestamps against `git log`'s commit times and confirmed **every one of them predates v1.49.19's own commit
+  (21:12:59 UTC)** — they were real instances of the exact bug v1.49.19 fixed, just from before that fix was
+  written/deployed (the deploy that went out ~21:13 UTC, confirmed via `vercel inspect`, was the very next
+  production deployment). The first new spam-shaped message that arrived AFTER that deploy (a promo link posted
+  alongside "Pinksale verified partner") was correctly caught end-to-end (`DELETE_WARN` + persona-voiced
+  warning) — direct evidence the v1.49.19 fix is working live.
+- **One more real, currently-still-open gap found while cross-checking every miss against the CURRENT (already-
+  widened) pre-filter**: "Do you low to promote your channel in big crypto community to get investors for your
+  project sir" — an ungrammatical, stranger-initiated pitch offering to promote the RECIPIENT's own channel —
+  still returned `false`. Neither `PROMOTION_SERVICE_RE` (requires an "I can"/"we can"/"let's" lead-in before
+  "promote") nor `BOOST_TARGET_RE` (requires grow/boost/push, not "promote") nor `GROWTH_PITCH_RE` (no exact
+  phrase match for "get investors for your project") matched this specific shape.
+- **Fix**: new `PROMOTE_YOUR_X_RE` (`\bpromote\b.{0,15}\b(your|the)\b.{0,15}\b(channel|project|community|
+  token|coin)\b`) folded into the existing `serviceOffer` signal (not a new standalone-strong marker — a bare
+  "promote your channel" alone is still not distinctive enough to skip the 2-signal requirement, e.g. "I really
+  like how you promote your channel, it's growing so fast!" is a genuine compliment and must never be flagged
+  on its own). `GROWTH_PITCH_RE` widened with `get investors|investors for (your|the)`. Combined, the exact
+  live-miss message now trips BOTH `serviceOffer` and `growthLanguage` (2 signals) and is correctly flagged —
+  verified directly against the real message text before writing any test, and verified the widening does NOT
+  fire on a genuine compliment about someone's own promotion efforts or an in-community "promote the pinned
+  announcement" request.
+- New tests (`link-moderation.test.ts`, +3): the exact live-miss message now flagged, the compliment
+  false-positive guard, the in-community-announcement false-positive guard. 2137 tests pass (up from 2134),
+  `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically this pass** — pending confirmation before pushing to production, alongside
+  v1.49.20 (not yet pushed either).
+
 ### 2026-09-03 — Corrected Project/Communities/Watchers IA (drop the redundant Watchers table from the Project's "Community" tab, restore the Communities sidebar destination with a real "+ Add Community") + trial moderation now shares the reactive-generation quota's headroom + ambient compliments get a reaction (v1.49.20)
 - **IA correction, per explicit user feedback with a screenshot.** The 2026-09-02 "Project/Community dashboard
   consolidation" over-corrected: it removed "Communities" from the Workspace sidebar entirely AND duplicated

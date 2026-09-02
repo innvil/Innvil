@@ -119,6 +119,30 @@ test("REQUIRED (live bug repro): 'pump and increase holder' pitch offering a lar
   assert.equal(looksLikeUnsolicitedPitch(text), true);
 });
 
+// Live investigation (2026-09-02, follow-up): after v1.49.19 shipped, the
+// user reported "moderation only acts every 3-5 hours" -- traced against
+// production `moderator_activity_log`/`community_messages`. Every prior miss
+// found predated v1.49.19's deploy (a real spam pitch WAS correctly caught
+// immediately after deployment), but this exact phrasing -- an ungrammatical
+// question offering to promote the RECIPIENT's own channel, with no "I can"/
+// "we can"/"let's" lead-in and no exact GROWTH_PITCH_RE phrase -- was still
+// slipping through even in the post-fix code. Neither PROMOTION_SERVICE_RE
+// (requires a lead-in phrase) nor BOOST_TARGET_RE (requires grow/boost/push,
+// not "promote") nor GROWTH_PITCH_RE (no exact phrase match for "get
+// investors for your project") matched it.
+test("REQUIRED (live bug repro, follow-up): 'do you [want to] promote your channel... to get investors for your project' is flagged", () => {
+  const text = "Do you low to promote your channel in big crypto community to get investors for your project sir";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+test("a genuine compliment about someone's own channel-promotion effort is never flagged (single signal, no second corroborating one)", () => {
+  assert.equal(looksLikeUnsolicitedPitch("I really like how you promote your channel, it's growing so fast!"), false);
+});
+
+test("a genuine in-community request to promote an announcement is never flagged", () => {
+  assert.equal(looksLikeUnsolicitedPitch("can you promote the announcement in the pinned post please"), false);
+});
+
 test("the new single-strong-signal branch never fires on ordinary conversation that merely mentions similar words individually", () => {
   assert.equal(looksLikeUnsolicitedPitch("that KOL panel discussion at the conference was really insightful"), false);
   assert.equal(looksLikeUnsolicitedPitch("promos are live on the store this week, check it out"), false);
