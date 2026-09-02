@@ -16,6 +16,7 @@ import { AutoPostScheduleCard } from "@/src/components/watch/AutoPostScheduleCar
 import { getAutoPostingEligibility } from "@/src/lib/actions/watch-autopost";
 import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
 import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
+import { AcknowledgeAdminModToggle } from "@/src/components/watch/AcknowledgeAdminModToggle";
 import { assignWatcherRoles } from "@/src/lib/moderator/watcher-roles";
 
 export const metadata: Metadata = { title: "Community — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
@@ -206,6 +207,7 @@ export default async function CommunityDetailPage({
           <div className="mt-5 pt-5 border-t w-line-soft">
             <SectionHeader icon={SettingsIcon} title="Moderation" />
             <CommunitySolicitationToggle communityId={community.id} allowSolicitation={community.allowSolicitation} />
+            <AcknowledgeAdminModToggle communityId={community.id} acknowledgeAdminMod={community.acknowledgeAdminMod} />
           </div>
         </div>
       ),

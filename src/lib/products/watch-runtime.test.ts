@@ -17,6 +17,7 @@ import {
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
   resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
+  setAccountCommunityAcknowledgeAdminMod,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration, communityCountExceeded } from "@/src/lib/moderator/plan";
@@ -131,16 +132,23 @@ function fakeAdmin(seed: {
         update(patch: Row) {
           return {
             eq(col: string, val: unknown) {
+              const applyPatch = () => {
+                const rows = store[table] ?? [];
+                const idx = rows.findIndex((r) => r[col] === val);
+                if (idx < 0) return { data: null, error: { message: "not found" } };
+                rows[idx] = { ...rows[idx], ...patch };
+                store[table] = rows;
+                return { data: rows[idx], error: null };
+              };
               return {
                 select() { return this; },
-                async single() {
-                  const rows = store[table] ?? [];
-                  const idx = rows.findIndex((r) => r[col] === val);
-                  if (idx < 0) return { data: null, error: { message: "not found" } };
-                  rows[idx] = { ...rows[idx], ...patch };
-                  store[table] = rows;
-                  return { data: rows[idx], error: null };
-                },
+                async single() { return applyPatch(); },
+                // A bare `await admin.from(table).update(patch).eq(col, val)`
+                // (no .select()/.single() chained) is how most callers in
+                // this codebase actually use update() -- a real Supabase
+                // query builder is thenable regardless of whether .select()
+                // was chained, so this must be too.
+                then(resolve: (v: { data: Row | null; error: { message: string } | null }) => void) { resolve(applyPatch()); },
               };
             },
           };
@@ -2414,4 +2422,37 @@ test("listAccountCommunities exposes connectionType so the UI can label an Escal
   const communities = await listAccountCommunities(admin, "acct-1");
   assert.equal(communities.find((c) => c.id === "c1")?.connectionType, "community");
   assert.equal(communities.find((c) => c.id === "esc")?.connectionType, "escalation_group");
+});
+
+test("REQUIRED: listAccountCommunities defaults acknowledgeAdminMod to false and reflects a true value when explicitly set", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [
+      { id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" },
+      { id: "c2", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1002", acknowledge_admin_mod: true },
+    ],
+  });
+  const communities = await listAccountCommunities(admin, "acct-1");
+  assert.equal(communities.find((c) => c.id === "c1")?.acknowledgeAdminMod, false, "defaults to false when the column is missing/null, never fabricated true");
+  assert.equal(communities.find((c) => c.id === "c2")?.acknowledgeAdminMod, true);
+});
+
+test("REQUIRED: setAccountCommunityAcknowledgeAdminMod updates only the targeted community, and only within the owning account's own projects", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" }],
+  });
+  const result = await setAccountCommunityAcknowledgeAdminMod(admin, "acct-1", "c1", true);
+  assert.equal(result.ok, true);
+  const communities = await listAccountCommunities(admin, "acct-1");
+  assert.equal(communities.find((c) => c.id === "c1")?.acknowledgeAdminMod, true);
+});
+
+test("setAccountCommunityAcknowledgeAdminMod rejects a community that doesn't belong to this account's own projects", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "other-proj", platform: "telegram", chat_id: "-1001" }],
+  });
+  const result = await setAccountCommunityAcknowledgeAdminMod(admin, "acct-1", "c1", true);
+  assert.equal(result.ok, false);
 });

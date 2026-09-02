@@ -13,7 +13,7 @@ import { hasProductAccess, createStandaloneProject, listAccountProjects, type Ac
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import {
   createAccountWatcher, listAccountWatchers, createAccountCommunity, deployAccountWatcher,
-  setAccountCommunityAllowSolicitation,
+  setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   listAccountAttentionItems, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountProjectDetail, getAccountWatcherDetail, getAccountPaidPlan,
@@ -182,6 +182,12 @@ export async function setCommunityAllowSolicitation(communityId: string, allow: 
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return setAccountCommunityAllowSolicitation(admin, user.id, communityId, allow);
+}
+
+export async function setCommunityAcknowledgeAdminMod(communityId: string, acknowledge: boolean): Promise<{ ok: true; data: null } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return setAccountCommunityAcknowledgeAdminMod(admin, user.id, communityId, acknowledge);
 }
 
 /* ============================================================

@@ -809,6 +809,25 @@ export async function setAccountCommunityAllowSolicitation(admin: SupabaseClient
   return { ok: true, data: null };
 }
 
+/** Owner-facing control for the Community-level "Acknowledge admins/mods"
+ *  override (see chatter-coordinator.ts's suppressAcknowledgementForSender
+ *  + communities.acknowledge_admin_mod). Same account-ownership pattern as
+ *  setAccountCommunityAllowSolicitation. Default false -- a real Telegram
+ *  admin/creator's trivial ("thanks"/"got it"/"lol") messages get no
+ *  acknowledgement by default; turning this on treats them the same as an
+ *  ordinary member's. Never affects substantive ANSWER/CASUAL_CHAT replies,
+ *  and is completely independent of bot-to-bot acknowledgement (bot_ack_mode). */
+export async function setAccountCommunityAcknowledgeAdminMod(admin: SupabaseClient, accountId: string, communityId: string, acknowledge: boolean): Promise<CreateResult<null>> {
+  const { data: accountProjects } = await admin.from("projects").select("id").eq("account_id", accountId);
+  const projectIds = (accountProjects ?? []).map((p: Record<string, unknown>) => p.id as string);
+  if (!projectIds.length) return { ok: false, error: "Community not found." };
+  const { data: community } = await admin.from("communities").select("id, project_id").eq("id", communityId).maybeSingle();
+  if (!community || !projectIds.includes(community.project_id as string)) return { ok: false, error: "Community not found." };
+  const { error } = await admin.from("communities").update({ acknowledge_admin_mod: acknowledge }).eq("id", communityId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
 export interface AccountDeploymentRow {
   id: string;
   moderatorId: string;
@@ -953,6 +972,13 @@ export interface AccountCommunitySummary {
    *  promotional; every other moderation check (flood-repeat, scam/
    *  phishing, explicit content) stays fully independent and unaffected. */
   allowSolicitation: boolean;
+  /** communities.acknowledge_admin_mod (default false) -- when true, a real
+   *  Telegram admin/creator's trivial message ("thanks", "got it", "lol")
+   *  gets the same lightweight REACT/SHORT_ACK acknowledgement an ordinary
+   *  member's does; when false (default), it's suppressed. Never affects a
+   *  substantive ANSWER/CASUAL_CHAT reply. See chatter-coordinator.ts's
+   *  selectChatterAction / community-runtime.ts's isSenderAdminOrTrusted. */
+  acknowledgeAdminMod: boolean;
   /** createdAt is additive -- purely so Watcher Role Separation (see
    *  src/lib/moderator/watcher-roles.ts) can derive the same stable,
    *  deterministic deployment ORDER for UI display (role label/chatter
@@ -984,7 +1010,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   // (unavoidable: it's what scopes this whole read to THIS account).
   const { data: communities } = await admin
     .from("communities")
-    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
+    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, acknowledge_admin_mod, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
     .in("project_id", projectIds)
     .order("created_at", { ascending: true });
   // `as unknown as` -- without generated Database types, supabase-js infers
@@ -998,6 +1024,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     id: string; project_id: string; platform: string; chat_id: string; title: string | null; chat_type: string | null;
     connection_type: "community" | "escalation_group" | null;
     allow_solicitation: boolean | null;
+    acknowledge_admin_mod: boolean | null;
     moderator_deployments: Array<{ id: string; moderator_id: string; enabled: boolean; created_at: string; virtual_moderators: { id: string; name: string } | null }> | null;
   }>;
   // Excludes any row deterministically known to be a private Telegram 1:1
@@ -1025,6 +1052,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     // never fabricates "escalation_group" from an unexpected/null value.
     connectionType: c.connection_type === "escalation_group" ? "escalation_group" : "community",
     allowSolicitation: c.allow_solicitation === true,
+    acknowledgeAdminMod: c.acknowledge_admin_mod === true,
     watchers: (c.moderator_deployments ?? [])
       .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: d.virtual_moderators?.name ?? "Watcher", enabled: d.enabled, createdAt: d.created_at })),
   }));

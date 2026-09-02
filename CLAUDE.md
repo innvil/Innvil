@@ -127,6 +127,54 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Per-community "Acknowledge admins/mods" toggle for lightweight acknowledgement (v1.49.14)
+- **New per-community, owner-editable toggle (default OFF)**: whether a Watcher's lightweight acknowledgement
+  mechanism (a canned SHORT_ACK reply, or a Telegram REACT, for genuinely trivial content — "thanks", "got it",
+  "lol", a positive closing) also applies to a message sent by a real Telegram admin/creator, or only to an
+  ordinary member. Explicit product decision: a toggle, not a hardcoded removal — "I think toggle is much better
+  rather than completely removing it" — mirroring the existing `bot_ack_mode`/Community Solicitation toggle
+  pattern exactly, including the "off unless explicitly turned on" default already established for bot-to-bot
+  acknowledgement.
+- **Scoped precisely — only the acknowledgement mechanism, never substantive replies.** A real question or
+  statement from an admin/mod still always gets a genuine ANSWER/CASUAL_CHAT reply either way; only the casual
+  "got it 👍"-style reaction for TRIVIAL content is gated. New `communities.acknowledge_admin_mod` column
+  (migration `0114`, default `false`) + `ChatterActionInput.suppressAcknowledgementForSender` (new, optional —
+  undefined/false preserves every existing behavior exactly) checked as the very first line of
+  `selectChatterAction`'s `TRIVIAL` branch, before any of its several acknowledgement-producing sub-branches
+  (`RESOLVED_ACK_RE`, `POSITIVE_WORD_RE`, `DISMISSIVE_CLOSING_RE`, directed thanks/laugh, ambient relevant
+  reaction) — resolves to `SILENCE` (reason `acknowledgement_suppressed_for_sender`) for every one of them
+  uniformly, rather than special-casing each shape individually.
+- **Admin detection reuses the EXISTING `isSenderAdminOrTrusted` (community-runtime.ts)** — the same real
+  Telegram `getChatMember` status check (`administrator`/`creator`) link moderation's admin-exemption already
+  uses, never a second/parallel trust concept. Gated behind a cheap pre-check (`classifyMessageKind(text) ===
+  "TRIVIAL"`, now exported from `chatter-coordinator.ts`) so the extra Telegram API round trip only happens for
+  a message actually shaped to reach the acknowledgement path — not spent on every human message.
+- **Owner UI**: new `AcknowledgeAdminModToggle.tsx` (mirrors `CommunitySolicitationToggle.tsx`'s exact
+  SettingsRow/SettingsSwitch pattern), mounted on the Community detail page's Moderation section alongside the
+  existing solicitation toggle. New `setAccountCommunityAcknowledgeAdminMod` (`watch-runtime.ts`, mirrors
+  `setAccountCommunityAllowSolicitation`'s account-ownership check exactly) + a thin `setCommunityAcknowledgeAdminMod`
+  action wrapper (`watch-dashboard.ts`). `listAccountCommunities`/`AccountCommunitySummary` gained
+  `acknowledgeAdminMod: boolean`.
+- **Real, previously-latent test-harness bug found and fixed along the way**: `watch-runtime.test.ts`'s fake DB
+  `update(patch).eq(col,val)` only supported a chained `.select().single()` — a bare `await
+  admin.from(table).update(...).eq(...)` (how `setAccountCommunityAllowSolicitation`/the new setter actually
+  call it in production) silently never applied the patch, since the returned object had no `then()` at all
+  (an `await` on a non-thenable object just resolves to that object itself, so `error` read back as `undefined`
+  — a false "success" with the mutation never actually happening). Fixed by adding a real `then()` alongside
+  `.select().single()`, matching how a genuine Supabase query builder is thenable regardless of whether
+  `.select()` was chained. This also means `setAccountCommunityAllowSolicitation` (which had zero prior test
+  coverage) is now correctly testable against this harness too, though no retroactive test was added for it
+  this pass (out of scope).
+- New tests: `chatter-coordinator.test.ts` (+11 — every acknowledgement-producing sub-branch correctly
+  suppressed, a genuine ANSWER/CASUAL_CHAT reply to a suppressed sender completely unaffected, a
+  COMMUNITY_OPENER unaffected, the flag being a true no-op when omitted), `watch-runtime.test.ts` (+3 —
+  `listAccountCommunities` surfaces the real value/defaults false, the setter updates only the targeted
+  community within the owning account's own projects, cross-account rejection), `community-runtime.test.ts`
+  (+1 — `resolveCommunity` surfaces the real value, never fabricating one when absent). 2006 tests pass (up
+  from 1992), `tsc --noEmit` clean, production build clean.
+- **Run migration `0114`** before this governs anything live — until then `acknowledge_admin_mod` doesn't exist
+  and every community reads/writes will need it added first.
+
 ### 2026-09-02 — Free Trial gets a real Media Moderation cap (10% of Bronze) + stale AI knowledge sources corrected (v1.49.13)
 - **Explicit product decision: the Free Trial's photo/video Media Moderation, previously completely unmetered,
   now has a real cap — 10% of Bronze's own monthly allowance (300 units → 30 units for the trial).** Kept as a

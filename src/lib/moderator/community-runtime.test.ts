@@ -1036,7 +1036,7 @@ test("START_COMMAND_RE tolerates trailing whitespace", () => {
 
 interface FakeCommunityRow {
   id: string; panel_id: string | null; platform: string; chat_id: string;
-  bot_ack_mode?: string; collab_contact?: string | null;
+  bot_ack_mode?: string; collab_contact?: string | null; acknowledge_admin_mod?: boolean | null;
 }
 
 /** Mimics resolveCommunity's exact query shape: .select().eq(platform).eq(chat_id)
@@ -1078,6 +1078,17 @@ test("REQUIRED: resolveCommunity resolves a standalone (Panel-less) community by
   const community = await resolveCommunity(admin, null, { id: -1001, type: "supergroup" });
   assert.ok(community);
   assert.equal(community?.id, "c1");
+});
+
+test("resolveCommunity surfaces the real acknowledge_admin_mod value, never fabricating it when absent", async () => {
+  const admin = fakeAdminForResolveCommunity([
+    { id: "c1", panel_id: null, platform: "telegram", chat_id: "-1001", acknowledge_admin_mod: true },
+    { id: "c2", panel_id: null, platform: "telegram", chat_id: "-1002" },
+  ]);
+  const withFlag = await resolveCommunity(admin, null, { id: -1001, type: "supergroup" });
+  const withoutFlag = await resolveCommunity(admin, null, { id: -1002, type: "supergroup" });
+  assert.equal(withFlag?.acknowledge_admin_mod, true);
+  assert.equal(withoutFlag?.acknowledge_admin_mod, undefined, "no invented value for a row that never set the column");
 });
 
 test("REQUIRED: resolveCommunity never returns a Panel-scoped community for a standalone (null panelId) lookup, even with the same chat_id", async () => {

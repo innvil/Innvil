@@ -633,7 +633,7 @@ type MessageKind = "EMPTY" | "TOO_SHORT" | "COMMUNITY_OPENER" | "TRIVIAL" | "QUE
  *    3. Only once none of those claim the message does a real opener
  *       signal (greeting/re-entry, or a presence-check already handled in
  *       step 1) resolve to COMMUNITY_OPENER. */
-function classifyMessageKind(trimmed: string): MessageKind {
+export function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (COMMUNITY_CHECK_IN_RE.test(trimmed)) return "COMMUNITY_OPENER";
@@ -693,6 +693,19 @@ export interface ChatterActionInput {
    *  piling another CASUAL_CHAT opener onto a room that already engaged
    *  with it themselves. */
   recentlyRespondedByHuman?: boolean;
+  /** True when this message's SENDER is a real Telegram admin/creator of
+   *  the community AND the community has not opted in to acknowledging
+   *  admins/mods the same way it acknowledges an ordinary member
+   *  (communities.acknowledge_admin_mod, default false — see
+   *  community-runtime.ts). Scoped ONLY to the lightweight acknowledgement
+   *  mechanism below (REACT/SHORT_ACK for genuinely trivial content) — a
+   *  substantive ANSWER/CASUAL_CHAT reply to an admin/mod's real question or
+   *  statement is completely unaffected by this flag; only the "got it 👍"
+   *  -style casual reaction is what's gated. Undefined/false preserves
+   *  every existing behavior exactly (every trivial sender is acknowledged
+   *  the same way, matching how this coordinator worked before this flag
+   *  existed) — this is purely additive. */
+  suppressAcknowledgementForSender?: boolean;
 }
 
 export type ChatterAction =
@@ -792,6 +805,14 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   }
 
   if (kind === "TRIVIAL") {
+    // Checked before every sub-branch below (RESOLVED_ACK/POSITIVE_WORD/
+    // DISMISSIVE_CLOSING/directed/ambient) — a real Telegram admin/mod's
+    // trivial remark simply gets no acknowledgement at all by default,
+    // rather than selectively suppressing only some of the several
+    // acknowledgement shapes this branch can produce.
+    if (input.suppressAcknowledgementForSender) {
+      return { type: "SILENCE", reasons: ["acknowledgement_suppressed_for_sender"] };
+    }
     if (RESOLVED_ACK_RE.test(trimmed)) {
       const picked = pickCandidate(eligible);
       if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };

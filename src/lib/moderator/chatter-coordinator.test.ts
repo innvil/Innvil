@@ -33,6 +33,7 @@ function single(opts: {
   now?: Date;
   recentlyAnsweredByModerator?: boolean;
   recentlyRespondedByHuman?: boolean;
+  suppressAcknowledgementForSender?: boolean;
 }) {
   return selectChatterAction({
     text: opts.text,
@@ -47,6 +48,7 @@ function single(opts: {
     now: opts.now ?? new Date(),
     recentlyAnsweredByModerator: opts.recentlyAnsweredByModerator,
     recentlyRespondedByHuman: opts.recentlyRespondedByHuman,
+    suppressAcknowledgementForSender: opts.suppressAcknowledgementForSender,
   });
 }
 
@@ -1409,4 +1411,73 @@ test("REQUIRED (false-positive guard): a longer message that merely starts with 
 test("a dismissive reply that ends in '?' is still handled as a real question, not swallowed by the closing check", () => {
   const result = single({ text: "nothing much, what about you?", isDirectedAtBot: true });
   assert.equal(result.type, "ANSWER");
+});
+
+/* ---------------------------------------- admin/mod acknowledgement toggle ---- */
+// suppressAcknowledgementForSender (communities.acknowledge_admin_mod, default
+// false) gates ONLY the lightweight REACT/SHORT_ACK mechanism for genuinely
+// trivial content -- a real admin/mod's substantive question/statement (an
+// ANSWER/CASUAL_CHAT-shaped message) must be completely unaffected.
+
+test("REQUIRED: a directed trivial ack from a suppressed sender resolves to SILENCE, not SHORT_ACK", () => {
+  const result = single({ text: "ok", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["acknowledgement_suppressed_for_sender"]);
+});
+
+test("REQUIRED: the SAME message from a NOT-suppressed sender still resolves to SHORT_ACK -- the toggle is per-message, not a global change", () => {
+  const result = single({ text: "ok", isDirectedAtBot: true, suppressAcknowledgementForSender: false });
+  assert.equal(result.type, "SHORT_ACK");
+});
+
+test("REQUIRED: a directed thanks/laugh acknowledgement is also suppressed (REACT normally, SILENCE when suppressed)", () => {
+  const allowed = single({ text: "thanks!", isDirectedAtBot: true });
+  assert.equal(allowed.type, "REACT");
+  const suppressed = single({ text: "thanks!", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
+  assert.equal(suppressed.type, "SILENCE");
+});
+
+test("REQUIRED: a resolved-issue reaction ('fixed it', 'nvm') is suppressed the same way", () => {
+  const allowed = single({ text: "fixed it, thanks", isDirectedAtBot: true });
+  assert.equal(allowed.type, "REACT");
+  const suppressed = single({ text: "fixed it, thanks", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
+  assert.equal(suppressed.type, "SILENCE");
+});
+
+test("REQUIRED: an upbeat positive closing ('perfect, thanks!') is suppressed the same way", () => {
+  const allowed = single({ text: "perfect, thanks!", isDirectedAtBot: true });
+  assert.equal(allowed.type, "REACT");
+  const suppressed = single({ text: "perfect, thanks!", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
+  assert.equal(suppressed.type, "SILENCE");
+});
+
+test("REQUIRED: an ambient (not directed) relevant reaction is also suppressed", () => {
+  const allowed = single({ text: "lol", recentlyParticipated: true });
+  assert.equal(allowed.type, "REACT");
+  const suppressed = single({ text: "lol", recentlyParticipated: true, suppressAcknowledgementForSender: true });
+  assert.equal(suppressed.type, "SILENCE");
+  assert.deepEqual(suppressed.reasons, ["acknowledgement_suppressed_for_sender"]);
+});
+
+test("REQUIRED: suppression does NOT affect a real question -- a substantive ANSWER still happens for a suppressed sender", () => {
+  const result = single({ text: "what services do you offer?", suppressAcknowledgementForSender: true });
+  assert.equal(result.type, "ANSWER");
+});
+
+test("REQUIRED: suppression does NOT affect a directed substantive statement -- CASUAL_CHAT still happens for a suppressed sender", () => {
+  const result = single({ text: "we just launched our new product today", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
+  assert.notEqual(result.type, "SILENCE");
+  assert.notEqual(result.type, "SHORT_ACK");
+});
+
+test("suppression does not affect a COMMUNITY_OPENER (a greeting is not the trivial-acknowledgement path)", () => {
+  const result = single({ text: "hey @mrpreswan_bot", isDirectedAtBot: true, suppressAcknowledgementForSender: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+});
+
+test("suppression is a no-op when omitted -- every existing caller/test that never passes it is completely unaffected", () => {
+  const withUndefined = single({ text: "ok", isDirectedAtBot: true });
+  const withExplicitFalse = single({ text: "ok", isDirectedAtBot: true, suppressAcknowledgementForSender: false });
+  assert.deepEqual(withUndefined, withExplicitFalse);
+  assert.equal(withUndefined.type, "SHORT_ACK");
 });

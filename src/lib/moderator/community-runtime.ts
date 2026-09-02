@@ -12,7 +12,7 @@ import {
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
   selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, requiresIndividualContribution,
-  isRoomWideAddress, roomWideResponderCount,
+  isRoomWideAddress, roomWideResponderCount, classifyMessageKind,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback, resolveAdditionalReactors,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
@@ -266,7 +266,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -290,6 +290,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
+    acknowledge_admin_mod: boolean | null;
   };
 }
 
@@ -2395,7 +2396,7 @@ async function runMediaModeration(
 async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; collab_contact?: string | null; project_id?: string | null; allow_solicitation?: boolean | null },
+  community: { id: string; collab_contact?: string | null; project_id?: string | null; allow_solicitation?: boolean | null; acknowledge_admin_mod?: boolean | null },
   message: TelegramMessage,
   event: CommunityEvent,
   isTrialEntitlement: boolean,
@@ -2512,6 +2513,25 @@ async function handleHumanMessage(
     pacing: pacings[i],
   }));
 
+  // Whether this message's SENDER should be exempted from the lightweight
+  // REACT/SHORT_ACK acknowledgement mechanism -- a real Telegram admin/
+  // creator of this community is exempted by default (communities
+  // .acknowledge_admin_mod, default false), same "off unless explicitly
+  // turned on" discipline as bot-to-bot acknowledgement (BOT_ACKNOWLEDGEMENT_ENABLED)
+  // and the fellow-bot case classifySender already handles separately.
+  // Substantive ANSWER/CASUAL_CHAT replies to an admin/mod are completely
+  // unaffected -- only genuinely trivial content is in scope. Cheap
+  // pre-check first (classifyMessageKind is pure/synchronous) so the extra
+  // Telegram getChatMember round trip only runs for a message actually
+  // shaped to reach the acknowledgement path, not every human message.
+  let suppressAcknowledgementForSender = false;
+  if (community.acknowledge_admin_mod !== true && deployments.length && classifyMessageKind(event.text.trim()) === "TRIVIAL") {
+    const ackCheckToken = await getBotTokenForDeployment(admin, deployments[0].deploymentId);
+    if (ackCheckToken) {
+      suppressAcknowledgementForSender = await isSenderAdminOrTrusted(ackCheckToken, chatId, event.sender.platformUserId);
+    }
+  }
+
   // Picks the socially appropriate ACTION (SILENCE/REACT/SHORT_ACK/
   // CASUAL_CHAT/ANSWER) and AT MOST ONE responder across every eligible
   // deployment — deterministic, no probability roll anywhere. Chatter
@@ -2519,7 +2539,9 @@ async function handleHumanMessage(
   // internals at all -- it's reconciled as a separate, explicit step right
   // after, so chatter-coordinator.ts's own extensively-tested selection
   // logic stays completely untouched by this feature.
-  let action = selectChatterAction({ text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman });
+  let action = selectChatterAction({
+    text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman, suppressAcknowledgementForSender,
+  });
   timer.mark("coordinator_action_selected", { actionType: action.type });
 
   if (action.type === "SILENCE" && isAmbientOpenerFallbackCandidate(action, event.text)) {
