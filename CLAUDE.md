@@ -127,6 +127,73 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Language-agnostic pitch detection + promotion redirect speaks a NAME not a link + never exposes a raw topic ID + confirmed moderation already runs independent of the 45s reply scheduler (v1.49.22)
+- **Verified, with live evidence, that moderation is NOT gated by the human-priority 45-second reply
+  scheduler — no code change was needed here, only confirmation.** Live concern: "the ishandled should be
+  somehow bypassed... moderation should be instant... within 10 seconds." Traced `handleHumanMessage`'s real
+  call order: `runMediaModeration`/`runLinkModeration` execute unconditionally, FIRST, before role/continuity/
+  task-routing/the pending-reply scheduler are ever reached — the `already_handled`/`deferred_pending_reply`
+  concepts that DO defer up to 45s only ever govern the separate CONVERSATIONAL reply path (ANSWER/CASUAL_CHAT),
+  never enforcement. Confirmed against real production timestamps: a real spam link posted at 21:33:14 UTC was
+  deleted + warned at 21:33:22 UTC — 8 seconds, already well under the requested 10-second bar. The "only every
+  3-5 hours" pattern (v1.49.21) and the specific unmoderated messages in this session's live screenshots were
+  never scheduling delays — they were detection misses (the pre-filter not recognizing that exact phrasing/
+  language), now addressed below. The existing "if 1 moderator only, moderation runs until the 20/day cap is
+  reached" behavior was already shipped in v1.49.20, confirmed unchanged.
+- **New language-agnostic pitch-detection backstop, closing the real remaining gap.** Live example: a Russian
+  like-for-money engagement-farming message ("Пролайкай профиль магазина с одеждой и я закину от себя 800 р")
+  and an English "Do you think about promotion on my telegram channel... contact me for promotion" pitch both
+  slipped through `looksLikeUnsolicitedPitch` — an English-only regex heuristic that structurally cannot
+  recognize a pitch in another language, and keeps missing new English phrasings no matter how many patterns
+  get added (an inherently unbounded whack-a-mole, acknowledged in the function's own doc comment). New
+  `classifyPitchLikelihood()` (`chatter-generate.ts`, mirrors `classifyAmbientGreeting`'s exact shape — a tiny
+  5-token DeepSeek Flash classification call, never Sonnet) is now consulted in `runLinkModeration`
+  (`community-runtime.ts`) **only when the free regex already said no** — never doubling classifier cost for
+  something the zero-cost heuristic already caught — and only for messages at least 20 characters long (an
+  ordinary short chat message never needs an AI call here). Budget-raced (`PITCH_CLASSIFY_BUDGET_MS = 15s`,
+  same pattern as the ambient-greeting fallback) so a slow/failed call just means "not flagged," never a hang
+  or an escalation. This is language-agnostic BY DESIGN — the model itself recognizes a pitch in Russian,
+  Chinese, or any other language, closing the gap without an ever-growing per-language regex list.
+- **Solicitation warnings always write in English now, regardless of the violating message's own language** —
+  new explicit instruction in `generatePersonaSolicitationWarning`'s prompt (`link-classify.ts`): "Always write
+  the warning in English, regardless of what language the violating message itself was written in."
+- **Promotion redirect now speaks a real NAME, never a raw ID or a raw link read out as if it were one.**
+  Two separate live-caught bugs in the SAME warning: (1) `topicDisplayName()` (`community-topics.ts`) fell back
+  to printing the bare numeric Telegram thread id ("topic 11623") whenever a topic's real name hadn't been
+  learned yet (only discoverable from a `forum_topic_created`/`edited` service message) — now falls back to
+  the same plain "this topic" phrase already used when no topic is known at all, never a raw id. (2) The
+  plain-community Promotion fallback (migration 0122, for communities with no Telegram Forum topics at all)
+  read the raw configured `promotion_channel_link` URL out AS IF it were the destination's name — new migration
+  `0123_promotion_channel_name.sql` adds `communities.promotion_channel_name`, now the PRIMARY field a warning
+  actually speaks ("post that in our Promotion channel"); `promotion_channel_link` becomes a purely optional
+  secondary field, appended alongside the name as a real clickable reference, exactly like the existing
+  Forum-topic redirect already does — never read out as the name itself. **Run migration `0123`.**
+- **Dashboard control reframed + real auto-detection, per explicit request** ("instead of a link... you should
+  have a question, do you have a promotion channel? Or better yet, the system should be able to determine
+  whether there is a promotion channel"). `PromotionChannelLinkControl.tsx` rewritten: it now checks the
+  community's own already-known Forum topics (`getCommunityTopics`, the same data the Topic Policies control
+  above it already surfaces) — if a real "promotion"-policy topic is already assigned there, this whole control
+  collapses to a plain informational note ("A Promotion topic is already configured: <name> — no separate
+  fallback needed") instead of asking the owner to configure a second, redundant destination. Otherwise it's a
+  real yes/no question ("Do you have a dedicated Promotion channel or group?") with a required Name field (what
+  the warning speaks) and an optional Link field, replacing the old bare "paste a link" text input.
+  `getAccountCommunityPromotionChannelLink`/`setAccountCommunityPromotionChannelLink` (`watch-runtime.ts`)
+  renamed to `getAccountCommunityPromotionChannel`/`setAccountCommunityPromotionChannel`, now returning/
+  accepting `{name, link}` together; the `watch-dashboard.ts` action wrappers renamed to match
+  (`getCommunityPromotionChannel`/`setCommunityPromotionChannel`).
+- New tests: `chatter-generate.test.ts` (+4 — `classifyPitchLikelihood` routes to DeepSeek Flash exactly like
+  `classifyAmbientGreeting`, an "OTHER" response for ordinary non-English conversation, unconfigured DeepSeek
+  makes zero network calls, a failed call surfaces as `ok:false` without escalating), `link-classify.test.ts`
+  (+1 — the English-only warning instruction is present in the actual outgoing prompt), `community-topics.test.ts`
+  (updated — the unnamed-topic fallback now asserts NO numeric id ever appears, only the same "this topic"
+  phrase used when no topic exists at all). 2142 tests pass (up from 2137), `tsc --noEmit` clean, production
+  build clean. **`runLinkModeration`'s own redirect-name resolution has no new dedicated DB-mocked integration
+  test** — consistent with this exact function's own long-established convention (verified via typecheck +
+  build + code review instead); every new PURE piece it now calls (`classifyPitchLikelihood`,
+  `topicDisplayName`'s corrected fallback) is independently, directly tested.
+- **Not deployed automatically this pass** — pending confirmation before pushing to production, alongside
+  v1.49.20/v1.49.21 (neither has been pushed/deployed yet either).
+
 ### 2026-09-02 — Investigated "moderation only acts every 3-5 hours" against live production data + widened the pitch pre-filter once more (v1.49.21)
 - **Root-caused with real evidence, not speculation.** Pulled `moderator_activity_log` + `community_messages`
   for the live community the user is testing in. Two separate things were true at once: (1) `runLinkModeration`

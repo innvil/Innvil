@@ -815,6 +815,63 @@ export async function classifyAmbientGreeting(
   }
 }
 
+/** Language-agnostic backstop for `looksLikeUnsolicitedPitch` (link-
+ *  moderation.ts) — a live-caught gap: that function is a pure, ENGLISH-ONLY
+ *  regex heuristic, so a real unsolicited-promotion/engagement-farming pitch
+ *  written in Russian, Chinese, or any other language it has no vocabulary
+ *  for structurally can never match it, no matter how the regex list keeps
+ *  growing. This is a single cheap DeepSeek Flash classification call (5
+ *  output tokens, non-thinking, same tier as classifyAmbientGreeting) — NOT
+ *  the verdict itself, same principle as the regex heuristic it backstops:
+ *  a false positive here just costs one extra real classifyLinkIntent() call
+ *  that resolves to ALLOW, never a fabricated deletion; a false negative
+ *  (the model says OTHER) simply isn't flagged, same as a missed regex
+ *  phrasing today. Only ever called for a message the regex heuristic has
+ *  ALREADY said no to (see runLinkModeration) — never doubles the classifier
+ *  cost for something the free regex already caught. */
+export async function classifyPitchLikelihood(
+  text: string,
+  aiRouting?: AccountAiRouting
+): Promise<{ ok: true; isPitch: boolean } | { ok: false; error: string }> {
+  const system = `You classify a single chat message from a Telegram community, which may be written in ANY language. Decide whether it is an UNSOLICITED PROMOTIONAL PITCH -- e.g. advertising an unrelated project/channel/service, offering marketing/KOL/growth/promotion services, soliciting private contact ("DM me") to discuss a paid service, or offering/requesting payment in exchange for likes/follows/engagement -- as opposed to an ordinary on-topic statement, question, or conversation (in any language). Respond with EXACTLY one word: PITCH or OTHER. No punctuation, no explanation, regardless of the message's own language.`;
+
+  if (aiRouting?.required) {
+    const cred = aiRouting.credential;
+    if (!cred || !cred.model) return { ok: false, error: "BYO Enterprise: no usable AI provider credential is stored for this account" };
+    try {
+      const raw = await aiComplete({
+        system,
+        messages: [{ role: "user", content: text }],
+        model: cred.model,
+        providerOverride: byoProviderOverride(cred),
+        disableThinking: true,
+        maxTokens: 5,
+        automation: "PITCH_LIKELIHOOD_CLASSIFY_BYO",
+      });
+      return { ok: true, isPitch: raw.trim().toUpperCase().startsWith("PITCH") };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : "pitch likelihood classification failed" };
+    }
+  }
+
+  const deepseek = deepseekChatterProvider();
+  if (!deepseek) return { ok: false, error: "DeepSeek chatter provider not configured (DEEPSEEK_API_KEY)" };
+  try {
+    const raw = await aiComplete({
+      system,
+      messages: [{ role: "user", content: text }],
+      model: deepseek.model,
+      providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+      disableThinking: true,
+      maxTokens: 5,
+      automation: "PITCH_LIKELIHOOD_CLASSIFY",
+    });
+    return { ok: true, isPitch: raw.trim().toUpperCase().startsWith("PITCH") };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "pitch likelihood classification failed" };
+  }
+}
+
 /** Exported for prompt-assembly tests (chatter-generate.test.ts) — verifying
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live

@@ -45,12 +45,16 @@ export function findPromotionTopic(topics: CommunityTopicRow[]): CommunityTopicR
 }
 
 /** A reasonable display label for a topic the owner hasn't named/assigned
- *  yet — never exposes the raw numeric thread id to an end user (per
- *  explicit instruction: a raw id is a last-resort fallback, not the normal
- *  UX) unless nothing else is available at all. */
+ *  yet — NEVER exposes the raw numeric thread id to an end user (Telegram's
+ *  own internal thread id means nothing to a real person reading a warning
+ *  message; "topic 11623" reads as a bot/system artifact, exactly the
+ *  generic-sounding wording this is meant to avoid). Falls back to a plain,
+ *  natural "this topic" when the real name hasn't been learned yet (only
+ *  discoverable from a forum_topic_created/edited service message) — the
+ *  SAME graceful fallback already used when no topic row exists at all. */
 export function topicDisplayName(topic: CommunityTopicRow | null): string {
   if (!topic) return "this topic";
-  return topic.topicName?.trim() || (topic.policy === "general" ? "General" : `topic ${topic.messageThreadId}`);
+  return topic.topicName?.trim() || (topic.policy === "general" ? "General" : "this topic");
 }
 
 /** A Telegram deep link straight to a specific topic, when a chat username

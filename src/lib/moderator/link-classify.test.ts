@@ -338,6 +338,22 @@ test("REQUIRED: the prompt requires the real configured contact handle when one 
   });
 });
 
+// Live requirement (2026-09-02): "it should also be able to recognize a
+// different language, if it is a promotion or not, and when it's a
+// promotion, it should still give warning in English" -- the violating
+// message itself may be in any language (see classifyPitchLikelihood in
+// chatter-generate.ts), but the warning text sent back must always be
+// English regardless.
+test("REQUIRED: the prompt always requires an English warning, regardless of the violating message's own language", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos in General please."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /always write the warning in english/i);
+    });
+  });
+});
+
 test("REQUIRED: falls back to the exact prior deterministic template on any generation failure -- never a broken/missing warning", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);

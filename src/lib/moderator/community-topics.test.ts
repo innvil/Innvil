@@ -101,8 +101,17 @@ test("a non-forum message (currentTopic null) still produces a sensible generic 
   assert.doesNotMatch(text, /\bthread \d+\b/);
 });
 
-test("never exposes a raw numeric thread id for an UNNAMED topic -- falls back to a plain 'topic <id>' label only as a last resort, never bare digits", () => {
+// Corrected 2026-09-02, per explicit live feedback ("It should not mention
+// topic ID, it should mention the name") -- a raw numeric Telegram thread id
+// reads as a bot/system artifact to a real person, never a natural warning.
+// An unnamed topic (its real display name was never learned from a
+// forum_topic_created/edited event) now falls back to a plain "this topic"
+// phrase -- the SAME graceful fallback already used when no topic row
+// exists at all -- rather than ever surfacing the bare numeric id.
+test("never exposes a raw numeric thread id for an UNNAMED topic -- falls back to the same plain 'this topic' phrase used when no topic is known at all", () => {
   const unnamed: CommunityTopicRow = { messageThreadId: 7, topicName: null, policy: "normal" };
   const text = topicSolicitationWarningText(unnamed, promotion, null, undefined);
-  assert.match(text, /topic 7/);
+  assert.doesNotMatch(text, /\btopic 7\b/);
+  assert.doesNotMatch(text, /\b7\b/);
+  assert.match(text, /this topic/);
 });

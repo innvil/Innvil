@@ -878,23 +878,35 @@ export async function setAccountCommunityTopicPolicy(
  *  bounds were somehow bypassed. */
 /** Fallback promotion redirect destination for a community with no
  *  Telegram Forum topic structure at all (see the migration's own doc
- *  comment) -- a plain, owner-entered string (a link or @handle), never
- *  validated/resolved against Telegram (it's just stated verbatim in a
- *  warning, never used to actually message/post anywhere). Null clears it. */
-export async function getAccountCommunityPromotionChannelLink(admin: SupabaseClient, accountId: string, communityId: string): Promise<string | null> {
-  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return null;
-  const { data } = await admin.from("communities").select("promotion_channel_link").eq("id", communityId).maybeSingle();
-  return data?.promotion_channel_link ?? null;
+ *  comment). Corrected 2026-09-02, per explicit live feedback ("direct them
+ *  to Promotion, the name, not the link or ID"): `name` is the primary,
+ *  owner-entered display name a warning actually SPEAKS ("post that in our
+ *  Promotion channel"); `link` is an optional secondary field, appended
+ *  alongside the name as a real clickable destination when present, never
+ *  read out AS the name. Neither is validated/resolved against Telegram --
+ *  both are just stated verbatim in a warning, never used to actually
+ *  message/post anywhere. Either field null/empty clears it. */
+export interface PromotionChannelFallback {
+  name: string | null;
+  link: string | null;
 }
 
-export async function setAccountCommunityPromotionChannelLink(
-  admin: SupabaseClient, accountId: string, communityId: string, link: string | null
-): Promise<CreateResult<{ link: string | null }>> {
+export async function getAccountCommunityPromotionChannel(admin: SupabaseClient, accountId: string, communityId: string): Promise<PromotionChannelFallback | null> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return null;
+  const { data } = await admin.from("communities").select("promotion_channel_name, promotion_channel_link").eq("id", communityId).maybeSingle();
+  if (!data) return null;
+  return { name: data.promotion_channel_name ?? null, link: data.promotion_channel_link ?? null };
+}
+
+export async function setAccountCommunityPromotionChannel(
+  admin: SupabaseClient, accountId: string, communityId: string, name: string | null, link: string | null
+): Promise<CreateResult<PromotionChannelFallback>> {
   if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return { ok: false, error: "Community not found." };
-  const trimmed = link?.trim() || null;
-  const { error } = await admin.from("communities").update({ promotion_channel_link: trimmed }).eq("id", communityId);
+  const trimmedName = name?.trim() || null;
+  const trimmedLink = link?.trim() || null;
+  const { error } = await admin.from("communities").update({ promotion_channel_name: trimmedName, promotion_channel_link: trimmedLink }).eq("id", communityId);
   if (error) return { ok: false, error: error.message };
-  return { ok: true, data: { link: trimmed } };
+  return { ok: true, data: { name: trimmedName, link: trimmedLink } };
 }
 
 export async function getAccountCommunityPendingReplyDelay(admin: SupabaseClient, accountId: string, communityId: string): Promise<number | null> {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { __testables, shortAckText, classifyAmbientGreeting, personaReactionEmoji, generateChatterReply, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { __testables, shortAckText, classifyAmbientGreeting, classifyPitchLikelihood, personaReactionEmoji, generateChatterReply, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
@@ -769,6 +769,63 @@ test("a failed DeepSeek call surfaces as ok:false rather than throwing or escala
     globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
     try {
       const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(result.ok, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+/* ================================ language-agnostic pitch classification =====
+   REQUIRED (live bug): looksLikeUnsolicitedPitch (link-moderation.ts) is a
+   pure, ENGLISH-ONLY regex heuristic -- a real unsolicited-promotion pitch
+   written in Russian/Chinese/any other language structurally can never match
+   it. classifyPitchLikelihood is the language-agnostic backstop, mirroring
+   classifyAmbientGreeting's exact shape (DeepSeek Flash, tiny classification
+   call, never Sonnet, never escalates on failure). ================ */
+
+test("REQUIRED: classifyPitchLikelihood routes to DeepSeek Flash (never Sonnet), sends a tiny classification request", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "PITCH" } }] }, async (calls) => {
+      const result = await classifyPitchLikelihood("Пролайкай профиль магазина с одеждой и я закину от себя 800 р");
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /deepseek/i);
+      const body = calls[0].body as { model?: string; max_tokens?: number; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.thinking?.type, "disabled");
+      assert.ok((body.max_tokens ?? 1024) <= 10, "classification output should be tiny, not a full reply");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isPitch, true);
+    });
+  });
+});
+
+test('REQUIRED: "OTHER" response classifies as not-a-pitch, for ordinary conversation in any language', async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "OTHER" } }] }, async () => {
+      const result = await classifyPitchLikelihood("Спасибо за проект, очень нравится");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isPitch, false);
+    });
+  });
+});
+
+test("REQUIRED: unconfigured DeepSeek fails explicitly -- no network call attempted, never falls back to Sonnet", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const result = await classifyPitchLikelihood("some long enough message that would otherwise qualify");
+      assert.equal(result.ok, false);
+      assert.equal(calls.length, 0, "must not attempt any network call when DeepSeek is unconfigured");
+    });
+  });
+});
+
+test("a failed DeepSeek call surfaces as ok:false rather than throwing or escalating", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
+    try {
+      const result = await classifyPitchLikelihood("some long enough message that would otherwise qualify");
       assert.equal(result.ok, false);
     } finally {
       globalThis.fetch = originalFetch;

@@ -16,7 +16,7 @@ import {
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback, resolveAdditionalReactors,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
-import { generateChatterReply, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type ChatterContextMessage, type ChatterGenerationUsage } from "./chatter-generate";
+import { generateChatterReply, shortAckText, classifyAmbientGreeting, classifyPitchLikelihood, personaReactionEmoji, type ChatterContextMessage, type ChatterGenerationUsage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource, type KnowledgeContextEntry } from "./knowledge";
 import { resolveContactIntent, findCommunityContactOverride, CONTACT_LABELS, type ProjectContacts } from "./project-profile";
@@ -164,6 +164,13 @@ const CHATTER_TOTAL_BUDGET_MS = 20_000;
  *  not a full reply -- same model-timeout floor, smaller budget than a full
  *  generation since there's much less work to do around it. */
 const AMBIENT_CLASSIFY_BUDGET_MS = 15_000;
+/** classifyPitchLikelihood's own budget -- same tiny-classification-call
+ *  shape as AMBIENT_CLASSIFY_BUDGET_MS. */
+const PITCH_CLASSIFY_BUDGET_MS = 15_000;
+/** A genuine unsolicited-promotion pitch is always at least a real sentence
+ *  -- never worth an AI call for something this short regardless of
+ *  language (an ordinary short chat message, "gm", "lol", a name, etc.). */
+const PITCH_CLASSIFY_MIN_LENGTH = 20;
 
 /** One elapsed-time tracker per webhook invocation, threaded from
  *  handleCommunityUpdate down into handleHumanMessage so "total request
@@ -301,7 +308,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link, promotion_channel_name")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -325,7 +332,8 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
-    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null; promotion_channel_link: string | null;
+    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
+    promotion_channel_link: string | null; promotion_channel_name: string | null;
   };
 }
 
@@ -2174,7 +2182,7 @@ async function isSenderAdminOrTrusted(token: string, chatId: string, platformUse
 export async function runLinkModeration(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; project_id?: string | null; allow_solicitation?: boolean | null; promotion_channel_link?: string | null },
+  community: { id: string; project_id?: string | null; allow_solicitation?: boolean | null; promotion_channel_link?: string | null; promotion_channel_name?: string | null },
   chatId: string,
   event: CommunityEvent,
   deployments: ChatterDeployment[],
@@ -2202,10 +2210,22 @@ export async function runLinkModeration(
   // I can promote your project...") never matched any of the above, so it
   // silently bypassed moderation entirely and fell through to ordinary
   // chatter, which just socially commented on it instead of removing it.
-  // looksLikeUnsolicitedPitch is a cheap, narrow gate (never the verdict
-  // itself) -- classifyLinkIntent + decideLinkEnforcement still make the
-  // real decision below, exactly as for a link-bearing message.
-  const isTextSolicitationCandidate = !hasRealLinkCandidate && looksLikeUnsolicitedPitch(event.text);
+  // looksLikeUnsolicitedPitch is a cheap, narrow, ENGLISH-ONLY gate (never
+  // the verdict itself) -- classifyLinkIntent + decideLinkEnforcement still
+  // make the real decision below, exactly as for a link-bearing message.
+  let isTextSolicitationCandidate = !hasRealLinkCandidate && looksLikeUnsolicitedPitch(event.text);
+  // Language-agnostic backstop, only reached when the free regex already
+  // said no -- a real pitch in Russian/Chinese/any other language has no
+  // English vocabulary for the regex to match, no matter how that list
+  // keeps growing. Skipped for anything too short to plausibly be a real
+  // pitch sentence (an ordinary short chat message never needs an AI call
+  // here) and bounded by the same request-budget pattern as the ambient-
+  // greeting fallback -- a timeout or failure just means "not flagged",
+  // never an escalation.
+  if (!hasRealLinkCandidate && !isTextSolicitationCandidate && event.text.trim().length >= PITCH_CLASSIFY_MIN_LENGTH) {
+    const pitchClassify = await raceWithTimeout(classifyPitchLikelihood(event.text, aiRouting), PITCH_CLASSIFY_BUDGET_MS);
+    if (pitchClassify.ok && pitchClassify.value.ok && pitchClassify.value.isPitch) isTextSolicitationCandidate = true;
+  }
   if (!hasRealLinkCandidate && !isTextSolicitationCandidate) return { handled: false, collabRoutable: false };
 
   // Spam & Scam Moderator owns link/phishing/scam moderation events end to
@@ -2443,13 +2463,19 @@ export async function runLinkModeration(
   // A Forum-topic-based Promotion redirect only applies to a chat that
   // actually HAS Telegram Forum topics -- an ordinary (non-Forum) group has
   // no such structure (message_thread_id is always null there), so
-  // promotionTopic can never resolve for one. `promotion_channel_link` is
-  // the manually-configured fallback for exactly that case (a separate
-  // Telegram destination, e.g. a dedicated promotions group) -- preferred
-  // ONLY when no real Forum-topic-based Promotion topic exists, never both
-  // at once (there's one real redirect destination to state, not two).
-  const redirectName = promotionTopic ? topicDisplayName(promotionTopic) : community.promotion_channel_link ? community.promotion_channel_link : null;
-  const redirectLink = promotionTopic ? promotionTopicLink : null;
+  // promotionTopic can never resolve for one. `promotion_channel_name`/
+  // `promotion_channel_link` is the manually-configured fallback for exactly
+  // that case (a separate Telegram destination, e.g. a dedicated promotions
+  // group) -- preferred ONLY when no real Forum-topic-based Promotion topic
+  // exists, never both at once (there's one real redirect destination to
+  // state, not two). Corrected 2026-09-02: the redirect is always spoken BY
+  // NAME (`promotion_channel_name`) -- the raw link, if the owner also set
+  // one, is only ever appended alongside the name as a real clickable
+  // destination, never read out AS the name itself (the earlier version
+  // fell back to printing the bare URL as if it were a name when no
+  // Forum-topic policy existed).
+  const redirectName = promotionTopic ? topicDisplayName(promotionTopic) : community.promotion_channel_name || null;
+  const redirectLink = promotionTopic ? promotionTopicLink : (redirectName ? community.promotion_channel_link || null : null);
   // Solicitation warnings are now PERSONA-VOICED (per explicit live product
   // feedback: "the way it says a warning is too generic... it should be
   // persona based, not a generic bot warning") -- every stated fact (the
@@ -3918,13 +3944,14 @@ interface PendingReplyDbRow {
 async function loadCommunityById(admin: SupabaseClient, communityId: string) {
   const { data } = await admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link, promotion_channel_name")
     .eq("id", communityId)
     .maybeSingle();
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
-    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null; promotion_channel_link: string | null;
+    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
+    promotion_channel_link: string | null; promotion_channel_name: string | null;
   } | null;
 }
 

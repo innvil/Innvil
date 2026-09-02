@@ -16,7 +16,7 @@ import {
   setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
   listAccountCommunityTopics, setAccountCommunityTopicPolicy, type AccountCommunityTopicRow,
   getAccountCommunityPendingReplyDelay, setAccountCommunityPendingReplyDelay,
-  getAccountCommunityPromotionChannelLink, setAccountCommunityPromotionChannelLink,
+  getAccountCommunityPromotionChannel, setAccountCommunityPromotionChannel, type PromotionChannelFallback,
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   listAccountAttentionItems, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountProjectDetail, getAccountWatcherDetail, getAccountPaidPlan,
@@ -221,18 +221,18 @@ export async function setCommunityPendingReplyDelay(
   return setAccountCommunityPendingReplyDelay(admin, user.id, communityId, delaySeconds);
 }
 
-export async function getCommunityPromotionChannelLink(communityId: string): Promise<string | null> {
+export async function getCommunityPromotionChannel(communityId: string): Promise<PromotionChannelFallback | null> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return null;
-  return getAccountCommunityPromotionChannelLink(admin, user.id, communityId);
+  return getAccountCommunityPromotionChannel(admin, user.id, communityId);
 }
 
-export async function setCommunityPromotionChannelLink(
-  communityId: string, link: string | null
-): Promise<{ ok: true; data: { link: string | null } } | { ok: false; error: string }> {
+export async function setCommunityPromotionChannel(
+  communityId: string, name: string | null, link: string | null
+): Promise<{ ok: true; data: PromotionChannelFallback } | { ok: false; error: string }> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
-  return setAccountCommunityPromotionChannelLink(admin, user.id, communityId, link);
+  return setAccountCommunityPromotionChannel(admin, user.id, communityId, name, link);
 }
 
 /* ============================================================

@@ -211,9 +211,14 @@ export interface SolicitationWarningFacts {
    *  no mute (e.g. a first offense). Never invented by the model; when
    *  present it MUST be stated verbatim. */
   muteMinutes: number | undefined;
-  /** Configured Promotion topic's display name + (when derivable) a real
-   *  deep link — both null when no Promotion topic is configured at all,
-   *  in which case the model must never invent a destination. */
+  /** The real configured redirect destination's display NAME (either a real
+   *  Telegram Forum "Promotion" topic, or the plain-community fallback name
+   *  set on Community Settings) + an optional real link, when one is known
+   *  — both null when nothing is configured at all, in which case the model
+   *  must never invent a destination. The name is always what gets SPOKEN
+   *  ("post that in our Promotion channel") — the link, when present, is
+   *  only ever appended as an additional clickable reference, never read
+   *  out as if it were itself the name. */
   promotionTopicName: string | null;
   promotionTopicLink: string | null;
   /** The Project's configured partnerships/promotion contact handle, when
@@ -260,10 +265,10 @@ export async function generatePersonaSolicitationWarning(
   else requiredFacts.push(`No mute applies to this specific offense — do not claim one happened.`);
   if (facts.promotionTopicName) {
     requiredFacts.push(
-      `Redirect them to the real configured Promotion topic, named exactly "${facts.promotionTopicName}"${facts.promotionTopicLink ? ` (link: ${facts.promotionTopicLink}, include it)` : " (no link is available, just name the topic)"}.`
+      `Redirect them to the real configured Promotion destination, referring to it BY NAME exactly as "${facts.promotionTopicName}" — never read out a raw link/URL as if it were the name.${facts.promotionTopicLink ? ` A real link is also available (${facts.promotionTopicLink}) — you may include it alongside the name, but the name must still be stated.` : " No link is available, just name it."}`
     );
   } else {
-    requiredFacts.push(`No Promotion topic is configured for this community — do NOT invent one or tell them to go somewhere that doesn't exist.`);
+    requiredFacts.push(`No Promotion destination is configured for this community — do NOT invent one or tell them to go somewhere that doesn't exist.`);
   }
   if (facts.contactHandle) requiredFacts.push(`Mention the real configured promotion contact: ${facts.contactHandle}.`);
   requiredFacts.push(`Always also state: repeated offenses escalate to a mute, and a 5th offense may result in a kick or ban.`);
@@ -274,6 +279,7 @@ export async function generatePersonaSolicitationWarning(
     `Required facts you MUST include, stated accurately -- never invent, omit, or alter any of these:`,
     ...requiredFacts.map((f) => `- ${f}`),
     `Never output robotic/templated phrasing like "Violation N" -- write like a real person in-character would, while still stating every required fact above.`,
+    `Always write the warning in English, regardless of what language the violating message itself was written in.`,
     `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation, under 60 words.`,
   ].join("\n");
 
