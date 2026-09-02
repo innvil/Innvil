@@ -127,6 +127,27 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Corrected the shill-raid rule: venue vs. beneficiary (v1.49.25)
+- **v1.49.24's fix had the semantics backwards — corrected per direct live clarification.** "LETS GO, SHILL
+  RAID IN @cryptomoonshots_chat and spread the word", posted in the Byte Humor community, means: go INTO that
+  external group and promote/mention **Byte Humor's own token** there — the mentioned `@handle` is the VENUE
+  the raid targets, never the project being promoted. v1.49.24 had framed it the opposite way ("rallying to
+  support ANOTHER project's group"), which is wrong and would have let genuinely bad content slip through: a
+  rally that names a DIFFERENT, specific project/token as what to shill ("let's go shill $OTHERCOIN") is still
+  unsolicited promotion for someone else's project and must stay flagged.
+- **Fix, replacing v1.49.24's worked example and category definition in `link-classify.ts`'s prompt** — the
+  decisive question for a raid/rally message is now stated as WHAT is being promoted, never WHERE: rallying
+  members to promote THIS community's own project (even at an external venue) is allowed (`SAFE_RELEVANT_LINK`);
+  rallying members to promote a DIFFERENT, specifically named project/token is still `UNSOLICITED_PROMOTION`,
+  regardless of whether it's framed as a "raid." Added a second worked example for the violating case
+  ("let's go shill $OTHERCOIN over at @somegroup" → still flagged) alongside the corrected allowed one.
+- New tests (`link-classify.test.ts`): rewrote the v1.49.24 test to assert the corrected venue-vs-promoted-
+  thing framing, and added a new test pinning the violating case (rallying to promote a different named
+  project) still classifies as `UNSOLICITED_PROMOTION`. 2148 tests pass (up from 2147), `tsc --noEmit` clean,
+  production build clean.
+- **Deployed to production**, superseding v1.49.24's prompt wording (v1.49.24's underlying mechanism — an
+  explicit shill-raid carve-out existing at all — was the right instinct, just needed the correct rule).
+
 ### 2026-09-02 — Classifier now distinguishes a "shill raid" (ordinary crypto camaraderie) from urging people to abandon this community (v1.49.24)
 - **Live feedback, correctly flagged as a real false-positive risk, not yet an actual live miss.** "LETS GO,
   SHILL RAID IN @cryptomoonshots_chat and spread the word" — an existing member rallying fellow members to go

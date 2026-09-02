@@ -72,23 +72,36 @@ test("REQUIRED (live bug repro): a link-LESS promotional pitch is classified via
   });
 });
 
-// Live feedback (2026-09-02): "LETS GO, SHILL RAID IN @cryptomoonshots_chat
-// and spread the word" (an existing member rallying fellow members to go
-// ADDITIONALLY support/engage another crypto project's group) is ordinary,
-// culturally normal crypto-community camaraderie -- not advertising. The
-// classifier's own pre-existing worked example ("everyone leave this group
-// and join X") frames external-group mentions negatively; without an
-// explicit carve-out, a shill raid risks being misread as the same thing.
-// The decisive distinction: does it ask people to LEAVE/ABANDON this
-// community, or just to additionally support another one while staying?
-test("REQUIRED (live feedback): the prompt explicitly distinguishes a 'shill raid' (ordinary camaraderie, SAFE_RELEVANT_LINK) from urging people to leave/abandon this community (UNSOLICITED_PROMOTION)", async () => {
+// Live feedback (2026-09-02), corrected after an initial misread: "LETS GO,
+// SHILL RAID IN @cryptomoonshots_chat and spread the word" is a member
+// rallying fellow COMMUNITY members to go INTO another Telegram group
+// (@cryptomoonshots_chat) and shill THIS community's OWN project there --
+// the mentioned venue is where the raid happens, never itself the thing
+// being promoted/advertised. This is standard, allowed crypto-community
+// growth activity. The decisive distinction is WHAT is being promoted, never
+// WHERE the raid targets: rallying members to promote a DIFFERENT,
+// specifically named project ("let's go shill $OTHERCOIN") is still
+// UNSOLICITED_PROMOTION.
+test("REQUIRED (live feedback): the prompt distinguishes a 'shill raid' promoting THIS community's own project at an external venue (SAFE_RELEVANT_LINK) from rallying members to promote a different named project (UNSOLICITED_PROMOTION)", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("CATEGORY: SAFE_RELEVANT_LINK\nCONFIDENCE: high"), async (calls) => {
       await classifyLinkIntent("LETS GO, SHILL RAID IN @cryptomoonshots_chat and spread the word", "");
       const body = calls[0].body as { system: string };
       assert.match(body.system, /shill raid/i);
-      assert.match(body.system, /never asks anyone to abandon or leave this community/i);
-      assert.match(body.system, /does not include a "shill raid" rally/i);
+      assert.match(body.system, /venue.*never itself the thing being promoted/i);
+      assert.match(body.system, /rallying members to promote a different, specifically named project/i);
+    });
+  });
+});
+
+test("REQUIRED (live feedback, corrected framing): the prompt's own worked example for rallying members to promote a DIFFERENT named project explicitly stays UNSOLICITED_PROMOTION", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: UNSOLICITED_PROMOTION\nCONFIDENCE: high"), async (calls) => {
+      const result = await classifyLinkIntent("Let's rally and go shill $OTHERCOIN over at @somegroup", "");
+      assert.deepEqual(result, { category: "UNSOLICITED_PROMOTION", confidence: "high" });
+      const body = calls[0].body as { system: string };
+      assert.match(body.system, /\$OTHERCOIN/);
+      assert.match(body.system, /is NOT this community's own subject/i);
     });
   });
 });
