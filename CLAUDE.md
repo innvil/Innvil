@@ -127,6 +127,53 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Change connected Telegram identity — trial continues/never re-grants (v1.49.12)
+- **New capability: an account can change WHICH Telegram identity is connected in Profile.** Previously the
+  Connect Telegram card was read-only once verified (explicitly deferred per the 2026-08-18 v1.37.0 entry's
+  own "no safe reassignment flow designed yet" note) — this pass builds that flow, with the exact free-trial
+  continuity/anti-reuse rules requested: changing identity **never** resets or extends an in-progress trial
+  (it keeps counting down from wherever the original identity left it), and **neither** the OLD nor the NEW
+  identity involved in a change can ever be used to claim a **second** free trial anywhere else.
+- **Root architecture insight, confirmed before writing any code**: this guarantee already existed
+  structurally, unused. `watch_trial_claims` (migration 0079) has TWO independent unique constraints —
+  `unique(account_id)` and `unique(telegram_user_id)` — so trial state is keyed by ACCOUNT, completely
+  decoupled from whichever Telegram identity happens to be linked right now, and a Telegram identity that
+  already claimed a trial can never claim a second one through any other account, by DB constraint alone. The
+  ONLY missing piece was the ability to actually change the linked identity at all — `linkTelegramIdentity`
+  (`watch-abuse.ts`) could only ever ADD a new `watch_telegram_links` row for an account, never replace the
+  existing one, and there was no UI control to trigger it a second time.
+- **Fix, in the one function every connect/relink path already funnels through**: `linkTelegramIdentity` now
+  deletes an account's own PRIOR link row(s) (any `telegram_user_id` other than the one just verified) before
+  writing the new one — but only AFTER confirming the new identity isn't already linked to a different account,
+  so a rejected change attempt never destroys the existing link. `watch_trial_claims` is never touched by this
+  function at all — the trial's `started_at`/`ends_at`/one-time-use record survive an identity change untouched,
+  by construction, not by a special case. No new relink-specific code path exists; "change" is just running the
+  exact same connect flow again.
+- **UI** (`ConnectTelegramCard.tsx`): the connected state gained a **"Change Telegram account"** control
+  (reuses the existing `startWatchTelegramVerification`/`/start <token>` deep-link flow unchanged), with a
+  short note stating the continuity/anti-reuse guarantee plainly. The pending screen now distinguishes "waiting
+  for your new Telegram account to verify" from a first-time connect, and correctly notes the current
+  connection stays active until the new one verifies. **Real bug fixed along the way**: `cancel()` previously
+  hardcoded `setState({status:"not_connected"})` — harmless before this pass (cancel was only ever reachable
+  from the not-yet-connected state, where that was correct), but would have been WRONG for a cancelled
+  **change** on an already-connected account (the original identity is still linked, untouched by a cancelled
+  verification attempt) — now re-reads the real server state via `getWatchTelegramState()` instead of assuming.
+- New tests (`watch-abuse.test.ts`, +9): direct `linkTelegramIdentity` replace-on-change behavior (old link
+  removed, new one reflected immediately, a rejected change leaves the existing link untouched, re-linking the
+  same identity is a no-op, one account's change never affects another's), plus 4 cross-module integration
+  tests exercising the REAL `linkTelegramIdentity` together with the REAL `startWatchTrial`/`getWatchTrialState`/
+  `hasActiveWatchTrial` against one shared fake admin — the exact two scenarios from the request: TG1 (used for
+  a trial, then disconnected) can be linked to a brand-new account but can never start a SECOND trial there; a
+  newly-connected identity that already has its OWN trial claim elsewhere is rejected outright; and a trial
+  that's 2 days in when TG1→TG2 happens keeps its exact original `started_at`/`ends_at` — including across
+  multiple consecutive identity changes. Test harness (`fakeAdmin`) extended with `.delete()` support and a
+  `watch_trial_claims` uniqueness-conflict simulation (mirrors `watch-trial.test.ts`'s own). 1984 tests pass
+  (up from 1975), `tsc --noEmit` clean, production build clean.
+- **Not verified live via click-through this pass** — this flow requires a real authenticated session with a
+  Telegram-linkable identity, unavailable in this sandbox (same limitation as most Watch dashboard passes);
+  verified instead via the full test suite (which directly exercises the real trial/identity logic end-to-end,
+  not mocked assertions) plus typecheck + production build + code review.
+
 ### 2026-09-01 — Watch landing hero headline update (v1.49.11)
 - `WatchLanding.tsx`'s hero `<h1>` changed from "Watchers that do more than watch." to explicit user-requested
   copy: **"Watchers — your virtual Telegram moderators that do more than just moderate."** Pure copy change,

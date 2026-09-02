@@ -6,14 +6,19 @@ import {
   getAccountTelegramIdentity, createTelegramVerificationAttempt, getPendingTelegramVerification,
   cancelPendingTelegramVerification, consumeTelegramVerificationAttempt,
 } from "./watch-abuse";
+import { getWatchTrialState, hasActiveWatchTrial, startWatchTrial } from "./watch-trial";
 
 type Row = Record<string, unknown>;
 
-function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: Row[]; watch_telegram_verification_attempts?: Row[] }) {
+function fakeAdmin(seed: {
+  watch_telegram_links?: Row[]; watch_abuse_signals?: Row[]; watch_telegram_verification_attempts?: Row[];
+  watch_trial_claims?: Row[];
+}) {
   const store: Record<string, Row[]> = {
     watch_telegram_links: seed.watch_telegram_links ?? [],
     watch_abuse_signals: seed.watch_abuse_signals ?? [],
     watch_telegram_verification_attempts: seed.watch_telegram_verification_attempts ?? [],
+    watch_trial_claims: seed.watch_trial_claims ?? [],
   };
   return {
     __store: store,
@@ -33,6 +38,15 @@ function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: R
         limit() { return builder; },
         async maybeSingle() { return { data: rowsMatching()[0] ?? null, error: null }; },
         async insert(row: Row) {
+          // Simulates watch_trial_claims' real DB constraints -- both
+          // unique(account_id) and unique(telegram_user_id), independently
+          // -- needed by the cross-module trial-continuity/anti-reuse
+          // integration tests below, which exercise the REAL startWatchTrial
+          // against this same fake admin/store.
+          if (table === "watch_trial_claims") {
+            const conflict = (store[table] ?? []).some((r) => r.account_id === row.account_id || r.telegram_user_id === row.telegram_user_id);
+            if (conflict) return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } };
+          }
           const id = `gen-${table}-${(store[table] ?? []).length + 1}`;
           store[table] = [...(store[table] ?? []), { id, ...row }];
           return { data: null, error: null };
@@ -84,6 +98,21 @@ function fakeAdmin(seed: { watch_telegram_links?: Row[]; watch_abuse_signals?: R
             },
           };
           return updateBuilder;
+        },
+        // delete().eq()...eq()/neq() -- removes every currently-matching row
+        // (mirrors the real Supabase delete-query shape linkTelegramIdentity's
+        // replace-on-change step uses). Implicitly awaited via `then`, same
+        // convention as the base builder and the plain update() path above.
+        delete() {
+          const deleteBuilder: Record<string, unknown> = {
+            eq(col: string, val: unknown) { filters.push([col, val, "eq"]); return deleteBuilder; },
+            neq(col: string, val: unknown) { filters.push([col, val, "neq"]); return deleteBuilder; },
+            then(resolve: (v: { data: null; error: null }) => void) {
+              store[table] = (store[table] ?? []).filter((r) => !rowsMatching().includes(r));
+              resolve({ data: null, error: null });
+            },
+          };
+          return deleteBuilder;
         },
         then(resolve: (v: { data: Row[]; error: null }) => void) {
           resolve({ data: rowsMatching(), error: null });
@@ -206,6 +235,58 @@ test("REQUIRED: a NEW account cannot re-consume the offer if the SAME verified T
   });
   // acct-2 is a brand new account, never itself consumed anything -- but shares the Telegram identity
   assert.equal(await eligibleForOneTimeOffer(admin, "acct-2", 555, "trial_consumed"), false);
+});
+
+/* ---------------------------------------------- change/relink identity ---- */
+
+test("REQUIRED: linking a NEW identity for an account REPLACES its own prior link, never leaves both", async () => {
+  const admin = fakeAdmin({ watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 111 }] });
+  const result = await linkTelegramIdentity(admin, "acct-1", 222);
+  assert.equal(result.ok, true);
+  assert.equal(admin.__store.watch_telegram_links.length, 1, "the old link must be replaced, not kept alongside the new one");
+  assert.equal(admin.__store.watch_telegram_links[0].telegram_user_id, 222);
+});
+
+test("REQUIRED: getAccountTelegramIdentity reflects the NEW identity immediately after a change", async () => {
+  const admin = fakeAdmin({ watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 111, verified_at: "2026-08-01T00:00:00.000Z" }] });
+  await linkTelegramIdentity(admin, "acct-1", 222, "new_handle");
+  const identity = await getAccountTelegramIdentity(admin, "acct-1");
+  assert.equal(identity?.telegramUserId, 222);
+  assert.equal(identity?.telegramUsername, "new_handle");
+});
+
+test("REQUIRED: changing to an identity already linked to ANOTHER account is rejected, and the account's own existing link is left untouched", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_links: [
+      { account_id: "acct-1", telegram_user_id: 111 },
+      { account_id: "acct-2", telegram_user_id: 999 },
+    ],
+  });
+  const result = await linkTelegramIdentity(admin, "acct-1", 999);
+  assert.equal(result.ok, false);
+  assert.equal(admin.__store.watch_telegram_links.length, 2, "nothing was deleted -- the rejected change must never touch the existing link");
+  const own = admin.__store.watch_telegram_links.find((r: Row) => r.account_id === "acct-1");
+  assert.equal(own?.telegram_user_id, 111, "acct-1's own identity must be unchanged after a rejected change attempt");
+});
+
+test("re-linking the SAME identity an account already has is a harmless no-op, not treated as a change", async () => {
+  const admin = fakeAdmin({ watch_telegram_links: [{ account_id: "acct-1", telegram_user_id: 111 }] });
+  const result = await linkTelegramIdentity(admin, "acct-1", 111);
+  assert.equal(result.ok, true);
+  assert.equal(admin.__store.watch_telegram_links.length, 1);
+  assert.equal(admin.__store.watch_telegram_links[0].telegram_user_id, 111);
+});
+
+test("changing identity never affects a DIFFERENT account's own linked identity", async () => {
+  const admin = fakeAdmin({
+    watch_telegram_links: [
+      { account_id: "acct-1", telegram_user_id: 111 },
+      { account_id: "acct-2", telegram_user_id: 333 },
+    ],
+  });
+  await linkTelegramIdentity(admin, "acct-1", 222);
+  const other = admin.__store.watch_telegram_links.find((r: Row) => r.account_id === "acct-2");
+  assert.equal(other?.telegram_user_id, 333, "acct-2's link must be completely unaffected by acct-1's change");
 });
 
 test("a different Telegram identity under a different account remains eligible", async () => {
@@ -417,4 +498,101 @@ test("REQUIRED: connecting a Telegram person creates no Project/Community/Watche
   assert.equal(Object.keys(admin.__store).includes("projects"), false);
   assert.equal(Object.keys(admin.__store).includes("communities"), false);
   assert.equal(Object.keys(admin.__store).includes("virtual_moderators"), false);
+});
+
+/* ============================================================
+   Cross-module: changing the connected Telegram identity + trial
+   continuity/anti-reuse. Exercises the REAL linkTelegramIdentity (this
+   file) together with the REAL startWatchTrial/getWatchTrialState/
+   hasActiveWatchTrial (watch-trial.ts) against one shared fake admin --
+   proves the two exact scenarios from the product spec, not just each
+   module's own isolated behavior.
+   ============================================================ */
+
+test("REQUIRED (scenario 1): once TG1 starts a trial, TG1 can never be used to start ANOTHER trial through a different account -- even after TG1 is disconnected from the original one", async () => {
+  const admin = fakeAdmin({});
+  const TG1 = 111111;
+
+  // Account A links TG1 and starts the trial.
+  await linkTelegramIdentity(admin, "acct-A", TG1);
+  const started = await startWatchTrial(admin, "acct-A");
+  assert.equal(started.ok, true);
+
+  // Account A later changes away from TG1 (to TG2) -- the link is replaced,
+  // but the trial claim record for TG1 is untouched (see watch-trial.ts).
+  await linkTelegramIdentity(admin, "acct-A", 222222);
+
+  // A brand-new Account B now verifies and links the FREED-UP TG1 --
+  // linking is allowed (nothing currently holds TG1), but starting a trial
+  // through it must be rejected: TG1 already has a trial claim.
+  const linkB = await linkTelegramIdentity(admin, "acct-B", TG1);
+  assert.equal(linkB.ok, true, "TG1 can be linked to a new account once freed -- only a NEW TRIAL through it is blocked");
+  const startB = await startWatchTrial(admin, "acct-B");
+  assert.equal(startB.ok, false, "TG1 already consumed its one-time trial; Account B must not get a new one through it");
+  assert.equal(admin.__store.watch_trial_claims.length, 1, "still exactly one trial claim in the whole system -- Account A's original one");
+});
+
+test("REQUIRED (scenario 1b): the NEWLY connected identity is also blocked if IT already has its own trial claim elsewhere", async () => {
+  const admin = fakeAdmin({});
+  const TG2 = 222222;
+
+  // TG2 already has its own trial claim from some earlier account.
+  await linkTelegramIdentity(admin, "acct-old", TG2);
+  await startWatchTrial(admin, "acct-old");
+
+  // A different account now connects TG2 as ITS Telegram identity.
+  const acctC = "acct-C";
+  const linkResult = await linkTelegramIdentity(admin, acctC, TG2);
+  assert.equal(linkResult.ok, false, "TG2 is still linked to acct-old -- must be rejected as linked elsewhere");
+  // Account C never even gets a Telegram identity to try starting a trial with.
+  const identity = await getAccountTelegramIdentity(admin, acctC);
+  assert.equal(identity, null);
+});
+
+test("REQUIRED (scenario 2): changing from TG1 to TG2 mid-trial continues the SAME trial -- it never restarts or extends", async () => {
+  const admin = fakeAdmin({});
+  await linkTelegramIdentity(admin, "acct-A", 111111);
+  const started = await startWatchTrial(admin, "acct-A");
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
+  const originalStartedAt = started.state.startedAt;
+  const originalEndsAt = started.state.endsAt;
+
+  // 2 days pass, then the account changes its connected Telegram identity.
+  await linkTelegramIdentity(admin, "acct-A", 222222, "tg2_handle");
+
+  const stateAfterChange = await getWatchTrialState(admin, "acct-A");
+  assert.equal(stateAfterChange.status, "active", "the trial must still be active -- unaffected by the identity change");
+  assert.equal(stateAfterChange.startedAt, originalStartedAt, "started_at must be exactly what TG1 originally began -- never reset");
+  assert.equal(stateAfterChange.endsAt, originalEndsAt, "ends_at must be exactly what TG1 originally set -- never extended or shortened");
+  assert.equal(admin.__store.watch_trial_claims.length, 1, "still one claim -- changing identity must never create a second one");
+
+  // Calling startWatchTrial again (e.g. the account revisits the trial CTA)
+  // must be a pure idempotent read of the SAME claim, never a fresh one.
+  const secondCall = await startWatchTrial(admin, "acct-A");
+  assert.equal(secondCall.ok, true);
+  if (secondCall.ok) {
+    assert.equal(secondCall.state.startedAt, originalStartedAt);
+    assert.equal(secondCall.state.endsAt, originalEndsAt);
+  }
+  assert.equal(await hasActiveWatchTrial(admin, "acct-A"), true);
+});
+
+test("REQUIRED (scenario 2b): the trial keeps running to its original expiry even across MULTIPLE identity changes", async () => {
+  const admin = fakeAdmin({});
+  await linkTelegramIdentity(admin, "acct-A", 111);
+  const started = await startWatchTrial(admin, "acct-A");
+  assert.equal(started.ok, true);
+  if (!started.ok) return;
+
+  await linkTelegramIdentity(admin, "acct-A", 222);
+  await linkTelegramIdentity(admin, "acct-A", 333);
+  await linkTelegramIdentity(admin, "acct-A", 444);
+
+  const finalState = await getWatchTrialState(admin, "acct-A");
+  assert.equal(finalState.status, "active");
+  assert.equal(finalState.startedAt, started.state.startedAt);
+  assert.equal(finalState.endsAt, started.state.endsAt);
+  assert.equal(admin.__store.watch_telegram_links.length, 1, "only the most recently connected identity remains linked");
+  assert.equal(admin.__store.watch_telegram_links[0].telegram_user_id, 444);
 });

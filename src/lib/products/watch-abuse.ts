@@ -38,12 +38,36 @@ export type LinkTelegramIdentityResult = { ok: true } | { ok: false; error: stri
  * constraint even if this pre-check raced past it, and that failure is
  * caught and reported the same way below) — never silently transfers an
  * already-linked identity to a new account.
+ *
+ * An Innvil account has at most ONE currently-connected Telegram identity at
+ * a time. Linking a NEW identity for an account that already has a
+ * DIFFERENT one linked REPLACES it (this account's own prior link row is
+ * removed before the new one is written) — this is the whole mechanism
+ * behind "change the connected Telegram account": there is no separate
+ * relink code path, the connect flow is simply run again. This never
+ * touches `watch_trial_claims` (see watch-trial.ts) — a trial's start/end
+ * timestamps and its one-time-use record are keyed by account_id and by the
+ * ORIGINAL telegram_user_id that claimed it, independent of whichever
+ * identity happens to be connected right now:
+ *   - An in-progress trial keeps counting down from its own started_at/
+ *     ends_at regardless of an identity change mid-trial (the claim row is
+ *     never touched here).
+ *   - The telegram_user_id that already claimed a trial can never claim a
+ *     second one through any other account, because watch_trial_claims has
+ *     its own independent `unique(telegram_user_id)` constraint that this
+ *     function has no bearing on — replacing a LINK never frees up a
+ *     TRIAL CLAIM.
  */
 export async function linkTelegramIdentity(admin: SupabaseClient, accountId: string, telegramUserId: number, telegramUsername?: string | null): Promise<LinkTelegramIdentityResult> {
   const elsewhere = await telegramIdentityLinkedElsewhere(admin, accountId, telegramUserId);
   if (elsewhere.length > 0) {
     return { ok: false, error: "This Telegram account is already linked to another Innvil account.", alreadyLinkedToAnotherAccount: true };
   }
+
+  // Replace this account's own prior link(s), if any, now that we know the
+  // new identity is actually linkable -- never destroys the existing link
+  // before confirming the new one isn't blocked above.
+  await admin.from("watch_telegram_links").delete().eq("account_id", accountId).neq("telegram_user_id", telegramUserId);
 
   const { error } = await admin
     .from("watch_telegram_links")
