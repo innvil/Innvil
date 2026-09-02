@@ -337,6 +337,47 @@ test("REQUIRED: solicitationAllowed never depends on admin/trusted status -- a n
   );
 });
 
+/* ------------------------- COMPETING_PROJECT_PROMOTION ("global no-go") ---- */
+// Live feedback (2026-09-02): rallying THIS community's own members to
+// promote a DIFFERENT, specifically named project/token is a "global no-go"
+// -- never exempted by the community's Allow-Solicitation toggle, the
+// admin-solicited backstop, or an admin/trusted role, unlike ordinary
+// UNSOLICITED_PROMOTION. Its warning must also never redirect to the
+// configured Promotion channel/topic (that's community-runtime.ts's own
+// concern, see link-classify.test.ts).
+
+test("REQUIRED: first offense -> DELETE_WARN, warning #1, no mute (same shape as ordinary solicitation's own first-offense leeway)", () => {
+  assert.deepEqual(decide({ category: "COMPETING_PROJECT_PROMOTION" }), { kind: "DELETE_WARN", warningNumber: 1, reason: "competing_project_promotion", muteMinutes: undefined });
+});
+
+test("REQUIRED: never exempted by the community's Allow Solicitation toggle -- unlike ordinary UNSOLICITED_PROMOTION", () => {
+  const result = decide({ category: "COMPETING_PROJECT_PROMOTION", solicitationAllowed: true });
+  assert.notEqual(result.kind, "ALLOW");
+  assert.equal(result.kind, "DELETE_WARN");
+});
+
+test("REQUIRED: never exempted by the admin-solicited backstop -- unlike ordinary UNSOLICITED_PROMOTION", () => {
+  const result = decide({ category: "COMPETING_PROJECT_PROMOTION", adminSolicitedExemption: true });
+  assert.notEqual(result.kind, "ALLOW");
+});
+
+test("REQUIRED: never exempted for an admin/trusted role -- unlike ordinary UNSOLICITED_PROMOTION, which IS exempt for admins", () => {
+  const nonAdmin = decide({ category: "COMPETING_PROJECT_PROMOTION", isAdminOrTrusted: false });
+  const admin = decide({ category: "COMPETING_PROJECT_PROMOTION", isAdminOrTrusted: true });
+  assert.deepEqual(admin, nonAdmin);
+  assert.notEqual(admin.kind, "ALLOW");
+});
+
+test("REQUIRED: escalates to DELETE_KICK + purge after the same SOLICITATION_WARNING_LIMIT as ordinary promotion, with its OWN distinct reason", () => {
+  const result = decide({ category: "COMPETING_PROJECT_PROMOTION", priorWarningCount: SOLICITATION_WARNING_LIMIT });
+  assert.deepEqual(result, { kind: "DELETE_KICK", reason: "repeated_competing_project_promotion", purge: true });
+});
+
+test("a flood-repeat burst of this category still forces straight past the warning ladder into DELETE_KICK", () => {
+  const result = decide({ category: "COMPETING_PROJECT_PROMOTION", floodRepeat: true });
+  assert.deepEqual(result, { kind: "DELETE_KICK", reason: "repeated_competing_project_promotion", purge: true });
+});
+
 test("REQUIRED (§54.2): a genuine AMA proposal -> ALLOW", () => {
   assert.deepEqual(decide({ category: "AMA_REQUEST" }), { kind: "ALLOW" });
 });

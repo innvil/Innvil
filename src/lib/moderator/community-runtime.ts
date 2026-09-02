@@ -2397,7 +2397,13 @@ export async function runLinkModeration(
     }
 
     if (community.project_id) {
-      const violationCategory = isScamEnforcement ? "scam_link" : enforcement.reason === "explicit_content" ? "explicit_link" : "spam";
+      const violationCategory: ModerationViolationCategory = isScamEnforcement
+        ? "scam_link"
+        : enforcement.reason === "explicit_content"
+          ? "explicit_link"
+          : enforcement.reason === "repeated_competing_project_promotion"
+            ? "competing_project"
+            : "spam";
       await sendModerationReport({
         admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
         platformUserId: senderPlatformId, username: event.sender.username ?? null, displayName: event.sender.displayName,
@@ -2409,7 +2415,9 @@ export async function runLinkModeration(
             ? "Repeated confirmed scam/phishing link after a prior warning."
             : violationCategory === "explicit_link"
               ? "User posted a confirmed high-confidence explicit/malicious link."
-              : "Repeated spam after prior warnings and temporary restrictions.",
+              : violationCategory === "competing_project"
+                ? "Repeated rallying to promote a different, unrelated project or token after prior warnings."
+                : "Repeated spam after prior warnings and temporary restrictions.",
           previousEnforcementSummary: [],
           purgedCount: enforcement.purge ? purgeResult.purged : null,
           purgeFailed: enforcement.purge ? purgeResult.failed : false,
@@ -2453,6 +2461,13 @@ export async function runLinkModeration(
   // state or invent. Omitted entirely when the Project has no partnerships
   // contact configured -- never fabricates one.
   const isPromotionEnforcement = enforcement.reason === "unsolicited_promotion" || enforcement.reason === "repeated_unsolicited_promotion";
+  // "Global no-go" (2026-09-02): promoting a DIFFERENT, specifically named
+  // project/token is never redirected anywhere, even to this community's
+  // OWN real configured Promotion destination/contact -- isPromotionEnforcement
+  // above deliberately stays scoped to ordinary unsolicited_promotion only,
+  // so promotionContact already correctly resolves to null for this reason
+  // with no extra guard needed here.
+  const isCompetingProjectEnforcement = enforcement.reason === "competing_project_promotion" || enforcement.reason === "repeated_competing_project_promotion";
   const promotionContact = isPromotionEnforcement && community.project_id
     ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.partnerships ?? null
     : null;
@@ -2474,8 +2489,12 @@ export async function runLinkModeration(
   // destination, never read out AS the name itself (the earlier version
   // fell back to printing the bare URL as if it were a name when no
   // Forum-topic policy existed).
-  const redirectName = promotionTopic ? topicDisplayName(promotionTopic) : community.promotion_channel_name || null;
-  const redirectLink = promotionTopic ? promotionTopicLink : (redirectName ? community.promotion_channel_link || null : null);
+  // Forced to null for a competing-project violation regardless of what's
+  // actually configured -- see isCompetingProjectEnforcement above and
+  // generatePersonaSolicitationWarning's own isCompetingProjectPromotion
+  // handling, which never surfaces a redirect for this reason either way.
+  const redirectName = isCompetingProjectEnforcement ? null : promotionTopic ? topicDisplayName(promotionTopic) : community.promotion_channel_name || null;
+  const redirectLink = isCompetingProjectEnforcement ? null : promotionTopic ? promotionTopicLink : (redirectName ? community.promotion_channel_link || null : null);
   // Solicitation warnings are now PERSONA-VOICED (per explicit live product
   // feedback: "the way it says a warning is too generic... it should be
   // persona based, not a generic bot warning") -- every stated fact (the
@@ -2495,6 +2514,7 @@ export async function runLinkModeration(
           promotionTopicName: redirectName,
           promotionTopicLink: redirectLink,
           contactHandle: promotionContact,
+          isCompetingProjectPromotion: isCompetingProjectEnforcement,
         },
         aiRouting
       )}`;
@@ -2540,7 +2560,7 @@ export async function runLinkModeration(
   }
 
   if (community.project_id) {
-    const violationCategory: ModerationViolationCategory = isScamEnforcement ? "scam_link" : "spam";
+    const violationCategory: ModerationViolationCategory = isScamEnforcement ? "scam_link" : isCompetingProjectEnforcement ? "competing_project" : "spam";
     await sendModerationReport({
       admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
       platformUserId: senderPlatformId, username: event.sender.username ?? null, displayName: event.sender.displayName,
@@ -2553,9 +2573,13 @@ export async function runLinkModeration(
         actionsTaken: enforcement.muteMinutes ? ["warning", "temporary_mute"] : ["warning"],
         reasonText: isScamEnforcement
           ? "First confirmed scam/phishing link from this member."
-          : enforcement.warningNumber === 1
-            ? "First confirmed spam/unsolicited-promotion violation."
-            : "Repeated spam/unsolicited-promotion after a prior warning.",
+          : isCompetingProjectEnforcement
+            ? (enforcement.warningNumber === 1
+                ? "First confirmed rally/request to promote a different, unrelated project or token."
+                : "Repeated rallying to promote a different, unrelated project or token after a prior warning.")
+            : enforcement.warningNumber === 1
+              ? "First confirmed spam/unsolicited-promotion violation."
+              : "Repeated spam/unsolicited-promotion after a prior warning.",
         previousEnforcementSummary: [],
         purgedCount: null, purgeFailed: false, purgeFailureReason: null,
         telegramActionFailed: muteFailed,

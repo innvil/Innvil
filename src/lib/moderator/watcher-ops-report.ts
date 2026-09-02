@@ -22,7 +22,7 @@
    is a different message from the one this module formats.)
    ========================================================= */
 
-export type ModerationViolationCategory = "spam" | "scam_link" | "nsfw" | "explicit_link";
+export type ModerationViolationCategory = "spam" | "competing_project" | "scam_link" | "nsfw" | "explicit_link";
 
 export type ModerationActionKind = "warning" | "temporary_mute" | "kick" | "ban" | "message_purge" | "moderation_failure";
 
@@ -73,6 +73,7 @@ export interface ModerationReportEvent {
 function violationLabel(category: ModerationViolationCategory): string {
   switch (category) {
     case "spam": return "Spam";
+    case "competing_project": return "Competing Project Promotion";
     case "scam_link": return "Scam Link";
     case "nsfw": return "Prohibited NSFW Content";
     case "explicit_link": return "Explicit Link";
@@ -89,6 +90,10 @@ export function moderationReportHeading(event: ModerationReportEvent): string {
   }
   if (event.violationCategory === "scam_link") {
     return kicked ? "User Removed — Repeated Scam Links" : "Scam Link Removed";
+  }
+  if (event.violationCategory === "competing_project") {
+    if (kicked) return "User Removed — Repeated Competing Project Promotion";
+    return event.warningNumber === 1 ? "Competing Project Promotion Warning" : "Repeated Competing Project Promotion";
   }
   // spam
   if (kicked) return "User Removed — Repeated Spam";

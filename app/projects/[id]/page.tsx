@@ -169,8 +169,8 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       // Community's full settings shown, never a bare list requiring a
       // further click. /communities/[id] still exists as a fallback/deep
       // link (e.g. from Activity items).
-      id: "community",
-      label: "Community",
+      id: "moderation",
+      label: "Moderation",
       content: (
         <div className="space-y-6">
           <div className="w-card p-4 border w-amber-border">

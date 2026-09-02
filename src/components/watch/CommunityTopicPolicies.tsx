@@ -49,12 +49,22 @@ export function CommunityTopicPolicies({ communityId }: { communityId: string })
     setBusyThreadId(messageThreadId);
     setError(null);
     const res = await setCommunityTopicPolicy(communityId, messageThreadId, policy);
-    setBusyThreadId(null);
     if (!res.ok) {
+      setBusyThreadId(null);
       setError(res.error);
       return;
     }
-    setTopics((prev) => (prev ?? []).map((t) => (t.messageThreadId === messageThreadId ? { ...t, policy } : t)));
+    // A full reload, not just local state -- PromotionChannelLinkControl
+    // (rendered as a sibling right below this one) only checks whether a
+    // real "promotion"-policy topic already exists ONCE, on its own mount,
+    // to decide whether to show its own "do you have a dedicated Promotion
+    // channel?" fallback question at all. A local-only update here left
+    // that sibling reading stale data, so assigning "Promotion" to a topic
+    // didn't make its own redundant fallback question disappear until the
+    // next full page load. Reloading keeps every dependent control in sync,
+    // matching the same simplest-correct-refresh convention already used
+    // elsewhere in this codebase for cross-component state dependencies.
+    window.location.reload();
   };
 
   return (

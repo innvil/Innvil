@@ -69,6 +69,46 @@ test("REQUIRED: third spam violation kicks + purges -> 'User Removed — Repeate
   assert.match(text, /Cleanup: 21 messages purged\./);
 });
 
+/* -------------------------- COMPETING_PROJECT_PROMOTION ("global no-go") ---- */
+// Live feedback (2026-09-02): promoting a different, specifically named
+// project/token gets its OWN distinct report category -- never silently
+// lumped in with generic "Spam", which would misdescribe the actual
+// violation in the internal Watcher Ops audit trail.
+
+test("REQUIRED: first competing-project-promotion violation renders its own distinct 'Competing Project Promotion Warning' heading, never generic Spam", () => {
+  const event = baseEvent({
+    violationCategory: "competing_project",
+    warningNumber: 1, warningLimit: 4,
+    actionsTaken: ["warning"],
+    reasonText: "First confirmed rally/request to promote a different, unrelated project or token.",
+  });
+  assert.equal(moderationReportHeading(event), "Competing Project Promotion Warning");
+  assert.notEqual(moderationReportHeading(event), "Spam Warning");
+});
+
+test("REQUIRED: a repeated competing-project-promotion violation renders 'Repeated Competing Project Promotion'", () => {
+  const event = baseEvent({
+    violationCategory: "competing_project",
+    warningNumber: 2, warningLimit: 4,
+    actionsTaken: ["warning"],
+    reasonText: "Repeated rallying to promote a different, unrelated project or token after a prior warning.",
+  });
+  assert.equal(moderationReportHeading(event), "Repeated Competing Project Promotion");
+});
+
+test("REQUIRED: a kicked competing-project-promotion offender renders 'User Removed — Repeated Competing Project Promotion', with the real purge count", () => {
+  const event = baseEvent({
+    violationCategory: "competing_project",
+    actionsTaken: ["kick", "message_purge"],
+    purgedCount: 5,
+    reasonText: "Repeated rallying to promote a different, unrelated project or token after prior warnings.",
+  });
+  assert.equal(moderationReportHeading(event), "User Removed — Repeated Competing Project Promotion");
+  const text = formatModerationReportText(event);
+  assert.match(text, /User kicked/);
+  assert.match(text, /Cleanup: 5 messages purged\./);
+});
+
 test("REQUIRED: first scam-link violation -> 'Scam Link Removed', mute duration stated, never includes a URL", () => {
   const event = baseEvent({
     violationCategory: "scam_link", warningNumber: 1, warningLimit: 1, muteMinutes: 30,

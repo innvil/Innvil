@@ -80,28 +80,32 @@ test("REQUIRED (live bug repro): a link-LESS promotional pitch is classified via
 // being promoted/advertised. This is standard, allowed crypto-community
 // growth activity. The decisive distinction is WHAT is being promoted, never
 // WHERE the raid targets: rallying members to promote a DIFFERENT,
-// specifically named project ("let's go shill $OTHERCOIN") is still
-// UNSOLICITED_PROMOTION.
-test("REQUIRED (live feedback): the prompt distinguishes a 'shill raid' promoting THIS community's own project at an external venue (SAFE_RELEVANT_LINK) from rallying members to promote a different named project (UNSOLICITED_PROMOTION)", async () => {
+// specifically named project ("let's go shill $OTHERCOIN") is its own
+// COMPETING_PROJECT_PROMOTION category (a "global no-go", per explicit
+// product decision -- see link-moderation.ts's decideLinkEnforcement, which
+// never redirects its warning to the community's Promotion channel/topic,
+// unlike ordinary UNSOLICITED_PROMOTION).
+test("REQUIRED (live feedback): the prompt distinguishes a 'shill raid' promoting THIS community's own project at an external venue (SAFE_RELEVANT_LINK) from rallying members to promote a different named project (its own COMPETING_PROJECT_PROMOTION category)", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("CATEGORY: SAFE_RELEVANT_LINK\nCONFIDENCE: high"), async (calls) => {
       await classifyLinkIntent("LETS GO, SHILL RAID IN @cryptomoonshots_chat and spread the word", "");
       const body = calls[0].body as { system: string };
       assert.match(body.system, /shill raid/i);
       assert.match(body.system, /venue.*never itself the thing being promoted/i);
-      assert.match(body.system, /rallying members to promote a different, specifically named project/i);
+      assert.match(body.system, /COMPETING_PROJECT_PROMOTION/);
     });
   });
 });
 
-test("REQUIRED (live feedback, corrected framing): the prompt's own worked example for rallying members to promote a DIFFERENT named project explicitly stays UNSOLICITED_PROMOTION", async () => {
+test("REQUIRED: the prompt's own worked example for rallying members to promote a DIFFERENT named project classifies as its own COMPETING_PROJECT_PROMOTION category, distinct from ordinary UNSOLICITED_PROMOTION", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("CATEGORY: UNSOLICITED_PROMOTION\nCONFIDENCE: high"), async (calls) => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: COMPETING_PROJECT_PROMOTION\nCONFIDENCE: high"), async (calls) => {
       const result = await classifyLinkIntent("Let's rally and go shill $OTHERCOIN over at @somegroup", "");
-      assert.deepEqual(result, { category: "UNSOLICITED_PROMOTION", confidence: "high" });
+      assert.deepEqual(result, { category: "COMPETING_PROJECT_PROMOTION", confidence: "high" });
       const body = calls[0].body as { system: string };
       assert.match(body.system, /\$OTHERCOIN/);
       assert.match(body.system, /is NOT this community's own subject/i);
+      assert.match(body.system, /Distinct from ordinary UNSOLICITED_PROMOTION/i);
     });
   });
 });
@@ -385,6 +389,42 @@ test("REQUIRED: the prompt always requires an English warning, regardless of the
       const system = (calls[0].body as { system?: string }).system ?? "";
       assert.match(system, /always write the warning in english/i);
     });
+  });
+});
+
+// COMPETING_PROJECT_PROMOTION ("global no-go") -- the warning must NEVER
+// redirect to the community's real configured Promotion channel/topic or
+// contact, even when one genuinely exists, since promoting a rival project
+// is never allowed anywhere in the community, not just outside the
+// Promotion destination.
+test("REQUIRED: a competing-project-promotion warning never redirects to the Promotion destination or contact, even when both are configured (isCompetingProjectPromotion overrides them)", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("promoting other projects isn't allowed here at all."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, {
+        ...noMuteFacts,
+        promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45", contactHandle: "@RhyleKhy",
+        isCompetingProjectPromotion: true,
+      });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /never allowed here, in any form/i);
+      assert.match(system, /do NOT suggest any alternative place/i);
+      assert.doesNotMatch(system, /"Promotion"/);
+      assert.doesNotMatch(system, /https:\/\/t\.me\/c\/123\/45/);
+      assert.doesNotMatch(system, /@RhyleKhy/);
+    });
+  });
+  // The deterministic fallback (used on any generation failure) must honor
+  // the same rule -- verified with no AI provider configured at all.
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const text = await generatePersonaSolicitationWarning("Kwan", persona, {
+      ...noMuteFacts,
+      promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45", contactHandle: "@RhyleKhy",
+      isCompetingProjectPromotion: true,
+    });
+    assert.doesNotMatch(text, /Promotion/);
+    assert.doesNotMatch(text, /t\.me/);
+    assert.doesNotMatch(text, /RhyleKhy/);
+    assert.match(text, /not allowed here, in any form/i);
   });
 });
 

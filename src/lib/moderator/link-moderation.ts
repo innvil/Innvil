@@ -24,6 +24,18 @@ export type LinkCategory =
   | "AMA_REQUEST"
   | "PARTNERSHIP_REQUEST"
   | "UNSOLICITED_PROMOTION"
+  /** Rallying THIS community's own members to promote/support a DIFFERENT,
+   *  specifically named project/token (never this community's own subject)
+   *  -- e.g. "let's go shill $OTHERCOIN over at @somegroup". Deliberately a
+   *  SEPARATE category from ordinary UNSOLICITED_PROMOTION (a stranger's
+   *  marketing-service pitch) per explicit product decision: promoting a
+   *  competing project is a "global no-go" -- never exempted by the
+   *  community's Allow Solicitation toggle, a Promotion-topic policy, or an
+   *  admin/trusted role, and its warning must never redirect to the
+   *  configured Promotion channel/topic (that destination is for promoting
+   *  THIS community's own project, never a rival one). See
+   *  decideLinkEnforcement's own dedicated branch. */
+  | "COMPETING_PROJECT_PROMOTION"
   | "LINK_SPAM_OR_FLOOD"
   | "PHISHING_OR_SCAM"
   | "EXPLICIT_CONTENT"
@@ -425,7 +437,7 @@ export type ModerationEnforcement =
    *  executed alongside the delete+warn, never inferred by the caller from
    *  warningNumber alone. Undefined means no mute (e.g. media's borderline
    *  path, which was never specified to include one). */
-  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "explicit_content_borderline" | "scam_or_phishing"; muteMinutes?: number }
+  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "competing_project_promotion" | "repeated_competing_project_promotion" | "explicit_content_borderline" | "scam_or_phishing"; muteMinutes?: number }
   /** Removes (kicks) the user — NOT a permanent ban (structurally distinct
    *  from DELETE_BAN, so a caller can never confuse "temporary removal, can
    *  rejoin" with "permanent"). `purge: true` means the caller should also
@@ -434,7 +446,7 @@ export type ModerationEnforcement =
    *  categories that reach this kind today (repeated spam, repeated scam,
    *  explicit content), since a kick without cleanup leaves the offending
    *  history sitting in the room. */
-  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
+  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
   /** Reserved for a possible future manual admin action — the automatic
    *  policy below (as of 2026-08-27) no longer PRODUCES this kind for any
    *  category; every automatic escalation that used to end in a permanent
@@ -559,6 +571,31 @@ export function decideLinkEnforcement(input: {
   // requires stronger confidence/history than "we're not sure."
   if (input.category === "UNKNOWN_OR_AMBIGUOUS") return { kind: "ALLOW" };
 
+  // COMPETING_PROJECT_PROMOTION -- a "global no-go" per explicit product
+  // decision, checked and returned BEFORE every exemption below (community
+  // Allow-Solicitation toggle, the admin-solicited backstop, and the
+  // admin/trusted-role exemption all only ever check `=== "UNSOLICITED_
+  // PROMOTION"`, but this early return makes the exclusion unconditional
+  // and unmissable regardless of how those checks evolve later). Promoting
+  // a rival project/token is never allowed in ANY form here, for anyone --
+  // reuses the SAME warning-count ladder as ordinary UNSOLICITED_PROMOTION
+  // (a deliberate simplification, not a separate persisted counter) but
+  // with its OWN distinct reason codes, so the caller (community-runtime.ts)
+  // can tell the two apart and NEVER redirect this warning to the
+  // configured Promotion channel/topic -- that destination exists to
+  // promote THIS community's own project, never a competitor's.
+  if (input.category === "COMPETING_PROJECT_PROMOTION") {
+    const isFlood = input.floodRepeat;
+    const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SOLICITATION_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
+    if (nextCount > SOLICITATION_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_competing_project_promotion", purge: true };
+    return {
+      kind: "DELETE_WARN",
+      warningNumber: nextCount,
+      reason: nextCount === 1 ? "competing_project_promotion" : "repeated_competing_project_promotion",
+      muteMinutes: SOLICITATION_MUTE_MINUTES_BY_WARNING[nextCount],
+    };
+  }
+
   // Community-level "Allow Solicitation" override — exempted from ORDINARY
   // ad enforcement ONLY (never LINK_SPAM_OR_FLOOD, never a flood-repeat
   // burst, never scam/phishing/explicit content, all handled above/below
@@ -580,7 +617,11 @@ export function decideLinkEnforcement(input: {
   // the severe branches above (never exempt from those). A flood burst is
   // still folded into the unified spam progression below, never exempted
   // for a trusted role either — an obvious automated burst is a safety
-  // signal, not ordinary self-promotion.
+  // signal, not ordinary self-promotion. COMPETING_PROJECT_PROMOTION already
+  // returned unconditionally above and structurally can never reach this
+  // line -- confirmed by TypeScript's own control-flow narrowing (the
+  // category type here is provably already down to UNSOLICITED_PROMOTION |
+  // PHISHING_OR_SCAM | EXPLICIT_CONTENT), not just by convention.
   if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
 
   // Solicitation progression: UNSOLICITED_PROMOTION and an obvious

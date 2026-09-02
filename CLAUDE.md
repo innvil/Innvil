@@ -127,6 +127,49 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — COMPETING_PROJECT_PROMOTION: a new, unconditional "global no-go" category that never redirects to the Promotion channel + UI fixes (v1.49.26)
+- **New category, per explicit product decision.** Rallying THIS community's own members to promote a
+  DIFFERENT, specifically named project/token ("let's go shill $OTHERCOIN") was, as of v1.49.25, classified as
+  ordinary `UNSOLICITED_PROMOTION` — which meant its warning could redirect to the community's configured
+  Promotion channel/topic, exactly like an ordinary self-promotion pitch. That's wrong: a rival/unrelated
+  project is never appropriate to promote here in ANY form, so redirecting someone to "post that in our
+  Promotion channel instead" would be actively wrong advice. Split it into its own `LinkCategory`:
+  **`COMPETING_PROJECT_PROMOTION`** — a strict, unconditional violation with different enforcement:
+  - **Never exempted** by the community's Allow-Solicitation toggle, the admin-solicited backstop, OR an
+    admin/trusted role (unlike ordinary `UNSOLICITED_PROMOTION`, which IS exempt for all three) — checked and
+    returned in `decideLinkEnforcement` (`link-moderation.ts`) BEFORE every one of those exemption branches,
+    confirmed unreachable past that point by TypeScript's own control-flow narrowing, not just by convention.
+  - **Never redirects anywhere** in its warning — `generatePersonaSolicitationWarning`
+    (`link-classify.ts`) gained `isCompetingProjectPromotion` on `SolicitationWarningFacts`; when true, the
+    Promotion-destination/contact facts are ignored even if the caller (accidentally) still passed real ones —
+    a genuine double safety net, not just caller discipline. The message states plainly that promoting other
+    projects/tokens is never allowed here, in any form, with no alternative venue suggested.
+  - **Same warn→kick ladder as ordinary promotion** (reuses `SOLICITATION_WARNING_LIMIT`/the same
+    `warning_count` counter — a deliberate simplification, not a separate persisted counter), but with its own
+    distinct reason codes (`competing_project_promotion` / `repeated_competing_project_promotion`) so the
+    internal Watcher Ops audit report correctly labels it **"Competing Project Promotion Warning"** /
+    **"Repeated Competing Project Promotion"** / **"User Removed — Repeated Competing Project Promotion"** —
+    never generic "Spam", which would misdescribe the actual violation (`watcher-ops-report.ts` gained a new
+    `ModerationViolationCategory` value + heading branch).
+  - Classifier's system prompt (`link-classify.ts`) updated with a real worked example distinguishing this from
+    the v1.49.25 "shill raid" case: rallying to promote THIS community's own project at an external venue stays
+    `SAFE_RELEVANT_LINK`; rallying to promote a DIFFERENT named project is `COMPETING_PROJECT_PROMOTION`.
+- **UI fixes, same session**: the Project detail page's "Community" tab (trimmed to moderation-only content in
+  v1.49.20) is now labeled **"Moderation"**, matching what it actually contains. Fixed a real stale-sibling-
+  state bug: assigning a Telegram Forum topic the "Promotion" policy (`CommunityTopicPolicies`) didn't tell its
+  sibling `PromotionChannelLinkControl` to re-check and hide its own redundant "do you have a dedicated
+  Promotion channel?" question — the two components each fetched their own data once, independently, so the
+  second one kept showing stale state until a manual page reload. `CommunityTopicPolicies`'s save handler now
+  reloads the page on success (matching this codebase's established cross-component-consistency convention)
+  instead of only updating its own local state.
+- New tests: `link-moderation.test.ts` (+6 — first-offense shape, never exempted by solicitation-toggle/
+  admin-solicited-backstop/admin-role, escalation to kick+purge, flood-repeat still forces past the ladder),
+  `link-classify.test.ts` (+1, plus 2 corrected from v1.49.25's now-superseded framing — a competing-project
+  warning never redirects even when Promotion facts ARE populated, verified for both the AI-generated path and
+  the deterministic fallback), `watcher-ops-report.test.ts` (+3 — the three distinct headings, confirmed never
+  falling back to generic "Spam"). 2158 tests pass (up from 2148), `tsc --noEmit` clean, production build clean.
+- **Deployed to production.**
+
 ### 2026-09-02 — Corrected the shill-raid rule: venue vs. beneficiary (v1.49.25)
 - **v1.49.24's fix had the semantics backwards — corrected per direct live clarification.** "LETS GO, SHILL
   RAID IN @cryptomoonshots_chat and spread the word", posted in the Byte Humor community, means: go INTO that
