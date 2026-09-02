@@ -127,6 +127,52 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Fix: a Watcher deployed to a real Telegram channel did nothing at all (v1.49.18)
+- **Live report investigated end-to-end against production data** ("Byte Humor"/"Spheric" account): confirmed
+  that account's one connected Community (a supergroup) is working correctly — moderation and Natural Chatter
+  both firing normally, per `moderator_activity_log`. But a direct query of the entire database found **zero
+  channel-type Communities anywhere in the whole system, for any account** — no Telegram channel has ever been
+  successfully connected/active. Root cause, found by reading `handleCommunityUpdate`'s webhook entry point: it
+  required `message.from` unconditionally (`if (!message?.from || !message.chat) return;`) before doing
+  anything else. A genuine Telegram **channel post is anonymous by default** (`from` is only present when the
+  channel owner explicitly enables message signatures, which almost nobody does) — so every real post to a
+  connected channel was silently dropped before reaching moderation, chatter, or any logging at all. This is a
+  structural bug independent of any specific account: a Watcher deployed to ANY real Telegram channel could
+  never have done anything.
+- **Fix**: the gate now only requires `from` for an ordinary message/edited_message (group/supergroup/private —
+  Telegram represents even an ANONYMOUS group admin as a real, if synthetic, `from` user, "GroupAnonymousBot",
+  never an absent `from`); a genuine `channel_post`/`edited_channel_post` with no `from` is now accepted and
+  given a synthesized identity (`isAnonymousChannelPost`, `SYNTHETIC_CHANNEL_SENDER_PREFIX = "channel:"` +
+  `isSyntheticChannelSender()`, `community-runtime.ts`).
+- **Scoped deliberately to moderation only, never conversational replies.** The synthetic sender flows through
+  the EXISTING `HUMAN`-branch pipeline unchanged (no new/duplicated moderation code) — media + link moderation
+  run exactly as they already do for a real member — but `chatterActive` is forced `false` whenever
+  `isAnonymousChannelPost`, so Natural Chatter/conversation-task routing never runs for a channel broadcast
+  (there's no real two-way conversation to have in a channel, and the bot may well lack post rights there
+  regardless).
+- **Trust handling, centralized correctly**: `isSenderAdminOrTrusted()` (the one function every admin/trusted-
+  role check in this file funnels through) now recognizes the `channel:` prefix and returns `true` WITHOUT
+  attempting a live `getChatMember` call (which would otherwise fail — a synthetic id isn't a real Telegram
+  user id — and fail-closed to `false`, incorrectly treating the channel's own broadcast as an untrusted
+  stranger and risking its own legitimate announcements being flagged as unsolicited promotion). Only a
+  channel's own admins can post there at all, so treating channel-broadcast content as inherently trusted for
+  the ordinary-promotion exemption is correct; scam/phishing/explicit-content enforcement in
+  `decideLinkEnforcement` is never role-exempt regardless, so a compromised channel account posting malicious
+  links is still caught and enforced.
+- Confirmed channel connection itself was never the blocker — `SUPPORTED_TELEGRAM_COMMUNITY_CHAT_TYPES` already
+  includes `"channel"` (watch-runtime.ts), so the Connect flow already supports it; this fix was the only
+  remaining piece.
+- New tests: `community-runtime.test.ts` (+2 — `isSyntheticChannelSender`'s prefix recognition and rejection of
+  a real numeric id, and a guard that the prefix itself can never collide with a real Telegram user id shape).
+  The full webhook-dispatch integration (`handleCommunityUpdate`'s new branch) is verified via `tsc --noEmit` +
+  the full test suite + production build + code review, consistent with this codebase's established convention
+  for this function (no full DB/Telegram-mocked test exists for it at all, for any of its branches). 2117 tests
+  pass (up from 2115), `tsc --noEmit` clean, production build clean.
+- **Not verified live against a real Telegram channel this pass** — no live channel/bot access in this sandbox;
+  the investigation traced the exact code path and confirmed the fix via the production data query above (zero
+  channel-type Communities ever existed, consistent with this bug), but the actual fix itself should be
+  confirmed against a real channel post once deployed.
+
 ### 2026-09-02 — Human-priority engagement corrections (11-point verification pass) + owner/admin/mod full suppression + configurable delay + Project/Community dashboard consolidation (v1.49.17)
 - **Behavioral corrections against the v1.49.15 spec, verified item-by-item, per explicit instruction not to
   change intended behavior without confirming it against the original rules.**

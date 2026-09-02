@@ -6,7 +6,7 @@ import {
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
   finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
-  trialMediaModerationPeriod,
+  trialMediaModerationPeriod, isSyntheticChannelSender, SYNTHETIC_CHANNEL_SENDER_PREFIX,
 } from "./community-runtime";
 import type { CommunityEvent } from "./event-types";
 import { DEFAULT_MODERATOR_PERSONA } from "./domain";
@@ -1606,4 +1606,23 @@ test("a deployment policy with real headroom does NOT block generation -- reache
   }
   const started = admin.__activityLog.find((r: Record<string, unknown>) => r.decision === "GENERATION_STARTED");
   assert.ok(started, "a deployment policy with headroom must never block reaching GENERATION_STARTED");
+});
+
+/* -------------------------------- anonymous channel post support (2026-09-02) ---- */
+// Root cause of "Watcher deployed to a real Telegram channel does nothing":
+// a genuine channel post is almost always anonymous (`from` absent unless
+// the channel owner enabled message signatures), but the webhook handler
+// used to require `from` unconditionally, silently dropping every channel
+// post before moderation/anything else ever ran.
+
+test("isSyntheticChannelSender recognizes the channel: prefix and rejects a real numeric Telegram user id", () => {
+  assert.equal(isSyntheticChannelSender(`${SYNTHETIC_CHANNEL_SENDER_PREFIX}-1001234567890`), true);
+  assert.equal(isSyntheticChannelSender("123456789"), false);
+  assert.equal(isSyntheticChannelSender(null), false);
+  assert.equal(isSyntheticChannelSender(undefined), false);
+  assert.equal(isSyntheticChannelSender(""), false);
+});
+
+test("SYNTHETIC_CHANNEL_SENDER_PREFIX is never a value Telegram could produce as a real numeric user id", () => {
+  assert.equal(/^\d+$/.test(SYNTHETIC_CHANNEL_SENDER_PREFIX), false);
 });

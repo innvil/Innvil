@@ -1041,6 +1041,17 @@ async function completeGroupSetupSession(
  *  name resolution fix — this is the ACTUAL source of the "@kwan_mod_bot in
  *  generated conversation" leak, so it needs its own direct test, not just a
  *  downstream one on the coordinator's template layer. */
+/** Prefix marking a synthesized "the channel itself posted this" identity
+ *  (an anonymous Telegram channel post has no real `from` user) -- never a
+ *  real numeric Telegram user id, so any code checking a platformUserId
+ *  against Telegram (e.g. isSenderAdminOrTrusted's getChatMember call) must
+ *  recognize this prefix and skip the live lookup rather than let it fail. */
+export const SYNTHETIC_CHANNEL_SENDER_PREFIX = "channel:";
+
+export function isSyntheticChannelSender(platformUserId: string | null | undefined): boolean {
+  return !!platformUserId && platformUserId.startsWith(SYNTHETIC_CHANNEL_SENDER_PREFIX);
+}
+
 export async function classifySender(admin: SupabaseClient, panelId: string | null, communityId: string, from: TelegramUser): Promise<CommunityEvent["sender"]> {
   const platformUserId = String(from.id);
   if (!from.is_bot) {
@@ -2134,6 +2145,12 @@ async function getBotTokenForDeployment(admin: SupabaseClient, deploymentId: str
  *  lookup error, since the exemption is a convenience, not a safety-
  *  relevant default. */
 async function isSenderAdminOrTrusted(token: string, chatId: string, platformUserId: string): Promise<boolean> {
+  // A synthesized "the channel itself posted this" identity is never a
+  // real Telegram user id -- getChatMember would just fail for it (and
+  // fail-closed to `false`, incorrectly treating a channel's own broadcast
+  // as an untrusted stranger). Only a channel admin can post to a channel
+  // at all, so this is trusted by construction, no live lookup needed.
+  if (isSyntheticChannelSender(platformUserId)) return true;
   const res = await telegramApiCall<{ status: string }>(token, "getChatMember", { chat_id: chatId, user_id: platformUserId });
   if (!res.ok) return false;
   return res.result.status === "administrator" || res.result.status === "creator";
@@ -3557,7 +3574,20 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   if (isDup) return;
 
   const message = update.message ?? update.edited_message ?? update.channel_post ?? update.edited_channel_post;
-  if (!message?.from || !message.chat) { timer.mark("no_message_or_sender"); return; }
+  if (!message?.chat) { timer.mark("no_message_or_sender"); return; }
+  // A real Telegram CHANNEL post (broadcast, not a group/supergroup message)
+  // is almost always anonymous -- `from` is only present when the channel
+  // owner has explicitly enabled message signatures, which is rare -- so
+  // requiring `from` unconditionally silently dropped every channel post
+  // before it ever reached moderation, making a Watcher deployed to a real
+  // channel structurally unable to do anything at all (found investigating
+  // a live "Watcher deployed to a channel is not doing anything" report,
+  // 2026-09-02). `from` is still required for a group/supergroup/private
+  // message -- those genuinely have no meaningful anonymous-sender case
+  // (Telegram represents an anonymous GROUP admin as a real, if synthetic,
+  // `from` user -- "GroupAnonymousBot" -- never an absent `from`).
+  const isAnonymousChannelPost = !message.from && (!!update.channel_post || !!update.edited_channel_post);
+  if (!message.from && !isAnonymousChannelPost) { timer.mark("no_message_or_sender"); return; }
 
   const integration = await resolveIntegration(admin, integrationId);
   if (!integration) { timer.mark("no_integration"); return; }
@@ -3596,7 +3626,26 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     return;
   }
 
-  const sender = await classifySender(admin, integration.panel_id, community.id, message.from);
+  // A synthetic, non-Telegram-user identity for an anonymous channel post --
+  // deliberately never real enough to pass isSenderAdminOrTrusted's live
+  // getChatMember lookup (there's no real numeric user id to check), so
+  // every call site that resolves it treats `channel:`-prefixed ids as
+  // trusted-by-construction instead of attempting (and failing) a live
+  // check -- see isSyntheticChannelSender below. Only Telegram channel
+  // ADMINS can post to a channel at all, so treating channel-broadcast
+  // content as inherently trusted for the ordinary-promotion exemption is
+  // correct; scam/phishing/explicit-content enforcement is never role-
+  // exempt regardless (decideLinkEnforcement), so a compromised channel
+  // posting malicious links is still caught.
+  const sender = isAnonymousChannelPost
+    ? {
+        platformUserId: `${SYNTHETIC_CHANNEL_SENDER_PREFIX}${message.chat.id}`,
+        isBot: false as const,
+        senderType: "HUMAN" as const,
+        displayName: message.chat.title ?? message.chat.username ?? "Channel",
+        username: message.chat.username ?? null,
+      }
+    : await classifySender(admin, integration.panel_id, community.id, message.from!);
 
   // Resolves whether THIS message is itself a bot-ack reply another
   // deployment sent — Telegram gives no such signal on the update itself,
@@ -3698,8 +3747,15 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // handleHumanMessage, strictly to gate the conversational-reply portion
     // (task routing onward) -- media/link moderation always run first,
     // unconditionally, regardless of this flag.
-    const chatterActive = virtualModNaturalChatterActive(settings);
-    timer.mark("natural_chatter_entitlement_gate", { active: chatterActive });
+    // An anonymous channel broadcast has no real conversational partner --
+    // there's nothing to reply/converse with, and the bot may well lack
+    // post permission in the channel regardless -- so conversational
+    // routing is skipped entirely for it (moderation above is unaffected,
+    // it already ran unconditionally). This is the ONLY effect
+    // isAnonymousChannelPost has on chatterActive; entitlement/rollout-flag
+    // gating is otherwise unchanged.
+    const chatterActive = virtualModNaturalChatterActive(settings) && !isAnonymousChannelPost;
+    timer.mark("natural_chatter_entitlement_gate", { active: chatterActive, isAnonymousChannelPost });
     // Phase 4.M (B): the 20/day reactive quota is trial-only (spec §2) --
     // paid tiers are unaffected and this patch does not change their
     // existing (unlimited) behavior.
