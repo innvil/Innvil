@@ -17,7 +17,7 @@ import {
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
   resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
-  setAccountCommunityAcknowledgeAdminMod,
+  setAccountCommunityAcknowledgeAdminMod, listAccountCommunityTopics, setAccountCommunityTopicPolicy,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration, communityCountExceeded } from "@/src/lib/moderator/plan";
@@ -40,6 +40,7 @@ function fakeAdmin(seed: {
   watch_trial_claims?: Row[]; watch_subscription_addons?: Row[];
   watch_byo_provider_credentials?: Row[];
   watch_byo_usage_policies?: Row[]; watch_byo_usage_counters?: Row[];
+  watch_community_topics?: Row[];
 }) {
   const store: Record<string, Row[]> = {
     products: seed.products ?? [],
@@ -56,6 +57,7 @@ function fakeAdmin(seed: {
     watch_byo_provider_credentials: seed.watch_byo_provider_credentials ?? [],
     watch_byo_usage_policies: seed.watch_byo_usage_policies ?? [],
     watch_byo_usage_counters: seed.watch_byo_usage_counters ?? [],
+    watch_community_topics: seed.watch_community_topics ?? [],
   };
   let idCounter = 0;
 
@@ -130,28 +132,35 @@ function fakeAdmin(seed: {
           };
         },
         update(patch: Row) {
-          return {
-            eq(col: string, val: unknown) {
-              const applyPatch = () => {
-                const rows = store[table] ?? [];
-                const idx = rows.findIndex((r) => r[col] === val);
-                if (idx < 0) return { data: null, error: { message: "not found" } };
-                rows[idx] = { ...rows[idx], ...patch };
-                store[table] = rows;
-                return { data: rows[idx], error: null };
-              };
-              return {
-                select() { return this; },
-                async single() { return applyPatch(); },
-                // A bare `await admin.from(table).update(patch).eq(col, val)`
-                // (no .select()/.single() chained) is how most callers in
-                // this codebase actually use update() -- a real Supabase
-                // query builder is thenable regardless of whether .select()
-                // was chained, so this must be too.
-                then(resolve: (v: { data: Row | null; error: { message: string } | null }) => void) { resolve(applyPatch()); },
-              };
-            },
+          // Chainable .eq() -- accumulates every filter (a real Supabase
+          // update() call can filter by more than one column, e.g. this
+          // module's own setAccountCommunityTopicPolicy: .eq(community_id).
+          // eq(message_thread_id)). Mirrors the same accumulating-filter
+          // shape the select() builder above already uses.
+          const updateFilters: Array<(r: Row) => boolean> = [];
+          const applyPatch = () => {
+            const rows = store[table] ?? [];
+            const idx = rows.findIndex((r) => updateFilters.every((f) => f(r)));
+            if (idx < 0) return { data: null, error: { message: "not found" } };
+            rows[idx] = { ...rows[idx], ...patch };
+            store[table] = rows;
+            return { data: rows[idx], error: null };
           };
+          const chain: Record<string, unknown> = {
+            eq(col: string, val: unknown) {
+              updateFilters.push((r) => r[col] === val);
+              return chain;
+            },
+            select() { return chain; },
+            async single() { return applyPatch(); },
+            // A bare `await admin.from(table).update(patch).eq(col, val)`
+            // (no .select()/.single() chained) is how most callers in this
+            // codebase actually use update() -- a real Supabase query
+            // builder is thenable regardless of whether .select() was
+            // chained, so this must be too.
+            then(resolve: (v: { data: Row | null; error: { message: string } | null }) => void) { resolve(applyPatch()); },
+          };
+          return chain;
         },
       };
       return builder;
@@ -2454,5 +2463,56 @@ test("setAccountCommunityAcknowledgeAdminMod rejects a community that doesn't be
     communities: [{ id: "c1", panel_id: null, project_id: "other-proj", platform: "telegram", chat_id: "-1001" }],
   });
   const result = await setAccountCommunityAcknowledgeAdminMod(admin, "acct-1", "c1", true);
+  assert.equal(result.ok, false);
+});
+
+/* --------------------------------------- community topic policies (§4/§5) ---- */
+
+test("REQUIRED: listAccountCommunityTopics lists this community's auto-discovered topics, scoped to the owning account", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [
+      { id: "t1", community_id: "c1", message_thread_id: 1, topic_name: "General", policy: "general" },
+      { id: "t2", community_id: "c1", message_thread_id: 3, topic_name: "Promotion", policy: "promotion" },
+    ],
+  });
+  const topics = await listAccountCommunityTopics(admin, "acct-1", "c1");
+  assert.equal(topics.length, 2);
+  assert.deepEqual(topics.find((t) => t.messageThreadId === 3), { messageThreadId: 3, topicName: "Promotion", policy: "promotion" });
+});
+
+test("listAccountCommunityTopics returns empty for a community outside this account's own projects -- never leaks another account's topics", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "other-proj", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [{ id: "t1", community_id: "c1", message_thread_id: 1, topic_name: "General", policy: "general" }],
+  });
+  assert.deepEqual(await listAccountCommunityTopics(admin, "acct-1", "c1"), []);
+});
+
+test("REQUIRED: setAccountCommunityTopicPolicy updates only the targeted topic within the owning account's own community", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [
+      { id: "t1", community_id: "c1", message_thread_id: 1, topic_name: "General", policy: "general" },
+      { id: "t2", community_id: "c1", message_thread_id: 2, topic_name: "Announcements", policy: "announcement" },
+    ],
+  });
+  const result = await setAccountCommunityTopicPolicy(admin, "acct-1", "c1", 1, "promotion");
+  assert.equal(result.ok, true);
+  const topics = await listAccountCommunityTopics(admin, "acct-1", "c1");
+  assert.equal(topics.find((t) => t.messageThreadId === 1)?.policy, "promotion");
+  assert.equal(topics.find((t) => t.messageThreadId === 2)?.policy, "announcement", "an unrelated topic in the same community is never touched");
+});
+
+test("setAccountCommunityTopicPolicy rejects a community that doesn't belong to this account's own projects", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "other-proj", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [{ id: "t1", community_id: "c1", message_thread_id: 1, topic_name: "General", policy: "general" }],
+  });
+  const result = await setAccountCommunityTopicPolicy(admin, "acct-1", "c1", 1, "promotion");
   assert.equal(result.ok, false);
 });

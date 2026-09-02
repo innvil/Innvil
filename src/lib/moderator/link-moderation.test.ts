@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
-  EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SPAM_WARNING_LIMIT,
+  EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SOLICITATION_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   promotionContactSentence,
@@ -220,9 +220,9 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
   });
 }
 
-test("REQUIRED (§54.1): unsolicited promotion, no legitimate context -> DELETE_WARN, warning #1, muted for 10 minutes", () => {
+test("REQUIRED (§54.1, revised 2026-09-02): unsolicited promotion, no legitimate context -> DELETE_WARN, warning #1, NO mute -- first warning is real leeway", () => {
   const result = decide({ category: "UNSOLICITED_PROMOTION" });
-  assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
+  assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: undefined });
 });
 
 /* ------------------------------------ Community "Allow Solicitation" override ---- */
@@ -262,8 +262,8 @@ test("solicitationAllowed=true never exempts a DIFFERENT category's own violatio
   assert.notEqual(result.kind, "ALLOW");
 });
 
-test("solicitationAllowed=false (the real default) behaves byte-identically to before this setting existed", () => {
-  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: false }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
+test("solicitationAllowed=false (the real default) still enforces the ordinary solicitation ladder (1st offense = no mute)", () => {
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", solicitationAllowed: false }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: undefined });
 });
 
 test("REQUIRED: solicitationAllowed never depends on admin/trusted status -- a non-admin gets the same ALLOW as an admin would", () => {
@@ -325,7 +325,7 @@ test("REQUIRED (scenario 9): borderline/uncertain (medium or low confidence) sca
 });
 
 test("REQUIRED (scenario 13): ordinary UNSOLICITED_PROMOTION escalation is completely unaffected by the new scam strike counter", () => {
-  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", priorWarningCount: 0, priorScamStrikeCount: 5 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
+  assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", priorWarningCount: 0, priorScamStrikeCount: 5 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: undefined });
 });
 
 test("LOW-confidence explicit/phishing does NOT auto-remove -- confidence gates severe enforcement too", () => {
@@ -341,13 +341,15 @@ test("REQUIRED: a floodRepeat signal escalates straight to DELETE_KICK even if c
   assert.deepEqual(decide({ category: "UNSOLICITED_PROMOTION", floodRepeat: true }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
-test("REQUIRED (§54.8/§54.9): repeated unsolicited promotion continues escalating -- warning 1 (10-min mute), warning 2 (30-min mute), then removal", () => {
-  assert.deepEqual(decide({ priorWarningCount: 0 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: 10 });
-  assert.deepEqual(decide({ priorWarningCount: 1 }), { kind: "DELETE_WARN", warningNumber: 2, reason: "repeated_unsolicited_promotion", muteMinutes: 30 });
+test("REQUIRED (§54.8/§54.9, revised 2026-09-02): repeated unsolicited promotion escalates through the full real-leeway ladder -- warning 1 (no mute), 2 (10-min), 3 (30-min), 4 (60-min), then removal on the 5th", () => {
+  assert.deepEqual(decide({ priorWarningCount: 0 }), { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: undefined });
+  assert.deepEqual(decide({ priorWarningCount: 1 }), { kind: "DELETE_WARN", warningNumber: 2, reason: "repeated_unsolicited_promotion", muteMinutes: 10 });
+  assert.deepEqual(decide({ priorWarningCount: 2 }), { kind: "DELETE_WARN", warningNumber: 3, reason: "repeated_unsolicited_promotion", muteMinutes: 30 });
+  assert.deepEqual(decide({ priorWarningCount: 3 }), { kind: "DELETE_WARN", warningNumber: 4, reason: "repeated_unsolicited_promotion", muteMinutes: 60 });
 });
 
-test("REQUIRED (§54.9): the 3rd unsolicited-promotion violation (past the 2-warning limit) -> DELETE_KICK + purge, never a permanent ban", () => {
-  assert.deepEqual(decide({ priorWarningCount: SPAM_WARNING_LIMIT }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
+test("REQUIRED (§54.9, revised 2026-09-02): the 5th unsolicited-promotion violation (past the 4-warning limit) -> DELETE_KICK + purge, never a permanent ban", () => {
+  assert.deepEqual(decide({ priorWarningCount: SOLICITATION_WARNING_LIMIT }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
 test("REQUIRED (§54.10): unknown/ambiguous, unfamiliar-looking link -> ALLOW, never an automatic permanent ban", () => {

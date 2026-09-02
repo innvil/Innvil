@@ -706,6 +706,19 @@ export interface ChatterActionInput {
    *  the same way, matching how this coordinator worked before this flag
    *  existed) — this is purely additive. */
   suppressAcknowledgementForSender?: boolean;
+  /** True when a real Telegram admin/creator is the most recent OTHER
+   *  speaker in THIS topic/thread (within the 120-second pending-reply
+   *  window — see pending-reply.ts's PENDING_REPLY_DELAY_MS, community-
+   *  runtime.ts computes this topic-scoped, never community-wide) — the
+   *  Watcher defers to them rather than jumping in with its own undirected
+   *  ANSWER/CASUAL_CHAT, UNLESS the message is explicitly directed at it
+   *  (an @mention/reply/configured-name match always still gets answered —
+   *  "when needed it will engage"). Consulted in QUESTION, SUBSTANTIVE
+   *  (only for its ambient/continuity engage path — a directed message
+   *  always overrides), and COMMUNITY_OPENER's undirected branch; TRIVIAL
+   *  has its own separate suppressAcknowledgementForSender gate above.
+   *  Undefined/false preserves every existing behavior exactly. */
+  recentlyRespondedByAdminOrMod?: boolean;
 }
 
 export type ChatterAction =
@@ -779,6 +792,16 @@ function pickCandidate(eligible: ChatterCandidate[]): ChatterCandidate | null {
  *  see file header. */
 export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   const trimmed = input.text.trim();
+
+  // A slash command is never the Watcher's to handle -- checked FIRST,
+  // before every other classification/directed-address override, so a
+  // command aimed at another bot/service (or the Watcher's own, unrelated,
+  // future command surface) is never answered, explained, acknowledged, or
+  // routed to an admin. There is deliberately no "if this command belongs
+  // to me, handle it" branch anywhere -- the Watcher does not participate
+  // in slash commands at all, full stop.
+  if (trimmed.startsWith("/")) return { type: "SILENCE", reasons: ["slash_command"] };
+
   const kind = classifyMessageKind(trimmed);
 
   if (kind === "EMPTY") return { type: "SILENCE", reasons: ["empty_message"] };
@@ -886,7 +909,7 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     if (directed) {
       return { type: "CASUAL_CHAT", deploymentId: directed.deploymentId, reasons: ["directed_opener"] };
     }
-    if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman) {
+    if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman || input.recentlyRespondedByAdminOrMod) {
       return { type: "SILENCE", reasons: ["already_handled"] };
     }
     const picked = pickCandidate(eligible);
@@ -895,6 +918,17 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   }
 
   if (kind === "QUESTION") {
+    // Defer to a real Telegram admin/mod who's the most recent speaker in
+    // the room -- a human staff member is clearly present and active, so
+    // the Watcher stays quiet on a FRESH question rather than duplicating/
+    // competing with them, exactly like a considerate human co-moderator
+    // would. Explicit direction always overrides this (an @mention/reply/
+    // configured-name match means the human asked THIS moderator directly,
+    // which still gets answered regardless of who else is in the room).
+    const directedCandidate = eligible.find((c) => c.isDirectedAtBot);
+    if (!directedCandidate && input.recentlyRespondedByAdminOrMod) {
+      return { type: "SILENCE", reasons: ["deferring_to_active_admin"] };
+    }
     // Directed (an explicit @mention of THIS candidate) wins over mere
     // continuity — a deliberate signal from the human beats "who was
     // already talking." pickCandidate already orders directed > continuity
@@ -913,6 +947,13 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   // win over whoever merely spoke last.
   if (!eligible.some((c) => c.isDirectedAtBot || c.wasLastSpeaker)) {
     return { type: "SILENCE", reasons: ["low_social_priority"] };
+  }
+  // An admin/mod actively handling THIS topic still defers the Watcher's own
+  // UNDIRECTED engagement (continuing a chat via wasLastSpeaker) -- a
+  // directed message always overrides, same precedent as QUESTION above.
+  const directedSubstantive = eligible.find((c) => c.isDirectedAtBot);
+  if (!directedSubstantive && input.recentlyRespondedByAdminOrMod) {
+    return { type: "SILENCE", reasons: ["deferring_to_active_admin"] };
   }
   const picked = pickCandidate(eligible);
   if (!picked) return { type: "SILENCE", reasons: ["no_eligible_moderator"] };

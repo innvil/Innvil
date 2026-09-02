@@ -52,6 +52,12 @@ export interface CommunityEvent {
   timestamp: string;
   text: string;
   replyToMessageId: string | null;
+  /** Telegram Forum topic id this message was posted in (see
+   *  TelegramMessage.message_thread_id) -- null for an ordinary chat or the
+   *  forum's default topic. Used to let a community allow-list specific
+   *  topics (e.g. a "Promotion" topic) as always-solicitation-allowed,
+   *  regardless of the community-wide allow_solicitation toggle. */
+  messageThreadId: number | null;
   origin: EventOrigin;
   /** 0 for a human-originated or proactive root event. Incremented by exactly
    *  one for a bot-ack reacting to another bot. Never allowed past MAX_BOT_INTERACTION_DEPTH. */

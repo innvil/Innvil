@@ -14,6 +14,7 @@ import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import {
   createAccountWatcher, listAccountWatchers, createAccountCommunity, deployAccountWatcher,
   setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
+  listAccountCommunityTopics, setAccountCommunityTopicPolicy, type AccountCommunityTopicRow,
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   listAccountAttentionItems, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountProjectDetail, getAccountWatcherDetail, getAccountPaidPlan,
@@ -188,6 +189,20 @@ export async function setCommunityAcknowledgeAdminMod(communityId: string, ackno
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return setAccountCommunityAcknowledgeAdminMod(admin, user.id, communityId, acknowledge);
+}
+
+export async function getCommunityTopics(communityId: string): Promise<AccountCommunityTopicRow[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  return listAccountCommunityTopics(admin, user.id, communityId);
+}
+
+export async function setCommunityTopicPolicy(
+  communityId: string, messageThreadId: number, policy: AccountCommunityTopicRow["policy"]
+): Promise<{ ok: true; data: null } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return setAccountCommunityTopicPolicy(admin, user.id, communityId, messageThreadId, policy);
 }
 
 /* ============================================================

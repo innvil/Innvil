@@ -3,6 +3,7 @@ import "server-only";
 import { aiComplete, aiCompleteWithMeta, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import type { KnowledgeContextEntry } from "./knowledge";
+import type { CommunityKnowledgeGrounding } from "./community-message-knowledge";
 import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
 /**
@@ -33,6 +34,13 @@ export interface ChatterContextMessage {
    *  another message and got no reply." Optional for callers that don't
    *  have it (e.g. tests). */
   senderPlatformId?: string | null;
+  /** Telegram Forum topic/thread id this message was posted in -- used to
+   *  scope "is an admin/mod actively handling THIS topic right now" to the
+   *  right sub-channel rather than the community's whole flat history.
+   *  `null`/absent = a non-forum chat, or Telegram's own unlabeled default
+   *  topic; matched only against other null-thread messages, never
+   *  conflated with a real numbered one. */
+  messageThreadId?: number | null;
 }
 
 export type ChatterGenerationAction = "CASUAL_CHAT" | "ANSWER";
@@ -94,6 +102,27 @@ export interface GenerateChatterReplyInput {
    *  was found — the moderator must say so rather than guessing, never fall
    *  back to inventing an answer. */
   projectKnowledge?: KnowledgeContextEntry[];
+  /** Already-retrieved community-message knowledge -- facts/links extracted
+   *  from THIS community's own admin/mod-authored Telegram messages
+   *  (pinned posts, announcements, official links), distinct from the
+   *  owner-authored Project/Community Knowledge above. Resolved in
+   *  community-runtime.ts via community-message-knowledge.ts, ONLY AFTER
+   *  every engagement/deference/scheduling decision already cleared the
+   *  Watcher to respond -- finding a pinned post/whitepaper link never
+   *  grants early permission to answer, it only improves the answer's
+   *  quality once already permitted. Only ever set for ANSWER. Undefined/
+   *  null means nothing relevant was found -- see
+   *  communityKnowledgeContextLines' own doc comment for the resulting
+   *  "answer naturally, never mention what's missing" prompt contract. */
+  communityKnowledge?: CommunityKnowledgeGrounding | null;
+  /** The community/Project's configured general fallback contact (reuses
+   *  the existing structured "support" contact preset, project-profile.ts)
+   *  -- offered as a MENTION-ONLY handoff (see MENTION_ADMIN_SENTINEL) when
+   *  ANSWER genuinely has no reliable, specific answer and no escalation
+   *  group is configured. Null/undefined = no such contact configured, in
+   *  which case the model is told SILENCE (NO_REPLY_SENTINEL) is the
+   *  correct outcome instead of guessing or saying it doesn't know. */
+  fallbackAdminMention?: string | null;
   /** BYO Enterprise (Phase 2, 2026-08-24) — the account's already-resolved
    *  AI-provider routing decision (community-runtime.ts's
    *  handleCommunityUpdate, via watch-runtime.ts's resolveAccountAiRouting).
@@ -135,10 +164,21 @@ export type ChatterGenerationResult =
    *  The caller (community-runtime.ts) must create a real escalation
    *  instead of sending any text — never both. */
   | { ok: true; escalate: true; usage: ChatterGenerationUsage }
+  /** ANSWER only -- the model has no reliable, specific answer to a genuine
+   *  informational question, and a configured fallback admin/mod mention
+   *  exists (input.fallbackAdminMention) to hand it off to. The caller
+   *  (community-runtime.ts) must send ONLY that bare mention -- no other
+   *  text, never persona filler on top of it (a mention-only fallback stays
+   *  mention-only). Checked ahead of escalate's own precedence only when NO
+   *  escalation group is configured (see knowledgeOrEscalationLine/
+   *  answerFallbackInstruction) -- a private team escalation channel is
+   *  always the stronger resolution when both exist. */
+  | { ok: true; mentionAdmin: true; usage: ChatterGenerationUsage }
   | { ok: false; error: string };
 
 const NO_REPLY_SENTINEL = "NO_REPLY";
 const ESCALATE_REQUIRED_SENTINEL = "ESCALATE_REQUIRED";
+const MENTION_ADMIN_SENTINEL = "MENTION_ADMIN_REQUIRED";
 const MAX_REPLY_CHARS = 300;
 
 /**
@@ -236,6 +276,8 @@ const SHARED_RULES = [
   `Never explain, reference, or imply your own internal mechanics — routing, coordinator/selection logic, turn-taking, how a responder gets picked, model or provider choice, AI architecture, or any other hidden system behavior. Never say things like "the system picked me", "there's no turn system", "we don't coordinate", "the routing decided...", "I was selected first", or "the other bot will respond next". If asked a casual question about timing or why more than one moderator replied, answer briefly from your own in-world, social perspective (e.g. "just timing" / "we both just saw it") — never describe how the underlying system actually works, and never imply there IS a hidden mechanism worth describing either way.`,
   `For casual, social, or meta exchanges: use the shortest natural reply that satisfies what the human is actually asking, in your own voice — this is about meaning, not a fixed word count. Don't restate or summarize the human's message before replying unless real clarification is genuinely needed. Not every casual message needs a complete, thorough answer just because a longer one is technically possible — ask yourself "what would I, this specific person, actually say here, if anything?" rather than "what's the most complete answer I could give?".`,
   `If someone asks who handles partnerships/collaborations/AMAs/sponsorships and no contact has been provided to you below, never invent a username or specific person — give a safe, generic fallback (e.g. "one of the group admins can help with that") or simply don't route them anywhere.`,
+  `Never expose internal system/retrieval terminology in your reply -- words like "retrieved context", "confidence", "classifier", "database", "index", "pinned post" (as a literal system label rather than natural phrasing), or similar. If you genuinely don't have reliable information on something, never say "I couldn't find that", "I couldn't verify that", "I only found the website", "there doesn't appear to be a [thing]", or any other phrasing that describes a search/retrieval attempt -- the absence of information is handled silently: just answer using whatever OTHER confirmed information you do have, with no comment on what's missing.`,
+  `CONTENT is grounded and accurate (only what you're actually given); STYLE is persona-based and natural -- every reply, including a short factual one (a contract address, a link, a one-word fact), must still sound like YOU, in your own configured voice/tone/vocabulary, not a generic bot/system message/retrieval engine/moderation script reciting a fact. Do not exaggerate, invent, or alter the underlying fact to fit your persona -- persona changes wording and tone only, never the substance. The one exception is a bare mention-only handoff (just an @name/contact with nothing else) -- when that's the correct response, send ONLY the mention, with no persona flavor/filler text added on top of it.`,
 ];
 
 /** Identity + presence-grounding line, shared by both actions — the
@@ -316,7 +358,72 @@ function projectKnowledgeContextLines(input: GenerateChatterReplyInput): string 
  *  explicit fact the model is told, not something it has to infer from a
  *  missing section. */
 const NO_PROJECT_KNOWLEDGE_LINE =
-  "No Project Knowledge was found relevant to this question -- you currently have ZERO project-specific facts, features, or details to draw on for it. Do not invent, guess, or improvise plausible-sounding specifics about what the project does, how any feature works, or anything else project-related. If the question needs specific project information you don't actually have, say so honestly (e.g. \"not sure on the specifics there\") instead of making something up -- you may still speak generally/socially if the question doesn't actually require project-specific facts.";
+  "No Project Knowledge was found relevant to this question -- you currently have ZERO project-specific facts, features, or details to draw on for it. Do not invent, guess, or improvise plausible-sounding specifics about what the project does, how any feature works, or anything else project-related. You may still speak generally/socially if the question doesn't actually require project-specific facts.";
+
+/** Community-message knowledge (pinned posts, announcements, official links
+ *  from THIS community's own admin/mod messages) -- a SECOND, independent
+ *  knowledge source from the owner-authored Project Knowledge above, folded
+ *  into the same "do I actually have something to answer with" check
+ *  (knowledgeOrEscalationLine). Returns null when nothing relevant was
+ *  retrieved, same "omit the block, never inject an empty/misleading
+ *  header" contract as projectKnowledgeContextLines. Explicitly instructs
+ *  answer-then-reference styling for a pinned post (never "just check the
+ *  pinned post" unless it's genuinely the only useful information) and
+ *  never exposes system/retrieval terminology (pinned/database/index) in
+ *  the actual reply -- that instruction lives here, closest to the data it
+ *  governs, reinforced again in SHARED_RULES for the general case. */
+function communityKnowledgeContextLines(input: GenerateChatterReplyInput): string | null {
+  const grounding = input.communityKnowledge;
+  if (!grounding) return null;
+  const parts: string[] = [];
+  if (grounding.facts.length) {
+    const lines = grounding.facts
+      .map((f) => `- ${f.text}${f.isPinned ? " (pinned)" : ""}${f.isAnnouncement ? " (announcement)" : ""}`)
+      .join("\n");
+    parts.push(
+      `Community context, from this community's own admin/mod messages (authoritative -- prefer NEWER admin/mod information over older/pinned information when they conflict on the same subject, e.g. a fresh "presale is now live" beats an older pinned "presale starts next month"):\n${lines}`
+    );
+  }
+  if (grounding.pinnedReference) {
+    const ref = grounding.pinnedReference.link ? `${grounding.pinnedReference.text}" (${grounding.pinnedReference.link})` : `${grounding.pinnedReference.text}"`;
+    parts.push(
+      `A relevant PINNED post exists: "${ref}. If it's genuinely useful for this question, answer directly first, THEN you may naturally point to it as additional/supporting information -- never JUST say "check the pinned post" unless it is genuinely the only useful information you have. Never expose that this is a "pinned post"/"database"/"index" in your own wording -- speak naturally, the way a community member would.`
+    );
+  }
+  if (grounding.whitepaperLink) {
+    parts.push(
+      `A confirmed WHITEPAPER link exists: ${grounding.whitepaperLink} -- you may mention it ONLY when genuinely relevant (e.g. a question about mechanics/roadmap/tokenomics/how the project works in depth). Use this EXACT link, never a different one, never derive/guess a different whitepaper URL. If no whitepaper link is listed here, one has never been confirmed -- do not mention a whitepaper at all, and never say you couldn't find/verify one.`
+    );
+  }
+  if (grounding.otherResources.length) {
+    const lines = grounding.otherResources.map((r) => `${r.kind}: ${r.url}`).join("; ");
+    parts.push(`Other confirmed official resources, mention ONLY when directly relevant to what was actually asked (never dump every link into one answer): ${lines}.`);
+  }
+  return parts.length ? parts.join("\n\n") : null;
+}
+
+/** The closing decision instruction for ANSWER, resolved from whichever
+ *  fallback is actually AVAILABLE for this project -- a private team
+ *  escalation channel (strongest, checked first) beats a configured
+ *  fallback-admin mention beats plain silence. Exactly one of the three
+ *  sentinel instructions is ever offered per project, so the model is
+ *  never asked to choose between mechanisms this project doesn't actually
+ *  have. Every branch explicitly bans the exact filler phrasing the
+ *  product spec forbids ("I don't know" / "I couldn't find that" / "I
+ *  don't have that information" / "please ask an admin") -- SILENCE
+ *  (NO_REPLY_SENTINEL) or a bare mention (MENTION_ADMIN_SENTINEL) are the
+ *  only correct ways to express "I genuinely don't know", never a spoken
+ *  disclaimer. */
+function answerFallbackInstruction(input: GenerateChatterReplyInput): string {
+  const bannedFiller = `never say "I don't know"/"I couldn't find that"/"I don't have that information"/"please ask an admin"`;
+  if (input.escalationConfigured) {
+    return `Decide naturally: if two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}. If the question needs project-specific information that's genuinely missing (see above; ${bannedFiller}), respond with EXACTLY: ${ESCALATE_REQUIRED_SENTINEL}. Never combine either sentinel with other text.`;
+  }
+  if (input.fallbackAdminMention) {
+    return `Decide naturally: if two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}. If you genuinely don't have a reliable, specific answer to this question (${bannedFiller} -- do not guess), respond with EXACTLY: ${MENTION_ADMIN_SENTINEL}. Never combine either sentinel with other text.`;
+  }
+  return `Decide naturally: if you genuinely don't know and can't give a useful answer (${bannedFiller} -- it is completely correct to simply say nothing), or two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}`;
+}
 
 /** Shared Escalation Group (Phase 1): when real Project Knowledge WAS
  *  retrieved (projectKnowledgeContextLines returns non-null), that already
@@ -328,10 +435,17 @@ const NO_PROJECT_KNOWLEDGE_LINE =
  *  Without a configured escalation group, behavior is byte-identical to
  *  before this feature existed. */
 function knowledgeOrEscalationLine(input: GenerateChatterReplyInput): string {
-  const knowledge = projectKnowledgeContextLines(input);
+  const projectLines = projectKnowledgeContextLines(input);
+  const communityLines = communityKnowledgeContextLines(input);
+  const knowledge = [projectLines, communityLines].filter((l): l is string => !!l).join("\n\n");
   if (knowledge) return knowledge;
-  if (!input.escalationConfigured) return NO_PROJECT_KNOWLEDGE_LINE;
-  return `${NO_PROJECT_KNOWLEDGE_LINE} However, a private team escalation channel IS configured for this project -- if this specific question genuinely needs project-specific information you don't have (a real informational question, not idle chat, not something answerable generally/socially), respond with EXACTLY: ${ESCALATE_REQUIRED_SENTINEL} -- never guess, never improvise a plausible-sounding answer, and never just write a freeform "I don't know" in this case; ${ESCALATE_REQUIRED_SENTINEL} is the correct response so the team can be asked for a verified answer instead.`;
+  if (input.escalationConfigured) {
+    return `${NO_PROJECT_KNOWLEDGE_LINE} However, a private team escalation channel IS configured for this project -- if this specific question genuinely needs project-specific information you don't have (a real informational question, not idle chat, not something answerable generally/socially), respond with EXACTLY: ${ESCALATE_REQUIRED_SENTINEL} -- never guess, never improvise a plausible-sounding answer, and never just write a freeform "I don't know" in this case; ${ESCALATE_REQUIRED_SENTINEL} is the correct response so the team can be asked for a verified answer instead.`;
+  }
+  if (input.fallbackAdminMention) {
+    return `${NO_PROJECT_KNOWLEDGE_LINE} If this specific question genuinely needs information you don't have (a real informational question, not idle chat, not something answerable generally/socially), never guess and never write a freeform "I don't know"/"I couldn't find that"/"I don't have that information" -- respond with EXACTLY: ${MENTION_ADMIN_SENTINEL} instead, which will hand this off to the right person for you.`;
+  }
+  return `${NO_PROJECT_KNOWLEDGE_LINE} If this specific question genuinely needs information you don't have, never guess and never write a freeform "I don't know"/"I couldn't find that"/"I don't have that information" -- it is completely correct to simply say nothing in that case (respond with EXACTLY: ${NO_REPLY_SENTINEL}).`;
 }
 
 /** Distinct-contribution rule for a multi-target exchange (only present for
@@ -377,9 +491,7 @@ function buildSystemPrompt(input: GenerateChatterReplyInput): string {
       ...SHARED_RULES,
       STYLE_HIERARCHY_PREFACE,
       style.join(" "),
-      input.escalationConfigured
-        ? `Decide naturally: if two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}. If the question needs project-specific information that's genuinely missing (see above), respond with EXACTLY: ${ESCALATE_REQUIRED_SENTINEL}. Never combine either sentinel with other text.`
-        : `Decide naturally: if you genuinely don't know and can't give a useful answer, or two other people are clearly already handling it, respond with EXACTLY: ${NO_REPLY_SENTINEL}`,
+      answerFallbackInstruction(input),
       `Otherwise respond with ONLY the message you'd actually send — no quotation marks, no explanation, no markdown, under 30 words.`,
     ].filter(Boolean).join("\n");
   }
@@ -548,6 +660,15 @@ export async function generateChatterReply(input: GenerateChatterReplyInput): Pr
     if (text.toUpperCase() === ESCALATE_REQUIRED_SENTINEL || text.toUpperCase().startsWith(ESCALATE_REQUIRED_SENTINEL)) {
       return { ok: true, escalate: true, usage };
     }
+    // Checked BEFORE NO_REPLY, same reasoning as ESCALATE_REQUIRED above --
+    // MENTION_ADMIN_REQUIRED is only ever offered to ANSWER when
+    // fallbackAdminMention is set (answerFallbackInstruction), but a
+    // defensive check here means an unexpected match is never silently
+    // swallowed as a plain NO_REPLY (which would drop the question with no
+    // handoff to anyone at all).
+    if (text.toUpperCase() === MENTION_ADMIN_SENTINEL || text.toUpperCase().startsWith(MENTION_ADMIN_SENTINEL)) {
+      return { ok: true, mentionAdmin: true, usage };
+    }
     if (!text || text.toUpperCase() === NO_REPLY_SENTINEL || text.toUpperCase().startsWith(NO_REPLY_SENTINEL)) {
       return { ok: true, noReply: true, usage };
     }
@@ -689,4 +810,7 @@ export async function classifyAmbientGreeting(
  *  the identity/persona-isolation/history-grounding rules and self/other
  *  labeling are actually IN the constructed prompt, without needing a live
  *  AI call. Not used by any other runtime code. */
-export const __testables = { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines, collabContactLine, projectKnowledgeContextLines, knowledgeOrEscalationLine };
+export const __testables = {
+  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines,
+  collabContactLine, projectKnowledgeContextLines, knowledgeOrEscalationLine, communityKnowledgeContextLines, answerFallbackInstruction,
+};

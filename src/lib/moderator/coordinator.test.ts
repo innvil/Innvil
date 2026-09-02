@@ -20,6 +20,7 @@ function baseEvent(overrides: Partial<CommunityEvent> = {}): CommunityEvent {
     timestamp: new Date().toISOString(),
     text: "Good morning everyone 👋",
     replyToMessageId: null,
+    messageThreadId: null,
     origin: "HUMAN",
     interactionDepth: 0,
     causationMessageId: null,

@@ -34,6 +34,7 @@ function single(opts: {
   recentlyAnsweredByModerator?: boolean;
   recentlyRespondedByHuman?: boolean;
   suppressAcknowledgementForSender?: boolean;
+  recentlyRespondedByAdminOrMod?: boolean;
 }) {
   return selectChatterAction({
     text: opts.text,
@@ -49,6 +50,7 @@ function single(opts: {
     recentlyAnsweredByModerator: opts.recentlyAnsweredByModerator,
     recentlyRespondedByHuman: opts.recentlyRespondedByHuman,
     suppressAcknowledgementForSender: opts.suppressAcknowledgementForSender,
+    recentlyRespondedByAdminOrMod: opts.recentlyRespondedByAdminOrMod,
   });
 }
 
@@ -1480,4 +1482,76 @@ test("suppression is a no-op when omitted -- every existing caller/test that nev
   const withExplicitFalse = single({ text: "ok", isDirectedAtBot: true, suppressAcknowledgementForSender: false });
   assert.deepEqual(withUndefined, withExplicitFalse);
   assert.equal(withUndefined.type, "SHORT_ACK");
+});
+
+/* ------------------------------------------------------- slash commands ---- */
+// Silence/command/fallback policy (§15A) -- a slash command is never the
+// Watcher's to handle, checked before every other classification/directed-
+// address override.
+
+test("REQUIRED (§15.I.1): /audit -> SILENCE, reason slash_command", () => {
+  const result = single({ text: "/audit" });
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["slash_command"] });
+});
+
+test("REQUIRED (§15.I.2): /ca -> SILENCE", () => {
+  assert.equal(single({ text: "/ca" }).type, "SILENCE");
+});
+
+test("REQUIRED (§15.I.3): /promotion -> SILENCE", () => {
+  assert.equal(single({ text: "/promotion" }).type, "SILENCE");
+});
+
+test("REQUIRED (§15.I.4): /help -> SILENCE", () => {
+  assert.equal(single({ text: "/help" }).type, "SILENCE");
+});
+
+test("REQUIRED (§15.I.5): an unrecognized/unknown slash command still resolves SILENCE, never an 'unsupported command' reply", () => {
+  const result = single({ text: "/some_totally_unknown_command_xyz" });
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["slash_command"] });
+});
+
+test("REQUIRED (§15.I.6): a slash command is NEVER handled conversationally, even when it directly @mentions the Watcher", () => {
+  const result = single({ text: "/audit @kwan_mod_bot", isDirectedAtBot: true });
+  assert.equal(result.type, "SILENCE");
+});
+
+test("REQUIRED (§15.I.15): a slash command never enters normal chatter generation, even when it looks like a real question", () => {
+  const result = single({ text: "/audit what's the status?" });
+  assert.equal(result.type, "SILENCE");
+});
+
+test("a slash command with leading whitespace is still recognized as a command", () => {
+  const result = single({ text: "   /status" });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["slash_command"]);
+});
+
+test("a message that merely CONTAINS a slash but doesn't START with one is a normal message, not a command", () => {
+  const result = single({ text: "the website is example.com/roadmap, check it out", isDirectedAtBot: true, wasLastSpeaker: true });
+  assert.notDeepEqual(result.reasons, ["slash_command"]);
+});
+
+/* ---------------------------------------- broadened admin-deference (SUBSTANTIVE/COMMUNITY_OPENER) ---- */
+// Rule 1/8: an admin/mod actively handling THIS topic defers the Watcher's
+// own UNDIRECTED engagement across every action kind, not just QUESTION.
+
+test("REQUIRED: an undirected SUBSTANTIVE continuity reply defers to an active admin/mod, same as QUESTION", () => {
+  const result = single({ text: "the deployment finished rolling out just now", wasLastSpeaker: true, recentlyRespondedByAdminOrMod: true });
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["deferring_to_active_admin"] });
+});
+
+test("a DIRECTED substantive message still engages even when an admin/mod is active -- explicit direction always overrides", () => {
+  const result = single({ text: "the deployment finished rolling out just now", isDirectedAtBot: true, recentlyRespondedByAdminOrMod: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+});
+
+test("REQUIRED: an undirected COMMUNITY_OPENER also defers to an active admin/mod", () => {
+  const result = single({ text: "hey everyone", recentlyRespondedByAdminOrMod: true });
+  assert.deepEqual(result, { type: "SILENCE", reasons: ["already_handled"] });
+});
+
+test("without an active admin/mod, an undirected COMMUNITY_OPENER still engages normally (unaffected by this change)", () => {
+  const result = single({ text: "hey everyone" });
+  assert.equal(result.type, "CASUAL_CHAT");
 });

@@ -214,6 +214,10 @@ export const FLOOD_WINDOW_MS = 30 * 60_000;
 export const FLOOD_REPEAT_THRESHOLD = 3;
 
 export interface LinkWarningState {
+  /** Solicitation/unsolicited-promotion's OWN 3(4)-strike counter --
+   *  EXCLUSIVELY solicitation's, since the 2026-09-02 media/solicitation
+   *  counter split (see mediaWarningCount below). Never incremented by a
+   *  media-moderation violation, and never reset by one either. */
   warningCount: number;
   recentLinkHash: string | null;
   recentLinkAt: string | null;
@@ -227,11 +231,20 @@ export interface LinkWarningState {
    *  expiry window (effectiveScamStrikeCount below), not a permanent
    *  lifetime counter. */
   scamStrikeAt: string | null;
+  /** Media moderation's OWN warning counter (media-moderation.ts's
+   *  decideMediaEnforcement), structurally SEPARATE from `warningCount`
+   *  since the 2026-09-02 split -- a photo/video violation never advances
+   *  the solicitation ladder, and a solicitation violation never advances
+   *  this one. Both are still stored on the SAME per-(community, user) row
+   *  (moderator_link_warning_state) since they share every other field
+   *  (flood window, scam strike) -- only the warning-count semantics were
+   *  ever actually conflated, so only that needed its own column. */
+  mediaWarningCount: number;
 }
 
 export const EMPTY_WARNING_STATE: LinkWarningState = {
   warningCount: 0, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0,
-  scamStrikeCount: 0, scamStrikeAt: null,
+  scamStrikeCount: 0, scamStrikeAt: null, mediaWarningCount: 0,
 };
 
 /** Finite strike window, not a permanent lifetime punishment (spec: "no
@@ -302,16 +315,32 @@ export type ModerationEnforcement =
 
 /** Maximum number of WARNINGS (with escalating mutes) before the next
  *  violation removes the user — 2 warnings, then the 3rd violation kicks.
- *  Shared by both the unified "spam" progression (unsolicited promotion +
- *  obvious flood bursts) and media's own borderline-explicit progression,
- *  so both read the same real number rather than a duplicated literal. */
+ *  Media's own borderline-explicit progression (media-moderation.ts /
+ *  media-warning.ts) still uses this exact number. Ordinary unsolicited
+ *  promotion ("solicitation") has its OWN, more lenient ladder now — see
+ *  SOLICITATION_WARNING_LIMIT below — deliberately decoupled so a change
+ *  to one can never silently change the other. */
 export const SPAM_WARNING_LIMIT = 2;
 
-/** Deterministic mute durations for the unified spam progression — first
- *  warning mutes for 10 minutes, second for 30. Scam/phishing (stricter,
- *  see below) mutes 30 minutes on its single warning before removal. */
+/** Deterministic mute durations for media's own borderline progression --
+ *  first warning mutes for 10 minutes, second for 30. Scam/phishing
+ *  (stricter, see below) mutes 30 minutes on its single warning before
+ *  removal. Ordinary unsolicited promotion no longer uses this table --
+ *  see SOLICITATION_MUTE_MINUTES_BY_WARNING below. */
 export const SPAM_MUTE_MINUTES_BY_WARNING: Record<number, number> = { 1: 10, 2: 30 };
 export const SCAM_FIRST_WARNING_MUTE_MINUTES = 30;
+
+/** Ordinary unsolicited promotion ("solicitation") gets a real leeway,
+ *  explicit product decision (2026-09-02): the FIRST warning carries no
+ *  mute at all -- just a deletion + a warning message, nothing else. Only
+ *  the 5th violation removes the user. Deliberately its own constants,
+ *  separate from SPAM_WARNING_LIMIT/SPAM_MUTE_MINUTES_BY_WARNING (which
+ *  still govern media's own, unrelated, stricter progression) -- a bare
+ *  automated flood burst (LINK_SPAM_OR_FLOOD / floodRepeat) still skips
+ *  straight past this whole ladder to the terminal kick, since it's an
+ *  abuse signal, not ordinary solicitation. */
+export const SOLICITATION_WARNING_LIMIT = 4;
+export const SOLICITATION_MUTE_MINUTES_BY_WARNING: Record<number, number> = { 2: 10, 3: 30, 4: 60 };
 
 /** The deterministic policy layer (spec §42) — classification informs this,
  *  it never decides alone. Admin/trusted-role exemption applies ONLY to
@@ -320,14 +349,18 @@ export const SCAM_FIRST_WARNING_MUTE_MINUTES = 30;
  *  question, not a "who's allowed to self-promote" one.
  *
  *  Enforcement model (2026-08-27, Watcher Ops moderation-reporting
- *  expansion — supersedes the earlier warn-then-ban model): spam
- *  (unsolicited promotion, and an obvious automated flood burst) gets a
- *  graduated mute-then-kick response — warning 1 mutes 10 minutes, warning
- *  2 mutes 30 minutes, the 3rd violation kicks the user AND purges their
- *  recent messages. Scam/phishing is stricter — a single warning (30-minute
- *  mute), then the 2nd confirmed offense kicks+purges. Explicit content
- *  (text link or media) is zero-tolerance — no warning, immediate
- *  kick+purge. None of these produce a permanent DELETE_BAN anymore. */
+ *  expansion; solicitation ladder revised 2026-09-02): ordinary unsolicited
+ *  promotion ("solicitation") gets a real leeway -- warning 1 is just a
+ *  deletion + warning (no mute at all), warning 2 mutes 10 minutes, warning
+ *  3 mutes 30 minutes, warning 4 mutes 60 minutes, and only the 5th
+ *  violation kicks the user AND purges their recent messages. An obvious
+ *  automated flood burst (LINK_SPAM_OR_FLOOD / a rapid same-link repost)
+ *  still skips straight past this whole ladder to the terminal kick --
+ *  that's an abuse signal, not ordinary solicitation. Scam/phishing is
+ *  stricter — a single warning (30-minute mute), then the 2nd confirmed
+ *  offense kicks+purges. Explicit content (text link or media) is
+ *  zero-tolerance — no warning, immediate kick+purge. None of these produce
+ *  a permanent DELETE_BAN anymore. */
 export function decideLinkEnforcement(input: {
   category: LinkCategory;
   confidence: ClassificationConfidence;
@@ -399,21 +432,23 @@ export function decideLinkEnforcement(input: {
   // signal, not ordinary self-promotion.
   if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
 
-  // Unified spam progression: UNSOLICITED_PROMOTION and an obvious
+  // Solicitation progression: UNSOLICITED_PROMOTION and an obvious
   // automated flood burst share ONE escalation counter/response shape. A
   // detected flood burst (spec §28's "obvious automated/rapid repetition")
-  // skips straight past any remaining warning grace period rather than
-  // needing the full count -- it forces the count to at least
-  // SPAM_WARNING_LIMIT + 1, so it always resolves to the kick+purge tier
-  // below, never a fresh warning.
+  // skips straight past the whole leeway ladder rather than needing the
+  // full count -- it forces the count to at least SOLICITATION_WARNING_LIMIT
+  // + 1, so it always resolves to the kick+purge tier below, never a fresh
+  // warning. An ordinary first offense gets warningNumber=1 with NO mute
+  // (SOLICITATION_MUTE_MINUTES_BY_WARNING has no entry for 1, so
+  // muteMinutes is correctly undefined) -- "first warning should be fine".
   const isFlood = input.category === "LINK_SPAM_OR_FLOOD" || input.floodRepeat;
-  const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SPAM_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
-  if (nextCount > SPAM_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true };
+  const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SOLICITATION_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
+  if (nextCount > SOLICITATION_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true };
   return {
     kind: "DELETE_WARN",
     warningNumber: nextCount,
     reason: nextCount === 1 ? "unsolicited_promotion" : "repeated_unsolicited_promotion",
-    muteMinutes: SPAM_MUTE_MINUTES_BY_WARNING[nextCount],
+    muteMinutes: SOLICITATION_MUTE_MINUTES_BY_WARNING[nextCount],
   };
 }
 

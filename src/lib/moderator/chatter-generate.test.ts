@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { __testables, shortAckText, classifyAmbientGreeting, personaReactionEmoji, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { __testables, shortAckText, classifyAmbientGreeting, personaReactionEmoji, generateChatterReply, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
-const { buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine, projectKnowledgeContextLines, knowledgeOrEscalationLine } = __testables;
+const {
+  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine,
+  projectKnowledgeContextLines, knowledgeOrEscalationLine, communityKnowledgeContextLines, answerFallbackInstruction,
+} = __testables;
 
 /**
  * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
@@ -1174,4 +1177,147 @@ test("escalationConfigured with real knowledge present: the knowledge block itse
   );
   assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
   assert.match(prompt, /Ethereum and Polygon\./);
+});
+
+/* ============================== community-message knowledge grounding ========== */
+
+test("communityKnowledgeContextLines is null when nothing was retrieved", () => {
+  assert.equal(communityKnowledgeContextLines(baseInput({})), null);
+  assert.equal(communityKnowledgeContextLines(baseInput({ communityKnowledge: null })), null);
+});
+
+test("REQUIRED: facts render with pinned/announcement markers and instruct newer-wins on conflict", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({
+      communityKnowledge: {
+        facts: [{ text: "presale is now live", isPinned: false, isAnnouncement: true, createdAt: "2026-09-01T00:00:00.000Z" }],
+        pinnedReference: null, whitepaperLink: null, otherResources: [],
+      },
+    })
+  );
+  assert.match(line ?? "", /presale is now live/);
+  assert.match(line ?? "", /prefer NEWER admin\/mod information/i);
+});
+
+test("REQUIRED (SS2): a pinned reference instructs answer-first-then-reference, never 'just check the pinned post'", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [], pinnedReference: { text: "presale stage details", link: "https://t.me/proj/5" }, whitepaperLink: null, otherResources: [] } })
+  );
+  assert.match(line ?? "", /answer directly first/i);
+  assert.match(line ?? "", /https:\/\/t\.me\/proj\/5/);
+  assert.match(line ?? "", /never JUST say "check the pinned post"/i);
+});
+
+test("REQUIRED (SS3/SS9): a confirmed whitepaper link is stated with an explicit never-derive-a-different-one instruction", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [], pinnedReference: null, whitepaperLink: "https://docs.example.com/paper", otherResources: [] } })
+  );
+  assert.match(line ?? "", /https:\/\/docs\.example\.com\/paper/);
+  assert.match(line ?? "", /never derive\/guess a different whitepaper URL/i);
+});
+
+test("REQUIRED (SS9): with no whitepaper, the prompt explicitly tells the model NOT to mention one at all -- never a placeholder", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [{ text: "presale is live", isPinned: false, isAnnouncement: false, createdAt: "2026-09-01T00:00:00.000Z" }], pinnedReference: null, whitepaperLink: null, otherResources: [] } })
+  );
+  assert.doesNotMatch(line ?? "", /whitepaper/i);
+});
+
+test("REQUIRED (SS4): other resources come with an explicit never-dump-every-link instruction", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [], pinnedReference: null, whitepaperLink: null, otherResources: [{ kind: "ROADMAP", url: "https://a.com/roadmap" }] } })
+  );
+  assert.match(line ?? "", /ROADMAP: https:\/\/a\.com\/roadmap/);
+  assert.match(line ?? "", /never dump every link/i);
+});
+
+/* --------------------------------------------------------- silence/command/fallback (15C) ---- */
+
+test("REQUIRED: with escalation configured, escalation is offered and mention-admin is NOT (escalation wins precedence)", () => {
+  const instr = answerFallbackInstruction(baseInput({ escalationConfigured: true, fallbackAdminMention: "@CommunityAdmin" }));
+  assert.match(instr, /ESCALATE_REQUIRED/);
+  assert.doesNotMatch(instr, /MENTION_ADMIN_REQUIRED/);
+});
+
+test("REQUIRED (15C): with no escalation but a configured fallback admin, mention-admin is offered instead", () => {
+  const instr = answerFallbackInstruction(baseInput({ escalationConfigured: false, fallbackAdminMention: "@CommunityAdmin" }));
+  assert.match(instr, /MENTION_ADMIN_REQUIRED/);
+  assert.doesNotMatch(instr, /ESCALATE_REQUIRED/);
+});
+
+test("REQUIRED (15C): with neither escalation nor a fallback admin, plain silence is offered and explicitly stated as correct", () => {
+  const instr = answerFallbackInstruction(baseInput({ escalationConfigured: false, fallbackAdminMention: null }));
+  assert.match(instr, /NO_REPLY/);
+  assert.match(instr, /completely correct to simply say nothing/i);
+});
+
+test("REQUIRED: every fallback branch explicitly bans the forbidden filler phrasing", () => {
+  for (const over of [{ escalationConfigured: true }, { fallbackAdminMention: "@Admin" }, {}]) {
+    const instr = answerFallbackInstruction(baseInput(over));
+    assert.match(instr, /I don.t know/);
+    assert.match(instr, /I couldn.t find that/);
+  }
+});
+
+test("REQUIRED: knowledgeOrEscalationLine offers the mention-admin sentinel when nothing is known but a fallback admin is configured", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: false, fallbackAdminMention: "@CommunityAdmin" }));
+  assert.match(line, /MENTION_ADMIN_REQUIRED/);
+});
+
+/* ------------------------------------------------- persona-consistency / no-system-terminology (NOTE) ---- */
+
+test("REQUIRED: prompt states content=grounded/style=persona and bans exposing internal retrieval terminology", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  assert.match(prompt, /CONTENT is grounded and accurate/i);
+  assert.match(prompt, /STYLE is persona-based and natural/i);
+  assert.match(prompt, /retrieved context/i);
+  assert.match(prompt, /confidence/i);
+  assert.match(prompt, /classifier/i);
+});
+
+test("REQUIRED: prompt bans 'couldn't find/verify' style phrasing for missing information", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  assert.match(prompt, /I couldn.t find that/i);
+});
+
+/* -------------------------------------------------- generateChatterReply sentinel round trip ---- */
+
+const BYO_CRED_FOR_GENERATION = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" };
+
+function withAnthropicFetchMock<T>(replyText: string, fn: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ content: [{ type: "text", text: replyText }], usage: { input_tokens: 10, output_tokens: 4 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  return fn().finally(() => {
+    globalThis.fetch = originalFetch;
+  });
+}
+
+test("REQUIRED (15C, end-to-end): the model emitting MENTION_ADMIN_REQUIRED resolves to a real mentionAdmin outcome", async () => {
+  await withAnthropicFetchMock("MENTION_ADMIN_REQUIRED", async () => {
+    const result = await generateChatterReply(
+      baseInput({ action: "ANSWER", fallbackAdminMention: "@CommunityAdmin", aiRouting: { required: true, credential: BYO_CRED_FOR_GENERATION } })
+    );
+    assert.equal(result.ok, true);
+    if (result.ok) assert.ok("mentionAdmin" in result && result.mentionAdmin === true);
+  });
+});
+
+test("a plain NO_REPLY response still resolves to noReply, unaffected by the new sentinel", async () => {
+  await withAnthropicFetchMock("NO_REPLY", async () => {
+    const result = await generateChatterReply(baseInput({ action: "ANSWER", aiRouting: { required: true, credential: BYO_CRED_FOR_GENERATION } }));
+    assert.equal(result.ok, true);
+    if (result.ok) assert.ok("noReply" in result && result.noReply === true);
+  });
+});
+
+test("a real answer still passes through as a normal reply, unaffected by the new sentinel", async () => {
+  await withAnthropicFetchMock("CA: 0x123456789", async () => {
+    const result = await generateChatterReply(baseInput({ action: "ANSWER", aiRouting: { required: true, credential: BYO_CRED_FOR_GENERATION } }));
+    assert.equal(result.ok, true);
+    if (result.ok) assert.ok("reply" in result && result.reply === "CA: 0x123456789");
+  });
 });

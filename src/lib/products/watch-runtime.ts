@@ -828,6 +828,48 @@ export async function setAccountCommunityAcknowledgeAdminMod(admin: SupabaseClie
   return { ok: true, data: null };
 }
 
+/** Silence/command/fallback policy (§4) -- lists the Telegram Forum topics
+ *  the bot has auto-discovered for this community (watch_community_topics,
+ *  populated by community-runtime.ts as messages arrive in each topic) so
+ *  the owner can pick from KNOWN topics and assign a policy, rather than
+ *  hunting for a raw numeric message_thread_id as the normal UX. */
+export interface AccountCommunityTopicRow {
+  messageThreadId: number;
+  topicName: string | null;
+  policy: "general" | "announcement" | "promotion" | "normal" | "custom";
+}
+
+async function verifyCommunityOwnership(admin: SupabaseClient, accountId: string, communityId: string): Promise<boolean> {
+  const { data: accountProjects } = await admin.from("projects").select("id").eq("account_id", accountId);
+  const projectIds = (accountProjects ?? []).map((p: Record<string, unknown>) => p.id as string);
+  if (!projectIds.length) return false;
+  const { data: community } = await admin.from("communities").select("id, project_id").eq("id", communityId).maybeSingle();
+  return !!community && projectIds.includes(community.project_id as string);
+}
+
+export async function listAccountCommunityTopics(admin: SupabaseClient, accountId: string, communityId: string): Promise<AccountCommunityTopicRow[]> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return [];
+  const { data } = await admin
+    .from("watch_community_topics")
+    .select("message_thread_id, topic_name, policy")
+    .eq("community_id", communityId)
+    .order("first_seen_at", { ascending: true });
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    messageThreadId: r.message_thread_id as number,
+    topicName: (r.topic_name as string | null) ?? null,
+    policy: r.policy as AccountCommunityTopicRow["policy"],
+  }));
+}
+
+export async function setAccountCommunityTopicPolicy(
+  admin: SupabaseClient, accountId: string, communityId: string, messageThreadId: number, policy: AccountCommunityTopicRow["policy"]
+): Promise<CreateResult<null>> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return { ok: false, error: "Community not found." };
+  const { error } = await admin.from("watch_community_topics").update({ policy }).eq("community_id", communityId).eq("message_thread_id", messageThreadId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
 export interface AccountDeploymentRow {
   id: string;
   moderatorId: string;

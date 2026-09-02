@@ -28,11 +28,22 @@ import {
 } from "./task-state";
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
-  COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, type LinkWarningState,
+  COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
-  filterOutOwnBotMentions, spamWarningMuteSentence, looksLikeUnsolicitedPitch, promotionContactSentence,
+  filterOutOwnBotMentions, looksLikeUnsolicitedPitch, promotionContactSentence,
 } from "./link-moderation";
-import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
+import { classifyLinkIntent } from "./link-classify";
+import {
+  PENDING_REPLY_DELAY_MS, pendingReplyScheduledFor, isPendingReplyDue, isPendingReplyStale,
+  isWithinPendingReplyWindow, revalidatePendingReply, type DeferredActionKind, type PendingReplyRow,
+} from "./pending-reply";
+import {
+  topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicSolicitationWarningText,
+  type CommunityTopicRow, type CommunityTopicPolicy,
+} from "./community-topics";
+import {
+  classifyResourceKind, buildCommunityKnowledgeGrounding, type CommunityKnowledgeItem, type CommunityKnowledgeGrounding,
+} from "./community-message-knowledge";
 import {
   decideMediaEnforcement, computeSamplePositions, classifySampledFrames,
   type MediaKind, type MediaClassificationResult,
@@ -205,6 +216,11 @@ export type TelegramMessage = {
   text?: string;
   caption?: string;
   reply_to_message?: { message_id: number };
+  /** Telegram Forum (topic-enabled supergroup) support -- identifies which
+   *  topic/sub-channel this message was posted in (e.g. a "General" vs
+   *  "Announcements" vs "Promotion" topic within ONE chat). Absent for an
+   *  ordinary (non-forum) chat or the forum's own default "General" topic. */
+  message_thread_id?: number;
   /** Telegram sends an ARRAY of the same photo at multiple resolutions
    *  (smallest first) — the LAST entry is the highest resolution without
    *  needing to fetch/compare every variant. */
@@ -212,6 +228,23 @@ export type TelegramMessage = {
   video?: TelegramVideo;
   animation?: TelegramAnimation;
   document?: TelegramDocument;
+  /** Present on the special service message Telegram sends the instant
+   *  something is pinned -- references the ORIGINAL message that was
+   *  pinned (self-contained: carries its own from/text/chat/message_id),
+   *  even one the bot never saw live (e.g. pinned before the bot joined).
+   *  Telegram sends no equivalent event for an UNPIN -- see
+   *  syncCurrentPinnedMessage below for how that's handled instead. */
+  pinned_message?: TelegramMessage;
+  /** Sent once, on the message that created a Forum topic -- the only
+   *  reliable way this codebase can learn a topic's real display name
+   *  (there is no general "get topic name by id" Bot API call). */
+  forum_topic_created?: { name: string };
+  /** Sent when a topic is renamed/re-iconed -- `name` is present on a
+   *  rename, absent on an icon-only edit. Used to keep the stored display
+   *  name current so a warning always names the topic correctly even after
+   *  a rename, per the explicit "renaming must not break policy, but the
+   *  displayed name must update" requirement. */
+  forum_topic_edited?: { name?: string };
 };
 export type TelegramUpdate = {
   update_id?: number;
@@ -292,6 +325,249 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
     acknowledge_admin_mod: boolean | null;
   };
+}
+
+/* ------------------------------------------------------- topic discovery ---- */
+// Auto-discovered Telegram Forum topics + owner-assignable policy (see
+// community-topics.ts for the pure vocabulary/lookup helpers). Every
+// message processed in a forum topic records/refreshes a row here so the
+// owner can pick from KNOWN topics instead of hunting for a raw numeric
+// message_thread_id -- the id is still the real lookup key underneath
+// (findCommunityTopic), this is purely discovery + a friendly last-seen
+// display name.
+
+const TOPIC_NAME_POLICY_HINTS: Array<{ policy: CommunityTopicPolicy; re: RegExp }> = [
+  { policy: "promotion", re: /promo(tion)?/i },
+  { policy: "announcement", re: /announce/i },
+  { policy: "general", re: /general/i },
+];
+
+/** A sensible STARTING policy guess from the topic's own Telegram-reported
+ *  name, purely a default -- never authoritative, always owner-overridable
+ *  after the fact (policy stays keyed to the thread id regardless of what
+ *  this guessed). A topic with no name, or a name matching nothing here,
+ *  defaults to 'normal' (restricted, same as General/Announcements for
+ *  solicitation purposes). */
+function suggestTopicPolicy(topicName: string | null): CommunityTopicPolicy {
+  if (!topicName) return "normal";
+  for (const { policy, re } of TOPIC_NAME_POLICY_HINTS) if (re.test(topicName)) return policy;
+  return "normal";
+}
+
+export async function loadCommunityTopics(admin: SupabaseClient, communityId: string): Promise<CommunityTopicRow[]> {
+  const { data } = await admin
+    .from("watch_community_topics")
+    .select("message_thread_id, topic_name, policy")
+    .eq("community_id", communityId);
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    messageThreadId: r.message_thread_id as number,
+    topicName: (r.topic_name as string | null) ?? null,
+    policy: r.policy as CommunityTopicPolicy,
+  }));
+}
+
+/** Best-effort auto-discovery -- upserts the topic's last-seen name/time,
+ *  never touching `policy` once the row already exists (an owner's explicit
+ *  assignment must never be silently reset by a later message). A brand-new
+ *  topic gets a suggested starting policy from its own name; failure here
+ *  is non-fatal to message processing (never blocks moderation/chatter). */
+async function recordTopicSighting(admin: SupabaseClient, communityId: string, messageThreadId: number, topicName: string | null): Promise<void> {
+  const { data: existing } = await admin
+    .from("watch_community_topics")
+    .select("id")
+    .eq("community_id", communityId)
+    .eq("message_thread_id", messageThreadId)
+    .maybeSingle();
+  const now = new Date().toISOString();
+  if (existing) {
+    // An ordinary (non-creation/rename) message carries no topic name at
+    // all -- only update the stored name when we actually HAVE a fresh one
+    // (a forum_topic_created/forum_topic_edited event), never clobber an
+    // already-known name with null on a plain sighting.
+    const update: Record<string, unknown> = { last_seen_at: now };
+    if (topicName != null) update.topic_name = topicName;
+    await admin.from("watch_community_topics").update(update).eq("id", existing.id);
+    return;
+  }
+  await admin.from("watch_community_topics").insert({
+    community_id: communityId, message_thread_id: messageThreadId, topic_name: topicName,
+    policy: suggestTopicPolicy(topicName), first_seen_at: now, last_seen_at: now,
+  });
+}
+
+/* ------------------------------------------------- community knowledge index ---- */
+// Real message/resource metadata index (community-message-knowledge.ts's
+// pure classification/ranking layer + this DB-facing populate/read side).
+// Populated going forward only -- existing message history predating this
+// feature is never retroactively indexed.
+
+/** Select-then-branch, never upsert -- the underlying unique constraint
+ *  (community_id, platform_message_id, coalesce(url,'')) is an EXPRESSION
+ *  index, which PostgREST's upsert(onConflict:...) can't target by naming
+ *  raw columns (the exact "no unique or exclusion constraint matching the
+ *  ON CONFLICT specification" bug class already hit once in this codebase
+ *  for a structurally identical nullable-column uniqueness case -- see
+ *  watch-runtime.ts's createAccountCommunity fix). A rare concurrent-
+ *  duplicate-insert race here is acceptable: this is best-effort knowledge
+ *  indexing, never a money-critical path. */
+async function upsertCommunityResource(admin: SupabaseClient, row: {
+  community_id: string; message_thread_id: number | null; platform_message_id: string;
+  sender_platform_id: string | null; is_admin_author: boolean; is_pinned: boolean;
+  is_announcement_topic: boolean; kind: string; url: string | null; text: string;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  const base = admin.from("watch_community_resources").select("id")
+    .eq("community_id", row.community_id).eq("platform_message_id", row.platform_message_id);
+  const { data: existing } = row.url == null ? await base.is("url", null).maybeSingle() : await base.eq("url", row.url).maybeSingle();
+  if (existing) {
+    await admin.from("watch_community_resources").update({ ...row, updated_at: now }).eq("id", existing.id);
+    return;
+  }
+  await admin.from("watch_community_resources").insert({ ...row, updated_at: now });
+}
+
+/** Indexes ONE message's text/links as community knowledge. `isAdminAuthor`
+ *  is forced true for a pinned message regardless of who originally posted
+ *  it -- an admin/mod choosing to PIN content is itself the endorsement
+ *  that makes it authoritative (spec: pinned posts are authoritative
+ *  community context), never gated on the original poster's own role. A
+ *  message with real https:// links gets one resource row PER link
+ *  (independently classified); a link-less message is stored as a single
+ *  plain text fact (kind OTHER, url null) so it's still retrievable as a
+ *  direct textual answer (e.g. "the project is currently in presale").
+ *  Empty/whitespace-only text is never indexed. */
+async function indexCommunityKnowledgeMessage(
+  admin: SupabaseClient, communityId: string, message: TelegramMessage,
+  opts: { isAdminAuthor: boolean; isAnnouncementTopic: boolean; forcePinned?: boolean }
+): Promise<void> {
+  const text = (message.text ?? message.caption ?? "").trim();
+  if (!text) return;
+  const platformMessageId = String(message.message_id);
+  const senderPlatformId = message.from ? String(message.from.id) : null;
+  const isPinned = opts.forcePinned === true;
+  const isAdminAuthor = isPinned ? true : opts.isAdminAuthor;
+  const links = extractLinks(text).filter((l) => l.startsWith("http"));
+  if (!links.length) {
+    await upsertCommunityResource(admin, {
+      community_id: communityId, message_thread_id: message.message_thread_id ?? null,
+      platform_message_id: platformMessageId, sender_platform_id: senderPlatformId,
+      is_admin_author: isAdminAuthor, is_pinned: isPinned, is_announcement_topic: opts.isAnnouncementTopic,
+      kind: "OTHER", url: null, text,
+    });
+    return;
+  }
+  for (const url of links) {
+    await upsertCommunityResource(admin, {
+      community_id: communityId, message_thread_id: message.message_thread_id ?? null,
+      platform_message_id: platformMessageId, sender_platform_id: senderPlatformId,
+      is_admin_author: isAdminAuthor, is_pinned: isPinned, is_announcement_topic: opts.isAnnouncementTopic,
+      kind: classifyResourceKind(text, url), url, text,
+    });
+  }
+}
+
+/** Best-effort reconciliation for the ONE case Telegram gives no direct
+ *  event for -- an unpin. Telegram's own getChat reports at most a single
+ *  CURRENT `pinned_message` for a chat; any resource this codebase has
+ *  marked `is_pinned=true` that no longer matches it is corrected back to
+ *  false. Never sets a NEW pin from here (that only ever happens from a
+ *  real pinned_message service-message event, indexCommunityKnowledgeMessage
+ *  above) -- this function only ever clears a stale one. Failure is
+ *  non-fatal (never blocks reply generation). */
+async function syncCurrentPinnedMessage(admin: SupabaseClient, token: string, communityId: string, chatId: string): Promise<void> {
+  const res = await telegramApiCall<{ pinned_message?: { message_id: number } }>(token, "getChat", { chat_id: chatId });
+  if (!res.ok) return;
+  const currentPinnedId = res.result.pinned_message ? String(res.result.pinned_message.message_id) : null;
+  const { data: pinnedRows } = await admin.from("watch_community_resources").select("id, platform_message_id").eq("community_id", communityId).eq("is_pinned", true);
+  for (const row of (pinnedRows ?? []) as Array<{ id: string; platform_message_id: string }>) {
+    if (row.platform_message_id !== currentPinnedId) {
+      await admin.from("watch_community_resources").update({ is_pinned: false }).eq("id", row.id);
+    }
+  }
+}
+
+/* ------------------------------------------------------- pending replies ---- */
+// Real, persisted "wait 120 seconds" Watcher-reply scheduling -- see
+// pending-reply.ts for the pure decision logic; this is the DB-facing half
+// (schedule / cancel-on-arrival / the cron sweep's own revalidate-then-send,
+// in pending-reply-runtime.ts).
+
+async function schedulePendingReply(admin: SupabaseClient, input: {
+  communityId: string; panelId: string | null; deploymentId: string; chatId: string;
+  messageThreadId: number | null; triggerPlatformMessageId: string; senderPlatformId: string;
+  senderDisplayName: string | null; senderUsername: string | null; messageText: string;
+  actionKind: DeferredActionKind; now: Date;
+}): Promise<void> {
+  const { error } = await admin.from("watch_pending_replies").insert({
+    community_id: input.communityId, panel_id: input.panelId, deployment_id: input.deploymentId,
+    chat_id: input.chatId, message_thread_id: input.messageThreadId,
+    trigger_platform_message_id: input.triggerPlatformMessageId, sender_platform_id: input.senderPlatformId,
+    sender_display_name: input.senderDisplayName, sender_username: input.senderUsername,
+    message_text: input.messageText, action_kind: input.actionKind, status: "pending",
+    scheduled_for: pendingReplyScheduledFor(input.now),
+  });
+  // A 23505 conflict means this EXACT trigger message already has a pending
+  // reply scheduled (a duplicate webhook delivery racing past the primary
+  // community_messages claim, or a genuine retry) -- a safe no-op, never a
+  // second competing row for the same real message.
+  if (error && error.code !== "23505") console.error("[telegram/community] schedulePendingReply failed", error.message);
+}
+
+/** Cancels every still-PENDING reply scheduled for this (community, topic)
+ *  -- called the instant an admin/mod's own message arrives there (rule 8),
+ *  synchronously, never waiting for the next cron sweep. A row already
+ *  claimed by the sweep (status='sending') or already resolved is left
+ *  alone -- only a genuinely still-waiting row is cancelled. */
+async function cancelPendingRepliesForTopic(admin: SupabaseClient, communityId: string, messageThreadId: number | null, reason: "admin_replied"): Promise<void> {
+  const patch = { status: "cancelled", cancel_reason: reason, resolved_at: new Date().toISOString() };
+  const base = admin.from("watch_pending_replies").update(patch).eq("community_id", communityId).eq("status", "pending");
+  if (messageThreadId == null) await base.is("message_thread_id", null);
+  else await base.eq("message_thread_id", messageThreadId);
+}
+
+/** Loads this community's indexed knowledge for ranking -- deliberately
+ *  bounded (most-recent 200) rather than the full unbounded history, same
+ *  "retrieval, not full-history prompt-stuffing" discipline as
+ *  knowledge.ts's owner-authored Project Knowledge. */
+async function loadCommunityKnowledgeItems(admin: SupabaseClient, communityId: string): Promise<CommunityKnowledgeItem[]> {
+  const { data } = await admin
+    .from("watch_community_resources")
+    .select("id, message_thread_id, platform_message_id, is_admin_author, is_pinned, is_announcement_topic, kind, url, text, created_at")
+    .eq("community_id", communityId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    messageThreadId: (r.message_thread_id as number | null) ?? null,
+    platformMessageId: r.platform_message_id as string,
+    isAdminAuthor: r.is_admin_author === true,
+    isPinned: r.is_pinned === true,
+    isAnnouncementTopic: r.is_announcement_topic === true,
+    kind: r.kind as CommunityKnowledgeItem["kind"],
+    url: (r.url as string | null) ?? null,
+    text: r.text as string,
+    createdAt: r.created_at as string,
+  }));
+}
+
+/** DB-facing half of community-message-knowledge's pure
+ *  buildCommunityKnowledgeGrounding -- loads this community's indexed
+ *  knowledge, resolves a real deep link to the chosen pinned reference when
+ *  one can be built (needs the chat's own username, which the caller
+ *  already has from the Telegram message), and returns null when nothing
+ *  relevant exists at all (the caller then omits the grounding block from
+ *  the prompt entirely). Called ONLY after the Watcher has already been
+ *  cleared to respond -- see this function's callers in respondAsDeployment
+ *  and the pending-reply sweep, both of which resolve it strictly AFTER
+ *  every engagement/deference/scheduling decision, never before. */
+async function loadCommunityKnowledgeGrounding(
+  admin: SupabaseClient, communityId: string, messageThreadId: number | null, chatId: string, chatUsername: string | null, query: string
+): Promise<CommunityKnowledgeGrounding | null> {
+  const items = await loadCommunityKnowledgeItems(admin, communityId);
+  if (!items.length) return null;
+  const pinned = items.find((i) => i.isAdminAuthor && i.isPinned);
+  const pinnedLink = pinned && pinned.messageThreadId != null ? buildTopicLink(chatUsername, chatId, pinned.messageThreadId) : null;
+  return buildCommunityKnowledgeGrounding(query, items, new Date(), pinnedLink);
 }
 
 /* ---------------------------------------------------- community connect ---- */
@@ -781,6 +1057,7 @@ async function recordCommunityMessage(
     deployment_id: sender.senderType === "INNVIL_MODERATOR" ? sender.deploymentId ?? null : null,
     text: message.text ?? message.caption ?? "",
     reply_to_platform_message_id: message.reply_to_message ? String(message.reply_to_message.message_id) : null,
+    message_thread_id: message.message_thread_id ?? null,
   });
   if (!error) return { claimed: true };
   if (error.code === "23505") return { claimed: false }; // another bot's webhook already claimed this message
@@ -1306,7 +1583,7 @@ async function recordBotSpoke(admin: SupabaseClient, deploymentId: string, now: 
 async function loadRecentContext(admin: SupabaseClient, communityId: string, limit = 10): Promise<ChatterContextMessage[]> {
   const { data } = await admin
     .from("community_messages")
-    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at")
+    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at, message_thread_id")
     .eq("community_id", communityId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -1318,6 +1595,7 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       text: string;
       deployment_id: string | null;
       created_at: string;
+      message_thread_id: number | null;
     }>
   )
     .reverse()
@@ -1328,7 +1606,31 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       deploymentId: r.deployment_id,
       createdAt: r.created_at,
       senderPlatformId: r.sender_platform_id,
+      messageThreadId: r.message_thread_id ?? null,
     }));
+}
+
+/** Finds the most recent message in `context` matching `messageThreadId`
+ *  (topic-scoped "conversation ownership" -- rule 8's "must be conversation-
+ *  specific, not admin-exists-anywhere-in-group"), optionally filtered to a
+ *  sender type and/or excluding one specific platform user id (so a user's
+ *  own second message never counts as "someone else already engaged").
+ *  `messageThreadId: null` matches only OTHER null-thread messages (an
+ *  ordinary non-forum chat, or Telegram's own unlabeled default topic) --
+ *  never conflated with a real numbered topic. */
+export function findMostRecentMessageInTopic(
+  context: ChatterContextMessage[],
+  messageThreadId: number | null,
+  opts?: { senderType?: ChatterContextMessage["senderType"]; excludePlatformId?: string | null }
+): ChatterContextMessage | null {
+  for (let i = context.length - 1; i >= 0; i--) {
+    const m = context[i];
+    if ((m.messageThreadId ?? null) !== messageThreadId) continue;
+    if (opts?.senderType && m.senderType !== opts.senderType) continue;
+    if (opts?.excludePlatformId && m.senderPlatformId === opts.excludePlatformId) continue;
+    return m;
+  }
+  return null;
 }
 
 /** A prior message only counts as "the room is mid an active exchange" if it
@@ -1343,6 +1645,15 @@ export function isRecentMessage(createdAt: string | null | undefined, now: Date)
   if (!createdAt) return false;
   return now.getTime() - new Date(createdAt).getTime() < RECENT_EXCHANGE_WINDOW_MS;
 }
+
+// The 120-second "admin still likely engaged" window is now the SAME real,
+// persisted wait the pending-reply scheduler itself uses -- see
+// pending-reply.ts's PENDING_REPLY_DELAY_MS/isWithinPendingReplyWindow,
+// which superseded this file's own earlier, narrower approximation
+// (ADMIN_DEFERENCE_WINDOW_MS, a backward-looking-only recency check with no
+// real scheduling behind it). One canonical 120s constant now governs both
+// "is an admin recently active enough to count as handling this topic" and
+// "how long an undirected Watcher reply actually waits before firing."
 
 /** True only when a DIFFERENT human recently engaged the room -- NOT when
  *  the prior message is simply human, which would also match the same
@@ -1537,7 +1848,7 @@ async function runModeratorTaskCascade(
       // to ANSWER's own prompt) -- guarded anyway so a future change can't
       // silently corrupt task state by treating an escalate result as a
       // real turn.
-      if (!generation.ok || "noReply" in generation || "escalate" in generation) break; // can't produce a turn right now -- leave the task exactly as-is, don't corrupt state
+      if (!generation.ok || "noReply" in generation || "escalate" in generation || "mentionAdmin" in generation) break; // can't produce a turn right now -- leave the task exactly as-is, don't corrupt state
       outputText = generation.reply;
     }
 
@@ -1679,7 +1990,7 @@ async function routeConversationTask(
 async function loadLinkWarningState(admin: SupabaseClient, communityId: string, platformUserId: string): Promise<LinkWarningState> {
   const { data } = await admin
     .from("moderator_link_warning_state")
-    .select("warning_count, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at")
+    .select("warning_count, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count")
     .eq("community_id", communityId)
     .eq("platform_user_id", platformUserId)
     .maybeSingle();
@@ -1691,6 +2002,7 @@ async function loadLinkWarningState(admin: SupabaseClient, communityId: string, 
     recentLinkCountInWindow: data.recent_link_count_in_window ?? 0,
     scamStrikeCount: data.scam_strike_count ?? 0,
     scamStrikeAt: data.scam_strike_at ?? null,
+    mediaWarningCount: data.media_warning_count ?? 0,
   };
 }
 
@@ -1713,6 +2025,7 @@ async function persistLinkWarningState(
       recent_link_count_in_window: state.recentLinkCountInWindow,
       scam_strike_count: state.scamStrikeCount,
       scam_strike_at: state.scamStrikeAt,
+      media_warning_count: state.mediaWarningCount,
       ...(violation ? { last_violation_at: violation.now.toISOString(), last_violation_kind: violation.kind } : {}),
     },
     { onConflict: "community_id,platform_user_id" }
@@ -1762,7 +2075,8 @@ export async function runLinkModeration(
   deployments: ChatterDeployment[],
   now: Date,
   aiRouting: AccountAiRouting = MANAGED_AI_ROUTING,
-  roleAssignments: WatcherRoleAssignment[] = []
+  roleAssignments: WatcherRoleAssignment[] = [],
+  chatUsername: string | null = null
 ): Promise<{ handled: boolean; collabRoutable: boolean }> {
   if (!deployments.length) return { handled: false, collabRoutable: false };
 
@@ -1818,6 +2132,18 @@ export async function runLinkModeration(
 
   const priorScamStrikeCount = effectiveScamStrikeCount(priorState.scamStrikeCount, priorState.scamStrikeAt, now);
 
+  // Solicitation is allowed either via the community-WIDE toggle, or when
+  // this message was posted in a topic the owner has explicitly assigned
+  // the "promotion" POLICY (watch_community_topics, keyed by the stable
+  // Telegram message_thread_id, never the display name) -- always allowed
+  // THERE regardless of whether the community-wide toggle is on or off. A
+  // non-forum chat (event.messageThreadId is null) can never match a real
+  // topic, so this is a pure no-op for the common non-topic case.
+  const topics = await loadCommunityTopics(admin, community.id);
+  const currentTopic = findCommunityTopic(topics, event.messageThreadId);
+  const promotionTopic = findPromotionTopic(topics);
+  const solicitationAllowedHere = community.allow_solicitation === true || topicAllowsSolicitation(currentTopic?.policy);
+
   const enforcement = decideLinkEnforcement({
     category: classification.category,
     confidence: classification.confidence,
@@ -1825,7 +2151,7 @@ export async function runLinkModeration(
     floodRepeat,
     priorWarningCount: priorState.warningCount,
     priorScamStrikeCount,
-    solicitationAllowed: community.allow_solicitation === true,
+    solicitationAllowed: solicitationAllowedHere,
   });
 
   await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", enforcement.kind, classification.category, {
@@ -1987,11 +2313,18 @@ export async function runLinkModeration(
   const promotionContactLine = promotionContactSentence(promotionContact);
 
   const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
+  // Solicitation warnings are now fully DETERMINISTIC/templated (never a
+  // model call) and dynamically name the CURRENT topic + point to the real
+  // configured Promotion topic (§6) -- supersedes the earlier AI-phrased
+  // generateModerationWarning for this category specifically (still used
+  // nowhere else; kept defined/tested for now rather than deleted, per
+  // "don't rewrite/remove more than required" discipline).
+  const promotionTopicLink = promotionTopic && event.messageThreadId != null
+    ? buildTopicLink(chatUsername, chatId, promotionTopic.messageThreadId)
+    : null;
   const warningText = isScamEnforcement
     ? scamFirstOffenseWarningHtml(mention)
-    : `${mention}, ${await generateModerationWarning(
-        enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting
-      )}${enforcement.muteMinutes ? ` ${spamWarningMuteSentence(enforcement.muteMinutes)}` : ""}${promotionContactLine}`;
+    : `${mention}, ${topicSolicitationWarningText(currentTopic, promotionTopic, promotionTopicLink, enforcement.muteMinutes)}${promotionContactLine}`;
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -2042,7 +2375,7 @@ export async function runLinkModeration(
         userMention: mention,
         violationCategory,
         warningNumber: enforcement.warningNumber,
-        warningLimit: isScamEnforcement ? 1 : SPAM_WARNING_LIMIT,
+        warningLimit: isScamEnforcement ? 1 : SOLICITATION_WARNING_LIMIT,
         muteMinutes: enforcement.muteMinutes ?? null,
         actionsTaken: enforcement.muteMinutes ? ["warning", "temporary_mute"] : ["warning"],
         reasonText: isScamEnforcement
@@ -2294,11 +2627,13 @@ async function runMediaModeration(
     await incrementWatchMediaModerationUsage(admin, accountId, mediaUsagePeriod, unitsConsumed);
   }
 
-  // Unified content-policy strike counter -- reuses the SAME per-(community,
-  // user) warning state link moderation already maintains, rather than a
-  // second parallel warning system.
+  // Media's OWN strike counter (mediaWarningCount) -- structurally separate
+  // from solicitation's `warningCount` since the 2026-09-02 split (see
+  // LinkWarningState's doc comment), still stored on the SAME per-
+  // (community, user) row as link moderation's warning state, rather than a
+  // second parallel table.
   const priorState = await loadLinkWarningState(admin, community.id, event.sender.platformUserId);
-  const enforcement = decideMediaEnforcement({ result, priorWarningCount: priorState.warningCount });
+  const enforcement = decideMediaEnforcement({ result, priorWarningCount: priorState.mediaWarningCount });
 
   await logActivity(admin, panelId, community.id, enforcer.deploymentId, "media_moderation", enforcement.kind, result.ok ? result.verdict : result.failure, {
     mediaKind: media.kind,
@@ -2328,7 +2663,7 @@ async function runMediaModeration(
         kickError = kickResult.error;
       }
     }
-    await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, { ...priorState, warningCount: priorState.warningCount + 1 }, { kind: enforcement.reason, now });
+    await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, { ...priorState, mediaWarningCount: priorState.mediaWarningCount + 1 }, { kind: enforcement.reason, now });
 
     let purgeResult: { attempted: number; purged: number; failed: boolean } = { attempted: 0, purged: 0, failed: false };
     if (enforcement.purge && token && !kickFailed) {
@@ -2360,7 +2695,7 @@ async function runMediaModeration(
 
   // DELETE_WARN (borderline only -- a high-confidence explicit result never
   // reaches here, see decideMediaEnforcement)
-  const nextState: LinkWarningState = { ...priorState, warningCount: enforcement.warningNumber };
+  const nextState: LinkWarningState = { ...priorState, mediaWarningCount: enforcement.warningNumber };
   await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
   const warningText = await generateMediaModerationWarning(
     enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting
@@ -2446,7 +2781,7 @@ async function handleHumanMessage(
   // left to task-route or chat about, so it short-circuits everything else.
   // The Spam & Scam Moderator role owns this event -- runs continuously
   // regardless of chatter duty, per the Watcher Role Separation spec.
-  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date(), aiRouting, roleAssignments);
+  const moderation = await runLinkModeration(admin, panelId, community, chatId, event, deployments, new Date(), aiRouting, roleAssignments, message.chat.username ?? null);
   timer.mark("link_moderation_check", { handled: moderation.handled });
   if (moderation.handled) return;
   const collabContact = moderation.collabRoutable ? (community.collab_contact ?? null) : null;
@@ -2513,23 +2848,63 @@ async function handleHumanMessage(
     pacing: pacings[i],
   }));
 
-  // Whether this message's SENDER should be exempted from the lightweight
-  // REACT/SHORT_ACK acknowledgement mechanism -- a real Telegram admin/
-  // creator of this community is exempted by default (communities
-  // .acknowledge_admin_mod, default false), same "off unless explicitly
-  // turned on" discipline as bot-to-bot acknowledgement (BOT_ACKNOWLEDGEMENT_ENABLED)
-  // and the fellow-bot case classifySender already handles separately.
-  // Substantive ANSWER/CASUAL_CHAT replies to an admin/mod are completely
-  // unaffected -- only genuinely trivial content is in scope. Cheap
-  // pre-check first (classifyMessageKind is pure/synchronous) so the extra
-  // Telegram getChatMember round trip only runs for a message actually
-  // shaped to reach the acknowledgement path, not every human message.
-  let suppressAcknowledgementForSender = false;
-  if (community.acknowledge_admin_mod !== true && deployments.length && classifyMessageKind(event.text.trim()) === "TRIVIAL") {
-    const ackCheckToken = await getBotTokenForDeployment(admin, deployments[0].deploymentId);
-    if (ackCheckToken) {
-      suppressAcknowledgementForSender = await isSenderAdminOrTrusted(ackCheckToken, chatId, event.sender.platformUserId);
-    }
+  // Resolved ONCE per message -- a single Telegram getChatMember round trip
+  // covers every admin-related decision below: (a) full conversational-
+  // engagement suppression toward an admin/mod SENDER (rule 2/3), (b)
+  // cancelling any still-pending scheduled reply for this topic the moment
+  // an admin/mod message arrives (rule 8), and (c) whether an admin/mod is
+  // the most recent OTHER speaker in THIS topic (feeds the coordinator's
+  // own admin-deference check). Always computed when a deployment exists,
+  // regardless of the acknowledge_admin_mod toggle -- (b) must fire
+  // independent of that toggle (an admin taking over cancels a pending
+  // reply either way; the toggle only governs whether the WATCHER itself
+  // may converse with the admin, a separate question).
+  const engagementCheckToken = deployments.length ? await getBotTokenForDeployment(admin, deployments[0].deploymentId) : null;
+  const senderIsAdminOrTrusted = engagementCheckToken
+    ? await isSenderAdminOrTrusted(engagementCheckToken, chatId, event.sender.platformUserId)
+    : false;
+
+  // Rule 2/3: when acknowledge_admin_mod is OFF (default), the Watcher must
+  // not voluntarily engage a real Telegram admin/mod CONVERSATIONALLY AT
+  // ALL -- no reaction, no short acknowledgement, no substantive reply, no
+  // jumping in "to help" alongside them, not even when the admin/mod
+  // directly @mentions the Watcher. Moderation/safety processing already
+  // ran above and is completely independent of this flag. Same "off unless
+  // explicitly turned on" discipline as bot-to-bot acknowledgement
+  // (BOT_ACKNOWLEDGEMENT_ENABLED) and the fellow-bot case classifySender
+  // already handles separately.
+  const suppressAcknowledgementForSender = community.acknowledge_admin_mod !== true && senderIsAdminOrTrusted;
+
+  // Rule 8: the instant an admin/mod's own message lands in a topic, any
+  // Watcher reply still pending (scheduled but not yet fired) for that SAME
+  // topic is cancelled synchronously -- never waiting for the next cron
+  // tick. "Same topic" is the whole conversation-ownership scope this
+  // codebase can reliably observe (see findMostRecentMessageInTopic) --
+  // never inferred from "an admin exists in the group" or "is online".
+  if (senderIsAdminOrTrusted) {
+    await cancelPendingRepliesForTopic(admin, community.id, event.messageThreadId, "admin_replied");
+  }
+
+  // Whether a real Telegram admin/mod is the most recent OTHER speaker in
+  // THIS SAME topic/thread -- a human staff member is clearly present and
+  // actively handling this exact conversation, so the Watcher defers rather
+  // than duplicating/competing with them (explicit product rule: "when an
+  // admin is talking with the user, it will stay quiet"). Explicit
+  // direction always overrides this inside the coordinator (an @mention/
+  // reply/configured-name match means the human asked THIS moderator
+  // directly, which still gets answered regardless of who else is
+  // handling the room). Uses the SAME 120s window the pending-reply
+  // scheduler itself waits (PENDING_REPLY_DELAY_MS, via
+  // isWithinPendingReplyWindow) -- an admin quiet for over 2 minutes no
+  // longer holds this topic, and the Watcher may respond/be scheduled
+  // normally. Applies uniformly to every plan/tier -- never gated by
+  // entitlement.
+  let recentlyRespondedByAdminOrMod = false;
+  const mostRecentOtherHuman = findMostRecentMessageInTopic(recentContext, event.messageThreadId, {
+    senderType: "HUMAN", excludePlatformId: event.sender.platformUserId,
+  });
+  if (mostRecentOtherHuman && isWithinPendingReplyWindow(mostRecentOtherHuman.createdAt, now) && mostRecentOtherHuman.senderPlatformId && engagementCheckToken) {
+    recentlyRespondedByAdminOrMod = await isSenderAdminOrTrusted(engagementCheckToken, chatId, mostRecentOtherHuman.senderPlatformId);
   }
 
   // Picks the socially appropriate ACTION (SILENCE/REACT/SHORT_ACK/
@@ -2540,7 +2915,8 @@ async function handleHumanMessage(
   // after, so chatter-coordinator.ts's own extensively-tested selection
   // logic stays completely untouched by this feature.
   let action = selectChatterAction({
-    text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman, suppressAcknowledgementForSender,
+    text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman,
+    suppressAcknowledgementForSender, recentlyRespondedByAdminOrMod,
   });
   timer.mark("coordinator_action_selected", { actionType: action.type });
 
@@ -2621,12 +2997,57 @@ async function handleHumanMessage(
     return;
   }
 
+  // Rule 1: an UNDIRECTED ANSWER/CASUAL_CHAT (the Watcher volunteering to
+  // engage, picked via continuity or quietest-longest -- nobody explicitly
+  // asked IT) gives a human the first opportunity, per explicit product
+  // decision (2026-09-02). Instead of sending now, a real, PERSISTED
+  // pending reply is scheduled (watch_pending_replies, never an in-memory
+  // timer -- survives a restart/new invocation by construction) and the
+  // cron sweep (pending-reply-runtime.ts) fires it in ~120s, unless an
+  // admin/mod takes over this exact topic first (cancelled synchronously
+  // above, the instant that happens). A DIRECTED message (an explicit
+  // @mention/reply/name-address) is the human choosing to talk to the
+  // Watcher right now and is answered immediately, exactly as before this
+  // change -- this only defers when the Watcher would otherwise be
+  // volunteering. Applies uniformly to every plan/tier. Never applies to
+  // the multi-target/room-wide fan-out or the decline-fallback reroute
+  // below (both are already-approved, explicitly-addressed continuations
+  // of an already-cleared primary response, not the Watcher volunteering).
+  const primaryIsDirected = candidates.find((c) => c.deploymentId === deployment.deploymentId)?.isDirectedAtBot ?? false;
+  if (!primaryIsDirected && (action.type === "ANSWER" || action.type === "CASUAL_CHAT")) {
+    await schedulePendingReply(admin, {
+      communityId: community.id, panelId, deploymentId: deployment.deploymentId, chatId: String(message.chat.id),
+      messageThreadId: event.messageThreadId, triggerPlatformMessageId: event.messageId,
+      senderPlatformId: event.sender.platformUserId, senderDisplayName: event.sender.displayName,
+      senderUsername: event.sender.username ?? null, messageText: event.text, actionKind: action.type, now,
+    });
+    await logActivity(admin, panelId, community.id, deployment.deploymentId, "human_message", "SILENCE", "deferred_pending_reply", { actionKind: action.type });
+    return;
+  }
+
   // Phase 4.N — retrieved ONCE per triggering message (not per responder),
   // only for ANSWER (substantive Q&A never grounds casual chatter in
   // project facts). Empty when nothing relevant matches -- passed through
   // as undefined so generateChatterReply's prompt correctly omits the
   // "Project knowledge" block entirely rather than injecting an empty one.
   const projectKnowledge = action.type === "ANSWER" ? await loadRelevantKnowledge(admin, panelId, community.id, event.text) : undefined;
+  // Community message knowledge (pinned posts/announcements/official
+  // links from this community's OWN admin/mod messages) -- resolved ONLY
+  // here, strictly AFTER every engagement/deference/scheduling decision
+  // above, per the explicit "finding a pinned post never grants early
+  // permission to respond" requirement. ANSWER only, same scoping as
+  // Project Knowledge above.
+  const communityKnowledge = action.type === "ANSWER"
+    ? await loadCommunityKnowledgeGrounding(admin, community.id, event.messageThreadId, chatId, message.chat.username ?? null, event.text)
+    : undefined;
+  // Silence/command/fallback policy (§15) -- the configured general
+  // fallback contact (reuses the existing structured "support" contact
+  // preset, project-profile.ts) offered as a MENTION-ONLY handoff when
+  // ANSWER genuinely has no reliable answer and no escalation group is
+  // configured. Resolved ONCE per message, ANSWER only.
+  const fallbackAdminMention = action.type === "ANSWER" && community.project_id
+    ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.support ?? null
+    : null;
   // Shared Escalation Group (Phase 1) — resolved ONCE per message, ANSWER
   // only (escalation only ever applies to a genuine informational
   // question), and only when this community actually belongs to a Project
@@ -2649,6 +3070,8 @@ async function handleHumanMessage(
     otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
     collabContact,
     projectKnowledge,
+    communityKnowledge,
+    fallbackAdminMention,
     aiRouting,
     projectId: community.project_id ?? null,
     escalationTarget,
@@ -2681,6 +3104,8 @@ async function handleHumanMessage(
         otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== named.deploymentId).map((d) => d.moderatorName),
         collabContact,
         projectKnowledge,
+        communityKnowledge,
+        fallbackAdminMention,
         aiRouting,
         projectId: community.project_id ?? null,
         escalationTarget,
@@ -2757,6 +3182,8 @@ async function handleHumanMessage(
           individualContributionExpected,
           collabContact,
           projectKnowledge,
+          communityKnowledge,
+          fallbackAdminMention,
           aiRouting,
           projectId: community.project_id ?? null,
           escalationTarget,
@@ -2840,6 +3267,19 @@ export async function respondAsDeployment(params: {
    *  knowledge for THIS triggering message (see GenerateChatterReplyInput's
    *  doc comment). Only ever set for ANSWER. */
   projectKnowledge?: KnowledgeContextEntry[];
+  /** Already-retrieved community-message knowledge (pinned posts,
+   *  announcements, official links from THIS community's own admin/mod
+   *  messages) -- see GenerateChatterReplyInput's own doc comment. Only
+   *  ever resolved for ANSWER, and only AFTER every engagement/deference/
+   *  scheduling decision already cleared the Watcher to respond. */
+  communityKnowledge?: CommunityKnowledgeGrounding | null;
+  /** Silence/command/fallback policy (§15) -- the configured general
+   *  fallback contact, if any (see GenerateChatterReplyInput's own doc
+   *  comment). Used BOTH to tell the model the option exists (via
+   *  generateChatterReply's own input) AND, if the model emits the
+   *  mention-only sentinel, as the LITERAL text sent -- a bare mention,
+   *  nothing else. */
+  fallbackAdminMention?: string | null;
   /** BYO Enterprise (Phase 2, 2026-08-24) -- the account's already-resolved
    *  AI-provider routing decision (see GenerateChatterReplyInput's own doc
    *  comment). Defaults to MANAGED_AI_ROUTING when omitted. */
@@ -2859,7 +3299,7 @@ export async function respondAsDeployment(params: {
 }): Promise<{ replied: false; modelDeclined?: boolean } | { replied: true; text: string }> {
   const {
     admin, panelId, communityId, chatId, event, deployment, actionType, reasons, isTrialEntitlement, accountId, paidTier, now, recentContext,
-    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, timer,
+    isDirectedAtBot, addressedWithTypo, otherActiveModeratorNames, priorResponsesToThisMessage, individualContributionExpected, collabContact, projectKnowledge, communityKnowledge, fallbackAdminMention, timer,
     aiRouting: initialAiRouting = MANAGED_AI_ROUTING,
     projectId = null, escalationTarget = null,
   } = params;
@@ -2969,6 +3409,8 @@ export async function respondAsDeployment(params: {
         individualContributionExpected,
         collabContact,
         projectKnowledge,
+        communityKnowledge,
+        fallbackAdminMention,
         aiRouting,
         // Shared Escalation Group (Phase 1) -- only ever true for ANSWER
         // (escalationTarget is only ever resolved for ANSWER, see
@@ -3040,6 +3482,28 @@ export async function respondAsDeployment(params: {
         console.error("[telegram/community] model emitted ESCALATE_REQUIRED with no escalation target resolved", communityId);
         await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "ESCALATION_FAILED", reasons.join(","), { reasons });
         replyText = "I don't have a confirmed answer for that right now.";
+      }
+    } else if ("mentionAdmin" in generation) {
+      // Silence/command/fallback policy (§15) -- no reliable answer exists,
+      // but a general fallback contact IS configured. The send is ALWAYS
+      // just the bare mention -- no persona filler, no lead-in sentence --
+      // per the explicit "mention-only fallback stays mention-only" rule.
+      // Real provider spend already happened (a genuine successful call),
+      // counted the same way a normal successful reply is.
+      recordByoCall(admin, aiRouting, accountId, communityId, deployment.deploymentId, `NATURAL_CHATTER_${actionType}`, true, undefined, generation.usage);
+      if (accountId && aiUsagePeriod) {
+        await incrementWatchAiGenerationUsage(admin, accountId, aiUsagePeriod);
+      }
+      if (fallbackAdminMention) {
+        await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MENTION_ADMIN_FALLBACK", reasons.join(","), { reasons });
+        replyText = fallbackAdminMention;
+      } else {
+        // Should be unreachable (fallbackAdminMention mirrors the prompt's
+        // own offer of this sentinel exactly) -- defensive fallback, never
+        // sends an empty/garbled mention.
+        console.error("[telegram/community] model emitted MENTION_ADMIN_REQUIRED with no fallback contact resolved", communityId);
+        await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
+        return { replied: false, modelDeclined: true };
       }
     } else if ("noReply" in generation) {
       await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "MODEL_DECLINED", reasons.join(","), { reasons });
@@ -3179,6 +3643,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     timestamp: new Date().toISOString(),
     text: message.text ?? message.caption ?? "",
     replyToMessageId: message.reply_to_message ? String(message.reply_to_message.message_id) : null,
+    messageThreadId: message.message_thread_id ?? null,
     origin,
     interactionDepth,
     causationMessageId: null,
@@ -3199,6 +3664,22 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   const { claimed } = await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
   timer.mark(claimed ? "claim_won" : "claim_lost_duplicate", { messageId: event.messageId });
   if (!claimed) return;
+
+  // Telegram Forum topic auto-discovery + pinned-message tracking --
+  // unconditional (any sender type), best-effort, never blocks message
+  // processing on failure. Real message_thread_id is the sole lookup key;
+  // a plain sighting never clobbers an already-known topic name with null.
+  if (message.message_thread_id != null) {
+    const topicNameFromEvent = message.forum_topic_created?.name ?? message.forum_topic_edited?.name ?? null;
+    await recordTopicSighting(admin, community.id, message.message_thread_id, topicNameFromEvent);
+  }
+  if (message.pinned_message) {
+    const currentTopics = await loadCommunityTopics(admin, community.id);
+    const pinnedTopic = findCommunityTopic(currentTopics, message.pinned_message.message_thread_id ?? null);
+    await indexCommunityKnowledgeMessage(admin, community.id, message.pinned_message, {
+      isAdminAuthor: true, isAnnouncementTopic: pinnedTopic?.policy === "announcement", forcePinned: true,
+    });
+  }
 
   if (sender.senderType === "INNVIL_MODERATOR" && sender.deploymentId) {
     if (!virtualModBotAcknowledgement(settings)) return;
@@ -3326,4 +3807,216 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   }
 
   // EXTERNAL_BOT — always ignored here (spec §10).
+}
+
+/* ================================================== pending-reply sweep ==========
+   The cron half of the real 120-second "wait, give a human the first
+   opportunity" scheduler (see pending-reply.ts for the pure decision
+   logic, and handleHumanMessage's own scheduling call for the write side).
+   Deliberately kept IN this file rather than a separate *-runtime.ts module
+   (the established convention for other Watch cron sweeps, e.g. presence-
+   runtime.ts/autopost-runtime.ts) -- unlike those, this sweep is tightly
+   coupled to community-runtime's own internals (respondAsDeployment,
+   findChatterDeployments, loadRecentContext, the settings/entitlement
+   resolution `handleCommunityUpdate` already does) and would need most of
+   this file re-exported to live elsewhere. */
+
+interface PendingReplyDbRow {
+  id: string;
+  community_id: string;
+  panel_id: string | null;
+  deployment_id: string;
+  chat_id: string;
+  message_thread_id: number | null;
+  trigger_platform_message_id: string;
+  sender_platform_id: string;
+  sender_display_name: string | null;
+  sender_username: string | null;
+  message_text: string;
+  action_kind: DeferredActionKind;
+  scheduled_for: string;
+  created_at: string;
+}
+
+async function loadCommunityById(admin: SupabaseClient, communityId: string) {
+  const { data } = await admin
+    .from("communities")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod")
+    .eq("id", communityId)
+    .maybeSingle();
+  return data as {
+    id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
+    connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
+    acknowledge_admin_mod: boolean | null;
+  } | null;
+}
+
+async function finishPendingReply(admin: SupabaseClient, id: string, status: "cancelled" | "expired" | "sent" | "failed", cancelReason?: string): Promise<void> {
+  await admin.from("watch_pending_replies").update({ status, cancel_reason: cancelReason ?? null, resolved_at: new Date().toISOString() }).eq("id", id);
+}
+
+/** Revalidates + (if still warranted) actually fires ONE due pending reply.
+ *  Re-resolves settings/entitlement/routing FRESH (never reused/persisted
+ *  from scheduling time, ~120s+ earlier) -- both for correctness (reflects
+ *  the account's CURRENT state, not a stale snapshot) and for safety (a
+ *  decrypted BYO credential/aiRouting object is never written to the
+ *  watch_pending_replies row in the first place). */
+async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDbRow, now: Date): Promise<void> {
+  if (isPendingReplyStale({ scheduledFor: row.scheduled_for }, now)) {
+    await finishPendingReply(admin, row.id, "expired");
+    return;
+  }
+
+  const deployments = await findChatterDeployments(admin, row.community_id);
+  const deployment = deployments.find((d) => d.deploymentId === row.deployment_id);
+  if (!deployment) {
+    // No longer an active/enabled deployment for this community -- nothing
+    // sensible to send as.
+    await finishPendingReply(admin, row.id, "cancelled", "already_answered");
+    return;
+  }
+  const community = await loadCommunityById(admin, row.community_id);
+  if (!community) {
+    await finishPendingReply(admin, row.id, "cancelled", "already_answered");
+    return;
+  }
+
+  // Revalidation (§ "make sure the delayed response is revalidated before
+  // sending"): already answered by a moderator, an admin/mod responded
+  // since scheduling (belt-and-suspenders -- normally already caught by
+  // cancel-on-arrival at write time), and whether the original asker is
+  // still a member of the community.
+  const recentContext = await loadRecentContext(admin, row.community_id, 25);
+  const rowCreatedAt = new Date(row.created_at);
+  const alreadyAnsweredByModerator = recentContext.some(
+    (m) => m.senderType === "INNVIL_MODERATOR" && (m.messageThreadId ?? null) === row.message_thread_id && m.createdAt && new Date(m.createdAt) > rowCreatedAt
+  );
+  const laterOtherHuman = recentContext.find(
+    (m) =>
+      m.senderType === "HUMAN" &&
+      (m.messageThreadId ?? null) === row.message_thread_id &&
+      m.senderPlatformId &&
+      m.senderPlatformId !== row.sender_platform_id &&
+      m.createdAt &&
+      new Date(m.createdAt) > rowCreatedAt
+  );
+  const token = await getBotTokenForDeployment(admin, deployment.deploymentId);
+  let adminRespondedSinceScheduling = false;
+  if (laterOtherHuman?.senderPlatformId && token) {
+    adminRespondedSinceScheduling = await isSenderAdminOrTrusted(token, row.chat_id, laterOtherHuman.senderPlatformId);
+  }
+  // "Is the user still in the community?" -- a lookup failure (network
+  // hiccup, transient Telegram error) fails SAFE by assuming still present:
+  // a real answer is never withheld just because a status check briefly
+  // failed, only when we can positively confirm the user actually left.
+  let senderStillPresent = true;
+  if (token) {
+    const memberRes = await telegramApiCall<{ status: string }>(token, "getChatMember", { chat_id: row.chat_id, user_id: row.sender_platform_id });
+    if (memberRes.ok) senderStillPresent = memberRes.result.status !== "left" && memberRes.result.status !== "kicked";
+  }
+
+  const validation = revalidatePendingReply({
+    now, row: { scheduledFor: row.scheduled_for },
+    alreadyAnsweredByModerator, adminRespondedSinceScheduling, senderStillPresent,
+  });
+  if (!validation.ok) {
+    await finishPendingReply(admin, row.id, "cancelled", validation.reason);
+    return;
+  }
+
+  // Fresh settings/entitlement resolution -- mirrors handleCommunityUpdate's
+  // own setup exactly, re-derived rather than persisted from scheduling time.
+  let settings: unknown = null;
+  if (row.panel_id) {
+    const { data: panel } = await admin.from("panels").select("settings").eq("id", row.panel_id).maybeSingle();
+    settings = panel?.settings ?? null;
+  } else {
+    settings = await resolveStandaloneModeratorSettings(admin, deployment.moderatorId);
+  }
+  const entitlementSource = moderatorEntitlementSource(settings);
+  const isTrialEntitlement = entitlementSource === "trial";
+  const accountId = row.panel_id ? null : await resolveWatcherAccountId(admin, deployment.moderatorId);
+  const paidTier: ModeratorPlanTier | null =
+    !row.panel_id && entitlementSource && entitlementSource !== "trial" && entitlementSource !== "enterprise" && entitlementSource !== "byo20" ? entitlementSource : null;
+  // A deferred reply fired later by the sweep is still a REACTIVE response
+  // to a real inbound message -- same "reactive" kind as the original
+  // webhook-time resolution, never the proactive/scheduled-presence kind.
+  const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", row.community_id, deployment.deploymentId, "reactive", entitlementSource === "byo20");
+
+  const projectKnowledge = row.action_kind === "ANSWER" ? await loadRelevantKnowledge(admin, row.panel_id, row.community_id, row.message_text) : undefined;
+  const communityKnowledge = row.action_kind === "ANSWER"
+    ? await loadCommunityKnowledgeGrounding(admin, row.community_id, row.message_thread_id, row.chat_id, null, row.message_text)
+    : undefined;
+  const fallbackAdminMention = row.action_kind === "ANSWER" && community.project_id
+    ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.support ?? null
+    : null;
+  const escalationTarget = row.action_kind === "ANSWER" && community.project_id ? await resolveProjectEscalationTarget(admin, community.project_id) : null;
+
+  const event: CommunityEvent = {
+    panelId: row.panel_id,
+    communityId: row.community_id,
+    integrationId: row.deployment_id,
+    messageId: row.trigger_platform_message_id,
+    sender: { senderType: "HUMAN", isBot: false, platformUserId: row.sender_platform_id, displayName: row.sender_display_name, username: row.sender_username },
+    timestamp: row.created_at,
+    text: row.message_text,
+    replyToMessageId: null,
+    messageThreadId: row.message_thread_id,
+    origin: "HUMAN",
+    interactionDepth: 0,
+    causationMessageId: null,
+  };
+
+  const result = await respondAsDeployment({
+    admin, panelId: row.panel_id, communityId: row.community_id, chatId: row.chat_id, event,
+    deployment, actionType: row.action_kind, reasons: ["deferred_pending_reply_fired"], isTrialEntitlement, accountId, paidTier, now,
+    recentContext,
+    isDirectedAtBot: false,
+    addressedWithTypo: false,
+    otherActiveModeratorNames: deployments.filter((d) => d.deploymentId !== deployment.deploymentId).map((d) => d.moderatorName),
+    collabContact: null,
+    projectKnowledge,
+    communityKnowledge,
+    fallbackAdminMention,
+    aiRouting,
+    projectId: community.project_id ?? null,
+    escalationTarget,
+    timer: createRequestTimer(row.deployment_id),
+  });
+  await finishPendingReply(admin, row.id, result.replied ? "sent" : "failed");
+}
+
+/** Entry point for the pending-replies cron (app/api/cron/pending-replies).
+ *  Claims a bounded batch of due rows via a conditional UPDATE (status
+ *  'pending' -> 'sending', matching WHERE status='pending' still holds) so
+ *  two overlapping sweep invocations can never both process the same row --
+ *  the loser's update simply matches zero rows and is skipped. */
+export async function sweepPendingReplies(admin: SupabaseClient, now: Date = new Date(), limit = 25): Promise<{ processed: number }> {
+  const { data: dueRows } = await admin
+    .from("watch_pending_replies")
+    .select("id, community_id, panel_id, deployment_id, chat_id, message_thread_id, trigger_platform_message_id, sender_platform_id, sender_display_name, sender_username, message_text, action_kind, scheduled_for, created_at")
+    .eq("status", "pending")
+    .lte("scheduled_for", now.toISOString())
+    .order("scheduled_for", { ascending: true })
+    .limit(limit);
+
+  let processed = 0;
+  for (const row of (dueRows ?? []) as PendingReplyDbRow[]) {
+    const { data: claimed } = await admin
+      .from("watch_pending_replies")
+      .update({ status: "sending" })
+      .eq("id", row.id)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle();
+    if (!claimed) continue; // lost the claim race, or already resolved (e.g. cancelled) between the select and here
+    processed++;
+    try {
+      await processDuePendingReply(admin, row, now);
+    } catch (err) {
+      console.error("[telegram/community] processDuePendingReply failed", row.id, err);
+      await finishPendingReply(admin, row.id, "failed");
+    }
+  }
+  return { processed };
 }

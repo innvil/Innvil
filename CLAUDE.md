@@ -127,6 +127,164 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Human-priority engagement overhaul: real 120s pending-reply scheduler, admin-engagement lockout, topic-aware solicitation, slash-command silence, mention-only fallback, community-message knowledge grounding (v1.49.15)
+- **Urgent product-direction correction, delivered as one combined patch.** The Watcher was over-engaging —
+  jumping into conversations an admin/mod was already handling, acknowledging admins/mods when it shouldn't,
+  and treating admin-solicited content as unsolicited promotion. This release implements the full corrected
+  behavior contract, verified with a written state-machine before implementation began.
+- **(1) A REAL, persisted 120-second "give a human the first opportunity" scheduler — not an approximation.**
+  New `watch_pending_replies` table (migration `0118`) + `src/lib/moderator/pending-reply.ts` (pure decision
+  logic). When the Coordinator would otherwise send an **undirected** ANSWER/CASUAL_CHAT (picked via continuity
+  or quietest-longest — nobody explicitly asked the Watcher), `handleHumanMessage` now inserts a pending-reply
+  row (`scheduled_for = now + 120s`) and returns `SILENCE` instead of sending immediately. A **directed**
+  message (an explicit @mention/reply/name-address) is still answered immediately, unchanged — this only
+  changes when the Watcher would be volunteering. Never an in-memory timer — the row survives a server
+  restart/new invocation by construction, since Telegram webhooks are one-shot/stateless.
+  - **Cancellation is synchronous, not cron-gated.** The instant any message from a real Telegram admin/mod
+    arrives in the SAME topic/thread, every still-pending reply for that topic is cancelled immediately
+    (`cancelPendingRepliesForTopic`) — never waiting for the next sweep tick.
+  - **New cron sweep** `sweepPendingReplies` (in `community-runtime.ts`, exported; cron route
+    `app/api/cron/pending-replies`, migration `0120` schedules it every minute via Supabase pg_cron — the
+    finest granularity already proven safe in this schema, matching the Binance-deposit poller's own cadence).
+    Claims due rows via a conditional `status='pending'→'sending'` UPDATE (loser's update matches zero rows,
+    so two overlapping sweeps can never double-process the same row) and **revalidates before sending**:
+    staleness (>15 min past scheduled time, mirroring the existing `moderator_conversation_tasks` TTL
+    convention — marks `expired`), already answered by a moderator in-topic since scheduling, an admin/mod
+    responded since scheduling (belt-and-suspenders re-check), and whether the original asker is still present
+    in the community (a lookup failure fails SAFE — assumes present — never withholds a real answer over a
+    transient API hiccup). Any failed check cancels with a specific `cancel_reason`; only a fully-revalidated
+    row is actually generated (fresh, at fire time — never a stale draft) and sent.
+  - **Duplicate-webhook protection**: a unique constraint on `(community_id, trigger_platform_message_id)` is
+    defense-in-depth — the PRIMARY guarantee is the pre-existing `community_messages` claim-race (migration
+    0049), which already ensures only one webhook invocation per real message ever reaches the scheduling code.
+  - **Honest cadence trade-off, stated explicitly**: a genuinely-unanswered reply fires somewhere in the
+    120–180s range (worst case: scheduled right after a sweep tick, waits nearly a full extra minute) —
+    cancellation is NOT affected by this cadence at all (always synchronous), only how close to exactly 120s a
+    real send lands.
+- **(2) Solicitation and media-moderation warning counters are now genuinely separate.** New
+  `moderator_link_warning_state.media_warning_count` column (migration `0116`) — `warning_count` is now
+  EXCLUSIVELY solicitation's own 2→4-warning ladder counter (matching its own pre-existing doc comment, which
+  had been silently violated by media moderation reading/writing the same field); `media_warning_count` is
+  media's own, completely independent counter. A media violation can never advance the solicitation ladder and
+  vice versa. Historical merged counts are NOT retroactively split (a merged count was never a correct count
+  for either domain individually — every user's counters simply start fresh in their now-correct column).
+- **(3) Full conversational-engagement lockout toward admins/mods (broadened from v1.49.14's trivial-only
+  scope).** `acknowledge_admin_mod = OFF` (still the default) now suppresses ALL voluntary conversational
+  engagement with an admin/mod sender — no reaction, no short acknowledgement, no substantive reply, no
+  jumping in "to help," not even when the admin/mod directly @mentions the Watcher — checked as the very FIRST
+  thing inside `selectChatterAction`, before any message-kind classification. Moderation/safety processing is
+  completely independent and unaffected (it already ran earlier in the pipeline). `ON` restores normal
+  engagement. Bot-to-bot communication remains separately controlled by `bot_ack_mode`, unchanged.
+- **(4) Telegram Forum topic auto-discovery + owner-assignable policy, replacing the raw-ID-hunting approach.**
+  New `watch_community_topics` table (migration `0115`) — every topic the bot observes a message in (or learns
+  about via a `forum_topic_created`/`forum_topic_edited` service message, which is the only reliable way to
+  learn a topic's real name — there's no "get topic name by id" Bot API call) gets a row, auto-suggested a
+  starting policy from its name (`general`/`announcement`/`promotion`/`normal`), always owner-overridable. New
+  owner UI `CommunityTopicPolicies.tsx` (Community detail page) lists known topics with a policy `<select>` —
+  no raw numeric thread-id entry required for normal use. **Policy is always keyed to the stable numeric
+  `message_thread_id`, never the display name** — renaming "Promotion" to anything else never breaks the
+  policy; the UI always shows the current observed name.
+- **Promotion-topic override, now real.** `runLinkModeration`'s `solicitationAllowedHere` check now resolves
+  the current topic's assigned policy (`topicAllowsSolicitation`) instead of the earlier draft's
+  `communities.solicitation_topic_ids` array (superseded before ever shipping — replaced outright, not layered
+  on top). Solicitation is allowed either via the community-wide toggle OR because the CURRENT topic is
+  assigned the `promotion` policy — regardless of the community-wide toggle's state.
+- **(5) Topic-aware, fully deterministic solicitation warnings** (`src/lib/moderator/community-topics.ts`'s
+  `topicSolicitationWarningText`, supersedes the earlier AI-phrased `generateModerationWarning` for this
+  category specifically — `generateModerationWarning` itself is left defined/tested, just no longer called
+  from this path). The warning always names the ACTUAL current topic ("Please do not send promotions in
+  General...") — never a hardcoded "General"/"Announcements" — and, when a Promotion topic is configured,
+  names it and includes a real deep link when derivable (`buildTopicLink` — a public `@username` link, or the
+  internal `t.me/c/<id>/<thread>` form for a private supergroup; never a raw numeric thread id exposed to the
+  end user unless nothing else is available). Never exposes a bare thread id as the primary reference.
+- **(6) Silence/command/fallback policy — slash commands, mention-only handoff, no invented "I don't know."**
+  - **Any message starting with `/` resolves to `SILENCE` unconditionally** — checked as the literal first line
+    of `selectChatterAction`, before every other classification/directed-address override. The Watcher never
+    answers, explains, acknowledges, or references a slash command, even when it's directed at the Watcher's
+    own username or looks like a real question. There is deliberately no "if this command belongs to me,
+    handle it" branch anywhere.
+  - **New mention-only fallback for a genuinely unanswerable question.** New `MENTION_ADMIN_REQUIRED` sentinel
+    (`chatter-generate.ts`, mirrors the existing `ESCALATE_REQUIRED`/`NO_REPLY` sentinel pattern exactly) —
+    when ANSWER has no reliable Project/Community Knowledge for a real informational question, precedence is:
+    a configured **Shared Escalation Group** (private team channel, strongest) → a configured **general
+    fallback contact** (reuses the existing structured "support" contact preset, `project-profile.ts` — sent as
+    a BARE mention, no persona filler, no lead-in text) → plain **SILENCE** (`NO_REPLY`, now explicitly stated
+    as the CORRECT outcome, not a last resort). Every branch explicitly bans the exact forbidden filler
+    ("I don't know" / "I couldn't find that" / "I don't have that information" / "please ask an admin").
+  - **Persona-consistency rule added**: even a short mention-only-adjacent factual answer must still sound like
+    the configured persona, never a generic bot/retrieval-engine/moderation-script voice — content is grounded
+    and accurate, style is persona-based; the ONE exception is a genuine bare mention-only handoff, which stays
+    mention-only with zero persona flavor added on top.
+  - **New SHARED_RULES entry** banning exposure of internal retrieval/system terminology ("retrieved context",
+    "confidence", "classifier", "database", "index") and any "I couldn't find/verify" phrasing — the absence of
+    information is handled silently, never narrated.
+- **(7) Community-message knowledge grounding — ANSWER now draws on this community's OWN admin/mod messages,
+  not just owner-authored Project Knowledge, and ONLY after every engagement/deference/scheduling decision has
+  already cleared the Watcher to respond.** New `src/lib/moderator/community-message-knowledge.ts` (pure) +
+  `watch_community_resources` table (migration `0119`, populated going forward only — existing history is not
+  retroactively indexed). Admin/mod-authored messages are indexed (link-bearing messages get one row per link,
+  classified by kind; link-less messages are stored as a plain text fact) whenever an admin message is
+  processed AND for every genuinely pinned message (Telegram's `pinned_message` service-message field —
+  pinning is itself treated as endorsement, so a pinned message is always authoritative regardless of who
+  originally posted it). **Unpin detection**: Telegram sends no event for a manual unpin — reconciled instead
+  by comparing against the chat's real CURRENT `pinned_message` via `getChat` at fire time (`syncCurrentPinnedMessage`,
+  a real, working mechanism, not a gap — though not yet wired into the live retrieval call site this pass, see
+  below).
+  - **Resource classification** (`classifyResourceKind`) reads the SURROUNDING message text first ("here is our
+    whitepaper: https://docs.example.com/abc123" classifies as WHITEPAPER even with no "whitepaper" keyword in
+    the URL path), falling back to the URL path only when the text gives no signal — never guesses a MORE
+    SPECIFIC kind (whitepaper/docs/roadmap) from a bare domain with no path, which resolves WEBSITE only.
+  - **Ranking** (`rankCommunityKnowledge`) is authority (pinned > announcement > ordinary admin message) +
+    relevance + a bounded recency bonus — a materially NEWER admin update can outrank an older pinned fact on
+    the same subject (the spec's own "presale is now live" beats an older pinned "presale starts next month"
+    worked example), but a bare-relevant brand-new message never outranks a strongly-relevant pinned one. A
+    NON-admin-authored message is never treated as authoritative, full stop, regardless of relevance.
+  - **Whitepaper handling is strict**: `pickWhitepaperLink` returns the one confirmed, previously-OBSERVED
+    whitepaper URL only — never derived/guessed from the website URL (no `example.com` → `example.com/whitepaper`
+    auto-conversion, ever). Absence is handled silently — the prompt explicitly instructs the model never to
+    mention a missing whitepaper.
+  - **Style contract**: answer directly first, then optionally reference a relevant pinned post as supporting
+    information (never "just check the pinned post" unless it's genuinely the only information available);
+    mention other official resources only when directly relevant, never dump every stored link into one answer.
+- New tests: `pending-reply.test.ts` (+18, new file), `community-topics.test.ts` (+18, new file),
+  `community-message-knowledge.test.ts` (+18, new file), `chatter-coordinator.test.ts` (+13 — slash commands +
+  broadened admin-deference across SUBSTANTIVE/COMMUNITY_OPENER), `chatter-generate.test.ts` (+18 — community
+  knowledge context lines, the fallback-precedence ladder, the mention-admin sentinel round trip via a real
+  fetch-mocked BYO-routed `generateChatterReply` call, persona-consistency/no-system-terminology prompt
+  assertions), `watch-runtime.test.ts` (+6 — `listAccountCommunityTopics`/`setAccountCommunityTopicPolicy`
+  scoping/isolation, plus a real fix to the shared fake-DB test harness: `update()` only ever supported a
+  single chained `.eq()`, breaking a real two-column filter update — now accumulates every `.eq()` call the
+  same way the harness's own `select()` builder already does), `link-moderation.test.ts` (4 pre-existing tests
+  updated for the new solicitation ladder shape, per the earlier same-day ladder redesign). 2086 tests pass,
+  `tsc --noEmit` clean, production build clean.
+- **Run migrations `0115` through `0120`** before this governs anything live (topics table, media-counter
+  split, `community_messages.message_thread_id`, pending-replies table, community-resources table, and the
+  pending-replies pg_cron schedule, in that order) — until then, scheduling/topic-policy/knowledge-indexing
+  writes will fail at the DB level.
+- **Deliberately not built this pass, honestly flagged rather than silently skipped**:
+  - **A deterministic backstop for "was this content solicited by an admin?"** (rule 7 of the request) — kept
+    as the existing semantic classifier-prompt check (`link-classify.ts`'s system prompt, unchanged from
+    earlier the same day) rather than adding a second, rigid state-tracking mechanism. A real deterministic
+    layer (e.g. "an admin's message matching a request pattern exempts the NEXT message from a specific user
+    within N minutes") is a reasonable follow-up, not attempted this pass to avoid rushing a security-adjacent
+    mechanism.
+  - **`syncCurrentPinnedMessage` is implemented and tested-by-construction but not yet called from the live
+    retrieval path** (`loadCommunityKnowledgeGrounding`) — a stale "pinned" flag from an old manual unpin will
+    self-correct once this is wired in; until then, an unpinned message could still be treated as pinned if
+    Telegram never sends a fresh pin event to replace it. Flagged as a concrete, scoped follow-up.
+  - **Full DB/Telegram-mocked orchestration tests for `sweepPendingReplies`, `schedulePendingReply`,
+    `cancelPendingRepliesForTopic`, topic auto-discovery (`recordTopicSighting`), and community-message
+    indexing (`indexCommunityKnowledgeMessage`/`upsertCommunityResource`)** — consistent with this codebase's
+    long-established convention for comparably complex orchestrators (`handleCommunityUpdate`, `executeAction`
+    have never had full DB-mocked tests either), these are verified via `tsc --noEmit` + production build +
+    direct code review rather than a new giant fake-DB harness covering five new tables. Every PURE decision
+    function underneath each of them (`pending-reply.ts`, `community-topics.ts`,
+    `community-message-knowledge.ts`) is fully, directly unit-tested.
+  - **A live click-through end-to-end verification** (a real Telegram message, a real 120s wait, a real
+    cancellation, a real fired reply referencing a real pinned post) was not performed — no live Telegram
+    bot/session is available in this sandbox, consistent with every other live-runtime change in this
+    codebase's history. Verified instead via the full pure-logic test suite + typecheck + production build.
+
 ### 2026-09-02 — Per-community "Acknowledge admins/mods" toggle for lightweight acknowledgement (v1.49.14)
 - **New per-community, owner-editable toggle (default OFF)**: whether a Watcher's lightweight acknowledgement
   mechanism (a canned SHORT_ACK reply, or a Telegram REACT, for genuinely trivial content — "thanks", "got it",
