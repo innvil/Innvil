@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyLinkIntent, generateModerationWarning } from "./link-classify";
+import { classifyLinkIntent, generateModerationWarning, generatePersonaSolicitationWarning, type SolicitationWarningFacts } from "./link-classify";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { SPAM_WARNING_LIMIT } from "./link-moderation";
 
@@ -258,6 +258,113 @@ test("REQUIRED: generateModerationWarning BYO required but unusable falls straig
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
       assert.ok(missingCred.length > 0);
       assert.ok(missingModel.length > 0);
+    });
+  });
+});
+
+/* ---------------------------------------------- generatePersonaSolicitationWarning ---- */
+// Persona-voiced solicitation warning (supersedes the flat deterministic
+// template's WORDING per explicit live feedback: "the way it says a
+// warning is too generic -- it should be persona based"). Every stated
+// FACT must still be exactly as deterministic/accurate as before -- these
+// tests verify the ACTUAL outgoing request requires each fact, and that
+// the deterministic fallback (used on any generation failure) states them
+// all correctly too.
+
+const noMuteFacts: SolicitationWarningFacts = {
+  currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: null,
+};
+
+test("REQUIRED: persona solicitation warning also routes to Sonnet 5, never DeepSeek", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("hey, no promos in General please -- pulled that one."), async (calls) => {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /anthropic/i);
+      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.ok(text.length > 0);
+    });
+  });
+});
+
+test("REQUIRED: the prompt requires the exact current topic name, and states no mute applies when none does", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos in General, thanks!"), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /General/);
+      assert.match(system, /no mute applies/i);
+    });
+  });
+});
+
+test("REQUIRED: the prompt requires the exact mute duration verbatim when one applies", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("that resulted in a mute, no promos in General."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10 });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /10-minute mute/);
+    });
+  });
+});
+
+test("REQUIRED: the prompt requires the real configured Promotion destination + link when one exists, and bans inventing one when it does not", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("head to Promotion instead."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, {
+        ...noMuteFacts, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45",
+      });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /"Promotion"/);
+      assert.match(system, /https:\/\/t\.me\/c\/123\/45/);
+    });
+  });
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos here, sorry."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /do NOT invent one/i);
+    });
+  });
+});
+
+test("REQUIRED: the prompt requires the real configured contact handle when one exists", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("hit up the contact if you want to talk business."), async (calls) => {
+      await generatePersonaSolicitationWarning("Patricia", persona, { ...noMuteFacts, contactHandle: "@RhyleKhy" });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /@RhyleKhy/);
+    });
+  });
+});
+
+test("REQUIRED: falls back to the exact prior deterministic template on any generation failure -- never a broken/missing warning", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+    assert.equal(
+      text,
+      "Please do not send promotions in General. Repeatedly sending promotional content here may result in a mute, and a 5th offense may result in a kick or ban."
+    );
+  });
+});
+
+test("deterministic fallback states the mute duration, the promotion redirect, and the contact -- all together", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const text = await generatePersonaSolicitationWarning("Kwan", persona, {
+      currentTopicName: "General", muteMinutes: 30, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/1/2", contactHandle: "@RhyleKhy",
+    });
+    assert.match(text, /Promotion \(https:\/\/t\.me\/c\/1\/2\)/);
+    assert.match(text, /30-minute mute/);
+    assert.match(text, /@RhyleKhy/);
+  });
+});
+
+test("REQUIRED: BYO required but unusable falls straight to the deterministic fallback, no network call at all", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts, { required: true, credential: null });
+      assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
+      assert.ok(text.length > 0);
     });
   });
 });

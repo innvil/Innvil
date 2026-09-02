@@ -876,6 +876,27 @@ export async function setAccountCommunityTopicPolicy(
  *  45s). Clamped server-side regardless of what the client sends, so an
  *  out-of-range value can never be persisted even if the UI's own input
  *  bounds were somehow bypassed. */
+/** Fallback promotion redirect destination for a community with no
+ *  Telegram Forum topic structure at all (see the migration's own doc
+ *  comment) -- a plain, owner-entered string (a link or @handle), never
+ *  validated/resolved against Telegram (it's just stated verbatim in a
+ *  warning, never used to actually message/post anywhere). Null clears it. */
+export async function getAccountCommunityPromotionChannelLink(admin: SupabaseClient, accountId: string, communityId: string): Promise<string | null> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return null;
+  const { data } = await admin.from("communities").select("promotion_channel_link").eq("id", communityId).maybeSingle();
+  return data?.promotion_channel_link ?? null;
+}
+
+export async function setAccountCommunityPromotionChannelLink(
+  admin: SupabaseClient, accountId: string, communityId: string, link: string | null
+): Promise<CreateResult<{ link: string | null }>> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return { ok: false, error: "Community not found." };
+  const trimmed = link?.trim() || null;
+  const { error } = await admin.from("communities").update({ promotion_channel_link: trimmed }).eq("id", communityId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: { link: trimmed } };
+}
+
 export async function getAccountCommunityPendingReplyDelay(admin: SupabaseClient, accountId: string, communityId: string): Promise<number | null> {
   if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return null;
   const { data } = await admin.from("communities").select("pending_reply_delay_seconds").eq("id", communityId).maybeSingle();

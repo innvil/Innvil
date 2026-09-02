@@ -85,6 +85,45 @@ test("a self-promotion pitch phrased slightly differently is still flagged (two 
   assert.equal(looksLikeUnsolicitedPitch("We can boost your channel's volume and bring you serious buyers, message us to get started"), true);
 });
 
+/* Live bug (2026-09-02): several real reported unsolicited-promotion pitches
+ * only ever tripped ONE of the three original signal categories (contact-
+ * ask / service-offer / growth-language) and were never even sent to the
+ * real classifier -- they fell straight through to ordinary chatter
+ * instead of moderation. Widened per this real, reported traffic. */
+test("REQUIRED (live bug repro, 2026-09-02): a partnership-styled cold pitch offering investor exposure is flagged", () => {
+  const text = "Hey! 👋 I came across your project and it looks really promising. 🚀\n\nI have strong, active crypto communities and can bring genuine investor exposure, engagement & buying interest.\n\nIf you're looking to grow your project and reach more serious investors, feel free to DM me. 📧🔥";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+test("REQUIRED (live bug repro): a 'boost your trading volume / market cap, let's connect' pitch is flagged", () => {
+  const text = "Hey Dev\nLooking to boost your trading volume and market cap? We help crypto projects get real exposure through targeted communities and top KOLs. Let's connect DM me.";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+test("REQUIRED (live bug repro): a bare 'you need promos?' offer is flagged on its own -- a distinctive marketing-service marker, not ordinary conversation", () => {
+  assert.equal(looksLikeUnsolicitedPitch("Hi , CEO\nYou need promos 💯?"), true);
+});
+
+test("REQUIRED (live bug repro): a KOL/influencer-marketing pitch is flagged even with only one of the three original signal categories", () => {
+  const text = "Hi! We help crypto projects grow through Telegram, X, and KOL marketing with a focus on visibility, community growth, and supporting higher market cap. Interested?";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+test("REQUIRED (live bug repro): the 'grow your diamond holders... DM us' pitch is flagged", () => {
+  const text = "Hi Dev  Looking for massive volume & strong holder growth before and after launch?\n\n🔵 SOL | 🟡 BSC |🔥 BASE |🔥 ETH |🔥 RHC + More\n\n💎 Grow your diamond holders\n📈 Affordable plans • Effective promotion\n\n✉️ DM us with your project details!";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+test("REQUIRED (live bug repro): 'pump and increase holder' pitch offering a large investor channel is flagged", () => {
+  const text = "Hi DEV \nWe have a channel telegram of \n2 million investor members\nLet us know if you need pump and increase holder";
+  assert.equal(looksLikeUnsolicitedPitch(text), true);
+});
+
+test("the new single-strong-signal branch never fires on ordinary conversation that merely mentions similar words individually", () => {
+  assert.equal(looksLikeUnsolicitedPitch("that KOL panel discussion at the conference was really insightful"), false);
+  assert.equal(looksLikeUnsolicitedPitch("promos are live on the store this week, check it out"), false);
+});
+
 /* --------------------------------------------------------- self-mention exemption ---- */
 /* Live bug: a legitimate mention of a Watcher's OWN Telegram username was
    being extracted as a "link" candidate and deleted/warned as scam/promotion

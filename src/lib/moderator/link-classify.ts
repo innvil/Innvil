@@ -53,6 +53,13 @@ Categories (choose exactly one):
 - AMA_REQUEST: proposing or referencing an AMA (Ask Me Anything) session.
 - PARTNERSHIP_REQUEST: asking who handles partnerships, or proposing a partnership.
 - UNSOLICITED_PROMOTION: advertising another project/group/channel with no legitimate relevance to this community, especially urging people to leave/join elsewhere.
+
+IMPORTANT — a common spam evasion tactic dresses up an unsolicited marketing-service pitch in "partnership"/"collaboration" wording specifically to be misread as COLLABORATION_REQUEST or PARTNERSHIP_REQUEST. A message is still UNSOLICITED_PROMOTION, not a genuine collaboration/partnership request, when it:
+- is a cold, unprompted pitch offering a GENERIC growth/marketing/exposure SERVICE (e.g. "I can bring you investors/buyers/volume/exposure", "we help projects grow through KOL marketing", "boost your trading volume/market cap") rather than proposing a SPECIFIC, concrete joint activity between two named parties;
+- reads as templated copy that could be sent unchanged to any project in any community (no reference to anything specific about THIS community/project);
+- ends by directing the reader to DM/message/contact the SENDER to "get started"/"grow"/"boost", i.e. the real goal is to move the conversation to a private sales pitch, not to actually discuss terms in the open;
+- comes from someone with no established relationship to this community and no context showing they were asked.
+A GENUINE COLLABORATION_REQUEST or PARTNERSHIP_REQUEST instead proposes a specific joint action ("we'd like to co-host an AMA with you next week", "our team wants to explore an integration — who should I talk to?") or is itself the SOLICITED response to an admin's own request (see the SOLICITED-content rule above). When genuinely unsure which of the two this is, weigh the presence of a generic "DM me to grow/boost/promote" call-to-action heavily toward UNSOLICITED_PROMOTION.
 - LINK_SPAM_OR_FLOOD: looks like an automated or repetitive advertising burst.
 - PHISHING_OR_SCAM: a link designed to steal credentials/funds (fake exchange, fake support, wallet drainer, impersonation of a known project's official domain).
 - EXPLICIT_CONTENT: pornographic/explicit content.
@@ -195,4 +202,118 @@ export async function generateModerationWarning(
     }
   }
   return WARNING_FALLBACK_TEMPLATES[Math.min(warningNumber, WARNING_FALLBACK_TEMPLATES.length) - 1] ?? WARNING_FALLBACK_TEMPLATES[0];
+}
+
+export interface SolicitationWarningFacts {
+  /** Display name of the topic the violation happened in (e.g. "General"). */
+  currentTopicName: string;
+  /** Exact mute duration this violation triggered, if any — undefined means
+   *  no mute (e.g. a first offense). Never invented by the model; when
+   *  present it MUST be stated verbatim. */
+  muteMinutes: number | undefined;
+  /** Configured Promotion topic's display name + (when derivable) a real
+   *  deep link — both null when no Promotion topic is configured at all,
+   *  in which case the model must never invent a destination. */
+  promotionTopicName: string | null;
+  promotionTopicLink: string | null;
+  /** The Project's configured partnerships/promotion contact handle, when
+   *  one exists — null means none is configured, never fabricated. */
+  contactHandle: string | null;
+}
+
+/** Persona-voiced solicitation/promotion warning — supersedes the flat
+ *  deterministic `topicSolicitationWarningText` template's WORDING (per
+ *  explicit live product feedback: "the way it says a warning is too
+ *  generic... it should be persona based, not generic bot warning"), while
+ *  keeping every stated FACT exactly as deterministic and accurate as
+ *  before — the model is required to include each given fact verbatim
+ *  (the current topic's real name, the exact mute duration when one
+ *  applies, the real configured Promotion topic name/link, the real
+ *  configured contact handle), never inventing or omitting one. Falls back
+ *  to the EXACT existing deterministic template (byte-for-byte the same
+ *  output this function replaces) on any generation failure or when no AI
+ *  provider is usable — there is no scenario where this produces a worse
+ *  or less accurate warning than before, only a differently-phrased one. */
+export async function generatePersonaSolicitationWarning(
+  moderatorName: string,
+  persona: ModeratorPersona,
+  facts: SolicitationWarningFacts,
+  aiRouting?: AccountAiRouting
+): Promise<string> {
+  const deterministicFallback = () => {
+    // Mirrors community-topics.ts's topicSolicitationWarningText +
+    // community-runtime.ts's promotionContactSentence exactly, inlined here
+    // so this function's fallback never depends on a circular import.
+    const mutePart = facts.muteMinutes ? ` This resulted in a ${facts.muteMinutes}-minute mute.` : "";
+    const contactPart = facts.contactHandle ? ` For promotion inquiries, please contact ${facts.contactHandle}.` : "";
+    if (!facts.promotionTopicName) {
+      return `Please do not send promotions in ${facts.currentTopicName}. Repeatedly sending promotional content here may result in a mute, and a 5th offense may result in a kick or ban.${mutePart}${contactPart}`;
+    }
+    const where = facts.promotionTopicLink ? `${facts.promotionTopicName} (${facts.promotionTopicLink})` : facts.promotionTopicName;
+    return `Please do not send promotions in ${facts.currentTopicName}. If you want to promote a project, please use the ${where} topic instead. Repeatedly sending promotional content in ${facts.currentTopicName} may result in a mute, and a 5th offense may result in a kick or ban.${mutePart}${contactPart}`;
+  };
+
+  const requiredFacts: string[] = [
+    `The current topic is named "${facts.currentTopicName}" — you must state that promotions aren't allowed HERE, by this exact name.`,
+  ];
+  if (facts.muteMinutes) requiredFacts.push(`This violation results in a real ${facts.muteMinutes}-minute mute — state this exact number, do not invent a different one.`);
+  else requiredFacts.push(`No mute applies to this specific offense — do not claim one happened.`);
+  if (facts.promotionTopicName) {
+    requiredFacts.push(
+      `Redirect them to the real configured Promotion topic, named exactly "${facts.promotionTopicName}"${facts.promotionTopicLink ? ` (link: ${facts.promotionTopicLink}, include it)` : " (no link is available, just name the topic)"}.`
+    );
+  } else {
+    requiredFacts.push(`No Promotion topic is configured for this community — do NOT invent one or tell them to go somewhere that doesn't exist.`);
+  }
+  if (facts.contactHandle) requiredFacts.push(`Mention the real configured promotion contact: ${facts.contactHandle}.`);
+  requiredFacts.push(`Always also state: repeated offenses escalate to a mute, and a 5th offense may result in a kick or ban.`);
+
+  const system = [
+    `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for posting unsolicited promotion (advertising a project/service with no relevance here, or soliciting private contact for a growth/marketing service).`,
+    `Write ONE short, natural warning to the person, entirely in your own persona voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
+    `Required facts you MUST include, stated accurately -- never invent, omit, or alter any of these:`,
+    ...requiredFacts.map((f) => `- ${f}`),
+    `Never output robotic/templated phrasing like "Violation N" -- write like a real person in-character would, while still stating every required fact above.`,
+    `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation, under 60 words.`,
+  ].join("\n");
+
+  if (aiRouting?.required) {
+    const cred = aiRouting.credential;
+    if (cred?.model) {
+      try {
+        const raw = await aiComplete({
+          system,
+          messages: [{ role: "user", content: "Write the warning now." }],
+          model: cred.model,
+          providerOverride: byoProviderOverride(cred),
+          maxTokens: 220,
+          automation: "LINK_MODERATION_WARNING_BYO",
+        });
+        const text = raw.trim();
+        if (text) return text.slice(0, 400);
+      } catch {
+        // fall through to the deterministic template below
+      }
+    }
+    return deterministicFallback();
+  }
+
+  if (aiConfigured()) {
+    try {
+      const { model, effort } = getInnvilModelConfig();
+      const raw = await aiComplete({
+        system,
+        messages: [{ role: "user", content: "Write the warning now." }],
+        model,
+        effort,
+        maxTokens: 220,
+        automation: "LINK_MODERATION_WARNING",
+      });
+      const text = raw.trim();
+      if (text) return text.slice(0, 400);
+    } catch {
+      // fall through to the deterministic template below
+    }
+  }
+  return deterministicFallback();
 }

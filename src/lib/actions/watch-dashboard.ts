@@ -16,6 +16,7 @@ import {
   setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
   listAccountCommunityTopics, setAccountCommunityTopicPolicy, type AccountCommunityTopicRow,
   getAccountCommunityPendingReplyDelay, setAccountCommunityPendingReplyDelay,
+  getAccountCommunityPromotionChannelLink, setAccountCommunityPromotionChannelLink,
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
   listAccountAttentionItems, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountProjectDetail, getAccountWatcherDetail, getAccountPaidPlan,
@@ -218,6 +219,20 @@ export async function setCommunityPendingReplyDelay(
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return setAccountCommunityPendingReplyDelay(admin, user.id, communityId, delaySeconds);
+}
+
+export async function getCommunityPromotionChannelLink(communityId: string): Promise<string | null> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return null;
+  return getAccountCommunityPromotionChannelLink(admin, user.id, communityId);
+}
+
+export async function setCommunityPromotionChannelLink(
+  communityId: string, link: string | null
+): Promise<{ ok: true; data: { link: string | null } } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return setAccountCommunityPromotionChannelLink(admin, user.id, communityId, link);
 }
 
 /* ============================================================

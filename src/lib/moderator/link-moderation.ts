@@ -112,18 +112,40 @@ export function extractLinks(text: string): string[] {
  *  Deliberately a bounded, non-exhaustive signal set (a real promotional
  *  pitch has endless phrasing) -- a missed phrasing here simply isn't
  *  flagged, same as today; it never causes a false enforcement action. */
-const SOLICIT_CONTACT_RE = /\b(dm|pm|message|contact|reach out to|hit (me|us) up)\b.{0,20}\b(me|us)\b/i;
-const PROMOTION_SERVICE_RE = /\b(i can|we can|let('| a)?s)\b.{0,30}\b(promote|market|shill|pump|grow|boost|push)\b/i;
-const GROWTH_PITCH_RE = /\b(real investors|serious buyers|strong volume|active (crypto )?communities|guaranteed (growth|holders|volume)|organic growth)\b/i;
-const BOOST_TARGET_RE = /\b(grow|boost|push)\b.{0,25}\b(your|the)\b.{0,25}\b(project|community|channel|token|coin|followers|views|members|volume|exposure|market cap)\b/i;
+const SOLICIT_CONTACT_RE = /\b(dm|pm|message|contact|reach out to|hit (me|us) up)\b.{0,20}\b(me|us)\b|\blet('|s)?s connect\b/i;
+const PROMOTION_SERVICE_RE = /\b(i can|we can|we help|let('| a)?s|let us)\b.{0,30}\b(promote|market|shill|pump|grow|boost|push)\b/i;
+const GROWTH_PITCH_RE =
+  /\b(real investors|genuine investors?|serious buyers|strong volume|strong,? active|active (crypto )?communit(y|ies)|guaranteed (growth|holders|volume)|organic growth|trading volume|market cap|investor exposure|buying interest)\b/i;
+const BOOST_TARGET_RE = /\b(grow|boost|push)\b.{0,25}\b(your|the)\b.{0,25}\b(project|community|channel|token|coin|followers|holders|views|members|volume|exposure|market cap)\b/i;
+// A very specific, low-false-positive marketing-service marker on its own
+// (mentioning KOL/influencer marketing, or the bare word "promo(s)" as a
+// noun someone is offering/asking about, virtually never comes up in
+// ordinary conversation) -- see looksLikeUnsolicitedPitch's own
+// single-strong-signal branch below.
+const KOL_MARKETING_RE = /\b(kols?|influencers?)\b.{0,25}\b(marketing|exposure|network|connect)\b|\b(kol|influencer)\s+(manager|marketing)\b/i;
+const PROMO_OFFER_RE = /\byou need (some )?promos?\b|\bneed (some )?promos?\??$|\boffer(ing)? promos?\b/i;
+// A claimed large-audience "investor channel" pitch ("we have a channel of
+// 2 million investor members") is a distinctive crypto-spam marker on its
+// own -- an ordinary community member essentially never states an exact
+// large follower/member/investor count as a sales pitch like this.
+const LARGE_AUDIENCE_PITCH_RE = /\b\d[\d,.]*\s*(million|k|thousand)?\s*(investor|holder)s?\b.{0,20}\b(members?|channel)\b|\bchannel\b.{0,20}\bof\b.{0,20}\b\d[\d,.]*\s*(million|k|thousand)?\s*(investor|holder)s?\b/i;
 
 export function looksLikeUnsolicitedPitch(text: string): boolean {
   const contactAsk = SOLICIT_CONTACT_RE.test(text);
   const serviceOffer = PROMOTION_SERVICE_RE.test(text) || BOOST_TARGET_RE.test(text);
   const growthLanguage = GROWTH_PITCH_RE.test(text);
-  // Require at least two independent signals -- a bare "DM me" alone (a
-  // completely ordinary thing to say in conversation) must never alone
-  // trigger a classification call; a real promotional pitch reliably
+  // A sufficiently distinctive standalone marketing-service signal (KOL/
+  // influencer marketing pitches, or a bare "you need promos?" offer) is
+  // strong enough on its own -- these phrasings essentially never occur in
+  // ordinary conversation, unlike a bare "DM me" or a bare "grow", so
+  // requiring a SECOND independent signal alongside them would just let
+  // real spam through unflagged (a live-caught gap: several real
+  // unsolicited-promotion pitches only ever tripped ONE of the three
+  // original categories and were never even sent to the real classifier).
+  if (KOL_MARKETING_RE.test(text) || PROMO_OFFER_RE.test(text) || LARGE_AUDIENCE_PITCH_RE.test(text)) return true;
+  // Otherwise require at least two independent signals -- a bare "DM me"
+  // alone (a completely ordinary thing to say in conversation) must never
+  // alone trigger a classification call; a real promotional pitch reliably
   // combines a contact/service call-to-action with marketing language.
   return [contactAsk, serviceOffer, growthLanguage].filter(Boolean).length >= 2;
 }

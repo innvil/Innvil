@@ -30,17 +30,17 @@ import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
-  filterOutOwnBotMentions, looksLikeUnsolicitedPitch, promotionContactSentence,
+  filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   looksLikeAdminInformationRequest, findRecentAdminInformationRequest,
   effectiveWarningCount,
 } from "./link-moderation";
-import { classifyLinkIntent } from "./link-classify";
+import { classifyLinkIntent, generatePersonaSolicitationWarning } from "./link-classify";
 import {
   DEFAULT_PENDING_REPLY_DELAY_MS, clampPendingReplyDelaySeconds, pendingReplyScheduledFor, isPendingReplyDue, isPendingReplyStale,
   isWithinPendingReplyWindow, revalidatePendingReply, isAdminMessageHandlingConversation, type DeferredActionKind, type PendingReplyRow,
 } from "./pending-reply";
 import {
-  topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicSolicitationWarningText,
+  topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicDisplayName,
   type CommunityTopicRow, type CommunityTopicPolicy,
 } from "./community-topics";
 import {
@@ -301,7 +301,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -325,7 +325,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
-    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
+    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null; promotion_channel_link: string | null;
   };
 }
 
@@ -2169,7 +2169,7 @@ async function isSenderAdminOrTrusted(token: string, chatId: string, platformUse
 export async function runLinkModeration(
   admin: SupabaseClient,
   panelId: string | null,
-  community: { id: string; project_id?: string | null; allow_solicitation?: boolean | null },
+  community: { id: string; project_id?: string | null; allow_solicitation?: boolean | null; promotion_channel_link?: string | null },
   chatId: string,
   event: CommunityEvent,
   deployments: ChatterDeployment[],
@@ -2431,21 +2431,42 @@ export async function runLinkModeration(
   const promotionContact = isPromotionEnforcement && community.project_id
     ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.partnerships ?? null
     : null;
-  const promotionContactLine = promotionContactSentence(promotionContact);
-
   const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
-  // Solicitation warnings are now fully DETERMINISTIC/templated (never a
-  // model call) and dynamically name the CURRENT topic + point to the real
-  // configured Promotion topic (§6) -- supersedes the earlier AI-phrased
-  // generateModerationWarning for this category specifically (still used
-  // nowhere else; kept defined/tested for now rather than deleted, per
-  // "don't rewrite/remove more than required" discipline).
   const promotionTopicLink = promotionTopic && event.messageThreadId != null
     ? buildTopicLink(chatUsername, chatId, promotionTopic.messageThreadId)
     : null;
+  // A Forum-topic-based Promotion redirect only applies to a chat that
+  // actually HAS Telegram Forum topics -- an ordinary (non-Forum) group has
+  // no such structure (message_thread_id is always null there), so
+  // promotionTopic can never resolve for one. `promotion_channel_link` is
+  // the manually-configured fallback for exactly that case (a separate
+  // Telegram destination, e.g. a dedicated promotions group) -- preferred
+  // ONLY when no real Forum-topic-based Promotion topic exists, never both
+  // at once (there's one real redirect destination to state, not two).
+  const redirectName = promotionTopic ? topicDisplayName(promotionTopic) : community.promotion_channel_link ? community.promotion_channel_link : null;
+  const redirectLink = promotionTopic ? promotionTopicLink : null;
+  // Solicitation warnings are now PERSONA-VOICED (per explicit live product
+  // feedback: "the way it says a warning is too generic... it should be
+  // persona based, not a generic bot warning") -- every stated fact (the
+  // current topic's real name, the exact mute duration when one applies,
+  // the real configured redirect destination, the real configured contact)
+  // is still deterministic and required, never left to the model to invent
+  // -- see generatePersonaSolicitationWarning's own doc comment. Falls back
+  // to the exact previous deterministic template on any generation failure.
   const warningText = isScamEnforcement
     ? scamFirstOffenseWarningHtml(mention)
-    : `${mention}, ${topicSolicitationWarningText(currentTopic, promotionTopic, promotionTopicLink, enforcement.muteMinutes)}${promotionContactLine}`;
+    : `${mention}, ${await generatePersonaSolicitationWarning(
+        enforcer.moderatorName,
+        enforcer.persona,
+        {
+          currentTopicName: topicDisplayName(currentTopic),
+          muteMinutes: enforcement.muteMinutes,
+          promotionTopicName: redirectName,
+          promotionTopicLink: redirectLink,
+          contactHandle: promotionContact,
+        },
+        aiRouting
+      )}`;
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -3867,13 +3888,13 @@ interface PendingReplyDbRow {
 async function loadCommunityById(admin: SupabaseClient, communityId: string) {
   const { data } = await admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link")
     .eq("id", communityId)
     .maybeSingle();
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
-    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
+    acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null; promotion_channel_link: string | null;
   } | null;
 }
 

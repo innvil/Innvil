@@ -21,6 +21,7 @@ import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySol
 import { AcknowledgeAdminModToggle } from "@/src/components/watch/AcknowledgeAdminModToggle";
 import { CommunityTopicPolicies } from "@/src/components/watch/CommunityTopicPolicies";
 import { PendingReplyDelayControl } from "@/src/components/watch/PendingReplyDelayControl";
+import { PromotionChannelLinkControl } from "@/src/components/watch/PromotionChannelLinkControl";
 import {
   SOLICITATION_DEFAULT_OFF_GUIDANCE, SOLICITATION_TOGGLE_HELPER_TEXT, PROMOTION_TOPIC_HELPER_TEXT,
 } from "@/src/lib/moderator/community-guidance";
@@ -246,6 +247,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     <div className="mt-4">
                       <CommunityTopicPolicies communityId={c.id} />
                       <p className="text-[11px] w-text-faint mt-1.5">{PROMOTION_TOPIC_HELPER_TEXT}</p>
+                      <PromotionChannelLinkControl communityId={c.id} />
                     </div>
                     <PendingReplyDelayControl communityId={c.id} />
                   </div>

@@ -48,7 +48,7 @@ export function findPromotionTopic(topics: CommunityTopicRow[]): CommunityTopicR
  *  yet — never exposes the raw numeric thread id to an end user (per
  *  explicit instruction: a raw id is a last-resort fallback, not the normal
  *  UX) unless nothing else is available at all. */
-function topicDisplayName(topic: CommunityTopicRow | null): string {
+export function topicDisplayName(topic: CommunityTopicRow | null): string {
   if (!topic) return "this topic";
   return topic.topicName?.trim() || (topic.policy === "general" ? "General" : `topic ${topic.messageThreadId}`);
 }

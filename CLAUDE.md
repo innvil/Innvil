@@ -127,6 +127,76 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-02 — Fix: unsolicited-promotion pitches with no link were bypassing moderation entirely + persona-voiced solicitation warnings + a plain-group Promotion-channel fallback (v1.49.19)
+- **Live investigation of "it moderated a spam message ~3 hours ago, but nothing since"** — traced end-to-end
+  via production data (`community_messages`, `moderator_activity_log`, `watch_pending_replies`). Root cause
+  found and reproduced: `looksLikeUnsolicitedPitch()` (the cheap deterministic gate deciding whether a link-less
+  text pitch is even worth a real classifier call) required **2 of 3** signal categories
+  (contact-ask / service-offer / growth-language) to match — several REAL, live unsolicited-promotion pitches
+  ("I have strong, active crypto communities and can bring genuine investor exposure... feel free to DM me",
+  "boost your trading volume and market cap? ...top KOLs. Let's connect", "You need promos?", "we have a
+  channel of 2 million investor members... pump and increase holder") each only tripped ONE of the three
+  categories, so `runLinkModeration` returned `{handled:false}` for every one of them — they were **never even
+  sent to the real classifier**, and fell straight through to ordinary Natural Chatter instead. Confirmed live:
+  a real `watch_pending_replies` row shows the Watcher scheduling a **CASUAL_CHAT** reply to one such pitch
+  ("Hi DEV We have a channel telegram of 2 million investor members...") and sending it — the model happened to
+  improvise persona-appropriate "no promos here" small talk from conversation history, which is why it LOOKED
+  like enforcement to a casual reader but was never a real delete/warn/mute action (no message deleted, no
+  warning-ladder count incremented). This fully explains the "acts, then goes quiet for hours" pattern — real
+  enforcement only fired for the rare spam message that happened to contain an actual link/handle or trip 2 of
+  the 3 original regex categories.
+- **Fix**: widened `looksLikeUnsolicitedPitch` — `PROMOTION_SERVICE_RE` now also matches "let us" (not only
+  "let's"), `GROWTH_PITCH_RE` widened (genuine/investor exposure, trading volume, market cap, buying interest),
+  `BOOST_TARGET_RE` gained "holders" as a target noun, and three NEW distinctive standalone-strong-signal
+  markers that are sufficient on their own (no longer requiring a second independent signal, since these
+  phrasings essentially never occur in ordinary conversation): `KOL_MARKETING_RE` (KOL/influencer marketing
+  pitches), `PROMO_OFFER_RE` ("you need promos?"), `LARGE_AUDIENCE_PITCH_RE` (a claimed large investor/holder
+  "channel"/"members" count as a sales pitch). Verified against every real message from this investigation
+  (all now correctly flagged) plus explicit false-positive guards (ordinary conversation merely mentioning
+  "KOL panel" or "promos are live on the store" stays unflagged). This function was already documented as
+  "never the verdict itself" — widening it only means MORE messages reach the real classifier +
+  `decideLinkEnforcement`, never a fabricated deletion on its own.
+- **Also tightened the classifier's own PARTNERSHIP_REQUEST/COLLABORATION_REQUEST definitions** (`link-classify.ts`)
+  — a cold, unprompted, templated growth/marketing-service pitch dressed up as a "partnership offer" (a known
+  crypto-spam evasion pattern) is now explicitly called out as still UNSOLICITED_PROMOTION, not a genuine
+  collaboration/partnership request, with concrete distinguishing criteria (generic service pitch vs. a
+  specific joint proposal; templated copy with no reference to this specific community; ends by redirecting to
+  a private DM to "get started").
+- **Persona-voiced solicitation warnings** (second explicit live request: "the way it says a warning is too
+  generic... it should be persona based, not generic bot warning" + "direct users to BOTH the configured
+  admin and the promo channel"). New `generatePersonaSolicitationWarning()` (`link-classify.ts`) replaces the
+  flat deterministic `topicSolicitationWarningText` template's WORDING with a real Sonnet-5-routed generation
+  call in the Watcher's own configured persona voice — every FACT stays exactly as deterministic/required as
+  before (the model is given the real current topic name, the real exact mute duration when one applies, the
+  real configured redirect destination, and the real configured contact handle, and is explicitly instructed
+  never to invent, omit, or alter any of them) — only the surrounding phrasing is persona-voiced now. Falls
+  back to the byte-identical previous deterministic template on any generation failure or BYO-unusable case —
+  there is no scenario where this produces a less accurate warning than before, only differently-phrased.
+- **New fallback Promotion-channel setting for communities with no Telegram Forum topics at all.** Investigated
+  the specific "why doesn't it mention the promo channel" report and confirmed via production data: the
+  community in question is a PLAIN (non-Forum) Telegram supergroup — `message_thread_id` is `null` on every
+  single message, meaning the existing Forum-topic-based Promotion-topic feature is structurally inapplicable
+  (there's no "topic" to assign a Promotion policy to at all). New `communities.promotion_channel_link` column
+  (migration `0122`) — a plain, owner-entered fallback destination (a separate dedicated promotions group/
+  channel link or @handle), used as the warning's redirect target ONLY when no real Forum-topic-based Promotion
+  topic applies, never both at once. New `getAccountCommunityPendingReplyDelay`-style getter/setter pair
+  (`watch-runtime.ts`) + `PromotionChannelLinkControl.tsx`, mounted on both the Community Settings tab and the
+  Project page's inline Community tab, right below the existing Topic Policies control.
+- **`topicDisplayName` exported** from `community-topics.ts` (was private) for reuse in the new warning-fact
+  computation.
+- New tests: `link-moderation.test.ts` (+8 — every real message from this investigation now correctly flagged,
+  plus 2 false-positive guards for the new standalone signals), `link-classify.test.ts` (+8 — the new
+  generator's Sonnet-only routing, every required fact's presence in the actual outgoing prompt, the
+  never-invent-a-destination instruction when none is configured, the byte-identical deterministic fallback on
+  failure/BYO-unusable, and the fallback correctly combining mute + redirect + contact together). 2132 tests
+  pass (up from 2124/2117), `tsc --noEmit` clean, production build clean.
+- **Run migration `0122`** before the Promotion-channel-link fallback field can be saved for any community.
+- **Not verified live this pass** — no live Telegram/AI-provider access in this sandbox; verified via the
+  production-data investigation above (which directly reproduced the root cause) plus the full fetch-spy test
+  suite for the new generation call, code review, and production build. Recommend re-checking the live
+  community's behavior after this deploys to confirm the widened detection catches new incoming spam and the
+  new warning reads correctly in Patricia's persona.
+
 ### 2026-09-02 — Fix: a Watcher deployed to a real Telegram channel did nothing at all (v1.49.18)
 - **Live report investigated end-to-end against production data** ("Byte Humor"/"Spheric" account): confirmed
   that account's one connected Community (a supergroup) is working correctly — moderation and Natural Chatter
