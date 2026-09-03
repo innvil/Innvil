@@ -109,6 +109,47 @@ test("REQUIRED: a kicked competing-project-promotion offender renders 'User Remo
   assert.match(text, /Cleanup: 5 messages purged\./);
 });
 
+/* -------------------------------------------- SEARCH_SPAM (off_topic_spam) ---- */
+// Live feedback (2026-09-03): an off-topic "search X" spam instruction gets
+// its own distinct report category too -- never generic "Spam" (which
+// already means ordinary unsolicited-promotion spam) and never confused
+// with COMPETING_PROJECT_PROMOTION.
+
+test("REQUIRED: first off-topic-spam violation renders its own distinct 'Off-Topic Spam Warning' heading, never generic Spam or Competing Project Promotion", () => {
+  const event = baseEvent({
+    violationCategory: "off_topic_spam",
+    warningNumber: 1, warningLimit: 4,
+    actionsTaken: ["warning"],
+    reasonText: "First confirmed off-topic spam instruction, unrelated to this project.",
+  });
+  assert.equal(moderationReportHeading(event), "Off-Topic Spam Warning");
+  assert.notEqual(moderationReportHeading(event), "Spam Warning");
+  assert.notEqual(moderationReportHeading(event), "Competing Project Promotion Warning");
+});
+
+test("REQUIRED: a repeated off-topic-spam violation renders 'Repeated Off-Topic Spam'", () => {
+  const event = baseEvent({
+    violationCategory: "off_topic_spam",
+    warningNumber: 2, warningLimit: 4,
+    actionsTaken: ["warning"],
+    reasonText: "Repeated off-topic spam instruction after a prior warning.",
+  });
+  assert.equal(moderationReportHeading(event), "Repeated Off-Topic Spam");
+});
+
+test("REQUIRED: a kicked off-topic-spam offender renders 'User Removed — Repeated Off-Topic Spam', with the real purge count", () => {
+  const event = baseEvent({
+    violationCategory: "off_topic_spam",
+    actionsTaken: ["kick", "message_purge"],
+    purgedCount: 3,
+    reasonText: "Repeated off-topic spam after prior warnings and temporary restrictions.",
+  });
+  assert.equal(moderationReportHeading(event), "User Removed — Repeated Off-Topic Spam");
+  const text = formatModerationReportText(event);
+  assert.match(text, /User kicked/);
+  assert.match(text, /Cleanup: 3 messages purged\./);
+});
+
 test("REQUIRED: first scam-link violation -> 'Scam Link Removed', mute duration stated, never includes a URL", () => {
   const event = baseEvent({
     violationCategory: "scam_link", warningNumber: 1, warningLimit: 1, muteMinutes: 30,

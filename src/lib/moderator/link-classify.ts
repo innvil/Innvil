@@ -26,6 +26,7 @@ const CATEGORIES: LinkCategory[] = [
   "UNSOLICITED_PROMOTION",
   "COMPETING_PROJECT_PROMOTION",
   "LINK_SPAM_OR_FLOOD",
+  "SEARCH_SPAM",
   "PHISHING_OR_SCAM",
   "EXPLICIT_CONTENT",
   "UNKNOWN_OR_AMBIGUOUS",
@@ -45,6 +46,7 @@ Context matters more than the link itself — the SAME url can be legitimate out
 - "LETS GO, SHILL RAID IN @othercrypto_chat and spread the word" -> SAFE_RELEVANT_LINK, NOT UNSOLICITED_PROMOTION or COMPETING_PROJECT_PROMOTION. This is a "shill raid" -- rallying THIS community's own members to go INTO another Telegram group/venue and promote/mention THIS community's OWN project there (a completely standard, allowed crypto-community growth tactic). The mentioned @handle/link here is only the VENUE the raid targets -- it is never itself the thing being promoted or advertised, and mentioning it is not advertising that other group to this community. "Spread the word" with nothing else named means spread the word about THIS project, the one this community is already about.
 - "Let's rally and go shill $OTHERCOIN over at @somegroup" / "everyone go support @unrelatedproject, they're a great token" -> COMPETING_PROJECT_PROMOTION, a SEPARATE category from UNSOLICITED_PROMOTION (see its own definition below). Here the thing being promoted is a DIFFERENT, specifically named project/token that is NOT this community's own subject -- this community's own members are effectively being organized to advertise someone else's unrelated (often competing) project, regardless of whether it's framed as a "raid."
 The decisive question for a raid/rally message is always WHAT is being promoted, never WHERE: rallying members to promote THIS community's own project (wherever the venue is, even an external group) is allowed (SAFE_RELEVANT_LINK); rallying members to promote a different, specifically named project is COMPETING_PROJECT_PROMOTION.
+- "Search miniairdrops" (posted by one member alone, or by several different members within minutes of each other) -> SEARCH_SPAM. This has zero connection to this project -- it's an off-topic engagement-farming instruction, not a promotion or a link, and should be flagged as SEARCH_SPAM even from a single sender.
 
 A bare @username mention by itself, with no accompanying suspicious content (no urgent call to action, no promise of rewards/free money, no request for credentials/private keys/funds, no impersonation of a known project or official account), is NOT sufficient on its own to classify as PHISHING_OR_SCAM or UNSOLICITED_PROMOTION — someone addressing another person or bot by @username is ordinary conversation, not a link/promotion signal. Only classify a message as suspicious when the actual evidence (a scam-shaped URL, an urgent/impersonation pattern, a promotional call-to-action, etc.) is present.
 
@@ -66,6 +68,7 @@ IMPORTANT — a common spam evasion tactic dresses up an unsolicited marketing-s
 - comes from someone with no established relationship to this community and no context showing they were asked.
 A GENUINE COLLABORATION_REQUEST or PARTNERSHIP_REQUEST instead proposes a specific joint action ("we'd like to co-host an AMA with you next week", "our team wants to explore an integration — who should I talk to?") or is itself the SOLICITED response to an admin's own request (see the SOLICITED-content rule above). When genuinely unsure which of the two this is, weigh the presence of a generic "DM me to grow/boost/promote" call-to-action heavily toward UNSOLICITED_PROMOTION.
 - LINK_SPAM_OR_FLOOD: looks like an automated or repetitive advertising burst.
+- SEARCH_SPAM: a short instruction telling members to search, google, or look something up that has NO connection whatsoever to this project/community (e.g. "Search miniairdrops", "Google [some unrelated app name]"). This is a distinct off-topic engagement-farming/search-manipulation pattern -- flag it as SEARCH_SPAM even when it's a single, isolated message from one sender, with no link/handle/promotion wording of any kind. It's especially common (but NOT required) for several different, unrelated accounts to post the exact same instruction within minutes of each other -- treat every occurrence as SEARCH_SPAM regardless of whether you can see other similar messages nearby. Never UNSOLICITED_PROMOTION (it doesn't advertise a project/service or ask for contact) and never LINK_SPAM_OR_FLOOD (no link is involved).
 - PHISHING_OR_SCAM: a link designed to steal credentials/funds (fake exchange, fake support, wallet drainer, impersonation of a known project's official domain).
 - EXPLICIT_CONTENT: pornographic/explicit content.
 - UNKNOWN_OR_AMBIGUOUS: genuinely unclear — an unfamiliar resource with no strong signal either way.
@@ -239,6 +242,19 @@ export interface SolicitationWarningFacts {
    *  Promotion destination or contact exists for THIS community's own
    *  promotion. Defaults to false/undefined for every existing caller. */
   isCompetingProjectPromotion?: boolean;
+  /** For a SEARCH_SPAM violation only (2026-09-03 live feedback: an
+   *  off-topic "search X"/"google X" instruction, flagged as spam, never as
+   *  a promotion). "isolated" = a standalone occurrence from one sender --
+   *  warned and addressed at them like every other violation.
+   *  "coordinated" = the message immediately preceding this one in the room
+   *  (from ANY sender) was ALSO SEARCH_SPAM-shaped -- the classic multi-
+   *  account raid signature -- so the warning reads as a general room-wide
+   *  reminder instead, and must NOT name or single out this one sender.
+   *  undefined for every other category. When set, the caller
+   *  (community-runtime.ts) also passes promotionTopicName/contactHandle as
+   *  null regardless of what's configured -- there's nothing to redirect a
+   *  spam instruction to, this isn't a project pitch. */
+  searchSpamPattern?: "isolated" | "coordinated";
 }
 
 /** Persona-voiced solicitation/promotion warning — supersedes the flat
@@ -274,12 +290,19 @@ export async function generatePersonaSolicitationWarning(
     if (facts.isCompetingProjectPromotion) {
       return `Promoting other projects or tokens is not allowed here, in any form.${mutePart} Repeated offenses escalate to a kick or ban.`;
     }
+    if (facts.searchSpamPattern) {
+      return facts.searchSpamPattern === "coordinated"
+        ? `Please stop spamming that here.${mutePart} Repeated offenses escalate to a kick or ban.`
+        : `No spamming that here, please.${mutePart} Repeated offenses escalate to a kick or ban.`;
+    }
     const where = facts.promotionTopicName ? ` Post that in ${facts.promotionTopicName} instead.` : facts.contactHandle ? ` For that, contact ${facts.contactHandle}.` : "";
     return `No promos in ${facts.currentTopicName}, please.${where}${mutePart} Repeated offenses escalate to a kick or ban.`;
   };
 
   const requiredFacts: string[] = [
-    `State plainly that promotions aren't allowed in "${facts.currentTopicName}" (this exact topic name) -- keep this part brief, don't over-explain it.`,
+    facts.searchSpamPattern
+      ? `State plainly that this kind of off-topic spam isn't allowed in "${facts.currentTopicName}" (this exact topic name) -- keep this part brief, don't over-explain it.`
+      : `State plainly that promotions aren't allowed in "${facts.currentTopicName}" (this exact topic name) -- keep this part brief, don't over-explain it.`,
   ];
   if (facts.muteMinutes) requiredFacts.push(`State the real ${facts.muteMinutes}-minute mute in a short clause -- do not invent a different number.`);
   else requiredFacts.push(`No mute applies to this specific offense -- do not claim one happened.`);
@@ -288,6 +311,14 @@ export async function generatePersonaSolicitationWarning(
     // topic, or contact, even if one is genuinely configured for THIS
     // community's own promotion elsewhere.
     requiredFacts.push(`This was a rally to promote a DIFFERENT project/token, not this community's own -- state plainly that promoting other projects/tokens is never allowed here, in any form. Do NOT suggest any alternative place to post it, do NOT mention a Promotion channel/topic/contact of any kind.`);
+  } else if (facts.searchSpamPattern === "coordinated") {
+    // Live feedback (2026-09-03): "if 2 messages followed each other, the
+    // warning should be only general please stop spamming" -- several
+    // different accounts posted the same off-topic instruction back to
+    // back, so this reads as a room-wide reminder, never naming one person.
+    requiredFacts.push(`This is part of a coordinated pattern -- more than one account has posted this same kind of off-topic "search/look something up" spam back to back. Write this as a GENERAL reminder to the room -- do NOT name, mention, or single out this one specific person, just say something like "please stop spamming that here" addressed to whoever's doing it.`);
+  } else if (facts.searchSpamPattern === "isolated") {
+    requiredFacts.push(`State plainly that this off-topic "search/look something up" instruction is spam and has nothing to do with this project -- there is no Promotion destination or contact to mention here, this isn't a project pitch.`);
   } else if (facts.promotionTopicName) {
     requiredFacts.push(`Mention the real Promotion destination BY NAME ONLY, exactly as "${facts.promotionTopicName}" -- never a link/URL of any kind, and never any other destination or contact even if one is also configured.`);
   } else if (facts.contactHandle) {
@@ -297,9 +328,15 @@ export async function generatePersonaSolicitationWarning(
   }
   requiredFacts.push(`Briefly note repeated offenses escalate (to a mute, then a kick/ban) -- a short closing clause, not a full sentence spelling out every step.`);
 
+  const violationDescription = facts.isCompetingProjectPromotion
+    ? "rallying members to promote a different, unrelated project/token (not this community's own)"
+    : facts.searchSpamPattern
+      ? "posting off-topic spam (an instruction to search/look something up that has nothing to do with this project)"
+      : "posting unsolicited promotion (advertising a project/service with no relevance here, or soliciting private contact for a growth/marketing service)";
+
   const system = [
-    `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${facts.isCompetingProjectPromotion ? "rallying members to promote a different, unrelated project/token (not this community's own)" : "posting unsolicited promotion (advertising a project/service with no relevance here, or soliciting private contact for a growth/marketing service)"}.`,
-    `Write ONE short, natural, casual warning to the person, entirely in your own persona voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
+    `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${violationDescription}.`,
+    `Write ONE short, natural, casual warning${facts.searchSpamPattern === "coordinated" ? " to the room" : " to the person"}, entirely in your own persona voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
     `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY and BRIEFLY, the way a real person would actually type a quick warning, not as a checklist:`,
     ...requiredFacts.map((f) => `- ${f}`),
     `Mention AT MOST ONE destination/contact (whichever fact above applies) -- never list a Promotion topic AND a contact handle together, that reads like a form letter, not a person.`,

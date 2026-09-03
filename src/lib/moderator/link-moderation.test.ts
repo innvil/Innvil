@@ -5,6 +5,7 @@ import {
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SOLICITATION_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
+  looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   promotionContactSentence,
   type LinkWarningState,
 } from "./link-moderation";
@@ -376,6 +377,88 @@ test("REQUIRED: escalates to DELETE_KICK + purge after the same SOLICITATION_WAR
 test("a flood-repeat burst of this category still forces straight past the warning ladder into DELETE_KICK", () => {
   const result = decide({ category: "COMPETING_PROJECT_PROMOTION", floodRepeat: true });
   assert.deepEqual(result, { kind: "DELETE_KICK", reason: "repeated_competing_project_promotion", purge: true });
+});
+
+/* -------------------------------------------------------------- SEARCH_SPAM ---- */
+// Live feedback (2026-09-03): "Search miniairdrops" posted by two different
+// accounts, minutes apart -- an off-topic instruction with no link/handle/
+// promotion wording at all. Flagged as spam even from a single sender
+// (never exempted the way ordinary self-promotion sometimes is), same
+// never-exempt treatment as COMPETING_PROJECT_PROMOTION above.
+
+test("REQUIRED: looksLikeSearchInstructionSpam recognizes the exact live repro", () => {
+  assert.equal(looksLikeSearchInstructionSpam("Search miniairdrops"), true);
+});
+
+test("looksLikeSearchInstructionSpam also recognizes google/look-up phrasing, case-insensitively, with an optional 'please'", () => {
+  assert.equal(looksLikeSearchInstructionSpam("google unrelatedapp now"), true);
+  assert.equal(looksLikeSearchInstructionSpam("Look up freecoins123"), true);
+  assert.equal(looksLikeSearchInstructionSpam("please search giveawaybot"), true);
+});
+
+test("looksLikeSearchInstructionSpam requires the instruction at the START of the message -- an unrelated sentence merely containing the word doesn't match", () => {
+  assert.equal(looksLikeSearchInstructionSpam("I searched for the answer already"), false);
+  assert.equal(looksLikeSearchInstructionSpam("you can search the pinned FAQ for that"), false);
+});
+
+test("REQUIRED: first SEARCH_SPAM offense -> DELETE_WARN, warning #1, no mute (same leeway shape as ordinary solicitation)", () => {
+  assert.deepEqual(decide({ category: "SEARCH_SPAM" }), { kind: "DELETE_WARN", warningNumber: 1, reason: "search_spam", muteMinutes: undefined });
+});
+
+test("REQUIRED: never exempted by the community's Allow Solicitation toggle", () => {
+  const result = decide({ category: "SEARCH_SPAM", solicitationAllowed: true });
+  assert.notEqual(result.kind, "ALLOW");
+  assert.equal(result.kind, "DELETE_WARN");
+});
+
+test("REQUIRED: never exempted by the admin-solicited backstop", () => {
+  const result = decide({ category: "SEARCH_SPAM", adminSolicitedExemption: true });
+  assert.notEqual(result.kind, "ALLOW");
+});
+
+test("REQUIRED: never exempted for an admin/trusted role", () => {
+  const nonAdmin = decide({ category: "SEARCH_SPAM", isAdminOrTrusted: false });
+  const admin = decide({ category: "SEARCH_SPAM", isAdminOrTrusted: true });
+  assert.deepEqual(admin, nonAdmin);
+  assert.notEqual(admin.kind, "ALLOW");
+});
+
+test("REQUIRED: escalates to DELETE_KICK + purge after the same SOLICITATION_WARNING_LIMIT, with its OWN distinct reason", () => {
+  const result = decide({ category: "SEARCH_SPAM", priorWarningCount: SOLICITATION_WARNING_LIMIT });
+  assert.deepEqual(result, { kind: "DELETE_KICK", reason: "repeated_search_spam", purge: true });
+});
+
+test("a flood-repeat burst of this category still forces straight past the warning ladder into DELETE_KICK", () => {
+  const result = decide({ category: "SEARCH_SPAM", floodRepeat: true });
+  assert.deepEqual(result, { kind: "DELETE_KICK", reason: "repeated_search_spam", purge: true });
+});
+
+/* ------------------------------------------------------- isBackToBackSpamPattern ---- */
+// Only ever changes the WARNING wording (generic room reminder vs. naming
+// the offender) -- never whether SEARCH_SPAM is flagged/deleted/counted.
+
+test("REQUIRED (exact live repro): the same instruction posted ~8 minutes earlier by a DIFFERENT sender reads as a coordinated back-to-back pattern", () => {
+  const now = new Date("2026-09-03T18:50:00.000Z");
+  const preceding = { text: "Search miniairdrops", createdAt: "2026-09-03T18:42:00.000Z" };
+  assert.equal(isBackToBackSpamPattern(preceding, now), true);
+});
+
+test("an isolated occurrence with nothing similar immediately before it is NOT a coordinated pattern", () => {
+  const now = new Date("2026-09-03T18:50:00.000Z");
+  assert.equal(isBackToBackSpamPattern(null, now), false);
+  assert.equal(isBackToBackSpamPattern({ text: "gm everyone, how's it going?", createdAt: "2026-09-03T18:49:00.000Z" }, now), false);
+});
+
+test("outside the flood window, the same instruction no longer counts as coordinated -- a fresh evaluation, not a permanent flag", () => {
+  const now = new Date("2026-09-03T19:30:00.000Z"); // 48 minutes after the preceding message
+  const preceding = { text: "Search miniairdrops", createdAt: "2026-09-03T18:42:00.000Z" };
+  assert.equal(isBackToBackSpamPattern(preceding, now), false);
+});
+
+test("a preceding message with no createdAt (e.g. a test fixture) never crashes and is never treated as coordinated", () => {
+  const now = new Date();
+  assert.equal(isBackToBackSpamPattern({ text: "Search miniairdrops", createdAt: null }, now), false);
+  assert.equal(isBackToBackSpamPattern({ text: "Search miniairdrops" }, now), false);
 });
 
 test("REQUIRED (§54.2): a genuine AMA proposal -> ALLOW", () => {

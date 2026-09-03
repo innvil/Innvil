@@ -127,6 +127,56 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-03 — New SEARCH_SPAM category: off-topic "search X" instructions are flagged as spam, not promotion, with coordinated-raid-aware warning wording (v1.49.28)
+- **Live feedback, screenshot of two different accounts ("Jesika"/"Marco") posting "Search miniairdrops" 8
+  minutes apart**: "this should be flagged as spam, not as promo but spam even if sent by different users
+  because it's advising to search for something unrelated to the project. it should be responded as, please
+  stop spamming here or something similar and still being deleted. if 2 messages followed each other, the
+  warning should be only general please stop spamming, if only by 1, it should call them out."
+- **New `LinkCategory`: `SEARCH_SPAM`** (`link-moderation.ts`) — a short imperative instruction telling members
+  to search/google/look up/download something with NO connection to this project, flagged even from a single
+  sender with no link/handle/promotion wording at all. Distinct from `UNSOLICITED_PROMOTION` (doesn't advertise
+  anything or solicit contact) and from `LINK_SPAM_OR_FLOOD` (no link involved). Never exempted by the
+  community's Allow-Solicitation toggle, the admin-solicited backstop, or an admin/trusted role — same
+  never-exempt treatment as `COMPETING_PROJECT_PROMOTION`, checked and returned unconditionally before those
+  exemption branches, reusing the same shared warning-count ladder with its own distinct reason codes
+  (`search_spam` / `repeated_search_spam` for `DELETE_WARN`, `repeated_search_spam` for `DELETE_KICK`).
+- **New link-less pre-filter `looksLikeSearchInstructionSpam()`** — the message has no link/@handle/contact-ask
+  for `extractLinks`/`looksLikeUnsolicitedPitch` to catch at all, so a new gate (`^\s*(please\s+)?(search|
+  google|look\s?up)\b`) was needed just to get it in front of the real AI classifier. Deliberately broad (a
+  false-positive match here only costs one extra `classifyLinkIntent` call that resolves ALLOW/UNKNOWN with
+  full conversation context, never a fabricated deletion) — folded into `runLinkModeration`'s existing
+  link-less gate (renamed `isTextSolicitationCandidate` → `isTextModerationCandidate` for accuracy). Classifier
+  prompt (`link-classify.ts`) gained the category definition + a worked example matching the exact live message.
+- **New "coordinated vs. isolated" warning-wording signal, per the explicit requirement above.** New
+  `isBackToBackSpamPattern()` (`link-moderation.ts`) — true when the message immediately preceding this one in
+  the room (from ANY sender, within the existing 30-minute `FLOOD_WINDOW_MS`) also looks like the same
+  search-instruction pattern — the classic multi-account raid signature. **No new DB state was needed**: the
+  already-loaded `linkModerationContext` (8 most recent `community_messages` rows, already fetched for
+  classification context) is filtered by the current message's own platform id and the last remaining entry is
+  checked — a pure, cheap, in-memory computation. This only ever changes the WARNING'S wording — the message is
+  still deleted and the sender's own per-user warning ladder still advances identically either way, whether the
+  occurrence is isolated or part of a coordinated burst.
+- **`generatePersonaSolicitationWarning` gained `searchSpamPattern?: "isolated" | "coordinated"`**
+  (`link-classify.ts`) — "isolated" states plainly this is off-topic spam and explicitly addresses the sender
+  (unchanged mention-prefix behavior); "coordinated" instructs the model to write a GENERAL room-wide reminder
+  ("please stop spamming that here") and explicitly bans naming/mentioning the specific person. Neither case
+  ever mentions a Promotion destination or contact (there's nothing to redirect an off-topic spam instruction
+  to — same treatment as `isCompetingProjectPromotion`). `community-runtime.ts` omits the `${mention}, ` prefix
+  entirely only for the coordinated case; the internal Watcher Ops audit trail (`sendModerationReport`'s
+  `userMention`) still always records the real specific offender regardless of the public wording.
+- **New Watcher Ops report category `off_topic_spam`** (`watcher-ops-report.ts`) — "Off-Topic Spam Warning" /
+  "Repeated Off-Topic Spam" / "User Removed — Repeated Off-Topic Spam", never lumped into generic "Spam" (which
+  already means ordinary unsolicited-promotion spam) or confused with "Competing Project Promotion".
+- New tests: `link-moderation.test.ts` (+13 — `looksLikeSearchInstructionSpam`'s exact live repro + phrasing
+  variants + false-positive guards, the full `decideLinkEnforcement` never-exempt/escalation suite mirroring
+  `COMPETING_PROJECT_PROMOTION`'s own test shape, `isBackToBackSpamPattern`'s exact live-repro timing, isolation,
+  window-boundary, and null-safety cases), `link-classify.test.ts` (+4 — isolated vs. coordinated prompt wording
+  and deterministic-fallback text, both proven to never mention a Promotion destination/contact),
+  `watcher-ops-report.test.ts` (+3 — the three new heading states, never confused with Spam or Competing Project
+  Promotion). 2190 tests pass (up from 2170), `tsc --noEmit` clean, production build clean.
+- **Deployed to production.**
+
 ### 2026-09-03 — Solicitation warnings are now genuinely short/persona-voiced, never speak a raw link, and never quote a generic placeholder as a real name + owner can now type a custom topic display name (v1.49.27)
 - **Live feedback, three combined problems in one reported message**: "Like I said, this is too bot like. the
   warnings should be short and should be persona based, not like this. Also, it does not understand the [this

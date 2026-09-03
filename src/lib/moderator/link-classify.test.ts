@@ -453,6 +453,64 @@ test("REQUIRED: a competing-project-promotion warning never redirects to the Pro
   });
 });
 
+// SEARCH_SPAM (2026-09-03 live feedback: "Search miniairdrops" posted by
+// different accounts minutes apart) -- flagged as spam, never as a
+// promotion; never redirects to a Promotion destination/contact even when
+// one is configured; "coordinated" reads as a general room reminder with no
+// specific person named, "isolated" still explicitly addresses the sender.
+
+test("REQUIRED: an ISOLATED search-spam warning states this is off-topic spam, never mentions a Promotion destination or contact even when both are configured", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("that's spam, not allowed here."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, {
+        ...noMuteFacts,
+        promotionTopicName: "Promotion", contactHandle: "@RhyleKhy",
+        searchSpamPattern: "isolated",
+      });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /off-topic spam/i);
+      assert.match(system, /no Promotion destination or contact to mention/i);
+      assert.doesNotMatch(system, /"Promotion"/);
+      assert.doesNotMatch(system, /@RhyleKhy/);
+      // An isolated occurrence still writes "to the person", not "to the room".
+      assert.match(system, /warning to the person/i);
+    });
+  });
+});
+
+test("REQUIRED: a COORDINATED search-spam warning reads as a general room reminder and explicitly bans naming the specific sender", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("please stop spamming that here."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, {
+        ...noMuteFacts,
+        searchSpamPattern: "coordinated",
+      });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /coordinated pattern/i);
+      assert.match(system, /do NOT name, mention, or single out this one specific person/i);
+      assert.match(system, /warning to the room/i);
+    });
+  });
+});
+
+test("deterministic fallback (isolated): states the off-topic-spam framing, never 'no promos'/a Promotion redirect", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const text = await generatePersonaSolicitationWarning("Kwan", persona, {
+      ...noMuteFacts, muteMinutes: 10, searchSpamPattern: "isolated",
+    });
+    assert.equal(text, "No spamming that here, please. This resulted in a 10-minute mute. Repeated offenses escalate to a kick or ban.");
+  });
+});
+
+test("deterministic fallback (coordinated): a general room reminder, never singles out a name/mention", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const text = await generatePersonaSolicitationWarning("Kwan", persona, {
+      ...noMuteFacts, searchSpamPattern: "coordinated",
+    });
+    assert.equal(text, "Please stop spamming that here. Repeated offenses escalate to a kick or ban.");
+  });
+});
+
 test("REQUIRED: falls back to a short deterministic template on any generation failure -- never a broken/missing warning, never speaks a link", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);

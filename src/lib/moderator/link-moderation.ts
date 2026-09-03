@@ -37,6 +37,23 @@ export type LinkCategory =
    *  decideLinkEnforcement's own dedicated branch. */
   | "COMPETING_PROJECT_PROMOTION"
   | "LINK_SPAM_OR_FLOOD"
+  /** An instruction telling members to search/look up/google/download
+   *  something with NO connection to this project or community at all
+   *  (e.g. "Search miniairdrops") -- live-caught pattern: several
+   *  DIFFERENT accounts posting the identical/near-identical off-topic
+   *  instruction, often minutes apart, the classic multi-account
+   *  engagement-farming/search-manipulation raid signature. Distinct from
+   *  UNSOLICITED_PROMOTION (this doesn't advertise a project/service or
+   *  solicit contact) and from LINK_SPAM_OR_FLOOD (no link is involved at
+   *  all) -- it's spam by its own content, flagged the SAME way whether
+   *  it's a lone occurrence from one sender or part of a coordinated
+   *  back-to-back pattern across different senders (see
+   *  isBackToBackSpamPattern below, which only changes the WARNING wording,
+   *  never whether this is flagged at all). Never exempted by the
+   *  community's Allow-Solicitation toggle or an admin/trusted role -- it's
+   *  an abuse signal, not ordinary self-promotion, same category of
+   *  never-exempt as COMPETING_PROJECT_PROMOTION above. */
+  | "SEARCH_SPAM"
   | "PHISHING_OR_SCAM"
   | "EXPLICIT_CONTENT"
   | "UNKNOWN_OR_AMBIGUOUS";
@@ -169,6 +186,49 @@ export function looksLikeUnsolicitedPitch(text: string): boolean {
   // alone trigger a classification call; a real promotional pitch reliably
   // combines a contact/service call-to-action with marketing language.
   return [contactAsk, serviceOffer, growthLanguage].filter(Boolean).length >= 2;
+}
+
+/* --------------------------------------------------- link-less search-spam gate ---- */
+// Live-caught pattern (2026-09-03): "Search miniairdrops" posted by two
+// different accounts within minutes of each other -- no link, no @handle, no
+// contact ask, nothing looksLikeUnsolicitedPitch's signals would ever catch.
+// This is its own gate/category (SEARCH_SPAM above), never folded into
+// looksLikeUnsolicitedPitch, since it isn't a promotion/service pitch at
+// all -- it's a bare off-topic instruction.
+
+/** A short imperative "search/google/look up <something>" instruction at
+ *  the START of the message. Deliberately a BROAD gate, not a narrow one --
+ *  unlike an enforcement decision, a false-positive match here only costs
+ *  one extra classifyLinkIntent() call that resolves to ALLOW/UNKNOWN
+ *  (the real project-relevance judgment happens there, with full
+ *  conversation context); it never causes a fabricated deletion on its own.
+ *  A genuinely on-topic "search the pinned FAQ" would still just resolve
+ *  ALLOW at the classifier. Known, disclosed limitation: only the literal
+ *  search/google/look-up wording is gated here -- a coordinated instruction
+ *  phrased as "download X"/"vote for X" isn't caught by this specific
+ *  pre-filter (same "a missed phrasing here simply isn't flagged" trade-off
+ *  already accepted by looksLikeUnsolicitedPitch above). */
+const SEARCH_INSTRUCTION_RE = /^\s*(please\s+)?(search|google|look\s?up)\b/i;
+
+export function looksLikeSearchInstructionSpam(text: string): boolean {
+  return SEARCH_INSTRUCTION_RE.test(text);
+}
+
+/** True when the message immediately preceding this one in the room
+ *  (chronologically right before it, from ANY sender -- the caller already
+ *  excludes the current message itself) also looks like the same off-topic
+ *  search/instruction spam pattern, within the same FLOOD_WINDOW_MS used
+ *  for rapid-repost detection elsewhere in this file. This is the
+ *  multi-account raid signature: different accounts posting the identical
+ *  or near-identical off-topic instruction back to back. Only ever changes
+ *  the WARNING's wording (generic room-wide reminder vs. naming the
+ *  specific offender) -- it never affects whether SEARCH_SPAM is flagged,
+ *  deleted, or counted toward this sender's own warning ladder, all of
+ *  which happen identically for an isolated OR a coordinated occurrence. */
+export function isBackToBackSpamPattern(precedingMessage: { text: string; createdAt?: string | null } | null | undefined, now: Date): boolean {
+  if (!precedingMessage || !precedingMessage.createdAt) return false;
+  if (now.getTime() - new Date(precedingMessage.createdAt).getTime() >= FLOOD_WINDOW_MS) return false;
+  return looksLikeSearchInstructionSpam(precedingMessage.text);
 }
 
 /* ------------------------------------------- admin-solicited backstop (gap 3) ---- */
@@ -437,7 +497,7 @@ export type ModerationEnforcement =
    *  executed alongside the delete+warn, never inferred by the caller from
    *  warningNumber alone. Undefined means no mute (e.g. media's borderline
    *  path, which was never specified to include one). */
-  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "competing_project_promotion" | "repeated_competing_project_promotion" | "explicit_content_borderline" | "scam_or_phishing"; muteMinutes?: number }
+  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "competing_project_promotion" | "repeated_competing_project_promotion" | "search_spam" | "repeated_search_spam" | "explicit_content_borderline" | "scam_or_phishing"; muteMinutes?: number }
   /** Removes (kicks) the user — NOT a permanent ban (structurally distinct
    *  from DELETE_BAN, so a caller can never confuse "temporary removal, can
    *  rejoin" with "permanent"). `purge: true` means the caller should also
@@ -446,7 +506,7 @@ export type ModerationEnforcement =
    *  categories that reach this kind today (repeated spam, repeated scam,
    *  explicit content), since a kick without cleanup leaves the offending
    *  history sitting in the room. */
-  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
+  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_search_spam" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
   /** Reserved for a possible future manual admin action — the automatic
    *  policy below (as of 2026-08-27) no longer PRODUCES this kind for any
    *  category; every automatic escalation that used to end in a permanent
@@ -596,6 +656,28 @@ export function decideLinkEnforcement(input: {
     };
   }
 
+  // SEARCH_SPAM (2026-09-03 live feedback: an off-topic "search X" spam
+  // instruction, flagged even from a single sender, with NO link/promotion
+  // involved) -- same never-exempt treatment as COMPETING_PROJECT_PROMOTION
+  // above and for the same reason: this isn't ordinary self-promotion a
+  // community-wide Allow-Solicitation toggle or a trusted role should ever
+  // excuse, it's an abuse/spam signal. Reuses the SAME warning-count ladder
+  // (deliberate simplification, matching COMPETING_PROJECT_PROMOTION's own
+  // precedent) with its own distinct reason codes so the caller can render
+  // a genuinely different ("stop spamming", never a Promotion redirect)
+  // warning and label it correctly in the Watcher Ops audit trail.
+  if (input.category === "SEARCH_SPAM") {
+    const isFlood = input.floodRepeat;
+    const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SOLICITATION_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
+    if (nextCount > SOLICITATION_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_search_spam", purge: true };
+    return {
+      kind: "DELETE_WARN",
+      warningNumber: nextCount,
+      reason: nextCount === 1 ? "search_spam" : "repeated_search_spam",
+      muteMinutes: SOLICITATION_MUTE_MINUTES_BY_WARNING[nextCount],
+    };
+  }
+
   // Community-level "Allow Solicitation" override — exempted from ORDINARY
   // ad enforcement ONLY (never LINK_SPAM_OR_FLOOD, never a flood-repeat
   // burst, never scam/phishing/explicit content, all handled above/below
@@ -617,11 +699,12 @@ export function decideLinkEnforcement(input: {
   // the severe branches above (never exempt from those). A flood burst is
   // still folded into the unified spam progression below, never exempted
   // for a trusted role either — an obvious automated burst is a safety
-  // signal, not ordinary self-promotion. COMPETING_PROJECT_PROMOTION already
-  // returned unconditionally above and structurally can never reach this
-  // line -- confirmed by TypeScript's own control-flow narrowing (the
-  // category type here is provably already down to UNSOLICITED_PROMOTION |
-  // PHISHING_OR_SCAM | EXPLICIT_CONTENT), not just by convention.
+  // signal, not ordinary self-promotion. COMPETING_PROJECT_PROMOTION and
+  // SEARCH_SPAM both already returned unconditionally above and structurally
+  // can never reach this line -- confirmed by TypeScript's own control-flow
+  // narrowing (the category type here is provably already down to
+  // UNSOLICITED_PROMOTION | LINK_SPAM_OR_FLOOD | PHISHING_OR_SCAM |
+  // EXPLICIT_CONTENT), not just by convention.
   if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
 
   // Solicitation progression: UNSOLICITED_PROMOTION and an obvious
