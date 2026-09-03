@@ -40,7 +40,7 @@ import {
   isWithinPendingReplyWindow, revalidatePendingReply, isAdminMessageHandlingConversation, type DeferredActionKind, type PendingReplyRow,
 } from "./pending-reply";
 import {
-  topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicDisplayName,
+  topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicDisplayName, hasKnownTopicName,
   type CommunityTopicRow, type CommunityTopicPolicy,
 } from "./community-topics";
 import {
@@ -367,11 +367,12 @@ function suggestTopicPolicy(topicName: string | null): CommunityTopicPolicy {
 export async function loadCommunityTopics(admin: SupabaseClient, communityId: string): Promise<CommunityTopicRow[]> {
   const { data } = await admin
     .from("watch_community_topics")
-    .select("message_thread_id, topic_name, policy")
+    .select("message_thread_id, topic_name, custom_name, policy")
     .eq("community_id", communityId);
   return (data ?? []).map((r: Record<string, unknown>) => ({
     messageThreadId: r.message_thread_id as number,
     topicName: (r.topic_name as string | null) ?? null,
+    customName: (r.custom_name as string | null) ?? null,
     policy: r.policy as CommunityTopicPolicy,
   }));
 }
@@ -2472,29 +2473,46 @@ export async function runLinkModeration(
     ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.partnerships ?? null
     : null;
   const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
-  const promotionTopicLink = promotionTopic && event.messageThreadId != null
-    ? buildTopicLink(chatUsername, chatId, promotionTopic.messageThreadId)
-    : null;
   // A Forum-topic-based Promotion redirect only applies to a chat that
   // actually HAS Telegram Forum topics -- an ordinary (non-Forum) group has
   // no such structure (message_thread_id is always null there), so
-  // promotionTopic can never resolve for one. `promotion_channel_name`/
-  // `promotion_channel_link` is the manually-configured fallback for exactly
-  // that case (a separate Telegram destination, e.g. a dedicated promotions
-  // group) -- preferred ONLY when no real Forum-topic-based Promotion topic
-  // exists, never both at once (there's one real redirect destination to
-  // state, not two). Corrected 2026-09-02: the redirect is always spoken BY
-  // NAME (`promotion_channel_name`) -- the raw link, if the owner also set
-  // one, is only ever appended alongside the name as a real clickable
-  // destination, never read out AS the name itself (the earlier version
-  // fell back to printing the bare URL as if it were a name when no
-  // Forum-topic policy existed).
+  // promotionTopic can never resolve for one. `promotion_channel_name` is
+  // the manually-configured fallback for exactly that case (a separate
+  // Telegram destination, e.g. a dedicated promotions group), also used
+  // when a Forum-based Promotion topic exists but has no KNOWN real name
+  // (see hasKnownTopicName below).
+  //
+  // CRITICAL, corrected per live feedback (2026-09-02): "it should not send
+  // the promotion link, it should say promotion" -- the redirect is ALWAYS
+  // spoken BY NAME ONLY. A raw link/URL is never surfaced in the generated
+  // warning text at all anymore, from any source, regardless of whether one
+  // is technically available (buildTopicLink/promotion_channel_link) --
+  // there is deliberately no `redirectLink`/`promotionTopicLink` value fed
+  // into the warning generator anymore.
+  //
+  // Also corrected: `promotionTopic`'s own auto-observed name must never be
+  // trusted as a real, statable name unless hasKnownTopicName confirms one
+  // is actually known. Telegram only ever reports a topic's real name via a
+  // forum_topic_created/edited service message -- when the bot never
+  // observed one (e.g. the topic already existed before the bot joined),
+  // `topicDisplayName` falls back to a generic placeholder ("this topic")
+  // that reads fine as plain PROSE ("no promos in this topic") but is NOT a
+  // real name -- handing that placeholder to the AI generator as if it WERE
+  // a nameable destination produced a nonsensical warning literally quoting
+  // "this topic" as a place ("it's called 'this topic'"). When no real name
+  // is known for the Forum topic, this now falls through to the plain-
+  // community `promotion_channel_name` fallback exactly as if the Forum
+  // topic didn't exist at all (never states a fake name) -- which is why
+  // the owner needs a real way to type in a name for that specific topic;
+  // see CommunityTopicPolicies.tsx's per-topic custom-name field, backed by
+  // watch_community_topics.custom_name (migration 0124).
+  //
   // Forced to null for a competing-project violation regardless of what's
   // actually configured -- see isCompetingProjectEnforcement above and
   // generatePersonaSolicitationWarning's own isCompetingProjectPromotion
   // handling, which never surfaces a redirect for this reason either way.
-  const redirectName = isCompetingProjectEnforcement ? null : promotionTopic ? topicDisplayName(promotionTopic) : community.promotion_channel_name || null;
-  const redirectLink = isCompetingProjectEnforcement ? null : promotionTopic ? promotionTopicLink : (redirectName ? community.promotion_channel_link || null : null);
+  const knownPromotionTopicName = promotionTopic && hasKnownTopicName(promotionTopic) ? topicDisplayName(promotionTopic) : null;
+  const redirectName = isCompetingProjectEnforcement ? null : knownPromotionTopicName || community.promotion_channel_name || null;
   // Solicitation warnings are now PERSONA-VOICED (per explicit live product
   // feedback: "the way it says a warning is too generic... it should be
   // persona based, not a generic bot warning") -- every stated fact (the
@@ -2512,7 +2530,9 @@ export async function runLinkModeration(
           currentTopicName: topicDisplayName(currentTopic),
           muteMinutes: enforcement.muteMinutes,
           promotionTopicName: redirectName,
-          promotionTopicLink: redirectLink,
+          // Never speak a raw link in the warning text -- see the doc
+          // comment on redirectName above.
+          promotionTopicLink: null,
           contactHandle: promotionContact,
           isCompetingProjectPromotion: isCompetingProjectEnforcement,
         },

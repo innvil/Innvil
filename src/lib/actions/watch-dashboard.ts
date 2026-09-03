@@ -14,7 +14,7 @@ import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import {
   createAccountWatcher, listAccountWatchers, createAccountCommunity, deployAccountWatcher,
   setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
-  listAccountCommunityTopics, setAccountCommunityTopicPolicy, type AccountCommunityTopicRow,
+  listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName, type AccountCommunityTopicRow,
   getAccountCommunityPendingReplyDelay, setAccountCommunityPendingReplyDelay,
   getAccountCommunityPromotionChannel, setAccountCommunityPromotionChannel, type PromotionChannelFallback,
   listAccountCommunities, getAccountCapacity, listAccountActivity, countRecentModerationActions,
@@ -205,6 +205,14 @@ export async function setCommunityTopicPolicy(
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return setAccountCommunityTopicPolicy(admin, user.id, communityId, messageThreadId, policy);
+}
+
+export async function setCommunityTopicName(
+  communityId: string, messageThreadId: number, customName: string | null
+): Promise<{ ok: true; data: null } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return setAccountCommunityTopicName(admin, user.id, communityId, messageThreadId, customName);
 }
 
 export async function getCommunityPendingReplyDelay(communityId: string): Promise<number | null> {

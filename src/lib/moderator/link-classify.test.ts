@@ -346,7 +346,13 @@ test("REQUIRED: the prompt requires the exact mute duration verbatim when one ap
   });
 });
 
-test("REQUIRED: the prompt requires the real configured Promotion destination + link when one exists, and bans inventing one when it does not", async () => {
+// Corrected 2026-09-02, per explicit live feedback: "it should not send the
+// promotion link, it should say promotion" -- the redirect destination is
+// now ALWAYS spoken by name only. A raw link/URL must never appear anywhere
+// in the outgoing prompt, even when one is technically available on the
+// facts object (kept there only for a possible future non-message use, per
+// the field's own doc comment -- never read by this function's prompt).
+test("REQUIRED: the prompt requires the real configured Promotion destination BY NAME ONLY (never a link), and bans inventing one when none exists", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("head to Promotion instead."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, {
@@ -354,7 +360,8 @@ test("REQUIRED: the prompt requires the real configured Promotion destination + 
       });
       const system = (calls[0].body as { system?: string }).system ?? "";
       assert.match(system, /"Promotion"/);
-      assert.match(system, /https:\/\/t\.me\/c\/123\/45/);
+      assert.match(system, /never a link\/URL of any kind/i);
+      assert.doesNotMatch(system, /https:\/\/t\.me\/c\/123\/45/);
     });
   });
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
@@ -362,6 +369,24 @@ test("REQUIRED: the prompt requires the real configured Promotion destination + 
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
       const system = (calls[0].body as { system?: string }).system ?? "";
       assert.match(system, /do NOT invent one/i);
+    });
+  });
+});
+
+test("REQUIRED: the prompt never mentions a promotion destination AND a contact together, and asks for genuine brevity", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos here, use Promotion instead."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, {
+        ...noMuteFacts, promotionTopicName: "Promotion", contactHandle: "@RhyleKhy",
+      });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /at most one destination\/contact/i);
+      assert.match(system, /under 30 words/i);
+      // Only the Promotion-topic fact is required when both a topic and a
+      // contact are configured -- the contact fact is never separately
+      // required in this branch (mirrors decideLinkEnforcement's own
+      // Forum-topic-first precedence).
+      assert.match(system, /"Promotion"/);
     });
   });
 });
@@ -428,24 +453,37 @@ test("REQUIRED: a competing-project-promotion warning never redirects to the Pro
   });
 });
 
-test("REQUIRED: falls back to the exact prior deterministic template on any generation failure -- never a broken/missing warning", async () => {
+test("REQUIRED: falls back to a short deterministic template on any generation failure -- never a broken/missing warning, never speaks a link", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
-    assert.equal(
-      text,
-      "Please do not send promotions in General. Repeatedly sending promotional content here may result in a mute, and a 5th offense may result in a kick or ban."
-    );
+    assert.equal(text, "No promos in General, please. Repeated offenses escalate to a kick or ban.");
   });
 });
 
-test("deterministic fallback states the mute duration, the promotion redirect, and the contact -- all together", async () => {
+// Corrected 2026-09-02: the deterministic fallback must obey the SAME
+// "at most one destination" and "never a link" rules as the AI-generated
+// path -- given both a Promotion topic name AND a contact, only the topic
+// name is stated (matching decideLinkEnforcement's own Forum-topic-first
+// precedence), and the raw link is never included even though it's present
+// on the facts object.
+test("deterministic fallback states the mute duration and the Promotion topic NAME only -- never the link, never both a topic and a contact together", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       currentTopicName: "General", muteMinutes: 30, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/1/2", contactHandle: "@RhyleKhy",
     });
-    assert.match(text, /Promotion \(https:\/\/t\.me\/c\/1\/2\)/);
+    assert.match(text, /Post that in Promotion instead/);
     assert.match(text, /30-minute mute/);
-    assert.match(text, /@RhyleKhy/);
+    assert.doesNotMatch(text, /https:\/\/t\.me\/c\/1\/2/);
+    assert.doesNotMatch(text, /@RhyleKhy/);
+  });
+});
+
+test("deterministic fallback falls back to the contact when no Promotion topic name is known", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const text = await generatePersonaSolicitationWarning("Kwan", persona, {
+      currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: "@RhyleKhy",
+    });
+    assert.match(text, /For that, contact @RhyleKhy/);
   });
 });
 

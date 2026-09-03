@@ -837,6 +837,12 @@ export async function setAccountCommunityAcknowledgeAdminMod(admin: SupabaseClie
 export interface AccountCommunityTopicRow {
   messageThreadId: number;
   topicName: string | null;
+  /** Owner-typed override (2026-09-02) -- see watch_community_topics.custom_name's
+   *  own migration comment. Always takes precedence over the auto-observed
+   *  `topicName` when set; lets the owner state a real name for a topic
+   *  Telegram never told this codebase the name of (e.g. created before the
+   *  bot joined, so no forum_topic_created/edited event was ever observed). */
+  customName: string | null;
   policy: "general" | "announcement" | "promotion" | "normal" | "custom";
 }
 
@@ -852,12 +858,13 @@ export async function listAccountCommunityTopics(admin: SupabaseClient, accountI
   if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return [];
   const { data } = await admin
     .from("watch_community_topics")
-    .select("message_thread_id, topic_name, policy")
+    .select("message_thread_id, topic_name, custom_name, policy")
     .eq("community_id", communityId)
     .order("first_seen_at", { ascending: true });
   return (data ?? []).map((r: Record<string, unknown>) => ({
     messageThreadId: r.message_thread_id as number,
     topicName: (r.topic_name as string | null) ?? null,
+    customName: (r.custom_name as string | null) ?? null,
     policy: r.policy as AccountCommunityTopicRow["policy"],
   }));
 }
@@ -867,6 +874,21 @@ export async function setAccountCommunityTopicPolicy(
 ): Promise<CreateResult<null>> {
   if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return { ok: false, error: "Community not found." };
   const { error } = await admin.from("watch_community_topics").update({ policy }).eq("community_id", communityId).eq("message_thread_id", messageThreadId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, data: null };
+}
+
+/** Owner-typed display-name override for a specific Forum topic (2026-09-02,
+ *  live feedback: "if you cannot give it a direct name, put some field where
+ *  one can put promotion channel name"). Blank/whitespace-only clears the
+ *  override (stored as null) -- never persists an empty string, which would
+ *  otherwise pass hasKnownTopicName's truthy check as if it were a real name. */
+export async function setAccountCommunityTopicName(
+  admin: SupabaseClient, accountId: string, communityId: string, messageThreadId: number, customName: string | null
+): Promise<CreateResult<null>> {
+  if (!(await verifyCommunityOwnership(admin, accountId, communityId))) return { ok: false, error: "Community not found." };
+  const trimmed = customName?.trim() || null;
+  const { error } = await admin.from("watch_community_topics").update({ custom_name: trimmed }).eq("community_id", communityId).eq("message_thread_id", messageThreadId);
   if (error) return { ok: false, error: error.message };
   return { ok: true, data: null };
 }

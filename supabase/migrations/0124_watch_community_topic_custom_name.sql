@@ -1,0 +1,13 @@
+-- Owner-editable display name for an auto-discovered Telegram Forum topic
+-- (watch_community_topics, migration 0115). `topic_name` is best-effort and
+-- ONLY ever populated from a real forum_topic_created/edited Telegram
+-- service message -- if the bot never observed one for this topic (common
+-- for a topic created before the bot joined), it stays null forever, and
+-- there is no supported Bot API call to fetch a topic's name after the
+-- fact. When that happens, a solicitation warning had nothing real to call
+-- the configured Promotion topic by and fell back to a generic placeholder
+-- phrase ("this topic") -- which an AI-generated warning then nonsensically
+-- quoted as if it WERE a real name ("it's called 'this topic'"). This lets
+-- the owner simply type the real name themselves; it always takes
+-- precedence over the auto-observed `topic_name` when set.
+alter table watch_community_topics add column if not exists custom_name text;

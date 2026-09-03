@@ -127,6 +127,59 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-03 — Solicitation warnings are now genuinely short/persona-voiced, never speak a raw link, and never quote a generic placeholder as a real name + owner can now type a custom topic display name (v1.49.27)
+- **Live feedback, three combined problems in one reported message**: "Like I said, this is too bot like. the
+  warnings should be short and should be persona based, not like this. Also, it does not understand the [this
+  topic] in moderation, instead of promotion name, it says this topic. Like I said, it should not send the
+  promotion link, it should say promotion. If you cannot give it a direct name, put some field where one can
+  put promotion channel name."
+- **(1) Warnings are shorter and genuinely persona-voiced.** `generatePersonaSolicitationWarning`'s prompt
+  (`link-classify.ts`) previously crammed 4-6 mandatory facts (topic name, mute, redirect name+link, contact
+  handle, full escalation explanation) into one message every time, leaving no room for real personality — two
+  different moderators' warnings read almost identically. The prompt now explicitly caps output at **under 30
+  words** (was 60), instructs the model to work facts in "NATURALLY and BRIEFLY... not as a checklist," bans
+  enumerating facts as comma-joined clauses, and — critically — **mentions AT MOST ONE destination/contact per
+  warning** (never a Promotion topic name AND a contact handle stacked together, which reads like a form
+  letter). The deterministic fallback (used on any generation failure) was rewritten to match this same shape
+  — a single short sentence plus an optional one-clause redirect, never the old multi-clause template.
+- **(2) The generic "this topic" placeholder is never treated as a real, nameable destination anymore.** Root
+  cause: v1.49.22's fix for "don't expose a raw numeric topic ID" replaced it with a friendlier generic phrase
+  ("this topic") — but the CALLER then passed that placeholder string to the AI generator as if it were a real
+  Promotion-topic name, and the model nonsensically quoted it back verbatim ("it's called 'this topic'"). New
+  **`hasKnownTopicName(topic)`** (`community-topics.ts`) is the dedicated signal for "do I actually have a real
+  name" — true only when a real auto-observed `topicName` or an owner-typed `customName` exists, false for the
+  generic placeholder `topicDisplayName` still falls back to for prose purposes. `community-runtime.ts`'s
+  `redirectName` resolution now checks `hasKnownTopicName(promotionTopic)` before ever trusting the Forum
+  topic's own name — when no real name is known, it falls through to the plain-community
+  `promotion_channel_name` fallback exactly as if the Forum topic didn't exist at all, never stating a fake
+  name. (`currentTopicName` — the topic the violation happened IN, not a destination being redirected to —
+  keeps using the plain `topicDisplayName` fallback unchanged; "no promos in this topic" reads correctly as
+  ordinary prose there, since it's never presented as a nameable place.)
+- **(3) The raw Telegram link is never spoken in a warning anymore, period.** `redirectLink`/`promotionTopicLink`
+  are no longer computed/threaded into the warning generator at all — `SolicitationWarningFacts.promotionTopicLink`
+  is always passed `null` from `community-runtime.ts` now (kept on the type only for a possible future non-
+  message display, per its own doc comment). Both the AI prompt's `requiredFacts` and the deterministic
+  fallback state the destination BY NAME ONLY.
+- **(4) New owner-editable custom topic name field**, since there's no supported Telegram Bot API call to
+  retroactively fetch a topic's name once created (a name is only ever learned from a real
+  `forum_topic_created`/`edited` service message — a topic that existed before the bot joined has none and
+  never will on its own). New `watch_community_topics.custom_name` column (migration `0124`) — always takes
+  precedence over the auto-observed `topic_name` when set. `CommunityTopicRow`/`AccountCommunityTopicRow`
+  gained `customName`; new `setAccountCommunityTopicName`/`setCommunityTopicName` (watch-runtime.ts /
+  watch-dashboard.ts) let the owner set/clear it (blank/whitespace clears to `null`, never persists an empty
+  string that would otherwise pass `hasKnownTopicName`'s truthy check). `CommunityTopicPolicies.tsx` gained a
+  per-topic text input + Save button, with an inline amber note on any "promotion"-policy topic that still has
+  no known name at all, explaining that warnings will use the community-wide fallback until one is typed in.
+- New tests: `link-classify.test.ts` (updated — the prompt now bans a raw link and requires "at most one
+  destination," the deterministic fallback's new short shape, the exact never-both-name-and-contact rule),
+  `community-topics.test.ts` (+7 — `hasKnownTopicName`'s full truth table incl. a `customName` override winning
+  over the auto-observed name, a whitespace-only `customName` correctly not counting as known), `watch-runtime.test.ts`
+  (+4 — `listAccountCommunityTopics` surfaces a real `customName`, `setAccountCommunityTopicName`'s scoped
+  update/blank-clears/cross-account-rejection behavior). 2170 tests pass (up from 2158), `tsc --noEmit` clean,
+  production build clean.
+- **Run migration `0124`** before the custom-name field can be saved for any community.
+- **Deployed to production.**
+
 ### 2026-09-02 — COMPETING_PROJECT_PROMOTION: a new, unconditional "global no-go" category that never redirects to the Promotion channel + UI fixes (v1.49.26)
 - **New category, per explicit product decision.** Rallying THIS community's own members to promote a
   DIFFERENT, specifically named project/token ("let's go shill $OTHERCOIN") was, as of v1.49.25, classified as

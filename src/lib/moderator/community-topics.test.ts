@@ -2,12 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   topicAllowsSolicitation, findCommunityTopic, findPromotionTopic, buildTopicLink, topicSolicitationWarningText,
+  hasKnownTopicName, topicDisplayName,
   type CommunityTopicRow,
 } from "./community-topics";
 
-const general: CommunityTopicRow = { messageThreadId: 1, topicName: "General", policy: "general" };
-const announcements: CommunityTopicRow = { messageThreadId: 2, topicName: "Announcements", policy: "announcement" };
-const promotion: CommunityTopicRow = { messageThreadId: 3, topicName: "Promotion", policy: "promotion" };
+const general: CommunityTopicRow = { messageThreadId: 1, topicName: "General", customName: null, policy: "general" };
+const announcements: CommunityTopicRow = { messageThreadId: 2, topicName: "Announcements", customName: null, policy: "announcement" };
+const promotion: CommunityTopicRow = { messageThreadId: 3, topicName: "Promotion", customName: null, policy: "promotion" };
 const topics = [general, announcements, promotion];
 
 test("REQUIRED: only the 'promotion' policy allows solicitation -- general/announcement/normal/custom all restrict", () => {
@@ -109,9 +110,48 @@ test("a non-forum message (currentTopic null) still produces a sensible generic 
 // phrase -- the SAME graceful fallback already used when no topic row
 // exists at all -- rather than ever surfacing the bare numeric id.
 test("never exposes a raw numeric thread id for an UNNAMED topic -- falls back to the same plain 'this topic' phrase used when no topic is known at all", () => {
-  const unnamed: CommunityTopicRow = { messageThreadId: 7, topicName: null, policy: "normal" };
+  const unnamed: CommunityTopicRow = { messageThreadId: 7, topicName: null, customName: null, policy: "normal" };
   const text = topicSolicitationWarningText(unnamed, promotion, null, undefined);
   assert.doesNotMatch(text, /\btopic 7\b/);
   assert.doesNotMatch(text, /\b7\b/);
   assert.match(text, /this topic/);
+});
+
+/* --------------------------------------------------------- hasKnownTopicName ---- */
+// Live feedback (2026-09-02): "it does not understand the [this topic] in
+// moderation, instead of promotion name, it says this topic" -- a caller
+// deciding whether it has a REAL, statable destination name must never infer
+// that from topicDisplayName's return value alone, since that function
+// always returns SOME string, including the generic "this topic"/"General"
+// placeholder labels. hasKnownTopicName is the dedicated signal for that.
+
+test("REQUIRED: hasKnownTopicName is true for a topic with a real auto-observed name", () => {
+  assert.equal(hasKnownTopicName(promotion), true);
+});
+
+test("REQUIRED: hasKnownTopicName is true for a topic with only an owner-typed customName (no auto-observed name)", () => {
+  const owned: CommunityTopicRow = { messageThreadId: 9, topicName: null, customName: "Promo Zone", policy: "promotion" };
+  assert.equal(hasKnownTopicName(owned), true);
+});
+
+test("REQUIRED: a customName override wins over the auto-observed topicName", () => {
+  const overridden: CommunityTopicRow = { messageThreadId: 3, topicName: "Promotion", customName: "Shill Zone", policy: "promotion" };
+  assert.equal(topicDisplayName(overridden), "Shill Zone");
+  assert.equal(hasKnownTopicName(overridden), true);
+});
+
+test("REQUIRED: hasKnownTopicName is false for a topic with neither a real name nor a customName -- even though topicDisplayName still returns a placeholder string", () => {
+  const unnamed: CommunityTopicRow = { messageThreadId: 7, topicName: null, customName: null, policy: "normal" };
+  assert.equal(hasKnownTopicName(unnamed), false);
+  assert.equal(typeof topicDisplayName(unnamed), "string");
+  assert.match(topicDisplayName(unnamed), /this topic/);
+});
+
+test("hasKnownTopicName is false for a null topic (no row at all)", () => {
+  assert.equal(hasKnownTopicName(null), false);
+});
+
+test("a whitespace-only customName does not count as a known name -- must not fall through to a blank/whitespace 'name'", () => {
+  const blank: CommunityTopicRow = { messageThreadId: 8, topicName: null, customName: "   ", policy: "promotion" };
+  assert.equal(hasKnownTopicName(blank), false);
 });

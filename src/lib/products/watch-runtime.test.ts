@@ -17,7 +17,7 @@ import {
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
   resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
-  setAccountCommunityAcknowledgeAdminMod, listAccountCommunityTopics, setAccountCommunityTopicPolicy,
+  setAccountCommunityAcknowledgeAdminMod, listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration, communityCountExceeded } from "@/src/lib/moderator/plan";
@@ -2479,7 +2479,57 @@ test("REQUIRED: listAccountCommunityTopics lists this community's auto-discovere
   });
   const topics = await listAccountCommunityTopics(admin, "acct-1", "c1");
   assert.equal(topics.length, 2);
-  assert.deepEqual(topics.find((t) => t.messageThreadId === 3), { messageThreadId: 3, topicName: "Promotion", policy: "promotion" });
+  assert.deepEqual(topics.find((t) => t.messageThreadId === 3), { messageThreadId: 3, topicName: "Promotion", customName: null, policy: "promotion" });
+});
+
+test("REQUIRED: listAccountCommunityTopics surfaces a real owner-typed customName (2026-09-02, per live feedback about a topic Telegram never named)", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [
+      { id: "t1", community_id: "c1", message_thread_id: 5, topic_name: null, custom_name: "Promo Zone", policy: "promotion" },
+    ],
+  });
+  const topics = await listAccountCommunityTopics(admin, "acct-1", "c1");
+  assert.deepEqual(topics.find((t) => t.messageThreadId === 5), { messageThreadId: 5, topicName: null, customName: "Promo Zone", policy: "promotion" });
+});
+
+test("REQUIRED: setAccountCommunityTopicName saves a real name, only for the targeted topic within the owning account's own community", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [
+      { id: "t1", community_id: "c1", message_thread_id: 1, topic_name: null, policy: "promotion" },
+      { id: "t2", community_id: "c1", message_thread_id: 2, topic_name: "Announcements", policy: "announcement" },
+    ],
+  });
+  const result = await setAccountCommunityTopicName(admin, "acct-1", "c1", 1, "Promo Zone");
+  assert.equal(result.ok, true);
+  const topics = await listAccountCommunityTopics(admin, "acct-1", "c1");
+  assert.equal(topics.find((t) => t.messageThreadId === 1)?.customName, "Promo Zone");
+  assert.equal(topics.find((t) => t.messageThreadId === 2)?.customName, null, "an unrelated topic in the same community is never touched");
+});
+
+test("setAccountCommunityTopicName treats a blank/whitespace-only value as clearing the name, never persisting an empty string", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "proj-1", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [{ id: "t1", community_id: "c1", message_thread_id: 1, topic_name: null, custom_name: "Old Name", policy: "promotion" }],
+  });
+  const result = await setAccountCommunityTopicName(admin, "acct-1", "c1", 1, "   ");
+  assert.equal(result.ok, true);
+  const topics = await listAccountCommunityTopics(admin, "acct-1", "c1");
+  assert.equal(topics.find((t) => t.messageThreadId === 1)?.customName, null);
+});
+
+test("setAccountCommunityTopicName rejects a community that doesn't belong to this account's own projects", async () => {
+  const admin = fakeAdmin({
+    products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_STANDARD], projects: [STANDALONE_PROJECT],
+    communities: [{ id: "c1", panel_id: null, project_id: "other-proj", platform: "telegram", chat_id: "-1001" }],
+    watch_community_topics: [{ id: "t1", community_id: "c1", message_thread_id: 1, topic_name: null, policy: "promotion" }],
+  });
+  const result = await setAccountCommunityTopicName(admin, "acct-1", "c1", 1, "Promo Zone");
+  assert.equal(result.ok, false);
 });
 
 test("listAccountCommunityTopics returns empty for a community outside this account's own projects -- never leaks another account's topics", async () => {

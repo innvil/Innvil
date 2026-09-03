@@ -260,52 +260,52 @@ export async function generatePersonaSolicitationWarning(
   facts: SolicitationWarningFacts,
   aiRouting?: AccountAiRouting
 ): Promise<string> {
+  // Live feedback (2026-09-02): "it should not send the promotion link, it
+  // should say promotion" -- the redirect destination is now ALWAYS spoken
+  // by name only. promotionTopicLink is never surfaced in generated text at
+  // all anymore (kept on SolicitationWarningFacts only for a future
+  // dashboard display, never for the Telegram message itself). The caller
+  // (community-runtime.ts) is also responsible for only ever passing a
+  // REAL, known name here -- never a generic placeholder like "this topic"
+  // -- since a model handed a placeholder string has no way to tell it
+  // isn't a real name and will nonsensically quote it as one.
   const deterministicFallback = () => {
-    // Mirrors community-topics.ts's topicSolicitationWarningText +
-    // community-runtime.ts's promotionContactSentence exactly, inlined here
-    // so this function's fallback never depends on a circular import.
     const mutePart = facts.muteMinutes ? ` This resulted in a ${facts.muteMinutes}-minute mute.` : "";
     if (facts.isCompetingProjectPromotion) {
-      return `Promoting other projects or tokens is not allowed here, in any form.${mutePart} Repeatedly doing this may result in a mute, and a 5th offense may result in a kick or ban.`;
+      return `Promoting other projects or tokens is not allowed here, in any form.${mutePart} Repeated offenses escalate to a kick or ban.`;
     }
-    const contactPart = facts.contactHandle ? ` For promotion inquiries, please contact ${facts.contactHandle}.` : "";
-    if (!facts.promotionTopicName) {
-      return `Please do not send promotions in ${facts.currentTopicName}. Repeatedly sending promotional content here may result in a mute, and a 5th offense may result in a kick or ban.${mutePart}${contactPart}`;
-    }
-    const where = facts.promotionTopicLink ? `${facts.promotionTopicName} (${facts.promotionTopicLink})` : facts.promotionTopicName;
-    return `Please do not send promotions in ${facts.currentTopicName}. If you want to promote a project, please use the ${where} topic instead. Repeatedly sending promotional content in ${facts.currentTopicName} may result in a mute, and a 5th offense may result in a kick or ban.${mutePart}${contactPart}`;
+    const where = facts.promotionTopicName ? ` Post that in ${facts.promotionTopicName} instead.` : facts.contactHandle ? ` For that, contact ${facts.contactHandle}.` : "";
+    return `No promos in ${facts.currentTopicName}, please.${where}${mutePart} Repeated offenses escalate to a kick or ban.`;
   };
 
   const requiredFacts: string[] = [
-    `The current topic is named "${facts.currentTopicName}" — you must state that promotions aren't allowed HERE, by this exact name.`,
+    `State plainly that promotions aren't allowed in "${facts.currentTopicName}" (this exact topic name) -- keep this part brief, don't over-explain it.`,
   ];
-  if (facts.muteMinutes) requiredFacts.push(`This violation results in a real ${facts.muteMinutes}-minute mute — state this exact number, do not invent a different one.`);
-  else requiredFacts.push(`No mute applies to this specific offense — do not claim one happened.`);
+  if (facts.muteMinutes) requiredFacts.push(`State the real ${facts.muteMinutes}-minute mute in a short clause -- do not invent a different number.`);
+  else requiredFacts.push(`No mute applies to this specific offense -- do not claim one happened.`);
   if (facts.isCompetingProjectPromotion) {
     // A "global no-go" -- never offer or hint at ANY alternative venue,
     // topic, or contact, even if one is genuinely configured for THIS
-    // community's own promotion elsewhere. This is the one case where the
-    // ordinary Promotion-destination/contact facts below are deliberately
-    // never surfaced, regardless of what's actually configured.
-    requiredFacts.push(`This was a request/rally to promote a DIFFERENT project or token, not this community's own. State plainly that promoting other projects/tokens is never allowed here, in any form -- do NOT suggest any alternative place to post it, do NOT mention a Promotion channel/topic/contact of any kind, even if one exists for this community's own promotion.`);
+    // community's own promotion elsewhere.
+    requiredFacts.push(`This was a rally to promote a DIFFERENT project/token, not this community's own -- state plainly that promoting other projects/tokens is never allowed here, in any form. Do NOT suggest any alternative place to post it, do NOT mention a Promotion channel/topic/contact of any kind.`);
   } else if (facts.promotionTopicName) {
-    requiredFacts.push(
-      `Redirect them to the real configured Promotion destination, referring to it BY NAME exactly as "${facts.promotionTopicName}" — never read out a raw link/URL as if it were the name.${facts.promotionTopicLink ? ` A real link is also available (${facts.promotionTopicLink}) — you may include it alongside the name, but the name must still be stated.` : " No link is available, just name it."}`
-    );
+    requiredFacts.push(`Mention the real Promotion destination BY NAME ONLY, exactly as "${facts.promotionTopicName}" -- never a link/URL of any kind, and never any other destination or contact even if one is also configured.`);
+  } else if (facts.contactHandle) {
+    requiredFacts.push(`Mention the real configured contact: ${facts.contactHandle}.`);
   } else {
-    requiredFacts.push(`No Promotion destination is configured for this community — do NOT invent one or tell them to go somewhere that doesn't exist.`);
+    requiredFacts.push(`No Promotion destination or contact is configured for this community -- do NOT invent one or tell them to go somewhere that doesn't exist.`);
   }
-  if (!facts.isCompetingProjectPromotion && facts.contactHandle) requiredFacts.push(`Mention the real configured promotion contact: ${facts.contactHandle}.`);
-  requiredFacts.push(`Always also state: repeated offenses escalate to a mute, and a 5th offense may result in a kick or ban.`);
+  requiredFacts.push(`Briefly note repeated offenses escalate (to a mute, then a kick/ban) -- a short closing clause, not a full sentence spelling out every step.`);
 
   const system = [
     `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${facts.isCompetingProjectPromotion ? "rallying members to promote a different, unrelated project/token (not this community's own)" : "posting unsolicited promotion (advertising a project/service with no relevance here, or soliciting private contact for a growth/marketing service)"}.`,
-    `Write ONE short, natural warning to the person, entirely in your own persona voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
-    `Required facts you MUST include, stated accurately -- never invent, omit, or alter any of these:`,
+    `Write ONE short, natural, casual warning to the person, entirely in your own persona voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
+    `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY and BRIEFLY, the way a real person would actually type a quick warning, not as a checklist:`,
     ...requiredFacts.map((f) => `- ${f}`),
-    `Never output robotic/templated phrasing like "Violation N" -- write like a real person in-character would, while still stating every required fact above.`,
+    `Mention AT MOST ONE destination/contact (whichever fact above applies) -- never list a Promotion topic AND a contact handle together, that reads like a form letter, not a person.`,
+    `Never output robotic/templated phrasing like "Violation N" and never enumerate facts as separate clauses joined with commas -- write like a real short chat message.`,
     `Always write the warning in English, regardless of what language the violating message itself was written in.`,
-    `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation, under 60 words.`,
+    `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation. Keep it SHORT: one sentence, occasionally two if it genuinely needs both a fact and the escalation note. Under 30 words.`,
   ].join("\n");
 
   if (aiRouting?.required) {

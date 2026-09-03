@@ -17,7 +17,27 @@ export const COMMUNITY_TOPIC_POLICIES: CommunityTopicPolicy[] = ["general", "ann
 export interface CommunityTopicRow {
   messageThreadId: number;
   topicName: string | null;
+  /** Owner-typed override (2026-09-02) — always takes precedence over the
+   *  auto-observed `topicName` when set. Exists specifically for a topic
+   *  whose real name was never learned from Telegram (no forum_topic_
+   *  created/edited event was ever observed for it, e.g. a topic created
+   *  before the bot joined) — there's no supported way to fetch a topic's
+   *  name after the fact, so this lets the owner just state it. */
+  customName: string | null;
   policy: CommunityTopicPolicy;
+}
+
+/** True only when a REAL name is known for this topic (owner-set override or
+ *  a genuine Telegram-observed name) — false for the generic "this topic"/
+ *  "General" placeholder labels topicDisplayName falls back to. Callers that
+ *  need to decide "do I have a real name to state as a destination" (as
+ *  opposed to merely a display label for prose) must use this, never infer
+ *  it from topicDisplayName's return value — that function always returns
+ *  SOME string, including the placeholder, and a caller/model fed the
+ *  placeholder string has no way to tell it isn't a real name. */
+export function hasKnownTopicName(topic: CommunityTopicRow | null): boolean {
+  if (!topic) return false;
+  return !!(topic.customName?.trim() || topic.topicName?.trim());
 }
 
 /** Solicitation/promotion is allowed in a topic ONLY when its assigned
@@ -54,7 +74,7 @@ export function findPromotionTopic(topics: CommunityTopicRow[]): CommunityTopicR
  *  SAME graceful fallback already used when no topic row exists at all. */
 export function topicDisplayName(topic: CommunityTopicRow | null): string {
   if (!topic) return "this topic";
-  return topic.topicName?.trim() || (topic.policy === "general" ? "General" : "this topic");
+  return topic.customName?.trim() || topic.topicName?.trim() || (topic.policy === "general" ? "General" : "this topic");
 }
 
 /** A Telegram deep link straight to a specific topic, when a chat username
