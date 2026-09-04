@@ -127,6 +127,108 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-04 — v1.49.29 completeness audit: every visible Watcher-spoken warning is persona-voiced, response length is response-mode aware, generated prose is guarded against unsupported claims, and anti-repetition scoping is now provably moderation-only (v1.49.30)
+- **Second pass on the same day's persona-voicing fix, closing 6 specific gaps
+  the first report either narrowed or classified "already satisfied" without actually satisfying the
+  requested behavior.**
+- **(1) Persona now applies to EVERY visible Watcher-spoken moderation path that has one, not just
+  promotion warnings.** Audited every category: promotion/competing-project/search-spam warnings
+  (`generatePersonaSolicitationWarning`) were already fixed in v1.49.29. `generateMediaModerationWarning`
+  (`media-warning.ts`) had the EXACT SAME bug — it interpolated only a bare `persona.description` sentence
+  despite its own doc comment already claiming to mirror the link-classify fix — now rewritten onto
+  `personaVoiceBlock` identically. **Two messages stay deterministic, by explicit, named, justified
+  exception, not silent exemption**: `scamFirstOffenseWarningHtml`/`scamRepeatOffenseWarningHtml`
+  (`link-moderation.ts`) — a PRE-EXISTING, already-documented architectural invariant ("a scam/phishing
+  warning must never depend on a model call... must never reproduce the malicious URL itself") for the
+  platform's one zero-tolerance, highest-severity category; changing this would mean introducing a live-
+  model-dependency failure surface into the one enforcement path that must fire instantly and reliably
+  regardless of AI-provider health. **No new message was added where none exists today** (non-scam
+  DELETE_KICK for spam/promotion/competing-project/search-spam, and every DELETE_BAN) — the code's own
+  existing comment already documents this as a deliberate convention ("only scam kicks announce
+  themselves"), and inventing a new outbound-communication class there would itself be "changing kick/ban
+  logic," which was explicitly out of scope.
+- **(2) New deterministic, zero-extra-cost response-mode decision — `resolveWarningResponseMode`**
+  (`link-moderation.ts`): `WARNING` (ordinary first-time-shaped correction, unchanged) /
+  `SHORT_NUDGE` (no real consequence attached AND this Watcher just said something near-identical very
+  recently — a brief acknowledgment instead of a second full explanation) / `ENFORCEMENT_NOTICE` (a real
+  mute is attached, or — for media, which has no mute — this is the final pre-kick warning; ALWAYS
+  communicated in full, NEVER downgraded by near-duplicate detection). Deliberately never resolves to
+  "no public reply at all" — deleting a message with zero acknowledgment is itself an enforcement-clarity
+  gap, so SHORT_NUDGE, not silence, is this decision's floor. Wired into the ALREADY-EXISTING bounded
+  single retry (no new model call — the near-duplicate signal was already computed from the first,
+  already-happening generation attempt) in both `generatePersonaSolicitationWarning` and
+  `generateMediaModerationWarning`: mode-aware retry instructions now explicitly forbid shortening an
+  ENFORCEMENT_NOTICE and explicitly request brevity for a SHORT_NUDGE.
+- **(3) New deterministic guard treating generated moderation prose as untrusted presentation output, never
+  an enforcement authority — `warningTextExceedsAuthorizedFacts`** (`link-moderation.ts`): catches (a) a
+  stated mute-minute count that doesn't match the real authoritative value (including any minute-count
+  stated when no mute actually applies — media, having no mute concept at all, treats ANY stated
+  minute-count as unsupported by construction), and (b) a DEFINITE, completed-tense ban/kick/removal claim
+  ("you've been banned", "you are now banned") — since both generator functions are only ever called for a
+  WARN-tier notice, no such thing has actually happened. Explicitly does NOT (and, without a
+  disproportionate NLP investment, cannot) distinguish an overly-confident HEDGE about a possible future
+  consequence from an appropriately cautious one — "repeated offenses escalate to a kick or ban" (the
+  exact, already-instructed sanctioned phrasing) is deliberately never caught. Applied uniformly to EVERY
+  generated candidate in both functions (the no-retry fast path AND the bounded retry) — a candidate that
+  fails is discarded for the already-known-safe deterministic template, never "corrected" in place.
+- **(4) Anti-repetition context is now provably MODERATION-WARNING-ONLY, not "anything this Watcher
+  said."** Investigated and confirmed a real gap: `recentOwnModeratorMessages` originally filtered only by
+  `senderType`+`deploymentId`, which also picked up ordinary Natural Chatter replies and task-sequence
+  turns from the SAME Watcher — `community_messages` had no column distinguishing a moderation-warning
+  send from ordinary chatter for either kind of insert. Closed by reusing the ALREADY-EXISTING `origin`
+  column (migration 0048, added for the orthogonal purpose of bot-ack loop prevention) rather than a new
+  table/tracking mechanism — moderation-warning inserts now tag `origin: "MODERATION_WARNING"`
+  (migration `0125` widens the check constraint); `recentOwnModeratorMessages` now requires that exact tag.
+  **A real, separate shared-system risk was found and closed while making this change**: `resolveEventOrigin`
+  (the bot-ack loop-prevention resolver, unrelated to this feature but reading the SAME column) previously
+  cast ANY non-null stored `origin` value straight to `CommunityEvent["origin"]` with no allowlist check —
+  once moderation-warning rows started setting `origin`, a moderation-warning message re-observed by a
+  DIFFERENT bot's webhook (the exact scenario this resolver exists to handle) would have resolved to the
+  invalid literal `"MODERATION_WARNING"` instead of its previous, correct `HUMAN`/depth-0 default, silently
+  changing bot-ack classification behavior as an unintended side effect. Fixed with a new
+  `KNOWN_EVENT_ORIGINS` allowlist — any stored value that isn't a genuine `EventOrigin` now degrades to the
+  exact same safe default as "no origin recorded at all," byte-for-byte preserving pre-existing behavior.
+  **Also fixed a real, separate, pre-existing latent bug found incidentally while touching this exact
+  constraint**: `recordBotAckReply` has always written `origin: "COMMUNITY_HANDOFF"` for a
+  `COMMUNITY_HANDOFF`-kind reply, but that value was never actually in the column's allowed list — any such
+  insert would have failed outright at the database level; the same migration widens the constraint to
+  include it too, at zero extra cost.
+- **(5) Test-count reconciliation, done properly.** The v1.49.29 report's "+31 new tests" vs. the real
+  2190→2220 (+30) delta was a simple miscounted baseline for `community-runtime.test.ts` (121 assumed
+  instead of the real 122) — verified precisely this pass by temporarily restoring each touched file's
+  pre-change content in place and re-running it, confirming the real per-file baselines
+  (chatter-generate 131, link-moderation 126, link-classify 35, community-runtime **122**) and the real
+  delta (5+8+12+**5**=30, matching exactly). **A second, more serious count discrepancy was caught and
+  fixed during THIS pass's own reconciliation**: an initial `Write` call for `media-warning.ts`'s new test
+  coverage overwrote an existing, already-committed test file (8 real, valid pre-existing tests — Sonnet-5
+  routing, the anti-robotic-wording ban, FINAL-warning framing, the varied deterministic fallback pool, and
+  3 BYO Enterprise routing tests) instead of creating a genuinely new one — caught precisely because the
+  full-suite total (2246) didn't match the expected arithmetic (2220+34=2254), traced to `git status`
+  showing the file as modified rather than untracked, and fixed by restoring all 8 original tests verbatim
+  alongside the 13 new ones (21 total). Final, verified, reconciled numbers below.
+- **(6) Requirement audit corrected to inspect actual runtime behavior, not approximate it** — see the
+  in-conversation report delivered alongside this release for the full, explicit, non-collapsed per-
+  requirement audit (IMPLEMENTED / ALREADY SATISFIED AND VERIFIED / NOT IMPLEMENTED — BLOCKED for every
+  item), including a precise, honest statement of the one deliberately-scoped exception (the scam-warning
+  deterministic paths) and why it's a justified named exception rather than a silent narrowing.
+- New tests: `link-moderation.test.ts` (+12 — `resolveWarningResponseMode`'s full mode matrix incl.
+  ENFORCEMENT_NOTICE always winning over a near-duplicate, and `warningTextExceedsAuthorizedFacts`'s full
+  guard matrix incl. the exact live-quoted "next time you're banned" example and the hedge-language
+  non-trigger proof), `link-classify.test.ts` (+6 — mode-aware retry wording for both ENFORCEMENT_NOTICE and
+  SHORT_NUDGE, the guard applied on the fast path/the live-example/the retry path, and a not-overzealous
+  control), `media-warning.test.ts` (+13 new + 8 restored = 21 total in the corrected file — persona
+  differentiation, escalation framing, anti-repetition retry, both response modes, the full guard matrix,
+  plus the pre-existing Sonnet-routing/anti-robotic/fallback-pool/BYO Enterprise coverage), `community-
+  runtime.test.ts` (+3 — the exact completeness-gap regression: an ordinary chatter reply from the same
+  Watcher no longer counts as a recent moderation warning, a bot-ack/handoff/proactive message is likewise
+  excluded, and the `resolveEventOrigin` shared-system-risk regression proving a moderation-warning message
+  re-observed by another bot still safely degrades to HUMAN/0). **2254 tests pass (up from 2220 before this
+  pass began), `tsc --noEmit` clean, production build clean.**
+- **Run migration `0125` before this governs anything live** (widens `community_messages.origin`'s check
+  constraint to allow `'MODERATION_WARNING'` and `'COMMUNITY_HANDOFF'`).
+- **Not deployed automatically, per explicit instruction** (this pass's own instruction reiterated the
+  standing "do not deploy" directive from the same-day v1.49.29 task).
+
 ### 2026-09-04 — Moderation warnings are persona-voiced and anti-repetitive: a Watcher's warnings sound like ITS configured persona and stop reusing the same sentence skeleton (v1.49.29)
 - **Live feedback, two screenshots of "Patricia" sending near-identical warnings to different offenders**
   ("No promo in this topic, friend -- that's a 10-min mute. Take that energy to Promotion instead..." /

@@ -863,3 +863,100 @@ export const NEAR_DUPLICATE_WARNING_THRESHOLD = 0.45;
 export function isNearDuplicateWarning(candidate: string, recentTexts: string[]): boolean {
   return recentTexts.some((t) => warningTextSimilarity(candidate, t) >= NEAR_DUPLICATE_WARNING_THRESHOLD);
 }
+
+/* -------------------------------------------- moderation-warning response mode ---- */
+// 2026-09-04, second pass: a Watcher should not narrate every minor deletion
+// with a full paragraph, especially when the same low-value violation was
+// just publicly corrected. This is a DETERMINISTIC, zero-cost decision --
+// computed entirely from state the caller already has (whether a real
+// consequence -- a mute, or media's final pre-kick warning -- is attached to
+// THIS specific violation, and whether the just-generated text already reads
+// as a near-duplicate of something this Watcher recently said) -- never an
+// extra model call whose only purpose is deciding whether to speak.
+
+export type WarningResponseMode = "WARNING" | "SHORT_NUDGE" | "ENFORCEMENT_NOTICE";
+
+/** Resolves how much a DELETE_WARN-tier moderation notice should say.
+ *
+ *   - ENFORCEMENT_NOTICE: a REAL consequence is attached to this specific
+ *     violation (a mute is being applied, or -- for media, which has no
+ *     mute concept -- this is the final warning immediately before a kick).
+ *     Always communicated in full, every stated fact intact, and NEVER
+ *     downgraded by near-duplicate detection -- the product needs the
+ *     person/community to actually understand what just happened.
+ *   - SHORT_NUDGE: no real consequence beyond the deletion itself (a
+ *     first-offense-shaped warning with nothing else attached), AND this
+ *     Watcher has just said something near-identical very recently in this
+ *     same Community -- a brief, still persona-voiced acknowledgment
+ *     instead of another full explanation of the same rule.
+ *   - WARNING: the ordinary case -- no real consequence attached, and
+ *     nothing recently duplicate to react to. A normal, concise, persona-
+ *     based correction (today's existing, unchanged shape for a genuine
+ *     first-time-style notice).
+ *
+ *  Deliberately NEVER resolves to "no public reply at all": deleting a
+ *  message with zero acknowledgment is itself an enforcement-clarity gap
+ *  (the person/room has no idea why the message vanished) -- SHORT_NUDGE,
+ *  not silence, is this decision's floor for a DELETE_WARN. */
+export function resolveWarningResponseMode(input: { hasEnforcementConsequence: boolean; isNearDuplicateOfRecent: boolean }): WarningResponseMode {
+  if (input.hasEnforcementConsequence) return "ENFORCEMENT_NOTICE";
+  if (input.isNearDuplicateOfRecent) return "SHORT_NUDGE";
+  return "WARNING";
+}
+
+/* --------------------------------------- generated-text authoritative-fact guard ---- */
+// Generated moderation prose is untrusted presentation output, never an
+// enforcement authority -- the real decision (what happened, whether a mute
+// applies, what number it is) was already made deterministically before this
+// text exists. This is a small, deliberately narrow, deterministic guard
+// against the model stating something that contradicts (or invents beyond)
+// that already-decided authoritative state -- not a semantic/NLP validator.
+
+const MUTE_MENTION_RE = /\b(\d+)\s*[-\s]?\s*(?:min|mins|minute|minutes)\b/gi;
+
+// A DEFINITE, already-happened-sounding ban/kick/removal claim. This guard is
+// only ever run against DELETE_WARN-tier text, which by construction never
+// represents an actual ban/kick/removal having occurred -- so any claim
+// phrased as already-completed is categorically false. Deliberately does NOT
+// match a hedged, conditional mention of a possible FUTURE consequence
+// ("repeated offenses escalate to a kick or ban") -- that phrasing is
+// explicitly instructed/permitted (see link-classify.ts's requiredFacts) and
+// is the one form of forward-looking risk language this function must never
+// reject.
+const DEFINITE_REMOVAL_CLAIM_RE =
+  /\byou(?:'ve| have)?\s+(?:been|got)\s+(?:banned|kicked|removed)\b|\byou\s+(?:are|were)\s+(?:now\s+)?(?:banned|kicked|removed)\b|\bbanned\s+(?:now|already|permanently)\b|\bkicked\s+(?:now|already)\b|\bremoved\s+(?:now|already)\s+from\b/i;
+
+/** True when generated moderation-warning `text` states something the
+ *  authoritative, already-decided facts don't support. Only two concrete,
+ *  cheaply-checkable classes are caught:
+ *
+ *   1. A specific minute-count that doesn't match the REAL mute duration
+ *      actually applied to this violation -- including stating any minute-
+ *      count at all when no mute applies (`authoritative.muteMinutes` is
+ *      null/undefined). This is the exact class of error a hallucinated or
+ *      garbled number produces (the live-reported concern: "next time
+ *      you're banned" stated with no basis, generalized here to any
+ *      invented specific fact).
+ *   2. A DEFINITE, completed-tense ban/kick/removal claim -- since this
+ *      function is only ever called for a WARN-tier notice, no such thing
+ *      has actually happened yet.
+ *
+ *  What this deliberately does NOT (and, without a disproportionate NLP/
+ *  semantic-parsing investment, cannot) guarantee: it cannot distinguish an
+ *  overly-confident HEDGE about a possible future consequence from an
+ *  appropriately cautious one -- only categorically definite/completed-tense
+ *  claims are caught, the smallest coherent guard available here rather than
+ *  a full semantic validator. The real enforcement action was already
+ *  decided and executed before this text was generated, so an over-
+ *  confident hedge never itself causes an incorrect ACTION, only a
+ *  mismatched narrative -- this guard's job is to catch the concrete,
+ *  checkable cases, and fall back to the known-safe deterministic template
+ *  on a match. */
+export function warningTextExceedsAuthorizedFacts(text: string, authoritative: { muteMinutes?: number | null }): boolean {
+  const authoritativeMute = authoritative.muteMinutes ?? null;
+  for (const match of text.matchAll(MUTE_MENTION_RE)) {
+    const stated = Number(match[1]);
+    if (authoritativeMute === null || stated !== authoritativeMute) return true;
+  }
+  return DEFINITE_REMOVAL_CLAIM_RE.test(text);
+}

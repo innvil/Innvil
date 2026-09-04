@@ -8,6 +8,7 @@ import {
   looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   promotionContactSentence,
   warningTextSimilarity, isNearDuplicateWarning, NEAR_DUPLICATE_WARNING_THRESHOLD,
+  resolveWarningResponseMode, warningTextExceedsAuthorizedFacts,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -832,4 +833,90 @@ test("warningTextSimilarity is symmetric and self-similarity is exactly 1", () =
 test("warningTextSimilarity handles empty strings safely -- never divides by zero / never NaN", () => {
   assert.equal(warningTextSimilarity("", ""), 0);
   assert.equal(warningTextSimilarity("", LIVE_PAIR_1A), 0);
+});
+
+/* =========================================== resolveWarningResponseMode ====
+   2026-09-04, second pass: a Watcher should not narrate every minor
+   deletion with a full paragraph. Deterministic, zero-cost decision -- see
+   the function's own doc comment for the full ENFORCEMENT_NOTICE /
+   SHORT_NUDGE / WARNING semantics and why NO_PUBLIC_REPLY is deliberately
+   never a possible outcome. */
+
+test("REQUIRED: a real consequence (a mute, or media's final pre-kick warning) is always ENFORCEMENT_NOTICE, regardless of near-duplicate status", () => {
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: false }), "ENFORCEMENT_NOTICE");
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: true }), "ENFORCEMENT_NOTICE");
+});
+
+test("REQUIRED: no consequence + a near-duplicate of something recently said resolves to SHORT_NUDGE", () => {
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: true }), "SHORT_NUDGE");
+});
+
+test("REQUIRED: no consequence + nothing recently duplicate resolves to the ordinary WARNING (today's existing, unchanged behavior)", () => {
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: false }), "WARNING");
+});
+
+test("REQUIRED: ENFORCEMENT_NOTICE always wins over SHORT_NUDGE -- a mute/final-warning is never downgraded merely because it also happens to look like a recent duplicate", () => {
+  const withDuplicate = resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: true });
+  const withoutDuplicate = resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: false });
+  assert.equal(withDuplicate, withoutDuplicate);
+  assert.equal(withDuplicate, "ENFORCEMENT_NOTICE");
+});
+
+test("resolveWarningResponseMode never resolves to a silence/no-reply value -- SHORT_NUDGE, never suppression, is the floor for a DELETE_WARN", () => {
+  const modes = [
+    resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: true }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: false }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: true }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: false }),
+  ];
+  for (const m of modes) assert.ok(m === "WARNING" || m === "SHORT_NUDGE" || m === "ENFORCEMENT_NOTICE");
+});
+
+/* ===================================== warningTextExceedsAuthorizedFacts ====
+   Generated moderation prose is untrusted presentation output, never an
+   enforcement authority (2026-09-04, second pass). Only two concrete,
+   checkable classes of unsupported claim are caught -- see the function's
+   own doc comment for the explicit, stated boundary of what this does NOT
+   (and, without disproportionate NLP investment, cannot) guarantee. */
+
+test("REQUIRED: a stated mute-minute count matching the real authoritative value passes", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("No promo in this topic -- that's a 10-minute mute.", { muteMinutes: 10 }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("that's a 10-min mute, friend.", { muteMinutes: 10 }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("30min mute for that one.", { muteMinutes: 30 }), false);
+});
+
+test("REQUIRED (the live-reported concern's exact class): a stated mute-minute count that does NOT match the real authoritative value is caught", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("that's a 30-min mute.", { muteMinutes: 10 }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("that's a 10-minute mute.", { muteMinutes: 60 }), true);
+});
+
+test("REQUIRED: a stated mute-minute count when NO mute actually applies (authoritative is null/undefined) is caught -- the exact 'first offense, no consequence' case must never fabricate a mute", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("No promos here -- that's a 10-minute mute.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("No promos here -- that's a 10-minute mute.", {}), true);
+});
+
+test("plain text with no minute-mention at all always passes the mute check, regardless of the authoritative value", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("No promos in General, please.", { muteMinutes: 10 }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("No promos in General, please.", { muteMinutes: null }), false);
+});
+
+test("REQUIRED (the user's own quoted example): a DEFINITE, already-happened ban/kick/removal claim is caught, since this function is only ever run against WARN-tier text where nothing was actually banned/kicked/removed", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("Careful -- you've been banned from this community.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("You are now banned.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("You have been removed from this community.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("You've been kicked already.", { muteMinutes: null }), true);
+});
+
+test("REQUIRED: a HEDGED, future-conditional escalation-risk mention is explicitly permitted, never caught -- this is the exact sanctioned phrasing the deterministic template and requiredFacts already use", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("Repeated offenses escalate to a kick or ban.", { muteMinutes: null }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("Keep doing this and you could end up banned.", { muteMinutes: null }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("Another violation results in removal from the community.", { muteMinutes: null }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("This is their FINAL warning -- next time results in removal.", { muteMinutes: null }), false);
+});
+
+test("both checks combine correctly -- a wrong mute number is caught even alongside otherwise-fine hedge language", () => {
+  assert.equal(
+    warningTextExceedsAuthorizedFacts("That's a 45-minute mute. Repeated offenses escalate to a kick or ban.", { muteMinutes: 10 }),
+    true
+  );
 });

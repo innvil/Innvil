@@ -799,3 +799,122 @@ test("REQUIRED: a successful first generation that IS a near-duplicate, whose re
     }
   });
 });
+
+/* ============ (2026-09-04, second pass) response mode + authorized-facts guard ==== */
+// Closes two completeness gaps flagged against the first pass: (a) the
+// retry, when it happens, must be RESPONSE-MODE aware -- an actual mute
+// must never be shortened away just because it also reads as a near-
+// duplicate; (b) EVERY generated candidate (not just the retry) is checked
+// against warningTextExceedsAuthorizedFacts before being returned, since
+// generated text is untrusted presentation output, never an enforcement
+// authority.
+
+test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate WITH a real mute attached gets a retry instruction that explicitly demands the consequence still be stated in full, never shortened", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
+    const { calls, install } = multiCallFetchSpy([
+      "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.",
+      "Hey, that's a promo, pulled it. 10-minute mute, use Promotion next time.",
+    ]);
+    const restore = install();
+    try {
+      await generatePersonaSolicitationWarning(
+        "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
+      );
+      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      assert.match(retrySystem, /real consequence is attached.*still state every required fact.*in full/i);
+      assert.doesNotMatch(retrySystem, /keep this one especially short/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (mode-aware retry, SHORT_NUDGE): a near-duplicate with NO consequence attached (no mute -- a genuine first-offense-shaped warning) gets the brevity instruction instead", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promos in General, please. Post that in Promotion instead."];
+    const { calls, install } = multiCallFetchSpy([
+      "No promos in General, please -- take it to Promotion.",
+      "Hey, please keep that kind of thing out of General.",
+    ]);
+    const restore = install();
+    try {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, recentOwnWarnings);
+      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      assert.match(retrySystem, /keep this one especially short/i);
+      assert.doesNotMatch(retrySystem, /real consequence is attached/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (untrusted-output guard, fast path): a generated candidate that invents an unsupported fact is discarded for the deterministic fallback, WITHOUT ever attempting a retry (no near-duplicate detected -- the guard is a separate check from anti-repetition)", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    // "no consequence beyond deletion" facts (muteMinutes undefined) --
+    // the generated text nonetheless invents a specific mute duration.
+    const { calls, install } = multiCallFetchSpy(["No promos in General, please -- that's a 30-minute mute for you."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, []);
+      assert.equal(calls.length, 1, "the guard rejecting a candidate must never itself trigger the anti-repetition retry");
+      assert.equal(text, "No promos in General, please. Repeated offenses escalate to a kick or ban.", "falls back to the exact deterministic template, no invented mute stated");
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (untrusted-output guard, exact live-quoted example): a candidate claiming a definite ban ('next time you're banned') that isn't actually authorized is discarded", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["Careful -- you've been banned from posting that here."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, []);
+      assert.equal(calls.length, 1);
+      assert.doesNotMatch(text, /you've been banned/i);
+      assert.equal(text, "No promos in General, please. Repeated offenses escalate to a kick or ban.");
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (untrusted-output guard applies to the RETRY too): a near-duplicate whose regenerated retry ALSO invents an unsupported fact is discarded for the deterministic fallback, not silently returned", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
+    const { calls, install } = multiCallFetchSpy([
+      "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.",
+      // Retry regenerates with a DIFFERENT (wrong) mute number than the
+      // real authoritative 10 minutes -- must still be caught, not just
+      // "different enough" from the first attempt to pass.
+      "Different wording this time, but that's a 45-minute mute for you.",
+    ]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning(
+        "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
+      );
+      assert.equal(calls.length, 2);
+      assert.doesNotMatch(text, /45-minute/i);
+      assert.equal(text, "No promos in General, please. Post that in Promotion instead. This resulted in a 10-minute mute. Repeated offenses escalate to a kick or ban.");
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("a normal, fact-accurate candidate with no unsupported claims is returned unchanged -- the guard is not overzealous against ordinary correct wording", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const text = await (async () => {
+      const { calls, install } = multiCallFetchSpy(["No promos in General, please -- that's a 10-minute mute. Repeated offenses can escalate to a kick or ban."]);
+      const restore = install();
+      try {
+        return await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10, warningNumber: 2 }, undefined, []);
+      } finally {
+        restore();
+      }
+    })();
+    assert.equal(text, "No promos in General, please -- that's a 10-minute mute. Repeated offenses can escalate to a kick or ban.");
+  });
+});

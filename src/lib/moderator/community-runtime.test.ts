@@ -135,6 +135,14 @@ test("resolveEventOrigin: does not leak a match from a different community", asy
   assert.deepEqual(result, { origin: "HUMAN", interactionDepth: 0 });
 });
 
+test("REQUIRED (shared-system-risk fix, 2026-09-04): a moderation-warning message re-observed by a different bot's webhook degrades to HUMAN/0, exactly as it did before origin='MODERATION_WARNING' started being set on it -- never leaks an invalid EventOrigin value into bot-ack classification", async () => {
+  const admin = fakeAdminWithRows([
+    { community_id: "community-1", platform_message_id: "300", origin: "MODERATION_WARNING", interaction_depth: 0, created_at: "2026-01-01T00:00:00Z" },
+  ]);
+  const result = await resolveEventOrigin(admin, "community-1", "300");
+  assert.deepEqual(result, { origin: "HUMAN", interactionDepth: 0 });
+});
+
 /* ------------------------------------------ isRecentMessage staleness guard ---- */
 // Live bug: "hey guys 👋" sent 95 minutes after the previous message (a
 // moderator reply) was silenced with reason "already_handled" -- the runtime
@@ -500,16 +508,25 @@ test("a HUMAN message from the same deployment id slot never counts (only INNVIL
 });
 
 /* ============================================ recentOwnModeratorMessages ====
-   Moderation anti-repetition context (2026-09-04) -- the raw text of THIS
-   deployment's own recent messages, used only to decide whether a freshly
+   Moderation anti-repetition context (2026-09-04, narrowed the same day --
+   see the function's own doc comment) -- the raw text of THIS deployment's
+   own recent MODERATION WARNINGS, used only to decide whether a freshly
    generated warning reads as a near-duplicate of something this SAME
-   Watcher already said (link-classify.ts's generatePersonaSolicitationWarning).
-   Requirements #5/#6: correctly scoped to Watcher + the community the
-   caller's own `context` array was loaded for, with no cross-Watcher/
-   cross-Community leakage possible. */
+   Watcher already said (link-classify.ts's generatePersonaSolicitationWarning
+   / media-warning.ts's generateMediaModerationWarning). Requirements #5/#6:
+   correctly scoped to Watcher + the community the caller's own `context`
+   array was loaded for, with no cross-Watcher/cross-Community leakage
+   possible, AND (the same-day completeness fix) correctly scoped to
+   moderation-warning sends specifically -- ordinary Natural Chatter/task-
+   turn output from the SAME deployment must never count. */
 
-function ownMsg(deploymentId: string | null, text: string, senderType: "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT" = "INNVIL_MODERATOR") {
-  return { senderType, senderName: null, text, deploymentId, createdAt: new Date().toISOString(), senderPlatformId: null };
+function ownMsg(
+  deploymentId: string | null,
+  text: string,
+  senderType: "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT" = "INNVIL_MODERATOR",
+  origin: string | null = "MODERATION_WARNING"
+) {
+  return { senderType, senderName: null, text, deploymentId, createdAt: new Date().toISOString(), senderPlatformId: null, origin };
 }
 
 test("REQUIRED (#5): returns only THIS deployment's own recent message texts, in order", () => {
@@ -545,6 +562,24 @@ test("HUMAN and EXTERNAL_BOT messages are never counted, even if they somehow ca
 test("an empty context, or a deployment id that never appears, returns an empty array -- never throws", () => {
   assert.deepEqual(recentOwnModeratorMessages([], "dep-a"), []);
   assert.deepEqual(recentOwnModeratorMessages([ownMsg("dep-a", "hi")], "dep-z"), []);
+});
+
+test("REQUIRED (completeness gap #4, 2026-09-04): an ORDINARY Natural Chatter reply from the same deployment/community is never counted as a recent moderation warning -- the exact ambiguity the live report flagged", () => {
+  const context = [
+    ownMsg("dep-a", "haha yeah that's a good point, welcome to the group!", "INNVIL_MODERATOR", null),
+    ownMsg("dep-a", "sure, glad to help with that", "INNVIL_MODERATOR", null),
+    ownMsg("dep-a", "No promos in General, please. Post that in Promotion instead.", "INNVIL_MODERATOR", "MODERATION_WARNING"),
+  ];
+  assert.deepEqual(recentOwnModeratorMessages(context, "dep-a"), ["No promos in General, please. Post that in Promotion instead."]);
+});
+
+test("REQUIRED (completeness gap #4): a bot-ack reply or community handoff from the same deployment is also excluded -- only origin==='MODERATION_WARNING' counts", () => {
+  const context = [
+    ownMsg("dep-a", "morning!", "INNVIL_MODERATOR", "BOT_ACK"),
+    ownMsg("dep-a", "anyone got anything new today?", "INNVIL_MODERATOR", "COMMUNITY_HANDOFF"),
+    ownMsg("dep-a", "a proactive good-morning post", "INNVIL_MODERATOR", "PROACTIVE"),
+  ];
+  assert.deepEqual(recentOwnModeratorMessages(context, "dep-a"), []);
 });
 
 /* ==================================================== classifySender: display name ====

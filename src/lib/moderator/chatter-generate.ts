@@ -50,6 +50,17 @@ export interface ChatterContextMessage {
    *  topic; matched only against other null-thread messages, never
    *  conflated with a real numbered one. */
   messageThreadId?: number | null;
+  /** Provenance tag for a message this SAME runtime sent (community_messages
+   *  .origin) -- distinguishes a genuine moderation-warning send from
+   *  ordinary Natural Chatter/task-sequence output, both of which otherwise
+   *  look identical (same senderType/deploymentId). Only ever
+   *  "MODERATION_WARNING" for a moderation notice; null/absent/any other
+   *  value for everything else (ordinary chatter, task turns, bot-ack
+   *  replies, community handoffs). Optional for callers that don't have it
+   *  (e.g. tests) or don't need it (ordinary chatter generation ignores this
+   *  field entirely -- it exists specifically for
+   *  community-runtime.ts's recentOwnModeratorMessages scoping). */
+  origin?: string | null;
 }
 
 export type ChatterGenerationAction = "CASUAL_CHAT" | "ANSWER";

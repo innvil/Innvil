@@ -1175,7 +1175,27 @@ async function recordCommunityMessage(
  * message IDs are per-chat, not per-recipient). Ordinary messages (human,
  * natural-chatter replies, proactive posts) never get an `origin` row, so
  * this safely defaults to HUMAN/0 for everything else.
+ *
+ * `community_messages.origin` is ALSO now used for a second, orthogonal
+ * purpose (2026-09-04) -- moderation-warning sends tag themselves
+ * `origin: "MODERATION_WARNING"` purely for recentOwnModeratorMessages'
+ * anti-repetition scoping, a value that is NOT a real EventOrigin (see
+ * event-types.ts). Without the explicit allowlist check below, a
+ * moderation-warning message re-observed by a DIFFERENT bot's webhook (the
+ * exact same "delivered to every other bot as an ordinary message" case
+ * this function exists to handle) would have hit the `!data?.origin` branch
+ * as false (a non-null string) and fallen through to an unchecked `as
+ * CommunityEvent["origin"]` cast, resolving to the literal string
+ * "MODERATION_WARNING" -- a value outside EventOrigin's real union, changing
+ * bot-ack classification behavior for a re-observed moderation warning as
+ * an unintended side effect. KNOWN_EVENT_ORIGINS makes this impossible: any
+ * stored value that isn't a genuine EventOrigin degrades to the exact same
+ * safe HUMAN/0 default as "no origin recorded at all" -- byte-for-byte the
+ * same resolution a moderation-warning message already got before this
+ * column started being set on it.
  */
+const KNOWN_EVENT_ORIGINS: ReadonlySet<CommunityEvent["origin"]> = new Set(["HUMAN", "PROACTIVE", "BOT_ACK", "COMMUNITY_HANDOFF", "INNVIL_MARKETING"]);
+
 export async function resolveEventOrigin(admin: SupabaseClient, communityId: string, platformMessageId: string): Promise<{ origin: CommunityEvent["origin"]; interactionDepth: number }> {
   const { data } = await admin
     .from("community_messages")
@@ -1186,7 +1206,7 @@ export async function resolveEventOrigin(admin: SupabaseClient, communityId: str
     .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
-  if (!data?.origin) return { origin: "HUMAN", interactionDepth: 0 };
+  if (!data?.origin || !KNOWN_EVENT_ORIGINS.has(data.origin as CommunityEvent["origin"])) return { origin: "HUMAN", interactionDepth: 0 };
   return { origin: data.origin as CommunityEvent["origin"], interactionDepth: data.interaction_depth ?? 0 };
 }
 
@@ -1680,7 +1700,7 @@ async function recordBotSpoke(admin: SupabaseClient, deploymentId: string, now: 
 async function loadRecentContext(admin: SupabaseClient, communityId: string, limit = 10): Promise<ChatterContextMessage[]> {
   const { data } = await admin
     .from("community_messages")
-    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at, message_thread_id, platform_message_id, reply_to_platform_message_id")
+    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at, message_thread_id, platform_message_id, reply_to_platform_message_id, origin")
     .eq("community_id", communityId)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -1695,6 +1715,7 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       message_thread_id: number | null;
       platform_message_id: string | null;
       reply_to_platform_message_id: string | null;
+      origin: string | null;
     }>
   )
     .reverse()
@@ -1708,6 +1729,7 @@ async function loadRecentContext(admin: SupabaseClient, communityId: string, lim
       messageThreadId: r.message_thread_id ?? null,
       platformMessageId: r.platform_message_id ?? null,
       replyToPlatformMessageId: r.reply_to_platform_message_id ?? null,
+      origin: r.origin ?? null,
     }));
 }
 
@@ -1786,20 +1808,36 @@ export function deploymentRecentlyParticipated(recentContext: ChatterContextMess
   return recentContext.some((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId && isRecentMessage(m.createdAt, now));
 }
 
-/** Moderation anti-repetition context (2026-09-04) -- the raw text of THIS
- *  specific deployment's own recent messages within `context`, used only to
- *  decide whether a freshly-generated warning reads as a near-duplicate of
- *  something this SAME Watcher already said (see link-moderation.ts's
- *  isNearDuplicateWarning / link-classify.ts's generatePersonaSolicitationWarning).
- *  Never affects WHETHER a violation is flagged/deleted/counted -- only
- *  candidate wording. Correctly scoped by construction, not by a runtime
- *  check: `context` is already loaded scoped to one specific community (the
- *  caller's own `loadRecentContext(admin, community.id, ...)`), and this
- *  filter further narrows it to one specific deployment -- a different
- *  Watcher's or a different Community's recent wording can never appear in
- *  the result. */
+/** Moderation anti-repetition context (2026-09-04, narrowed the same day --
+ *  see below) -- the raw text of THIS specific deployment's own recent
+ *  MODERATION WARNINGS within `context`, used only to decide whether a
+ *  freshly-generated warning reads as a near-duplicate of something this
+ *  SAME Watcher already said (see link-moderation.ts's isNearDuplicateWarning
+ *  / link-classify.ts's generatePersonaSolicitationWarning /
+ *  media-warning.ts's generateMediaModerationWarning). Never affects WHETHER
+ *  a violation is flagged/deleted/counted -- only candidate wording.
+ *  Correctly scoped by construction, not by a runtime check: `context` is
+ *  already loaded scoped to one specific community (the caller's own
+ *  `loadRecentContext(admin, community.id, ...)`), and this filter further
+ *  narrows it to one specific deployment -- a different Watcher's or a
+ *  different Community's recent wording can never appear in the result.
+ *
+ *  NARROWED (2026-09-04, same-day follow-up): originally filtered only by
+ *  senderType + deploymentId, which meant this ALSO picked up ordinary
+ *  Natural Chatter replies and task-sequence turns from this same Watcher --
+ *  a genuine gap, since community_messages carries no column distinguishing
+ *  "this send was a moderation warning" from "this send was ordinary
+ *  chatter" for either kind of insert until now. Closed by reusing the
+ *  ALREADY-EXISTING `origin` column (added in migration 0048 for a different,
+ *  orthogonal purpose -- bot-ack loop prevention) rather than adding a new
+ *  table/tracking mechanism: moderation-warning inserts now tag themselves
+ *  `origin: "MODERATION_WARNING"` (migration 0125 widens the column's check
+ *  constraint to allow it), and this filter requires that exact tag -- an
+ *  ordinary chatter/task-turn/bot-ack/community-handoff message (origin
+ *  null, "HUMAN", "PROACTIVE", "BOT_ACK", or "COMMUNITY_HANDOFF") is
+ *  structurally excluded, never just filtered out by convention. */
 export function recentOwnModeratorMessages(context: ChatterContextMessage[], deploymentId: string): string[] {
-  return context.filter((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId).map((m) => m.text);
+  return context.filter((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId && m.origin === "MODERATION_WARNING").map((m) => m.text);
 }
 
 /* -------------------------------------------------- trial reactive quota ---- */
@@ -2423,7 +2461,7 @@ export async function runLinkModeration(
           await admin.from("community_messages").insert({
             panel_id: panelId, community_id: community.id, platform_message_id: sendResult.sentMessageId,
             sender_type: "INNVIL_MODERATOR", sender_platform_id: null, sender_display_name: enforcer.moderatorName,
-            deployment_id: enforcer.deploymentId, text: warningText,
+            deployment_id: enforcer.deploymentId, text: warningText, origin: "MODERATION_WARNING",
           });
         }
       }
@@ -2623,6 +2661,14 @@ export async function runLinkModeration(
         sender_display_name: enforcer.moderatorName,
         deployment_id: enforcer.deploymentId,
         text: warningText,
+        // Tags this AS a real moderation warning (see recentOwnModeratorMessages'
+        // doc comment) regardless of whether its wording came from the
+        // deterministic scam template or the persona-generated path above --
+        // both are genuine Watcher-spoken moderation messages, and including
+        // the deterministic one in a later warning's anti-repetition history
+        // is harmless (structurally distinct wording, unlikely to ever
+        // register as similar) while keeping the tagging semantically honest.
+        origin: "MODERATION_WARNING",
       });
     }
   }
@@ -2988,8 +3034,14 @@ async function runMediaModeration(
   // reaches here, see decideMediaEnforcement)
   const nextState: LinkWarningState = { ...priorState, mediaWarningCount: enforcement.warningNumber };
   await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
+  // Anti-repetition context (2026-09-04, mirrors runLinkModeration's own
+  // linkModerationContext exactly) -- loaded only here, not at the top of
+  // this function, since ALLOW/DELETE_KICK never reach this branch and would
+  // otherwise pay for a query they don't need.
+  const mediaModerationContext = await loadRecentContext(admin, community.id, 8);
+  const recentOwnMediaWarnings = recentOwnModeratorMessages(mediaModerationContext, enforcer.deploymentId);
   const warningText = await generateMediaModerationWarning(
-    enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting
+    enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting, recentOwnMediaWarnings
   );
   if (token) {
     const sendResult = await executeAction(admin, chatId, {
@@ -2999,6 +3051,7 @@ async function runMediaModeration(
       await admin.from("community_messages").insert({
         panel_id: panelId, community_id: community.id, platform_message_id: sendResult.sentMessageId,
         sender_type: "INNVIL_MODERATOR", sender_platform_id: null, sender_display_name: enforcer.moderatorName, deployment_id: enforcer.deploymentId, text: warningText,
+        origin: "MODERATION_WARNING",
       });
     }
   }

@@ -2,7 +2,16 @@ import "server-only";
 
 import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
-import { SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, isNearDuplicateWarning, type LinkCategory, type ClassificationConfidence } from "./link-moderation";
+import {
+  SPAM_WARNING_LIMIT,
+  SOLICITATION_WARNING_LIMIT,
+  isNearDuplicateWarning,
+  resolveWarningResponseMode,
+  warningTextExceedsAuthorizedFacts,
+  type LinkCategory,
+  type ClassificationConfidence,
+  type WarningResponseMode,
+} from "./link-moderation";
 import { personaVoiceBlock } from "./chatter-generate";
 import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
@@ -279,12 +288,26 @@ function stripMentionForPrompt(text: string): string {
   return text.replace(/<a\b[^>]*>.*?<\/a>/gi, "[name]").replace(/@[a-z0-9_]+/gi, "[name]");
 }
 
-function buildAvoidRepeatingNote(recentOwnWarnings: string[]): string {
+/** Mode-aware retry instruction (2026-09-04, second pass -- see
+ *  resolveWarningResponseMode in link-moderation.ts). Both modes still ask
+ *  for genuinely different phrasing (never a second attempt that reads as
+ *  the same skeleton again); they differ only in what happens to LENGTH:
+ *  ENFORCEMENT_NOTICE (a real mute is attached to THIS violation) must
+ *  never be shortened away -- the mute fact still has to land clearly, so
+ *  this near-duplicate is treated as an ordinary "say it differently"
+ *  rewrite, not a nudge. SHORT_NUDGE (nothing beyond the deletion itself is
+ *  happening) is explicitly told to go brief, since there's no real
+ *  consequence that needs spelling out in full a second time. */
+function buildAvoidRepeatingNote(recentOwnWarnings: string[], mode: WarningResponseMode): string {
   const sample = recentOwnWarnings
     .slice(-MAX_RECENT_WARNINGS_IN_PROMPT)
     .map((t) => `"${stripMentionForPrompt(t).slice(0, MAX_RECENT_WARNING_SNIPPET_CHARS)}"`)
     .join(" / ");
-  return `You've said something VERY similar to this recently in this same room: ${sample}. Say THIS one differently -- change the opener, the sentence structure, and the closing line so it doesn't read like a repeat. Since this keeps coming up, keep this one especially short -- a brief correction, not a full explanation.`;
+  const lengthInstruction =
+    mode === "ENFORCEMENT_NOTICE"
+      ? "A real consequence is attached to THIS violation, so still state every required fact clearly and in full -- just phrase it differently, don't shorten it away."
+      : "Since this keeps coming up and nothing further happened this time beyond removing the message, keep this one especially short -- a brief correction, not a full explanation.";
+  return `You've said something VERY similar to this recently in this same room: ${sample}. Say THIS one differently -- change the opener, the sentence structure, and the closing line so it doesn't read like a repeat. ${lengthInstruction}`;
 }
 
 /** Persona-voiced solicitation/promotion warning — supersedes the flat
@@ -310,14 +333,31 @@ function buildAvoidRepeatingNote(recentOwnWarnings: string[]): string {
  *  sentence -- so two differently-configured Watchers genuinely SOUND
  *  different for the identical underlying violation, never a second,
  *  separate "moderation persona" system;
- *  (2) `recentOwnWarnings` (this SAME Watcher's own recent messages in this
- *  SAME community, caller-supplied and already scoped -- see
- *  community-runtime.ts) lets this step notice when it's about to repeat
- *  itself and regenerate ONCE with an explicit "say it differently, keep it
- *  short" instruction -- bounded to a single retry, never an unbounded loop,
- *  and it can only ever change WORDING, never the underlying facts (the
+ *  (2) `recentOwnWarnings` (this SAME Watcher's own recent MODERATION
+ *  WARNINGS in this SAME community -- caller-supplied and already scoped to
+ *  exclude ordinary chatter, see community-runtime.ts's
+ *  recentOwnModeratorMessages) lets this step notice when it's about to
+ *  repeat itself and regenerate ONCE with an explicit "say it differently"
+ *  instruction -- bounded to a single retry, never an unbounded loop, and it
+ *  can only ever change WORDING, never the underlying facts (the
  *  requiredFacts list below is unaffected by this and is still injected
- *  verbatim into the retry). */
+ *  verbatim into the retry).
+ *
+ *  2026-09-04, second pass -- two more completeness gaps closed in this
+ *  same function:
+ *  (3) the retry is now response-MODE aware (resolveWarningResponseMode,
+ *  link-moderation.ts): a violation with a real mute attached is always an
+ *  ENFORCEMENT_NOTICE and is never shortened even when it reads as a near-
+ *  duplicate -- only a violation with no consequence beyond the deletion
+ *  itself may become a brief SHORT_NUDGE on retry;
+ *  (4) EVERY generated candidate (both the no-retry fast path and the
+ *  retry) is now passed through warningTextExceedsAuthorizedFacts before
+ *  ever being returned -- generated text is treated as untrusted
+ *  presentation output, never an enforcement authority; a candidate that
+ *  states an unsupported specific fact (a wrong/invented mute-minute count,
+ *  or a definite ban/kick/removal claim that never happened) is discarded
+ *  in favor of the already-known-safe deterministic template, never
+ *  "corrected" in place. */
 export async function generatePersonaSolicitationWarning(
   moderatorName: string,
   persona: ModeratorPersona,
@@ -453,13 +493,29 @@ export async function generatePersonaSolicitationWarning(
     }
   };
 
+  // Generated text is untrusted presentation output, never an enforcement
+  // authority (2026-09-04, second pass) -- `authoritativeFacts` is the ONLY
+  // thing any generated candidate is checked against, applied uniformly to
+  // both the fast (no-retry) path and the bounded retry below. A candidate
+  // that fails is discarded in favor of the already-known-safe deterministic
+  // template -- never "fixed up" (that would itself be an untrusted rewrite).
+  const authoritativeFacts = { muteMinutes: facts.muteMinutes ?? null };
+  const sanitize = (candidate: string) => (warningTextExceedsAuthorizedFacts(candidate, authoritativeFacts) ? deterministicFallback() : candidate);
+
   const first = await attemptGeneration(buildSystem());
   if (first === null) return deterministicFallback();
-  if (!recentOwnWarnings.length || !isNearDuplicateWarning(first, recentOwnWarnings)) return first;
+
+  const isDuplicate = recentOwnWarnings.length > 0 && isNearDuplicateWarning(first, recentOwnWarnings);
+  if (!isDuplicate) return sanitize(first);
 
   // Bounded to exactly ONE retry -- if the regenerated text is somehow
   // still similar, or the retry itself fails, it's used/fallen-back-from
   // exactly the same as any other generation outcome, never looped again.
-  const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings)));
-  return retry ?? first;
+  // Mode-aware (resolveWarningResponseMode, link-moderation.ts): an actual
+  // mute attached to this violation is always an ENFORCEMENT_NOTICE and must
+  // still be stated in full on the retry; nothing beyond the deletion itself
+  // is SHORT_NUDGE-eligible -- see buildAvoidRepeatingNote's own doc comment.
+  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: !!facts.muteMinutes, isNearDuplicateOfRecent: true });
+  const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, mode)));
+  return sanitize(retry ?? first);
 }
