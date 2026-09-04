@@ -803,3 +803,63 @@ export function spamWarningMuteSentence(muteMinutes: number): string {
 export function promotionContactSentence(contact: string | null): string {
   return contact ? ` For promotion inquiries, please contact ${contact}.` : "";
 }
+
+/* ------------------------------------------------ moderation-warning anti-repetition ---- */
+// Live feedback (2026-09-04): a Watcher was posting near-identical warnings
+// ("No promo in this topic, friend -- that's a 10-min mute. Take that energy
+// to Promotion instead..." / "...that's a 10 min mute. Take it to Promotion
+// instead, or next time it escalates further.") across different offenders --
+// each generation call had zero awareness of what the SAME Watcher had just
+// said. This is a cheap, deterministic, bounded similarity check (never a
+// vector/embedding comparison, never unbounded retries) the language-
+// realization step (link-classify.ts's generatePersonaSolicitationWarning)
+// uses to decide whether to regenerate ONCE with an explicit "say this
+// differently" instruction. It never affects WHETHER a violation is flagged/
+// deleted/counted -- only how the resulting text is worded.
+
+/** Normalizes a warning's text into a bag of words for similarity purposes --
+ *  strips @mentions and `tg://user` HTML mentions (a different offender's
+ *  name/handle every time would otherwise make two structurally-identical
+ *  warnings look LESS similar, exactly backwards), strips punctuation/casing,
+ *  and collapses any run of digits to a single placeholder so "10-minute
+ *  mute" and "30-minute mute" still register as the same underlying SHAPE
+ *  (the live-caught bug: only the mute number differed, everything else was
+ *  the same skeleton). */
+function normalizeWarningWords(text: string): Set<string> {
+  const stripped = text
+    .toLowerCase()
+    .replace(/<a\b[^>]*>.*?<\/a>/gi, " ")
+    .replace(/@[a-z0-9_]+/gi, " ")
+    .replace(/[^a-z0-9\s]/gi, " ")
+    .replace(/\b\d+\b/g, "#");
+  return new Set(stripped.split(/\s+/).filter(Boolean));
+}
+
+/** Bag-of-words Jaccard similarity (intersection / union) between two
+ *  warning texts, 0 (nothing in common) to 1 (identical word sets). Cheap,
+ *  deterministic, in-memory -- no external library, no embeddings. */
+export function warningTextSimilarity(a: string, b: string): number {
+  const sa = normalizeWarningWords(a);
+  const sb = normalizeWarningWords(b);
+  if (!sa.size || !sb.size) return 0;
+  let intersection = 0;
+  for (const word of sa) if (sb.has(word)) intersection++;
+  const union = sa.size + sb.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+/** Chosen empirically against the exact live-reported near-duplicate pairs
+ *  (see link-classify.test.ts) -- high enough that two genuinely different
+ *  warnings (different topic, different fact, different structure) never
+ *  cross it by accident, low enough to reliably catch "same skeleton, only
+ *  the mute number/username changed." */
+export const NEAR_DUPLICATE_WARNING_THRESHOLD = 0.45;
+
+/** True when `candidate` reads as a near-duplicate of ANY of `recentTexts`
+ *  (a small, bounded set -- the caller passes at most a handful of this
+ *  SAME Watcher's own recent messages in this SAME community, never an
+ *  unbounded history). Used to decide whether to regenerate once, never to
+ *  block/alter the underlying moderation decision itself. */
+export function isNearDuplicateWarning(candidate: string, recentTexts: string[]): boolean {
+  return recentTexts.some((t) => warningTextSimilarity(candidate, t) >= NEAR_DUPLICATE_WARNING_THRESHOLD);
+}

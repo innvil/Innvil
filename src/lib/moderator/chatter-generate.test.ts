@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { __testables, shortAckText, classifyAmbientGreeting, classifyPitchLikelihood, personaReactionEmoji, generateChatterReply, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { __testables, shortAckText, classifyAmbientGreeting, classifyPitchLikelihood, personaReactionEmoji, generateChatterReply, personaVoiceBlock, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
 import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
 
 const {
-  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, obligationContextLines, collabContactLine,
+  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, personaCustomInstructionsLine, obligationContextLines, collabContactLine,
   projectKnowledgeContextLines, knowledgeOrEscalationLine, communityKnowledgeContextLines, answerFallbackInstruction,
 } = __testables;
 
@@ -1377,4 +1377,53 @@ test("a real answer still passes through as a normal reply, unaffected by the ne
     assert.equal(result.ok, true);
     if (result.ok) assert.ok("reply" in result && result.reply === "CA: 0x123456789");
   });
+});
+
+/* --------------------------------------------------------------- personaVoiceBlock ---- */
+// Small reusable adapter (2026-09-04) letting moderation-warning generation
+// (link-classify.ts's generatePersonaSolicitationWarning) reuse the EXACT
+// SAME persona-realization machinery as ordinary conversational replies --
+// never a second, separate "moderation persona" system. These prove the
+// adapter's output matches what buildSystemPrompt itself would produce for
+// the same persona, and that two differently-configured personas produce
+// genuinely different voice blocks.
+
+test("REQUIRED: personaVoiceBlock includes the same identity line buildSystemPrompt uses for this persona", () => {
+  const block = personaVoiceBlock(FORMAL_MODERATOR_A);
+  assert.ok(block.some((line) => line === personaIdentityLine(baseInput({ persona: FORMAL_MODERATOR_A }))));
+});
+
+test("REQUIRED: personaVoiceBlock includes customInstructions when configured, omits it when blank -- matching personaCustomInstructionsLine exactly", () => {
+  const withInstructions: ModeratorPersona = { ...FORMAL_MODERATOR_A, customInstructions: "Always sign off with 'Regards, Management.'" };
+  const block = personaVoiceBlock(withInstructions);
+  assert.ok(block.includes(personaCustomInstructionsLine(withInstructions) as string));
+
+  const withoutInstructions: ModeratorPersona = { ...FORMAL_MODERATOR_A, customInstructions: "" };
+  const blockWithout = personaVoiceBlock(withoutInstructions);
+  assert.equal(personaCustomInstructionsLine(withoutInstructions), null);
+  assert.ok(!blockWithout.some((line) => line.includes("customInstructions")));
+});
+
+test("REQUIRED: personaVoiceBlock includes the exact same style-mechanics text personaStyle produces for this persona", () => {
+  const block = personaVoiceBlock(CASUAL_MODERATOR_B);
+  assert.ok(block.includes(personaStyle(CASUAL_MODERATOR_B).join(" ")));
+});
+
+test("REQUIRED: two different personas realize the SAME moderation facts differently -- personaVoiceBlock output genuinely differs, not just the description sentence", () => {
+  const formalBlock = personaVoiceBlock(FORMAL_MODERATOR_A).join("\n");
+  const casualBlock = personaVoiceBlock(CASUAL_MODERATOR_B).join("\n");
+  assert.notEqual(formalBlock, casualBlock);
+  // The difference is attributable to real style mechanics (capitalization/
+  // slang), not just an incidental string mismatch.
+  assert.match(formalBlock, /always capitalize the start/i);
+  assert.match(formalBlock, /avoid slang/i);
+  assert.match(casualBlock, /lowercase/i);
+  assert.match(casualBlock, /slang and internet-speak are welcome/i);
+});
+
+test("a persona with no description/customInstructions still returns a sensible, non-fabricating block -- never crashes, never invents traits", () => {
+  const bare: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "", customInstructions: "" };
+  const block = personaVoiceBlock(bare);
+  assert.ok(block.length > 0);
+  assert.match(block.join(" "), /no specific persona description has been configured/i);
 });

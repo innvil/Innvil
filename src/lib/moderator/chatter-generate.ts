@@ -304,12 +304,35 @@ function identityAndPresenceLine(input: GenerateChatterReplyInput): string {
  *  owner-authored description when configured, or an honest, non-fabricating
  *  fallback when it isn't. Kept separate from personaStyle() below, which
  *  governs HOW the moderator writes (mechanics), not WHO it says it is when
- *  directly asked. */
-function personaIdentityLine(input: GenerateChatterReplyInput): string {
-  const desc = input.persona.description.trim();
+ *  directly asked. Extracted to a persona-only helper (personaIdentityLineFor)
+ *  so it can be reused outside a full GenerateChatterReplyInput -- see
+ *  personaVoiceBlock below. */
+function personaIdentityLineFor(persona: ModeratorPersona): string {
+  const desc = persona.description.trim();
   return desc
     ? `Your configured persona — the authoritative answer if asked what your persona, personality, style, or vibe is: ${desc}.`
     : `No specific persona description has been configured for you beyond your name and general writing style below. If asked about your persona, answer simply and honestly from your name/role rather than inventing detailed personality traits that were never actually configured.`;
+}
+
+function personaIdentityLine(input: GenerateChatterReplyInput): string {
+  return personaIdentityLineFor(input.persona);
+}
+
+/** Small reusable adapter (2026-09-04) — lets a Watcher's MODERATION wording
+ *  (link-classify.ts's generatePersonaSolicitationWarning) draw on the exact
+ *  same persona-realization machinery as its ordinary conversational
+ *  replies, instead of a second, separate "moderation persona" system that
+ *  only ever read persona.description. Composes, in the same order
+ *  buildSystemPrompt itself uses: the authoritative identity line, the
+ *  equally-authoritative customInstructions, the style-hierarchy preface,
+ *  and the numeric-dial style mechanics (formality/slang/chattiness/humor/
+ *  teasing/emoji) -- so two different personas realize the SAME moderation
+ *  facts in genuinely different voices, not just a different description
+ *  sentence pasted into an otherwise-identical prompt. */
+export function personaVoiceBlock(persona: ModeratorPersona): string[] {
+  return [personaIdentityLineFor(persona), personaCustomInstructionsLine(persona), STYLE_HIERARCHY_PREFACE, personaStyle(persona).join(" ")].filter(
+    (line): line is string => !!line
+  );
 }
 
 function typoLine(input: GenerateChatterReplyInput): string | null {
@@ -877,6 +900,6 @@ export async function classifyPitchLikelihood(
  *  labeling are actually IN the constructed prompt, without needing a live
  *  AI call. Not used by any other runtime code. */
 export const __testables = {
-  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, resolveChatterRoute, obligationContextLines,
+  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, personaCustomInstructionsLine, resolveChatterRoute, obligationContextLines,
   collabContactLine, projectKnowledgeContextLines, knowledgeOrEscalationLine, communityKnowledgeContextLines, answerFallbackInstruction,
 };

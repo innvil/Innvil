@@ -310,7 +310,7 @@ test("REQUIRED: generateModerationWarning BYO required but unusable falls straig
 // all correctly too.
 
 const noMuteFacts: SolicitationWarningFacts = {
-  currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: null,
+  currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: null, warningNumber: 1,
 };
 
 test("REQUIRED: persona solicitation warning also routes to Sonnet 5, never DeepSeek", async () => {
@@ -527,7 +527,7 @@ test("REQUIRED: falls back to a short deterministic template on any generation f
 test("deterministic fallback states the mute duration and the Promotion topic NAME only -- never the link, never both a topic and a contact together", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
-      currentTopicName: "General", muteMinutes: 30, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/1/2", contactHandle: "@RhyleKhy",
+      currentTopicName: "General", muteMinutes: 30, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/1/2", contactHandle: "@RhyleKhy", warningNumber: 2,
     });
     assert.match(text, /Post that in Promotion instead/);
     assert.match(text, /30-minute mute/);
@@ -539,7 +539,7 @@ test("deterministic fallback states the mute duration and the Promotion topic NA
 test("deterministic fallback falls back to the contact when no Promotion topic name is known", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
-      currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: "@RhyleKhy",
+      currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: "@RhyleKhy", warningNumber: 1,
     });
     assert.match(text, /For that, contact @RhyleKhy/);
   });
@@ -552,5 +552,250 @@ test("REQUIRED: BYO required but unusable falls straight to the deterministic fa
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
       assert.ok(text.length > 0);
     });
+  });
+});
+
+/* ===================================================================
+   Persona-based moderation wording + anti-repetition (2026-09-04)
+   ===================================================================
+   Live feedback: a Watcher was repeating near-identical moderation
+   warnings across different offenders ("No promo in this topic,
+   friend -- that's a 10-min mute..." variants). Fixed by (1) reusing
+   Natural Chatter's own persona-realization machinery instead of a bare
+   description sentence, (2) an escalation-stage fact so tone can firm up
+   across repeat offenses, and (3) a bounded, one-time regeneration when
+   the candidate reads as a near-duplicate of this Watcher's own recent
+   messages. These tests verify each requirement against the ACTUAL
+   outgoing prompt/behavior, not assumptions. */
+
+const FORMAL_PERSONA: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, formal: true, formality: 90, slang: 5, description: "" };
+const CASUAL_PERSONA: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, formal: false, formality: 10, slang: 85, description: "" };
+
+/* -------------------------------------------------- (1) persona respected ---- */
+
+test("REQUIRED: persona is included and respected in moderation-language generation -- the system prompt carries real style mechanics derived from the configured persona, not just a bare description sentence", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos in General."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, { ...noMuteFacts, warningNumber: 1 });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /always capitalize the start/i);
+      assert.match(system, /avoid slang/i);
+    });
+  });
+});
+
+/* --------------------------------------- (2) two personas, same facts, different voice ---- */
+
+test("REQUIRED: two different personas realize the SAME moderation facts differently", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const facts: SolicitationWarningFacts = { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 };
+    let formalSystem = "";
+    let casualSystem = "";
+    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, facts);
+      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+    });
+    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", CASUAL_PERSONA, facts);
+      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+    });
+    assert.notEqual(formalSystem, casualSystem);
+    assert.match(formalSystem, /always capitalize the start/i);
+    assert.match(casualSystem, /always write in lowercase/i);
+  });
+});
+
+/* ------------------------------------------- (3) facts stay authoritative ---- */
+
+test("REQUIRED: enforcement facts remain authoritative and are IDENTICAL regardless of persona -- only the style mechanics differ", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const facts: SolicitationWarningFacts = { ...noMuteFacts, muteMinutes: 30, promotionTopicName: "Promotion", warningNumber: 3 };
+    let formalSystem = "";
+    let casualSystem = "";
+    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, facts);
+      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+    });
+    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", CASUAL_PERSONA, facts);
+      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+    });
+    // The exact facts -- mute duration, topic name, destination, escalation
+    // stage -- must be present VERBATIM and IDENTICALLY in both prompts.
+    for (const required of [/"General"/, /30-minute mute/, /"Promotion"/, /warning 3 of 4/i]) {
+      assert.match(formalSystem, required);
+      assert.match(casualSystem, required);
+    }
+  });
+});
+
+test("REQUIRED: a persona can never alter what the fallback (or any generation attempt) states as fact -- the deterministic fallback ignores persona entirely by design", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const facts: SolicitationWarningFacts = { currentTopicName: "General", muteMinutes: 10, promotionTopicName: "Promotion", promotionTopicLink: null, contactHandle: null, warningNumber: 2 };
+    const formalText = await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, facts);
+    const casualText = await generatePersonaSolicitationWarning("Kwan", CASUAL_PERSONA, facts);
+    assert.equal(formalText, casualText);
+  });
+});
+
+/* --------------------------------------------- escalation-stage tone fact ---- */
+
+test("REQUIRED (Case B): the prompt instructs a firmer tone for repeat offenses, and explicitly states the real warning number/limit -- never left for the model to guess", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 30, warningNumber: 3 });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /warning 3 of 4/i);
+      assert.match(system, /sound noticeably firmer/i);
+    });
+  });
+});
+
+test("a first offense is explicitly framed as light/matter-of-fact, not firm", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos."), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 });
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /first offense/i);
+      assert.doesNotMatch(system, /sound noticeably firmer/i);
+    });
+  });
+});
+
+/* --------------------------------------------------------- anti-repetition ---- */
+
+function multiCallFetchSpy(responses: string[]): { calls: Array<{ url: string; body: unknown }>; install: () => () => void } {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const install = () => {
+    const originalFetch = globalThis.fetch;
+    let i = 0;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      const text = responses[Math.min(i, responses.length - 1)];
+      i++;
+      return new Response(JSON.stringify(anthropicTextResponse(text)), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = originalFetch;
+    };
+  };
+  return { calls, install };
+}
+
+test("REQUIRED (Case C/4): a near-duplicate candidate triggers exactly ONE bounded regeneration, whose prompt explicitly says to avoid repeating the recent wording", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
+    // First call returns near-identical text to the recent one; second
+    // (retry) call returns something genuinely different.
+    const { calls, install } = multiCallFetchSpy([
+      "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.",
+      "Hey, that's a promo, pulled it. 10-minute mute, use Promotion next time.",
+    ]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning(
+        "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
+      );
+      assert.equal(calls.length, 2, "exactly one regeneration attempt, never zero, never more than one");
+      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      assert.match(retrySystem, /said something VERY similar to this recently/i);
+      assert.match(retrySystem, /say this one differently/i);
+      assert.equal(text, "Hey, that's a promo, pulled it. 10-minute mute, use Promotion next time.");
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED: when the candidate is NOT similar to any recent warning, only ONE call is made -- no wasted regeneration", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["That's off-topic spam, not allowed here."];
+    const { calls, install } = multiCallFetchSpy(["No promo in this topic, please -- 10 minute mute. Use Promotion instead."]);
+    const restore = install();
+    try {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10, warningNumber: 2 }, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED: the retry is bounded to exactly ONE attempt -- even if the regenerated text is STILL similar, it's used as-is, never retried again", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
+    const sameSimilarText = "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.";
+    const { calls, install } = multiCallFetchSpy([sameSimilarText, sameSimilarText]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning(
+        "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
+      );
+      assert.equal(calls.length, 2, "never a third call even though the retry is also similar");
+      assert.equal(text, sameSimilarText);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("an empty recentOwnWarnings list never triggers a regeneration, regardless of candidate content", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead."]);
+    const restore = install();
+    try {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10, warningNumber: 2 }, undefined, []);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+/* -------------------------------------- generation-failure never blocks enforcement ---- */
+
+test("REQUIRED: a failed FIRST generation call falls straight to the deterministic fallback -- no retry is ever attempted (there's nothing successful to compare for similarity)", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    globalThis.fetch = (async () => {
+      callCount++;
+      return new Response("server error", { status: 500 });
+    }) as typeof fetch;
+    try {
+      const text = await generatePersonaSolicitationWarning(
+        "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, warningNumber: 2 }, undefined, ["some recent warning text"]
+      );
+      assert.equal(callCount, 1, "exactly one attempt, never a retry after a genuine failure");
+      assert.ok(text.length > 0);
+      assert.equal(text, "No promos in General, please. This resulted in a 10-minute mute. Repeated offenses escalate to a kick or ban.");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("REQUIRED: a successful first generation that IS a near-duplicate, whose retry then fails, still returns the first (already-valid) text -- never discarded for an unrelated retry failure", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
+    const firstText = "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.";
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    globalThis.fetch = (async () => {
+      callCount++;
+      if (callCount === 1) {
+        return new Response(JSON.stringify(anthropicTextResponse(firstText)), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("server error", { status: 500 }); // the retry attempt fails
+    }) as typeof fetch;
+    try {
+      const text = await generatePersonaSolicitationWarning(
+        "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
+      );
+      assert.equal(callCount, 2);
+      assert.equal(text, firstText, "the retry failing must not discard the already-valid first generation");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -1786,6 +1786,22 @@ export function deploymentRecentlyParticipated(recentContext: ChatterContextMess
   return recentContext.some((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId && isRecentMessage(m.createdAt, now));
 }
 
+/** Moderation anti-repetition context (2026-09-04) -- the raw text of THIS
+ *  specific deployment's own recent messages within `context`, used only to
+ *  decide whether a freshly-generated warning reads as a near-duplicate of
+ *  something this SAME Watcher already said (see link-moderation.ts's
+ *  isNearDuplicateWarning / link-classify.ts's generatePersonaSolicitationWarning).
+ *  Never affects WHETHER a violation is flagged/deleted/counted -- only
+ *  candidate wording. Correctly scoped by construction, not by a runtime
+ *  check: `context` is already loaded scoped to one specific community (the
+ *  caller's own `loadRecentContext(admin, community.id, ...)`), and this
+ *  filter further narrows it to one specific deployment -- a different
+ *  Watcher's or a different Community's recent wording can never appear in
+ *  the result. */
+export function recentOwnModeratorMessages(context: ChatterContextMessage[], deploymentId: string): string[] {
+  return context.filter((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId).map((m) => m.text);
+}
+
 /* -------------------------------------------------- trial reactive quota ---- */
 // Phase 4.M (B): 20 successfully-executed reactive conversational text
 // responses (CASUAL_CHAT/ANSWER/SHORT_ACK) per community per local
@@ -2550,6 +2566,13 @@ export async function runLinkModeration(
   // is still deterministic and required, never left to the model to invent
   // -- see generatePersonaSolicitationWarning's own doc comment. Falls back
   // to the exact previous deterministic template on any generation failure.
+  //
+  // Anti-repetition context (2026-09-04, live feedback: a Watcher was
+  // producing near-identical warnings across different offenders): reuses
+  // the SAME already-loaded linkModerationContext (no new query), via
+  // recentOwnModeratorMessages -- see its own doc comment for the scoping
+  // guarantee.
+  const recentOwnWarnings = recentOwnModeratorMessages(linkModerationContext, enforcer.deploymentId);
   const generatedWarning = await generatePersonaSolicitationWarning(
     enforcer.moderatorName,
     enforcer.persona,
@@ -2563,8 +2586,10 @@ export async function runLinkModeration(
       contactHandle: promotionContact,
       isCompetingProjectPromotion: isCompetingProjectEnforcement,
       searchSpamPattern,
+      warningNumber: enforcement.warningNumber,
     },
-    aiRouting
+    aiRouting,
+    recentOwnWarnings
   );
   // A coordinated (multi-account) SEARCH_SPAM burst is deliberately never
   // addressed to a specific person (live feedback: "if 2 messages followed

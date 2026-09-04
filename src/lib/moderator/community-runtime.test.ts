@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse, getCommunityReactiveQuotaUsage,
-  raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated,
+  raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated, recentOwnModeratorMessages,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
   finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
   trialMediaModerationPeriod, isSyntheticChannelSender, SYNTHETIC_CHANNEL_SENDER_PREFIX,
@@ -497,6 +497,54 @@ test("a HUMAN message from the same deployment id slot never counts (only INNVIL
   const now = new Date();
   const recentContext = [msg({ senderType: "HUMAN", deploymentId: "dep-a", createdAt: now.toISOString() })];
   assert.equal(deploymentRecentlyParticipated(recentContext, "dep-a", now), false);
+});
+
+/* ============================================ recentOwnModeratorMessages ====
+   Moderation anti-repetition context (2026-09-04) -- the raw text of THIS
+   deployment's own recent messages, used only to decide whether a freshly
+   generated warning reads as a near-duplicate of something this SAME
+   Watcher already said (link-classify.ts's generatePersonaSolicitationWarning).
+   Requirements #5/#6: correctly scoped to Watcher + the community the
+   caller's own `context` array was loaded for, with no cross-Watcher/
+   cross-Community leakage possible. */
+
+function ownMsg(deploymentId: string | null, text: string, senderType: "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT" = "INNVIL_MODERATOR") {
+  return { senderType, senderName: null, text, deploymentId, createdAt: new Date().toISOString(), senderPlatformId: null };
+}
+
+test("REQUIRED (#5): returns only THIS deployment's own recent message texts, in order", () => {
+  const context = [
+    ownMsg("dep-a", "first warning from A"),
+    ownMsg("dep-b", "an unrelated message from B"),
+    ownMsg("dep-a", "second warning from A"),
+  ];
+  assert.deepEqual(recentOwnModeratorMessages(context, "dep-a"), ["first warning from A", "second warning from A"]);
+});
+
+test("REQUIRED (#6): a DIFFERENT Watcher's (deployment's) messages never leak in, even when interleaved in the same community's context", () => {
+  const context = [ownMsg("dep-a", "A's own warning"), ownMsg("dep-b", "B's own warning")];
+  assert.deepEqual(recentOwnModeratorMessages(context, "dep-b"), ["B's own warning"]);
+  assert.ok(!recentOwnModeratorMessages(context, "dep-b").includes("A's own warning"));
+});
+
+test("REQUIRED (#6, cross-Community): since `context` is always loaded scoped to ONE community by the caller (loadRecentContext(admin, community.id, ...)), a deployment id that never appears in a DIFFERENT community's own context array simply yields nothing -- structurally cannot pull in another community's wording", () => {
+  const communityAContext = [ownMsg("dep-a", "warning said in community A")];
+  const communityBContext = [ownMsg("dep-c", "warning said in community B")];
+  // The same deployment id, if it somehow existed in both (it never does in
+  // practice -- a deployment belongs to exactly one community), only ever
+  // sees the array it was actually given.
+  assert.deepEqual(recentOwnModeratorMessages(communityAContext, "dep-a"), ["warning said in community A"]);
+  assert.deepEqual(recentOwnModeratorMessages(communityBContext, "dep-a"), []);
+});
+
+test("HUMAN and EXTERNAL_BOT messages are never counted, even if they somehow carried a matching deploymentId", () => {
+  const context = [ownMsg("dep-a", "a human message", "HUMAN"), ownMsg("dep-a", "an external bot message", "EXTERNAL_BOT")];
+  assert.deepEqual(recentOwnModeratorMessages(context, "dep-a"), []);
+});
+
+test("an empty context, or a deployment id that never appears, returns an empty array -- never throws", () => {
+  assert.deepEqual(recentOwnModeratorMessages([], "dep-a"), []);
+  assert.deepEqual(recentOwnModeratorMessages([ownMsg("dep-a", "hi")], "dep-z"), []);
 });
 
 /* ==================================================== classifySender: display name ====

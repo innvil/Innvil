@@ -2,7 +2,8 @@ import "server-only";
 
 import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
-import { SPAM_WARNING_LIMIT, type LinkCategory, type ClassificationConfidence } from "./link-moderation";
+import { SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, isNearDuplicateWarning, type LinkCategory, type ClassificationConfidence } from "./link-moderation";
+import { personaVoiceBlock } from "./chatter-generate";
 import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/watch-runtime";
 
 /**
@@ -215,6 +216,16 @@ export async function generateModerationWarning(
 export interface SolicitationWarningFacts {
   /** Display name of the topic the violation happened in (e.g. "General"). */
   currentTopicName: string;
+  /** Escalation stage (2026-09-04) -- "warning N of LIMIT" for THIS specific
+   *  offender's own repeated-violation ladder (decideLinkEnforcement's
+   *  warningNumber). A structured fact, not something the model infers from
+   *  the mute duration alone -- lets tone genuinely firm up across repeat
+   *  offenses (Case B: "the exact same sentence with only the mute number
+   *  changed" is exactly the bug this fixes) without ever changing what
+   *  actually happened. Always the real SOLICITATION_WARNING_LIMIT-based
+   *  ladder position, since this function is never called for scam/phishing
+   *  (that path stays fully deterministic, unchanged). */
+  warningNumber: number;
   /** Exact mute duration this violation triggered, if any — undefined means
    *  no mute (e.g. a first offense). Never invented by the model; when
    *  present it MUST be stated verbatim. */
@@ -257,6 +268,25 @@ export interface SolicitationWarningFacts {
   searchSpamPattern?: "isolated" | "coordinated";
 }
 
+/** Bounded to exactly one retry (2026-09-04 anti-repetition fix, see
+ *  link-moderation.ts's isNearDuplicateWarning) -- never an unbounded loop.
+ *  Only the last 3 of the caller-supplied recent texts are ever referenced
+ *  in the prompt, kept short, so this never balloons the request. */
+const MAX_RECENT_WARNINGS_IN_PROMPT = 3;
+const MAX_RECENT_WARNING_SNIPPET_CHARS = 140;
+
+function stripMentionForPrompt(text: string): string {
+  return text.replace(/<a\b[^>]*>.*?<\/a>/gi, "[name]").replace(/@[a-z0-9_]+/gi, "[name]");
+}
+
+function buildAvoidRepeatingNote(recentOwnWarnings: string[]): string {
+  const sample = recentOwnWarnings
+    .slice(-MAX_RECENT_WARNINGS_IN_PROMPT)
+    .map((t) => `"${stripMentionForPrompt(t).slice(0, MAX_RECENT_WARNING_SNIPPET_CHARS)}"`)
+    .join(" / ");
+  return `You've said something VERY similar to this recently in this same room: ${sample}. Say THIS one differently -- change the opener, the sentence structure, and the closing line so it doesn't read like a repeat. Since this keeps coming up, keep this one especially short -- a brief correction, not a full explanation.`;
+}
+
 /** Persona-voiced solicitation/promotion warning — supersedes the flat
  *  deterministic `topicSolicitationWarningText` template's WORDING (per
  *  explicit live product feedback: "the way it says a warning is too
@@ -269,12 +299,31 @@ export interface SolicitationWarningFacts {
  *  to the EXACT existing deterministic template (byte-for-byte the same
  *  output this function replaces) on any generation failure or when no AI
  *  provider is usable — there is no scenario where this produces a worse
- *  or less accurate warning than before, only a differently-phrased one. */
+ *  or less accurate warning than before, only a differently-phrased one.
+ *
+ *  2026-09-04: two further live-reported problems fixed in this same
+ *  function, per explicit product requirement --
+ *  (1) the persona voice now reuses the SAME persona-realization machinery
+ *  (personaVoiceBlock, chatter-generate.ts) Natural Chatter's own
+ *  conversational replies already use -- formality/slang/humor/teasing/
+ *  emoji dials and customInstructions, not just the bare description
+ *  sentence -- so two differently-configured Watchers genuinely SOUND
+ *  different for the identical underlying violation, never a second,
+ *  separate "moderation persona" system;
+ *  (2) `recentOwnWarnings` (this SAME Watcher's own recent messages in this
+ *  SAME community, caller-supplied and already scoped -- see
+ *  community-runtime.ts) lets this step notice when it's about to repeat
+ *  itself and regenerate ONCE with an explicit "say it differently, keep it
+ *  short" instruction -- bounded to a single retry, never an unbounded loop,
+ *  and it can only ever change WORDING, never the underlying facts (the
+ *  requiredFacts list below is unaffected by this and is still injected
+ *  verbatim into the retry). */
 export async function generatePersonaSolicitationWarning(
   moderatorName: string,
   persona: ModeratorPersona,
   facts: SolicitationWarningFacts,
-  aiRouting?: AccountAiRouting
+  aiRouting?: AccountAiRouting,
+  recentOwnWarnings: string[] = []
 ): Promise<string> {
   // Live feedback (2026-09-02): "it should not send the promotion link, it
   // should say promotion" -- the redirect destination is now ALWAYS spoken
@@ -334,20 +383,43 @@ export async function generatePersonaSolicitationWarning(
       ? "posting off-topic spam (an instruction to search/look something up that has nothing to do with this project)"
       : "posting unsolicited promotion (advertising a project/service with no relevance here, or soliciting private contact for a growth/marketing service)";
 
-  const system = [
-    `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${violationDescription}.`,
-    `Write ONE short, natural, casual warning${facts.searchSpamPattern === "coordinated" ? " to the room" : " to the person"}, entirely in your own persona voice (persona description: ${persona.description || "no specific persona configured — keep it plain and neutral"}).`,
-    `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY and BRIEFLY, the way a real person would actually type a quick warning, not as a checklist:`,
-    ...requiredFacts.map((f) => `- ${f}`),
-    `Mention AT MOST ONE destination/contact (whichever fact above applies) -- never list a Promotion topic AND a contact handle together, that reads like a form letter, not a person.`,
-    `Never output robotic/templated phrasing like "Violation N" and never enumerate facts as separate clauses joined with commas -- write like a real short chat message.`,
-    `Always write the warning in English, regardless of what language the violating message itself was written in.`,
-    `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation. Keep it SHORT: one sentence, occasionally two if it genuinely needs both a fact and the escalation note. Under 30 words.`,
-  ].join("\n");
+  // Escalation-stage fact (Case B: tone should genuinely firm up across
+  // repeat offenses, never just swap the mute number into an otherwise
+  // identical sentence). Purely a TONE instruction -- the actual mute/
+  // destination/contact facts above are the only things that may ever be
+  // STATED; this only affects how firm/patient the wording sounds.
+  const escalationLine =
+    facts.warningNumber <= 1
+      ? `This is this person's FIRST offense of this kind -- keep the tone light/matter-of-fact, not harsh.`
+      : `This is warning ${facts.warningNumber} of ${SOLICITATION_WARNING_LIMIT} for this SAME kind of violation from this SAME person -- you've already told them this before, so sound noticeably firmer/less patient than a first-time nudge, while still sounding like yourself. Do not write it as if this were their first offense.`;
 
-  if (aiRouting?.required) {
-    const cred = aiRouting.credential;
-    if (cred?.model) {
+  const buildSystem = (avoidRepeatingNote?: string): string =>
+    [
+      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${violationDescription}.`,
+      `Write ONE short, natural, casual warning${facts.searchSpamPattern === "coordinated" ? " to the room" : " to the person"}, entirely in your own persona voice (see below).`,
+      ...personaVoiceBlock(persona),
+      escalationLine,
+      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY and BRIEFLY, the way a real person would actually type a quick warning, not as a checklist:`,
+      ...requiredFacts.map((f) => `- ${f}`),
+      `Mention AT MOST ONE destination/contact (whichever fact above applies) -- never list a Promotion topic AND a contact handle together, that reads like a form letter, not a person.`,
+      `Never output robotic/templated phrasing like "Violation N" and never enumerate facts as separate clauses joined with commas -- write like a real short chat message.`,
+      `Always write the warning in English, regardless of what language the violating message itself was written in.`,
+      avoidRepeatingNote,
+      `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation. Keep it SHORT: one sentence, occasionally two if it genuinely needs both a fact and the escalation note. Under 30 words.`,
+    ]
+      .filter((line): line is string => !!line)
+      .join("\n");
+
+  /** Returns the generated text, or null when generation genuinely could not
+   *  happen (BYO required-but-unusable, no AI configured, or a failed
+   *  call) -- null is the caller's signal to fall back to the deterministic
+   *  template, exactly preserving the prior branch-by-branch behavior
+   *  (including the "zero network calls when BYO is required but unusable"
+   *  and "never reach Innvil's own key when BYO is required" invariants). */
+  const attemptGeneration = async (system: string): Promise<string | null> => {
+    if (aiRouting?.required) {
+      const cred = aiRouting.credential;
+      if (!cred?.model) return null;
       try {
         const raw = await aiComplete({
           system,
@@ -358,15 +430,12 @@ export async function generatePersonaSolicitationWarning(
           automation: "LINK_MODERATION_WARNING_BYO",
         });
         const text = raw.trim();
-        if (text) return text.slice(0, 400);
+        return text ? text.slice(0, 400) : null;
       } catch {
-        // fall through to the deterministic template below
+        return null;
       }
     }
-    return deterministicFallback();
-  }
-
-  if (aiConfigured()) {
+    if (!aiConfigured()) return null;
     try {
       const { model, effort } = getInnvilModelConfig();
       const raw = await aiComplete({
@@ -378,10 +447,19 @@ export async function generatePersonaSolicitationWarning(
         automation: "LINK_MODERATION_WARNING",
       });
       const text = raw.trim();
-      if (text) return text.slice(0, 400);
+      return text ? text.slice(0, 400) : null;
     } catch {
-      // fall through to the deterministic template below
+      return null;
     }
-  }
-  return deterministicFallback();
+  };
+
+  const first = await attemptGeneration(buildSystem());
+  if (first === null) return deterministicFallback();
+  if (!recentOwnWarnings.length || !isNearDuplicateWarning(first, recentOwnWarnings)) return first;
+
+  // Bounded to exactly ONE retry -- if the regenerated text is somehow
+  // still similar, or the retry itself fails, it's used/fallen-back-from
+  // exactly the same as any other generation outcome, never looped again.
+  const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings)));
+  return retry ?? first;
 }

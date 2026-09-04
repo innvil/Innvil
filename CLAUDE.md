@@ -127,6 +127,68 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-04 — Moderation warnings are persona-voiced and anti-repetitive: a Watcher's warnings sound like ITS configured persona and stop reusing the same sentence skeleton (v1.49.29)
+- **Live feedback, two screenshots of "Patricia" sending near-identical warnings to different offenders**
+  ("No promo in this topic, friend -- that's a 10-min mute. Take that energy to Promotion instead..." /
+  "...that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.") — the
+  underlying moderation DETECTION/DECISION (`decideLinkEnforcement`, `link-moderation.ts`) was never the
+  problem and is completely untouched by this fix; the bug was entirely in the human-facing WORDING step.
+- **Root cause**: `generatePersonaSolicitationWarning()` (`link-classify.ts`) only ever interpolated the bare
+  `persona.description` string into one prompt line — it never called any of `chatter-generate.ts`'s richer
+  persona-realization machinery (`personaStyle`, `personaCustomInstructionsLine`, the identity line,
+  `STYLE_HIERARCHY_PREFACE`) the way ordinary conversational replies already do. Combined with a highly
+  prescriptive `requiredFacts` checklist and zero awareness of what this SAME Watcher had just said, this
+  produced structurally near-identical warnings across different personas and different repeat offenses.
+- **New reusable adapter, not a second persona system: `personaVoiceBlock(persona)`** (`chatter-generate.ts`,
+  exported) — reuses the EXACT SAME machinery CASUAL_CHAT/ANSWER conversational replies already use
+  (`personaIdentityLineFor`, `personaCustomInstructionsLine`, `STYLE_HIERARCHY_PREFACE`, `personaStyle`),
+  refactored out of the existing `personaIdentityLine(input)` (now a thin wrapper) so both call sites share one
+  implementation. `generatePersonaSolicitationWarning` now spreads this block into its system prompt instead of
+  a single bare description sentence — persona changes HOW a warning is said, never WHAT happened; every
+  structured fact (topic name, exact mute duration, redirect destination, contact handle) stays deterministic
+  and required, exactly as before.
+- **New structured fact: `warningNumber`** (`SolicitationWarningFacts`, required) — the real escalation stage,
+  driving a persona-neutral tone instruction (a first warning reads lighter than a third) without ever inventing
+  a warning count the enforcement layer didn't actually compute.
+- **New, deliberately cheap/bounded anti-repetition mechanism** — `warningTextSimilarity`/
+  `isNearDuplicateWarning`/`NEAR_DUPLICATE_WARNING_THRESHOLD=0.45` (`link-moderation.ts`, pure, no I/O): a
+  bag-of-words Jaccard similarity over normalized text (mentions/links stripped, digits collapsed to a
+  placeholder so "10-minute mute" and "30-minute mute" register as the same underlying SHAPE — the exact
+  live-caught bug) — never a vector/embedding comparison, never unbounded retries. New
+  `recentOwnModeratorMessages(context, deploymentId)` (`community-runtime.ts`, exported) scopes "this Watcher's
+  own recent messages in this Community" from the ALREADY-LOADED `linkModerationContext` (zero new DB query),
+  filtered strictly by the resolved enforcer's own `deploymentId` — cannot leak another Watcher's or another
+  Community's messages by construction. `generatePersonaSolicitationWarning` generates once, checks the
+  candidate against this small bounded set, and — only if too similar — regenerates EXACTLY ONCE with an
+  explicit "say this differently, keep it short" instruction, using the retry result regardless of its own
+  outcome (`retry ?? first`) — never a loop, never fragile global randomness. A generation failure (first
+  attempt or retry) never breaks enforcement itself — the pre-existing deterministic template fallback is
+  completely unchanged and is what a failed retry falls back to.
+- **Every existing safety invariant reverified untouched, not just assumed**: single-coordinated-response
+  architecture (`resolveModerationEnforcer(deployments, roleAssignments, "spam_scam")` still resolves exactly
+  ONE enforcing Watcher per event, and `generatePersonaSolicitationWarning`/the resulting `SEND_TEXT` are each
+  called exactly once, inside the `DELETE_WARN` branch only — never from `DELETE_KICK`/`DELETE_BAN`, which keep
+  their own separate, unchanged, deliberately short/deterministic messaging, e.g. `scamFirstOffenseWarningHtml`);
+  no duplicate violation-counting (`moderator_link_warning_state` persistence is unchanged); AI-routing
+  architecture untouched (moderation DETECTION still runs through `classifyLinkIntent`'s existing Sonnet-5
+  routing, completely independent of this warning-TEXT generation call; BYO-required-but-unusable still makes
+  zero network calls and never silently falls back to Innvil's own key); media moderation (`media-moderation.ts`/
+  `media-warning.ts`) is fully untouched (confirmed via diff — not present in this change at all); moderation
+  thresholds, role allocation, Project Knowledge, billing/plan logic, and Watcher slot semantics are all
+  untouched (confirmed via `git diff --name-only` — exactly 8 files changed, all under `src/lib/moderator/`).
+- New tests: `link-moderation.test.ts` (+8 — `warningTextSimilarity`/`isNearDuplicateWarning` pinned against the
+  exact live-reported near-duplicate pairs, threshold correctness, mention-stripping proof, symmetry, empty-
+  string safety), `chatter-generate.test.ts` (+5 — `personaVoiceBlock` matches `buildSystemPrompt`'s own identity/
+  customInstructions/style-mechanics text exactly, two different personas produce genuinely different output, a
+  bare persona with nothing configured never fabricates traits), `link-classify.test.ts` (+12 — persona-respect,
+  cross-persona differentiation, fact-authority/invariance across personas, escalation-tone-by-warningNumber,
+  anti-repetition retry triggered/not-triggered/bounded-to-exactly-one/never-triggered-on-an-empty-recent-list,
+  and generation-failure-never-blocks-enforcement for both the first-call-fails and retry-fails cases),
+  `community-runtime.test.ts` (+6 — `recentOwnModeratorMessages` scoped strictly to one deployment, no cross-
+  Watcher leak, no cross-Community leak, HUMAN/EXTERNAL_BOT senders excluded, empty/no-match safety). 2220 tests
+  pass (up from 2190), `tsc --noEmit` clean, production build clean.
+- **Not deployed automatically, per explicit instruction.**
+
 ### 2026-09-03 — New SEARCH_SPAM category: off-topic "search X" instructions are flagged as spam, not promotion, with coordinated-raid-aware warning wording (v1.49.28)
 - **Live feedback, screenshot of two different accounts ("Jesika"/"Marco") posting "Search miniairdrops" 8
   minutes apart**: "this should be flagged as spam, not as promo but spam even if sent by different users

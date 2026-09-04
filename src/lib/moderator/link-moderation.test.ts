@@ -7,6 +7,7 @@ import {
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   promotionContactSentence,
+  warningTextSimilarity, isNearDuplicateWarning, NEAR_DUPLICATE_WARNING_THRESHOLD,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -765,4 +766,70 @@ test("promotionContactSentence includes the configured Partnerships contact verb
 
 test("promotionContactSentence is empty when no contact is configured -- never fabricates one", () => {
   assert.equal(promotionContactSentence(null), "");
+});
+
+/* ------------------------------------------ moderation-warning anti-repetition ---- */
+// Live feedback (2026-09-04): "Patricia" was posting near-identical
+// moderation warnings ("No promo in this topic, friend -- that's a 10-min
+// mute. Take that energy to Promotion instead..." vs "...that's a 10 min
+// mute. Take it to Promotion instead, or next time it escalates further.")
+// across DIFFERENT offenders. These pin the exact reported pairs against
+// the real function -- not a guessed threshold, an empirically-verified one.
+
+const LIVE_PAIR_1A = "@Gxr9gxGlA0qR, No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city.";
+const LIVE_PAIR_1B = "@SaraKOLs, No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.";
+const LIVE_PAIR_2A = "@Gxr9gxGlA0qR, Yanked that — no promo in this topic. 30-min mute for now, but keep it up and we're talking kick/ban territory.";
+const LIVE_PAIR_2B = "@Sleeping_Pepe, Yanked that — no promo in this topic, save it for Promotion. No mute this time, but keep it up and we're looking at a mute, then a boot.";
+const LIVE_PAIR_3A = "@Ashie2a, Yanked that—Announcement isn't for promo, take it to Promotion instead. No mute this time, but keep it up and that'll change fast.";
+const LIVE_PAIR_3B = "@Shojib_Web3_MKT, Yeah this topic isn't for promo — head over to Promotion for that. No mute this time, but keep it up and you'll earn one, then worse.";
+
+test("REQUIRED (exact live repro): each reported near-duplicate pair scores at or above the near-duplicate threshold", () => {
+  assert.ok(warningTextSimilarity(LIVE_PAIR_1A, LIVE_PAIR_1B) >= NEAR_DUPLICATE_WARNING_THRESHOLD);
+  assert.ok(warningTextSimilarity(LIVE_PAIR_2A, LIVE_PAIR_2B) >= NEAR_DUPLICATE_WARNING_THRESHOLD);
+  assert.ok(warningTextSimilarity(LIVE_PAIR_3A, LIVE_PAIR_3B) >= NEAR_DUPLICATE_WARNING_THRESHOLD);
+});
+
+test("REQUIRED: isNearDuplicateWarning flags a live-repro pair as a near-duplicate", () => {
+  assert.equal(isNearDuplicateWarning(LIVE_PAIR_1B, [LIVE_PAIR_1A]), true);
+});
+
+test("different usernames alone never explain the similarity -- mentions never overlap, and stripping them never HURTS the score (only helps or is neutral)", () => {
+  // A naive comparator that does NOT strip @mentions -- the two different
+  // usernames become two extra, never-overlapping tokens, which can only
+  // dilute (never inflate) a similarity score versus the real function.
+  const withoutMentionStripping = (a: string, b: string) => {
+    const words = (t: string) => new Set(t.toLowerCase().replace(/[^a-z0-9@\s]/gi, " ").split(/\s+/).filter(Boolean));
+    const sa = words(a), sb = words(b);
+    let hit = 0;
+    for (const w of sa) if (sb.has(w)) hit++;
+    return hit / (sa.size + sb.size - hit);
+  };
+  assert.ok(!LIVE_PAIR_1A.includes("SaraKOLs") && !LIVE_PAIR_1B.includes("Gxr9gxGlA0qR"), "the two usernames genuinely never overlap");
+  assert.ok(withoutMentionStripping(LIVE_PAIR_1A, LIVE_PAIR_1B) <= warningTextSimilarity(LIVE_PAIR_1A, LIVE_PAIR_1B));
+});
+
+test("distinct-template warnings from the SAME Watcher (different structure/opener) score below the threshold -- the check must not over-fire on ordinary phrasing variety", () => {
+  assert.ok(warningTextSimilarity(LIVE_PAIR_1A, LIVE_PAIR_2A) < NEAR_DUPLICATE_WARNING_THRESHOLD);
+  assert.ok(warningTextSimilarity(LIVE_PAIR_1A, LIVE_PAIR_3A) < NEAR_DUPLICATE_WARNING_THRESHOLD);
+  assert.ok(warningTextSimilarity(LIVE_PAIR_2A, LIVE_PAIR_3A) < NEAR_DUPLICATE_WARNING_THRESHOLD);
+});
+
+test("a genuinely unrelated message (different violation entirely) scores very low, never a false positive", () => {
+  const different = "@user, that's off-topic spam and not allowed here. Please stop.";
+  assert.ok(warningTextSimilarity(LIVE_PAIR_1A, different) < 0.2);
+  assert.equal(isNearDuplicateWarning(different, [LIVE_PAIR_1A, LIVE_PAIR_2A, LIVE_PAIR_3A]), false);
+});
+
+test("isNearDuplicateWarning is false when recentTexts is empty -- never flags with nothing to compare against", () => {
+  assert.equal(isNearDuplicateWarning(LIVE_PAIR_1A, []), false);
+});
+
+test("warningTextSimilarity is symmetric and self-similarity is exactly 1", () => {
+  assert.equal(warningTextSimilarity(LIVE_PAIR_1A, LIVE_PAIR_1B), warningTextSimilarity(LIVE_PAIR_1B, LIVE_PAIR_1A));
+  assert.equal(warningTextSimilarity(LIVE_PAIR_1A, LIVE_PAIR_1A), 1);
+});
+
+test("warningTextSimilarity handles empty strings safely -- never divides by zero / never NaN", () => {
+  assert.equal(warningTextSimilarity("", ""), 0);
+  assert.equal(warningTextSimilarity("", LIVE_PAIR_1A), 0);
 });
