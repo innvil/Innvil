@@ -934,6 +934,71 @@ test("no rows at all in any scope -> undefined, no query result mishandling", as
   assert.equal(result, undefined);
 });
 
+/* ============================ Web3/crypto commercial-intent contact routing ==== */
+// End-to-end proof (via the real loadRelevantKnowledge, not just the pure
+// resolveContactIntent unit tests in project-profile.test.ts) that a genuine
+// commercial ask retrieves the configured Partnerships/Collaboration contact
+// as an authoritative PRESET, a purely informational Web3 question does not,
+// a missing contact is never fabricated, and project isolation holds for
+// this new routing path exactly as it already does for every other one.
+
+test("REQUIRED test 5 (a genuine commercial ask retrieves the real configured Partnerships contact)", async () => {
+  const admin = fakeAdminForKnowledge([], { "community-1": "project-litho" }, { "project-litho": { contacts: { partnerships: "@litho_bd" } } });
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "Can we sponsor an AMA?");
+  assert.ok(result);
+  assert.equal(result![0].scope, "PRESET");
+  assert.equal(result![0].content, "@litho_bd");
+});
+
+test("REQUIRED test 7 (listing intent maps onto the SAME canonical Partnerships/Collaboration field, never a fabricated separate 'listing' contact)", async () => {
+  const admin = fakeAdminForKnowledge([], { "community-1": "project-litho" }, { "project-litho": { contacts: { partnerships: "@litho_bd" } } });
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "Can you list our token?");
+  assert.ok(result);
+  assert.equal(result![0].content, "@litho_bd");
+});
+
+test("REQUIRED test 1 (a purely informational Web3 question never retrieves the Partnerships contact, even when one is configured)", async () => {
+  const admin = fakeAdminForKnowledge([], { "community-1": "project-litho" }, { "project-litho": { contacts: { partnerships: "@litho_bd" } } });
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "What is an IDO?");
+  // No other knowledge exists in this fixture either, so a correctly-scoped
+  // question resolves to undefined -- if the bug were "vocabulary alone
+  // triggers routing," this would incorrectly return the @litho_bd PRESET.
+  assert.equal(result, undefined);
+});
+
+test("REQUIRED test 12 (missing contact does not fabricate one): a genuine commercial ask with NO partnerships contact configured retrieves nothing, never invents a value", async () => {
+  const admin = fakeAdminForKnowledge([], { "community-1": "project-litho" }, { "project-litho": { contacts: {} } });
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-1", "Who handles partnerships?");
+  assert.equal(result, undefined);
+});
+
+test("REQUIRED test 15 (no Project Knowledge bleed across Projects, for the NEW commercial-intent routing path too): two projects, each with its OWN partnerships contact -- a commercial ask in one community never surfaces the other project's contact", async () => {
+  const admin = fakeAdminForKnowledge(
+    [],
+    { "litho-community": "project-litho", "thanos-community": "project-thanos" },
+    {
+      "project-litho": { contacts: { partnerships: "@litho_bd" } },
+      "project-thanos": { contacts: { partnerships: "@thanos_bd" } },
+    }
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "thanos-community", "Can we sponsor an AMA together?");
+  assert.ok(result);
+  assert.equal(result!.length, 1);
+  assert.equal(result![0].content, "@thanos_bd");
+  assert.ok(!result!.some((r) => r.content === "@litho_bd"));
+});
+
+test("a community-specific partnerships override still wins over the project's own configured contact for a Web3 commercial ask", async () => {
+  const admin = fakeAdminForKnowledge(
+    [{ id: "comm-bd", panel_id: "panel-1", scope_type: "COMMUNITY", project_id: null, community_id: "community-2", kind: "fact", title: "Partnerships", content: "@regional_bd", active: true }],
+    { "community-2": "project-litho" },
+    { "project-litho": { contacts: { partnerships: "@litho_bd" } } }
+  );
+  const result = await loadRelevantKnowledge(admin, "panel-1", "community-2", "Who handles our AMA sponsorship?");
+  assert.ok(result);
+  assert.equal(result![0].content, "@regional_bd");
+});
+
 /* ==================================================== detectSupportedMedia ==== */
 
 function baseMessage(overrides: Partial<TelegramMessage> = {}): TelegramMessage {

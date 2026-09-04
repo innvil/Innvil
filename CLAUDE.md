@@ -127,6 +127,66 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-05 — Web3/crypto intent-aware Partnerships/Collaboration contact routing (v1.49.33)
+- **Extends the existing structured-contact-preset architecture** (`project-profile.ts`'s `resolveContactIntent`,
+  Phase 4.N) to correctly distinguish informational Web3/crypto questions, ordinary conversational mentions,
+  and genuine commercial/promo/partnership/BD/listing requests — **a Web3 term by itself is never promotional
+  intent.** No new knowledge system, no new contact system, no new `ContactKind` — this maps directly onto the
+  existing canonical "Partnerships / Collaboration" field, per explicit product decision that this is the
+  correct existing field for promo/BD/listing/sponsorship inquiries.
+- **Architecture: vocabulary AND intent, never vocabulary alone.** New `isPartnershipsIntent(text)` routes to
+  the Partnerships contact only when EITHER (a) an already-established, inherently commercial standalone phrase
+  matches (`collab(oration)?`/`partnership(s)?`/`business development`/`bizdev`/etc. — unchanged in spirit from
+  before this pass), OR (b) a genuine commercial-ASK grammatical shape (`COMMERCIAL_ASK_RE` — "can we/you...",
+  "who handles...", "who can/should I contact...", "we'd like...", "we want to...") is combined with a
+  commercial-topic word (`COMMERCIAL_TOPIC_RE` — the feature's own "Promo / partnership intent emphasis"
+  vocabulary: ICO/IDO/IEO/TGE/presale/launchpad/listing/AMA/KOL/campaign/sponsorship/giveaway/airdrop/ambassador/
+  affiliate/cross-promote/integration/BD/media partner/etc.). A bare topic mention with no ask attached ("gm
+  frens, that shill was wild", "nice airdrop", "What is an IDO?") never routes on its own — the ask-structure
+  gate is what makes a generous topic vocabulary safe, since even a common-word topic match (e.g. bare "list")
+  is harmless without a real request shape attached to it.
+- **General Web3 comprehension needed no new code — verified already satisfied, not silently assumed.**
+  Sonnet 5 already understands common Web3/crypto concepts from its own training, and the EXISTING
+  `NO_PROJECT_KNOWLEDGE_LINE` (`chatter-generate.ts`) already explicitly permits answering a question
+  generally/socially when it doesn't require project-specific facts — meaning "What is an IDO?"/"What is an
+  AMA?" were already answerable from general knowledge once correctly NOT routed to contact/escalation. Building
+  a dedicated Web3 terminology/glossary reference system for general comprehension would have been exactly the
+  "second knowledge system" this pass was explicitly told not to create — confirmed via a new test asserting the
+  existing permissive clause's presence, not assumed.
+- **Two real, pre-existing regex bugs found and fixed while adding test coverage (neither introduced by this
+  pass — this module had zero dedicated tests before it):** `\bpartnership\b` never matched the PLURAL
+  "partnerships" (no word boundary between "partnership" and its own trailing "s") — "Who handles
+  partnerships?", one of this feature's own required test cases, silently fell through; and `collab(oration)?`
+  never matched the verb forms "collaborate"/"collaborating"/"collaborated" (only the bare noun "collab" or
+  "collaboration"), even though "we'd love to collaborate" expresses the identical intent. Both fixed in the
+  same widened `PARTNERSHIP_KEYWORD_RE`.
+- **"Can you list our token?" maps onto the SAME canonical Partnerships/Collaboration field** — no new
+  "listing" `ContactKind` was invented (the task's own guidance: "preferably Partnerships / Collaboration /
+  Promo / BD contact according to actual canonical fields" — there is no separate listing field to invent one
+  for).
+- **Moderation precedence, Coordinator single-response ownership, violation counting, mute/kick/ban logic,
+  Watcher role allocation, and pricing/billing are completely untouched** — confirmed by diff review (only
+  `project-profile.ts` and three test files changed; zero changes to `chatter-coordinator.ts`, `link-classify.ts`,
+  `link-moderation.ts`, `money.ts`, `plan.ts`). `resolveContactIntent` only runs inside `loadRelevantKnowledge`,
+  itself only reached from the ANSWER path AFTER `runLinkModeration`/media moderation have already run and
+  allowed the message through — a real spam/scam/phishing message never reaches this classifier at all, by the
+  same pre-existing pipeline ordering this pass never modified. The existing, separate `collab_contact`/
+  `collabContactLine` mechanism (Phase 4.M (F), triggered only when a LINK-bearing message is AI-classified as
+  COLLABORATION_REQUEST/AMA_REQUEST/PARTNERSHIP_REQUEST) is untouched and coexists with this new, link-less,
+  regex-based path — they cover genuinely different trigger conditions (with vs. without a link/pitch signal).
+- New tests: `project-profile.test.ts` (+25, new file — the first dedicated test coverage this module has ever
+  had, covering the pre-existing support/sales/technical_support behavior plus every one of the feature's 16
+  required scenarios at the pure-function level), `community-runtime.test.ts` (+6 — end-to-end
+  `loadRelevantKnowledge` proof that a genuine commercial ask retrieves the real configured contact, an
+  informational Web3 question doesn't, a missing contact is never fabricated, project isolation holds for this
+  new path exactly as it already does for every other one, and a community-level override still wins),
+  `chatter-generate.test.ts` (+4 — the retrieved PRESET is rendered authoritative and used exactly as given,
+  two different personas state the identical contact in genuinely different voices, the existing never-invent
+  rule is confirmed to explicitly name partnerships/collaborations/AMAs/sponsorships, and the general-knowledge
+  permission clause is confirmed present). **2330 tests pass (up from 2295), `tsc --noEmit` clean, production
+  build clean, diff reviewed (exactly 1 implementation file + 3 test files, zero scope creep).**
+- **Not deployed automatically.**
+
 ### 2026-09-05 — Two live moderation/chatter bugs: a fabricated "I'm not the dev" identity denial, and a greeting misdirected at the Watcher instead of a different named person (v1.49.32)
 - **Bug 1 — solicitation warnings were inventing personal claims about the removed message's content.** Live repro: "Dev I am your friend DM me" (a DM-solicitation pitch) got the correct enforcement (deleted, redirected to the Promotion topic) but an incorrect opening line — "i'm not the dev and we don't do promo deals over dms." Root cause: `generatePersonaSolicitationWarning` (`link-classify.ts`) is structurally never given the removed message's raw text at all (`SolicitationWarningFacts` carries no such field, by design) — so the model wasn't "responding to" the literal message, it was free-associating a plausible-sounding personal remark from its own general knowledge of this violation category, with nothing in the prompt telling it that's exactly what NOT to do. `generatePersonaScamWarning` already had the correct guard for this ("You were NOT shown the link/message content... never mention, describe, guess, or invent...") — this fix extends the same explicit instruction to the solicitation-warning prompt: "You were NOT shown the exact wording of the removed message... Do NOT guess, invent, or react to specific words, names, or claims from it — for example, never claim or deny being 'the dev,' an admin, or any other specific role/identity/relationship the message might have referenced." Enforcing the "no promos here" policy is correct and untouched; reacting to invented specifics from a message the model never saw is not.
 - **Bug 2 — a greeting addressed to a different named person was answered as if the Watcher itself had been greeted, then fabricated a correction.** Live repro: "morning martin" (Parker greeting a different community member, Martin) got "morning! (though i think you've got the wrong name 😄)" from Patricia — inventing a claim (that the human meant to address her but erred) with zero basis in what was said. Root cause traced to two gaps: (1) `VOCATIVE_PRECEDING_TOKENS` (`chatter-coordinator.ts`, governs `resolveDirectedModerator`'s vocative-address detection) only recognized `hey/hi/yo/hello/you` as a cue immediately before a name — not the rest of `GREETING_RE`'s own vocabulary (morning/evening/afternoon/gm/sup/up-from-"what's up") — so even a moderator literally named "Martin" wouldn't have been correctly routed to instead of Patricia; (2) there was no mechanism at all for recognizing that a named greeting addressee is a real, ordinary HUMAN present in the room (not a moderator), which should silence every moderator rather than let one answer on Martin's behalf.

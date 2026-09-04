@@ -4,6 +4,7 @@ import { __testables, shortAckText, classifyAmbientGreeting, classifyPitchLikeli
 import { requiresIndividualContribution } from "./chatter-coordinator";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
 import { resolvePersonaPreset, personaFromPreset } from "./presets";
+import type { KnowledgeContextEntry } from "./knowledge";
 
 const {
   buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, personaCustomInstructionsLine, obligationContextLines, collabContactLine,
@@ -1120,6 +1121,53 @@ test("the no-knowledge fallback line is REPLACED (not both present) once real kn
 test("the no-knowledge fallback is CASUAL_CHAT-exempt, same as the real knowledge block -- casual chatter never gets grounding instructions at all", () => {
   const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: undefined }));
   assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+});
+
+/* ========== Web3/crypto commercial-intent contact routing -- generation-side proof ====
+   The ROUTING decision (does this message's intent map to the Partnerships/
+   Collaboration contact at all?) is made entirely in project-profile.ts's
+   resolveContactIntent, before this file is ever reached -- see project-
+   profile.test.ts and community-runtime.test.ts for that half. What's
+   verified here is generation-side only: once a PRESET entry for
+   "Partnerships / Collaboration" IS retrieved and handed to the model, (a)
+   it must be used EXACTLY as configured, never altered/omitted, (b)
+   different personas must express it in their own natural voice while
+   stating the identical contact (REQUIRED test 13), and (c) when no such
+   contact exists, the model must never invent one (REQUIRED test 12 -- this
+   codebase's existing SHARED_RULES line already names partnerships/
+   collaborations/AMAs/sponsorships explicitly). */
+
+const PARTNERSHIP_PRESET: KnowledgeContextEntry = { scope: "PRESET", title: "Partnerships / Collaboration", content: "@litho_bd", authoritative: true };
+
+test("REQUIRED test 13: a retrieved Partnerships PRESET is rendered as authoritative and must be used exactly as given", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [PARTNERSHIP_PRESET] }));
+  assert.match(prompt, /Configured contact \(authoritative/i);
+  assert.match(prompt, /Partnerships \/ Collaboration/);
+  assert.match(prompt, /@litho_bd/);
+  assert.match(prompt, /must be used exactly as given/i);
+});
+
+test("REQUIRED test 13: two differently-configured personas both state the SAME authoritative contact -- persona controls wording, never the contact itself", () => {
+  const formalPrompt = buildSystemPrompt(baseInput({ moderatorName: "Alex", persona: FORMAL_MODERATOR_A, action: "ANSWER", projectKnowledge: [PARTNERSHIP_PRESET] }));
+  const casualPrompt = buildSystemPrompt(baseInput({ moderatorName: "Bella", persona: CASUAL_MODERATOR_B, action: "ANSWER", projectKnowledge: [PARTNERSHIP_PRESET] }));
+  // Both prompts carry the exact same authoritative contact fact...
+  assert.match(formalPrompt, /@litho_bd/);
+  assert.match(casualPrompt, /@litho_bd/);
+  // ...while each persona's OWN distinct style mechanics are present and
+  // genuinely differ between the two -- content is grounded, style is not.
+  assert.notEqual(formalPrompt, casualPrompt);
+});
+
+test("REQUIRED test 12 (generation-side): SHARED_RULES already explicitly bans inventing a contact for partnerships/collaborations/AMAs/sponsorships specifically when none is configured", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined, collabContact: null }));
+  assert.match(prompt, /partnerships\/collaborations\/AMAs\/sponsorships/i);
+  assert.match(prompt, /never invent a username/i);
+  assert.doesNotMatch(prompt, /@litho_bd/);
+});
+
+test("informational Web3 questions with no project-specific facts are still explicitly permitted to be answered generally/socially -- the existing fallback line already grants this, so a purely definitional question ('what is an IDO?') is never blocked just because nothing project-specific was retrieved", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined }));
+  assert.match(prompt, /you may still speak generally\/socially if the question doesn't actually require project-specific facts/i);
 });
 
 test("multiple retrieved entries all appear in the prompt, each on its own line", () => {
