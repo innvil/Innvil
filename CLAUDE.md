@@ -127,6 +127,86 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-04 — Scam/phishing warnings are ALSO now persona-voiced; NO_PUBLIC_REPLY is a real, reachable response mode (v1.49.31)
+- **Third pass, same day, on the persona-voicing fix — corrects a real remaining scope error the previous
+  pass's own final report had wrongly justified as a "blocker."** The v1.49.30 report claimed scam-warning
+  text (`scamFirstOffenseWarningHtml`/`scamRepeatOffenseWarningHtml`) had to stay non-persona for reliability.
+  That conflated two genuinely separate things: (A) scam DETECTION/ENFORCEMENT DECISION must stay deterministic
+  and provider-independent (true, unchanged, still 100% inside `decideLinkEnforcement`) with (B) the VISIBLE
+  WORDING must also be deterministic (never actually required). **Proven from the code, not asserted**: the
+  mute (`RESTRICT_USER mode:"MUTE"`) in `runLinkModeration`'s DELETE_WARN branch executes in a block gated
+  ONLY on `enforcement.muteMinutes && token` — never on whether the warning text/SEND_TEXT above it succeeded
+  — and a repeat-offense kick executes BEFORE any warning text is even generated. Enforcement was ALREADY
+  fully independent of language realization for this category, the exact same guarantee
+  `generatePersonaSolicitationWarning` already relies on. There was no reliability blocker.
+- **New `generatePersonaScamWarning`** (`link-classify.ts`) — persona-voiced, given ONLY safe structured facts
+  (`ScamWarningFacts {isRepeatOffense, muteMinutes}` — never the violating message, never the malicious URL/
+  domain/handle), with an explicit prompt instruction that the model was never shown the link and must never
+  invent/guess one. Falls back to the EXACT existing `scamFirstOffenseWarningHtml`/`scamRepeatOffenseWarningHtml`
+  on any generation failure — those two functions are unchanged and still ship byte-for-byte whenever AI is
+  unavailable. Always resolves to `ENFORCEMENT_NOTICE` (a scam notice is always either a real mute or an
+  already-executed kick, never a bare no-consequence warning) — the anti-repetition retry, when it triggers,
+  only ever varies phrasing, never shortens or omits a fact. The mention is embedded deterministically by the
+  function itself (never asked of the model, avoiding any risk of a garbled Telegram mention tag) — wired into
+  both scam branches of `runLinkModeration` (the first-offense mute notice and the repeat-offense kick notice).
+- **`warningTextExceedsAuthorizedFacts` gained two real extensions** (`link-moderation.ts`): a new
+  `URL_OR_LINK_RE` check rejects ANY generated candidate containing a raw link/URL, unconditionally, for every
+  caller — this is what makes it structurally safe to persona-realize a scam warning at all (the malicious URL
+  is never given to the model, and even if it somehow produced a link-shaped string anyway, the guard rejects
+  it before Telegram ever sees it); and the definite-removal-claim check gained an explicit `removalHappened`
+  parameter (default false, preserving every existing caller's behavior exactly) — a "you've been removed"
+  claim is REJECTED by default (nothing was actually removed at WARN tier) but EXPLICITLY PERMITTED for the one
+  real case where it's true: a scam repeat-offense, where the kick already executed before this text exists.
+- **`resolveWarningResponseMode` gained a real, reachable `NO_PUBLIC_REPLY` outcome** — corrects the prior
+  pass's own invented "SHORT_NUDGE is the floor by design" rule, which was a product decision made unilaterally,
+  not a technical or existing-policy constraint. Re-audited against real precedent already in this codebase (a
+  repeated non-scam spam/promotion KICK already has no companion public message today) and against a genuine
+  decision shape: `hasEnforcementConsequence` always wins (checked first, unconditionally — a mute/scam/final-
+  media-warning is NEVER downgraded to silence or a nudge); otherwise mode is driven by a CONTINUOUS similarity
+  score (new `maxWarningSimilarity`, `isNearDuplicateWarning` redefined in terms of it) — `>= 0.7`
+  (`NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD`, near-identical to something just said — nothing new to communicate,
+  the deletion itself is the only signal needed) / `>= 0.45` (`NEAR_DUPLICATE_WARNING_THRESHOLD`, recognizably
+  similar but distinguishable — `SHORT_NUDGE`) / else `WARNING`. Silence is NEVER a symptom of generation
+  failure — a failed attempt always falls to the deterministic template (a real string), and this function is
+  only ever consulted once a candidate has ALREADY been successfully produced.
+- **`generatePersonaSolicitationWarning`/`generateMediaModerationWarning` now return `string | null`** — `null`
+  = `NO_PUBLIC_REPLY`. Callers in `community-runtime.ts` skip the `SEND_TEXT`/insert block entirely on `null`
+  while every other enforcement step (delete/mute/state-persistence/purge) runs completely unaffected either
+  way — language realization never gates enforcement, in either direction.
+- **A real logic bug found and fixed while wiring this up, in both generator functions**: the retry-gating was
+  briefly keyed on `mode !== "WARNING"` alone, which meant an `ENFORCEMENT_NOTICE` (unconditionally the mode
+  whenever a real consequence is attached, REGARDLESS of similarity) always retried even with a completely
+  empty/no-match `recentOwnWarnings` history — wasting a second model call for zero benefit, since there was
+  no actual "sounds like a repeat" problem to solve. Fixed by gating the retry on the real similarity score
+  directly (`mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD` returns
+  immediately, no retry) — caught by the test suite itself, not shipped.
+- **Full re-audit of every visible Telegram moderation output path, per explicit requirement:**
+
+  | Path | Normal state |
+  |---|---|
+  | Promotion / competing-project / search-spam warning (`generatePersonaSolicitationWarning`) | **Persona-realized**, falls back to deterministic template on failure |
+  | Scam/phishing first-offense mute notice (`generatePersonaScamWarning`) | **Persona-realized** (new this pass), falls back to `scamFirstOffenseWarningHtml` |
+  | Scam/phishing repeat-offense kick notice (`generatePersonaScamWarning`) | **Persona-realized** (new this pass), falls back to `scamRepeatOffenseWarningHtml` |
+  | Media borderline warning (`generateMediaModerationWarning`) | **Persona-realized** (v1.49.30), falls back to a varied deterministic template pool |
+  | Non-scam repeated spam/promotion/competing-project/search-spam KICK | No public message today (pre-existing, documented convention) — unchanged, not a persona gap since nothing is spoken |
+  | Any `DELETE_BAN` (link or media) | No public message today (pre-existing, documented convention) — unchanged |
+  | Watcher Ops moderation report (`sendModerationReport`) | **System/internal** — a private admin/ops-channel audit trail, never presented as the Watcher speaking to the community; explicitly zero-AI/deterministic by design (`watcher-ops-report.ts`) |
+  | Ordinary Natural Chatter reply (`respondAsDeployment`) | Already persona-realized, unrelated to and pre-dating this whole fix |
+
+  No normal Watcher-spoken moderation path remains intentionally non-persona without a genuine, named,
+  code-proven reason.
+- New tests: `link-moderation.test.ts` (+7 — `maxWarningSimilarity`, the corrected 4-mode `resolveWarningResponseMode`
+  matrix incl. `NO_PUBLIC_REPLY` as a real reachable value, the URL/link guard, and `removalHappened`'s exact
+  scope), `link-classify.test.ts` (+20 — the full `generatePersonaScamWarning` suite: persona respect, the
+  never-shown-the-link safety instruction, first/repeat-offense fact requirements, mention embedding, the
+  deterministic fallback, every guard case incl. the repeat-offense removal-claim permission, BYO routing, and
+  scam-specific anti-repetition; plus the corrected `NO_PUBLIC_REPLY`/no-wasted-retry regression tests for the
+  promotion-warning path), `media-warning.test.ts` (+2 — the corrected `NO_PUBLIC_REPLY`/no-wasted-retry
+  regression tests, and a fixed SHORT_NUDGE fixture that was accidentally scoring in the `NO_PUBLIC_REPLY`
+  band). **2283 tests pass (up from 2254 before this pass began — reconciled exactly: link-moderation +7,
+  link-classify +20, media-warning +2), `tsc --noEmit` clean, production build clean.**
+- **Not deployed automatically, per explicit instruction.**
+
 ### 2026-09-04 — v1.49.29 completeness audit: every visible Watcher-spoken warning is persona-voiced, response length is response-mode aware, generated prose is guarded against unsupported claims, and anti-repetition scoping is now provably moderation-only (v1.49.30)
 - **Second pass on the same day's persona-voicing fix, closing 6 specific gaps
   the first report either narrowed or classified "already satisfied" without actually satisfying the

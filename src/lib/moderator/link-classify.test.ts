@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyLinkIntent, generateModerationWarning, generatePersonaSolicitationWarning, type SolicitationWarningFacts } from "./link-classify";
+import {
+  classifyLinkIntent, generateModerationWarning, generatePersonaSolicitationWarning, generatePersonaScamWarning,
+  type SolicitationWarningFacts, type ScamWarningFacts,
+} from "./link-classify";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
-import { SPAM_WARNING_LIMIT } from "./link-moderation";
+import { SPAM_WARNING_LIMIT, SCAM_FIRST_WARNING_MUTE_MINUTES, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml } from "./link-moderation";
 
 /**
  * Phase 4.M (C)-(E): the AI-touching half of link moderation. Both
@@ -320,7 +323,7 @@ test("REQUIRED: persona solicitation warning also routes to Sonnet 5, never Deep
       assert.equal(calls.length, 1);
       assert.match(calls[0].url, /anthropic/i);
       assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
     });
   });
 });
@@ -446,6 +449,7 @@ test("REQUIRED: a competing-project-promotion warning never redirects to the Pro
       promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45", contactHandle: "@RhyleKhy",
       isCompetingProjectPromotion: true,
     });
+    assert.ok(text);
     assert.doesNotMatch(text, /Promotion/);
     assert.doesNotMatch(text, /t\.me/);
     assert.doesNotMatch(text, /RhyleKhy/);
@@ -529,6 +533,7 @@ test("deterministic fallback states the mute duration and the Promotion topic NA
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       currentTopicName: "General", muteMinutes: 30, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/1/2", contactHandle: "@RhyleKhy", warningNumber: 2,
     });
+    assert.ok(text);
     assert.match(text, /Post that in Promotion instead/);
     assert.match(text, /30-minute mute/);
     assert.doesNotMatch(text, /https:\/\/t\.me\/c\/1\/2/);
@@ -541,6 +546,7 @@ test("deterministic fallback falls back to the contact when no Promotion topic n
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: "@RhyleKhy", warningNumber: 1,
     });
+    assert.ok(text);
     assert.match(text, /For that, contact @RhyleKhy/);
   });
 });
@@ -550,7 +556,7 @@ test("REQUIRED: BYO required but unusable falls straight to the deterministic fa
     await withFetchSpy({}, async (calls) => {
       const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts, { required: true, credential: null });
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
     });
   });
 });
@@ -752,6 +758,56 @@ test("an empty recentOwnWarnings list never triggers a regeneration, regardless 
   });
 });
 
+test("REQUIRED: an ENFORCEMENT_NOTICE (a real mute attached) with NOTHING recently similar is returned as-is, without a wasted retry call -- ENFORCEMENT_NOTICE alone is not a reason to retry, only a genuine near-duplicate signal is", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10, warningNumber: 2 }, undefined, []);
+      assert.equal(calls.length, 1);
+      assert.equal(text, "No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead.");
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR (but not near-identical) to a recent warning, with no mute attached, gets the brevity instruction", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    // ~0.64 similarity measured -- above NEAR_DUPLICATE_WARNING_THRESHOLD
+    // (0.45), below NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD (0.7).
+    const recentOwnWarnings = ["Hey, no promos in General please -- pulled that link for now."];
+    const { calls, install } = multiCallFetchSpy([
+      "No promos in General, please -- I've pulled that one for now.",
+      "Yeah, that one's not staying up either.",
+    ]);
+    const restore = install();
+    try {
+      await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 2, "the two fixture texts must actually register as similar enough to exercise the retry path");
+      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      assert.match(retrySystem, /keep this one especially short/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (NO_PUBLIC_REPLY): a candidate NEAR-IDENTICAL to a recent warning, with no consequence attached, resolves to genuine silence -- null, not another short reply", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["No promos in General, please. Repeated offenses escalate to a kick or ban."];
+    const { calls, install } = multiCallFetchSpy(["No promos in General, please -- repeated offenses can escalate to a kick or ban."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 1, "no retry is attempted for a NO_PUBLIC_REPLY outcome -- there's nothing to vary the wording of");
+      assert.equal(text, null);
+    } finally {
+      restore();
+    }
+  });
+});
+
 /* -------------------------------------- generation-failure never blocks enforcement ---- */
 
 test("REQUIRED: a failed FIRST generation call falls straight to the deterministic fallback -- no retry is ever attempted (there's nothing successful to compare for similarity)", async () => {
@@ -767,7 +823,7 @@ test("REQUIRED: a failed FIRST generation call falls straight to the determinist
         "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, warningNumber: 2 }, undefined, ["some recent warning text"]
       );
       assert.equal(callCount, 1, "exactly one attempt, never a retry after a genuine failure");
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
       assert.equal(text, "No promos in General, please. This resulted in a 10-minute mute. Repeated offenses escalate to a kick or ban.");
     } finally {
       globalThis.fetch = originalFetch;
@@ -872,6 +928,7 @@ test("REQUIRED (untrusted-output guard, exact live-quoted example): a candidate 
     try {
       const text = await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, []);
       assert.equal(calls.length, 1);
+      assert.ok(text);
       assert.doesNotMatch(text, /you've been banned/i);
       assert.equal(text, "No promos in General, please. Repeated offenses escalate to a kick or ban.");
     } finally {
@@ -896,6 +953,7 @@ test("REQUIRED (untrusted-output guard applies to the RETRY too): a near-duplica
         "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
       );
       assert.equal(calls.length, 2);
+      assert.ok(text);
       assert.doesNotMatch(text, /45-minute/i);
       assert.equal(text, "No promos in General, please. Post that in Promotion instead. This resulted in a 10-minute mute. Repeated offenses escalate to a kick or ban.");
     } finally {
@@ -916,5 +974,247 @@ test("a normal, fact-accurate candidate with no unsupported claims is returned u
       }
     })();
     assert.equal(text, "No promos in General, please -- that's a 10-minute mute. Repeated offenses can escalate to a kick or ban.");
+  });
+});
+
+/* ==================== generatePersonaScamWarning (2026-09-04, third pass) ====
+   Explicit product correction: scam/phishing DETECTION and the ENFORCEMENT
+   DECISION remain fully deterministic (decideLinkEnforcement, untouched by
+   this) -- what changes is that the VISIBLE WORDING is now ALSO persona-
+   voiced, exactly like the solicitation-warning path, since there is no
+   reliability blocker (enforcement in community-runtime.ts already executes
+   independent of whether this generation call succeeds -- proven, not
+   assumed). Safety: this function is given ONLY safe structured facts
+   (ScamWarningFacts), never the malicious URL/message content. */
+
+const FIRST_OFFENSE_FACTS: ScamWarningFacts = { isRepeatOffense: false, muteMinutes: SCAM_FIRST_WARNING_MUTE_MINUTES };
+const REPEAT_OFFENSE_FACTS: ScamWarningFacts = { isRepeatOffense: true, muteMinutes: undefined };
+const MENTION = "@ScammedUser";
+
+test("REQUIRED: scam warning generation routes to Sonnet 5, never DeepSeek", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("Careful with links like that -- I've removed it and muted you for a bit."), async (calls) => {
+      await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /anthropic/i);
+      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+    });
+  });
+});
+
+test("REQUIRED: persona is respected -- two differently-configured Watchers produce genuinely different prompts for the identical scam facts", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    let formalSystem = "";
+    let casualSystem = "";
+    await withFetchSpy(anthropicTextResponse("removed that, be careful."), async (calls) => {
+      await generatePersonaScamWarning("Kwan", FORMAL_PERSONA, MENTION, FIRST_OFFENSE_FACTS);
+      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+    });
+    await withFetchSpy(anthropicTextResponse("removed that, be careful."), async (calls) => {
+      await generatePersonaScamWarning("Kwan", CASUAL_PERSONA, MENTION, FIRST_OFFENSE_FACTS);
+      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+    });
+    assert.notEqual(formalSystem, casualSystem);
+    assert.match(formalSystem, /always capitalize the start/i);
+    assert.match(casualSystem, /always write in lowercase/i);
+  });
+});
+
+test("REQUIRED: the model is never given the malicious URL/message -- explicit safety instruction present in the prompt for every call", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("removed that link, be careful."), async (calls) => {
+      await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /you were not shown the link\/message content/i);
+      assert.match(system, /never mention, describe, guess, or invent/i);
+    });
+  });
+});
+
+test("REQUIRED: first-offense facts require the real mute duration stated verbatim and the real future-removal risk, never a claim that removal already happened", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("removed that link, be careful."), async (calls) => {
+      await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, new RegExp(`muted them for exactly ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes`, "i"));
+      assert.match(system, /never invent, omit, or alter/i);
+      assert.match(system, /will result in removal/i);
+      assert.doesNotMatch(system, /have ALREADY been removed/i);
+    });
+  });
+});
+
+test("REQUIRED: repeat-offense facts state removal as an already-completed fact, never a threat, and never mention a mute", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("that's it, you're out."), async (calls) => {
+      await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /ALREADY been removed \(kicked\)/i);
+      assert.match(system, /this has genuinely already happened, state it as a completed fact, not a threat/i);
+      assert.doesNotMatch(system, /muted them for exactly/i);
+    });
+  });
+});
+
+test("REQUIRED: the mention is embedded deterministically by the function itself, never left to the model -- the returned text always starts with the exact mention passed in", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("your message was removed, be careful with links."), async (calls) => {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, `${MENTION}, your message was removed, be careful with links.`);
+    });
+  });
+});
+
+test("REQUIRED: falls back to the EXACT existing deterministic templates on any generation failure -- scam enforcement's public wording never depends on AI succeeding", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const firstText = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+    const repeatText = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
+    assert.equal(firstText, scamFirstOffenseWarningHtml(MENTION));
+    assert.equal(repeatText, scamRepeatOffenseWarningHtml(MENTION));
+  });
+});
+
+test("REQUIRED (untrusted-output guard): a candidate stating a WRONG mute duration is discarded for the deterministic fallback", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["Careful -- that's a 5-minute mute for you."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      assert.equal(calls.length, 1, "the guard rejecting a candidate must never itself trigger a retry");
+      assert.equal(text, scamFirstOffenseWarningHtml(MENTION));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (untrusted-output guard): a candidate containing a raw link/URL is discarded even though none was ever given to the model", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["That was a fake link, https://not-real.example, be careful."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, scamFirstOffenseWarningHtml(MENTION));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (untrusted-output guard): a FIRST-offense candidate falsely claiming removal already happened is discarded (nothing was actually removed -- only muted)", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["You've been removed from this community already."]);
+    const restore = install();
+    try {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, scamFirstOffenseWarningHtml(MENTION));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (untrusted-output guard, repeat offense): a candidate stating removal ALREADY happened is EXPLICITLY PERMITTED -- the kick genuinely already executed before this text is generated", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("You've been removed from this community already."), async (calls) => {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, `${MENTION}, You've been removed from this community already.`);
+    });
+  });
+});
+
+/* -------------------------------------- scam anti-repetition ---- */
+
+test("REQUIRED: a near-duplicate scam warning triggers exactly ONE bounded regeneration, always in ENFORCEMENT_NOTICE (full, never shortened) style", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = [`${MENTION}, your message was removed because it contained a suspected scam/phishing link. You've been muted for ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes. Another confirmed violation will result in removal from this community.`];
+    const { calls, install } = multiCallFetchSpy([
+      "your message was removed because it contained a suspected scam/phishing link. You've been muted for 30 minutes. Another confirmed violation will result in removal from this community.",
+      "Careful with that link -- it's gone, and you're on a 30-minute timeout because of it.",
+    ]);
+    const restore = install();
+    try {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 2, "exactly one regeneration attempt, never zero, never more than one");
+      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      assert.match(retrySystem, /still make that consequence clear|still state every required fact/i);
+      assert.doesNotMatch(retrySystem, /keep this one especially short/i);
+      assert.equal(text, `${MENTION}, Careful with that link -- it's gone, and you're on a 30-minute timeout because of it.`);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED: when the candidate is NOT similar to any recent scam warning, only ONE call is made -- no wasted regeneration", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["That's off-topic spam, not allowed here."];
+    const { calls, install } = multiCallFetchSpy(["Careful with that link -- removed it and muted you for a bit."]);
+    const restore = install();
+    try {
+      await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("an empty recentOwnWarnings list never triggers a regeneration, regardless of candidate content", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["Careful with that link -- removed it and muted you for a bit."]);
+    const restore = install();
+    try {
+      await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, undefined, []);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("the retry is bounded to exactly ONE attempt -- even if the regenerated text is STILL similar, it's used as-is, never retried again", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const sameSimilarText = "your message was removed because it contained a suspected scam/phishing link. You've been muted for 30 minutes. Another confirmed violation will result in removal from this community.";
+    const recentOwnWarnings = [`${MENTION}, ${sameSimilarText}`];
+    const { calls, install } = multiCallFetchSpy([sameSimilarText, sameSimilarText]);
+    const restore = install();
+    try {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 2, "never a third call even though the retry is also similar");
+      assert.equal(text, `${MENTION}, ${sameSimilarText}`);
+    } finally {
+      restore();
+    }
+  });
+});
+
+/* -------------------------------------- BYO Enterprise routing ---- */
+
+test("REQUIRED: BYO required+usable routes through the stored credential, never Innvil's own key", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy(anthropicTextResponse("Careful with that link -- removed it."), async (calls) => {
+      const text = await generatePersonaScamWarning(
+        "Kwan", persona, MENTION, FIRST_OFFENSE_FACTS,
+        { required: true, credential: { provider: "anthropic", apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" } }
+      );
+      assert.equal(calls.length, 1);
+      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.ok(text.length > 0);
+    });
+  });
+});
+
+test("REQUIRED: BYO required but unusable falls straight to the deterministic fallback, no network call at all", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, { required: true, credential: null });
+      assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
+      assert.equal(text, scamFirstOffenseWarningHtml(MENTION));
+    });
   });
 });

@@ -7,8 +7,8 @@ import {
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   promotionContactSentence,
-  warningTextSimilarity, isNearDuplicateWarning, NEAR_DUPLICATE_WARNING_THRESHOLD,
-  resolveWarningResponseMode, warningTextExceedsAuthorizedFacts,
+  warningTextSimilarity, isNearDuplicateWarning, maxWarningSimilarity, NEAR_DUPLICATE_WARNING_THRESHOLD,
+  resolveWarningResponseMode, NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD, warningTextExceedsAuthorizedFacts,
   type LinkWarningState,
 } from "./link-moderation";
 
@@ -835,41 +835,67 @@ test("warningTextSimilarity handles empty strings safely -- never divides by zer
   assert.equal(warningTextSimilarity("", LIVE_PAIR_1A), 0);
 });
 
+/* ============================================= maxWarningSimilarity ====
+   The continuous-score sibling of isNearDuplicateWarning -- resolveWarning
+   ResponseMode needs a real gradient (not just a boolean) to distinguish
+   SHORT_NUDGE from genuine NO_PUBLIC_REPLY. */
+
+test("maxWarningSimilarity returns 0 for an empty recentTexts list", () => {
+  assert.equal(maxWarningSimilarity(LIVE_PAIR_1A, []), 0);
+});
+
+test("maxWarningSimilarity returns the highest score across multiple recent texts, not just the first/last", () => {
+  const score = maxWarningSimilarity(LIVE_PAIR_1B, ["a totally unrelated sentence", LIVE_PAIR_1A, "another unrelated one"]);
+  assert.equal(score, warningTextSimilarity(LIVE_PAIR_1B, LIVE_PAIR_1A));
+  assert.ok(score >= NEAR_DUPLICATE_WARNING_THRESHOLD);
+});
+
 /* =========================================== resolveWarningResponseMode ====
-   2026-09-04, second pass: a Watcher should not narrate every minor
-   deletion with a full paragraph. Deterministic, zero-cost decision -- see
-   the function's own doc comment for the full ENFORCEMENT_NOTICE /
-   SHORT_NUDGE / WARNING semantics and why NO_PUBLIC_REPLY is deliberately
-   never a possible outcome. */
+   2026-09-04, third pass (corrected the same day -- NO_PUBLIC_REPLY is a
+   real, reachable outcome now, not an invented "SHORT_NUDGE is the floor"
+   rule): a Watcher should not narrate every minor deletion with a full
+   paragraph, and should not keep restating a correction the room has
+   already just seen. Deterministic, zero-cost decision driven by a
+   CONTINUOUS similarity score -- see the function's own doc comment for
+   the full 4-mode semantics and the exact threshold gradient. */
 
-test("REQUIRED: a real consequence (a mute, or media's final pre-kick warning) is always ENFORCEMENT_NOTICE, regardless of near-duplicate status", () => {
-  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: false }), "ENFORCEMENT_NOTICE");
-  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: true }), "ENFORCEMENT_NOTICE");
+test("REQUIRED: a real consequence (a mute, an already-executed kick for scam, or media's final pre-kick warning) is ALWAYS ENFORCEMENT_NOTICE, regardless of similarity -- including at maximum similarity (1.0)", () => {
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, similarityToRecent: 0 }), "ENFORCEMENT_NOTICE");
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, similarityToRecent: 0.5 }), "ENFORCEMENT_NOTICE");
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: true, similarityToRecent: 1 }), "ENFORCEMENT_NOTICE");
 });
 
-test("REQUIRED: no consequence + a near-duplicate of something recently said resolves to SHORT_NUDGE", () => {
-  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: true }), "SHORT_NUDGE");
+test("REQUIRED: no consequence + NEAR-IDENTICAL to something recently said (>= NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD) resolves to genuine NO_PUBLIC_REPLY", () => {
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD }), "NO_PUBLIC_REPLY");
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: 1 }), "NO_PUBLIC_REPLY");
 });
 
-test("REQUIRED: no consequence + nothing recently duplicate resolves to the ordinary WARNING (today's existing, unchanged behavior)", () => {
-  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: false }), "WARNING");
+test("REQUIRED: no consequence + recognizably similar but below the NO_PUBLIC_REPLY bar resolves to SHORT_NUDGE, not silence", () => {
+  const justBelowNoReply = NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD - 0.01;
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: NEAR_DUPLICATE_WARNING_THRESHOLD }), "SHORT_NUDGE");
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: justBelowNoReply }), "SHORT_NUDGE");
 });
 
-test("REQUIRED: ENFORCEMENT_NOTICE always wins over SHORT_NUDGE -- a mute/final-warning is never downgraded merely because it also happens to look like a recent duplicate", () => {
-  const withDuplicate = resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: true });
-  const withoutDuplicate = resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: false });
-  assert.equal(withDuplicate, withoutDuplicate);
-  assert.equal(withDuplicate, "ENFORCEMENT_NOTICE");
+test("REQUIRED: no consequence + nothing recently similar resolves to the ordinary WARNING (today's existing, unchanged behavior)", () => {
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: 0 }), "WARNING");
+  assert.equal(resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: NEAR_DUPLICATE_WARNING_THRESHOLD - 0.01 }), "WARNING");
 });
 
-test("resolveWarningResponseMode never resolves to a silence/no-reply value -- SHORT_NUDGE, never suppression, is the floor for a DELETE_WARN", () => {
+test("REQUIRED: ENFORCEMENT_NOTICE always wins -- a mute/scam/final-warning is never downgraded to NO_PUBLIC_REPLY or SHORT_NUDGE merely because it also happens to look like a recent duplicate", () => {
+  const atMaxSimilarity = resolveWarningResponseMode({ hasEnforcementConsequence: true, similarityToRecent: 1 });
+  const atZeroSimilarity = resolveWarningResponseMode({ hasEnforcementConsequence: true, similarityToRecent: 0 });
+  assert.equal(atMaxSimilarity, atZeroSimilarity);
+  assert.equal(atMaxSimilarity, "ENFORCEMENT_NOTICE");
+});
+
+test("REQUIRED: NO_PUBLIC_REPLY IS a reachable outcome -- this is not hardcoded away as a product decision, it is implemented per the real requirement", () => {
   const modes = [
-    resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: true }),
-    resolveWarningResponseMode({ hasEnforcementConsequence: true, isNearDuplicateOfRecent: false }),
-    resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: true }),
-    resolveWarningResponseMode({ hasEnforcementConsequence: false, isNearDuplicateOfRecent: false }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: true, similarityToRecent: 1 }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: 1 }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: 0.5 }),
+    resolveWarningResponseMode({ hasEnforcementConsequence: false, similarityToRecent: 0 }),
   ];
-  for (const m of modes) assert.ok(m === "WARNING" || m === "SHORT_NUDGE" || m === "ENFORCEMENT_NOTICE");
+  assert.deepEqual(modes, ["ENFORCEMENT_NOTICE", "NO_PUBLIC_REPLY", "SHORT_NUDGE", "WARNING"]);
 });
 
 /* ===================================== warningTextExceedsAuthorizedFacts ====
@@ -919,4 +945,26 @@ test("both checks combine correctly -- a wrong mute number is caught even alongs
     warningTextExceedsAuthorizedFacts("That's a 45-minute mute. Repeated offenses escalate to a kick or ban.", { muteMinutes: 10 }),
     true
   );
+});
+
+/* ============ REQUIRED (scam persona-voicing, third pass): URL/link check + conditional removal-claim ==== */
+
+test("REQUIRED: a raw link/URL of any kind is caught unconditionally, for every caller -- this is what makes it structurally safe to persona-realize a SCAM warning", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("Careful, that link (https://scam-site.example/claim) was fake.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("That t.me/fake_giveaway link isn't legit.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("No promos in General, please. Post that in Promotion instead.", { muteMinutes: null }), false);
+});
+
+test("REQUIRED: a definite removal claim is REJECTED by default (no scam-repeat context), matching every existing WARN-tier caller", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("You have been removed from this community.", { muteMinutes: null }), true);
+});
+
+test("REQUIRED: a definite removal claim is EXPLICITLY PERMITTED when authoritative facts confirm removal genuinely already happened (removalHappened: true) -- the scam-repeat-offense case, where the kick already executed before this text is generated", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("You have been removed from this community.", { muteMinutes: null, removalHappened: true }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("You've been kicked already.", { muteMinutes: null, removalHappened: true }), false);
+});
+
+test("removalHappened:true still catches every OTHER unsupported claim -- it only narrows the removal-claim check, not the whole guard", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("That's a 45-minute mute too.", { muteMinutes: null, removalHappened: true }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("Here's the link: https://scam.example", { muteMinutes: null, removalHappened: true }), true);
 });

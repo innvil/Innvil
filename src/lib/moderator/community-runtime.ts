@@ -29,12 +29,12 @@ import {
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
-  effectiveScamStrikeCount, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  effectiveScamStrikeCount, renderHumanModerationMention,
   filterOutOwnBotMentions, looksLikeUnsolicitedPitch, looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   looksLikeAdminInformationRequest, findRecentAdminInformationRequest,
   effectiveWarningCount,
 } from "./link-moderation";
-import { classifyLinkIntent, generatePersonaSolicitationWarning } from "./link-classify";
+import { classifyLinkIntent, generatePersonaSolicitationWarning, generatePersonaScamWarning } from "./link-classify";
 import {
   DEFAULT_PENDING_REPLY_DELAY_MS, clampPendingReplyDelaySeconds, pendingReplyScheduledFor, isPendingReplyDue, isPendingReplyStale,
   isWithinPendingReplyWindow, revalidatePendingReply, isAdminMessageHandlingConversation, type DeferredActionKind, type PendingReplyRow,
@@ -2443,15 +2443,25 @@ export async function runLinkModeration(
       purgeResult = await purgeUserMessages(admin, chatId, community.id, senderPlatformId, enforcer.deploymentId, now);
     }
 
-    // The scam-repeat public warning stays exactly as before (deterministic,
-    // never AI, never reproduces the URL); a spam/promotion or
+    // The scam-repeat public warning is now ALSO persona-voiced
+    // (generatePersonaScamWarning) -- the kick + strike + purge above
+    // already fully executed, independent of this call, so a generation
+    // failure/slowness here can never affect enforcement, only wording (it
+    // falls back to the exact same deterministic scamRepeatOffenseWarningHtml
+    // text that always shipped before this pass). A spam/promotion or
     // explicit-link kick has no equivalent public message today (matches
     // the existing convention that only scam kicks announce themselves in
     // the community) -- the Watcher Ops report below is where every kick
     // is actually recorded regardless.
     if (isScamEnforcement) {
       const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
-      const warningText = scamRepeatOffenseWarningHtml(mention);
+      // Loaded here, scoped to only this (relatively rare -- a user's 2nd
+      // confirmed scam offense) branch, rather than moving the shared
+      // linkModerationContext load earlier for every enforcement kind.
+      const recentScamWarnings = recentOwnModeratorMessages(await loadRecentContext(admin, community.id, 8), enforcer.deploymentId);
+      const warningText = await generatePersonaScamWarning(
+        enforcer.moderatorName, enforcer.persona, mention, { isRepeatOffense: true, muteMinutes: undefined }, aiRouting, recentScamWarnings
+      );
       if (token) {
         const sendResult = await executeAction(admin, chatId, {
           kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null,
@@ -2611,36 +2621,64 @@ export async function runLinkModeration(
   // recentOwnModeratorMessages -- see its own doc comment for the scoping
   // guarantee.
   const recentOwnWarnings = recentOwnModeratorMessages(linkModerationContext, enforcer.deploymentId);
-  const generatedWarning = await generatePersonaSolicitationWarning(
-    enforcer.moderatorName,
-    enforcer.persona,
-    {
-      currentTopicName: topicDisplayName(currentTopic),
-      muteMinutes: enforcement.muteMinutes,
-      promotionTopicName: redirectName,
-      // Never speak a raw link in the warning text -- see the doc
-      // comment on redirectName above.
-      promotionTopicLink: null,
-      contactHandle: promotionContact,
-      isCompetingProjectPromotion: isCompetingProjectEnforcement,
-      searchSpamPattern,
-      warningNumber: enforcement.warningNumber,
-    },
-    aiRouting,
-    recentOwnWarnings
-  );
+  // 2026-09-04, third pass: scam/phishing warnings are now ALSO persona-
+  // voiced (generatePersonaScamWarning, link-classify.ts) -- the earlier
+  // "must stay deterministic" framing conflated enforcement DECISION
+  // reliability (genuinely required, unaffected) with visible WORDING
+  // (never required to be deterministic). Proof this introduces zero
+  // reliability risk: the mute block below is gated ONLY on
+  // `enforcement.muteMinutes && token`, never on whether this generation
+  // call (or its SEND_TEXT) succeeds -- enforcement is already fully
+  // independent of language realization. `generatePersonaScamWarning`
+  // returns the FULL ready-to-send text (mention embedded internally,
+  // never asked of the model) and always resolves to ENFORCEMENT_NOTICE
+  // mode -- it can never return null.
+  //
   // A coordinated (multi-account) SEARCH_SPAM burst is deliberately never
   // addressed to a specific person (live feedback: "if 2 messages followed
   // each other, the warning should be only general please stop spamming")
   // -- the mention prefix is omitted entirely for that one case; every
   // other category (incl. an ISOLATED SEARCH_SPAM occurrence) keeps the
   // existing explicit mention, unchanged.
-  const warningText = isScamEnforcement
-    ? scamFirstOffenseWarningHtml(mention)
-    : searchSpamPattern === "coordinated"
-      ? generatedWarning
-      : `${mention}, ${generatedWarning}`;
-  if (token) {
+  //
+  // `generatedWarning` may be null for the non-scam path -- NO_PUBLIC_REPLY
+  // (resolveWarningResponseMode, link-moderation.ts): no real consequence
+  // attached to this specific violation AND the candidate reads as near-
+  // identical to something this Watcher just said -- nothing new to
+  // communicate. Enforcement/state-persistence below is UNAFFECTED either
+  // way; only the SEND_TEXT/insert block is skipped.
+  const warningText: string | null = isScamEnforcement
+    ? await generatePersonaScamWarning(
+        enforcer.moderatorName,
+        enforcer.persona,
+        mention,
+        { isRepeatOffense: false, muteMinutes: enforcement.muteMinutes },
+        aiRouting,
+        recentOwnWarnings
+      )
+    : await (async () => {
+        const generatedWarning = await generatePersonaSolicitationWarning(
+          enforcer.moderatorName,
+          enforcer.persona,
+          {
+            currentTopicName: topicDisplayName(currentTopic),
+            muteMinutes: enforcement.muteMinutes,
+            promotionTopicName: redirectName,
+            // Never speak a raw link in the warning text -- see the doc
+            // comment on redirectName above.
+            promotionTopicLink: null,
+            contactHandle: promotionContact,
+            isCompetingProjectPromotion: isCompetingProjectEnforcement,
+            searchSpamPattern,
+            warningNumber: enforcement.warningNumber,
+          },
+          aiRouting,
+          recentOwnWarnings
+        );
+        if (generatedWarning === null) return null;
+        return searchSpamPattern === "coordinated" ? generatedWarning : `${mention}, ${generatedWarning}`;
+      })();
+  if (warningText !== null && token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
       text: warningText,
@@ -3040,10 +3078,15 @@ async function runMediaModeration(
   // otherwise pay for a query they don't need.
   const mediaModerationContext = await loadRecentContext(admin, community.id, 8);
   const recentOwnMediaWarnings = recentOwnModeratorMessages(mediaModerationContext, enforcer.deploymentId);
+  // May be null -- NO_PUBLIC_REPLY (a non-final warning whose candidate
+  // reads as near-identical to something this Watcher just said, so there's
+  // nothing new to communicate). Enforcement/state-persistence above is
+  // completely unaffected either way; only the SEND_TEXT/insert below is
+  // skipped.
   const warningText = await generateMediaModerationWarning(
     enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting, recentOwnMediaWarnings
   );
-  if (token) {
+  if (warningText !== null && token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null, origin: "HUMAN", interactionDepth: 0, causationMessageId: event.messageId,
     });

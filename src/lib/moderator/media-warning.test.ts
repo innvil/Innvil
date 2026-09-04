@@ -104,7 +104,7 @@ test("a bare persona with nothing configured still produces a sensible prompt --
     await withFetchSpy(anthropicTextResponse("keep it appropriate please."), async (calls) => {
       await generateMediaModerationWarning("Kwan", DEFAULT_MODERATOR_PERSONA, 1, false);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.ok(system.length > 0);
+      assert.ok(system && system.length > 0);
     });
   });
 });
@@ -191,19 +191,54 @@ test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate on the F
   });
 });
 
-test("REQUIRED (mode-aware retry, SHORT_NUDGE): a near-duplicate on a NON-final warning gets the brevity instruction", async () => {
+test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR (but not near-identical) to a recent warning gets the brevity instruction", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    const recentOwnWarnings = ["Hey, that media isn't appropriate for this group, so I've taken it down for now. Please keep it appropriate."];
+    // Chosen to land in the SHORT_NUDGE band specifically (>= NEAR_DUPLICATE_
+    // WARNING_THRESHOLD but < NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD, ~0.52
+    // measured) -- similar enough to react to, distinguishable enough that
+    // it's NOT the "nothing new to say" NO_PUBLIC_REPLY case.
+    const recentOwnWarnings = ["Hey, that media isn't appropriate for this group, so I've taken it down for now."];
     const { calls, install } = multiCallFetchSpy([
-      "Hey, that media isn't appropriate for this group, so I've taken it down for now. Please keep it clean.",
+      "That upload isn't appropriate for this group, so I've gone ahead and removed it.",
       "Not for this group -- gone.",
     ]);
     const restore = install();
     try {
       await generateMediaModerationWarning("Kwan", persona, 1, false, undefined, recentOwnWarnings);
-      assert.equal(calls.length, 2, "the two fixture texts must actually register as near-duplicates for this test to exercise the retry path");
+      assert.equal(calls.length, 2, "the two fixture texts must actually register as similar enough to exercise the retry path");
       const retrySystem = (calls[1].body as { system?: string }).system ?? "";
       assert.match(retrySystem, /keep this one especially short/i);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED (NO_PUBLIC_REPLY): a candidate NEAR-IDENTICAL to a recent warning (no consequence attached) resolves to genuine silence -- null, not another short reply", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const recentOwnWarnings = ["Hey, that media isn't appropriate for this group, so I've taken it down for now. Please keep it appropriate."];
+    const { calls, install } = multiCallFetchSpy([
+      "Hey, that media isn't appropriate for this group, so I've taken it down for now. Please keep it clean.",
+    ]);
+    const restore = install();
+    try {
+      const text = await generateMediaModerationWarning("Kwan", persona, 1, false, undefined, recentOwnWarnings);
+      assert.equal(calls.length, 1, "no retry is attempted for a NO_PUBLIC_REPLY outcome -- there's nothing to vary the wording of");
+      assert.equal(text, null);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test("REQUIRED: a FINAL (consequence-bearing) warning with NOTHING recently similar is returned as-is, without a wasted retry call", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    const { calls, install } = multiCallFetchSpy(["This is your final warning -- next time results in removal."]);
+    const restore = install();
+    try {
+      const text = await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true, undefined, []);
+      assert.equal(calls.length, 1, "ENFORCEMENT_NOTICE alone is not a reason to retry -- only a genuine near-duplicate signal is");
+      assert.equal(text, "This is your final warning -- next time results in removal.");
     } finally {
       restore();
     }
@@ -219,6 +254,7 @@ test("REQUIRED: media has no mute concept at all -- a candidate stating ANY mute
     try {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false);
       assert.equal(calls.length, 1);
+      assert.ok(text);
       assert.doesNotMatch(text, /10-minute mute/i);
     } finally {
       restore();
@@ -233,6 +269,7 @@ test("REQUIRED: a candidate claiming a definite ban/removal that hasn't actually
     try {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false);
       assert.equal(calls.length, 1);
+      assert.ok(text);
       assert.doesNotMatch(text, /you've been removed/i);
     } finally {
       restore();
@@ -267,7 +304,7 @@ test("REQUIRED: a failed generation call falls to the deterministic template poo
     try {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false);
       assert.equal(callCount, 1, "exactly one attempt, never a retry after a genuine failure");
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -291,7 +328,7 @@ test("REQUIRED: warning generation routes to Sonnet 5, never DeepSeek", async ()
       assert.equal(calls.length, 1);
       assert.match(calls[0].url, /anthropic/i);
       assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
     });
   });
 });
@@ -325,9 +362,9 @@ test("REQUIRED: a failed generation call falls back to a VARIED deterministic te
       const first = await generateMediaModerationWarning("Kwan", persona, 1, false);
       const second = await generateMediaModerationWarning("Kwan", persona, 2, false);
       const third = await generateMediaModerationWarning("Kwan", persona, 3, true);
-      assert.ok(first.length > 0);
-      assert.ok(second.length > 0);
-      assert.ok(third.length > 0);
+      assert.ok(first && first.length > 0);
+      assert.ok(second && second.length > 0);
+      assert.ok(third && third.length > 0);
       assert.notEqual(first, second);
       assert.notEqual(second, third);
     } finally {
@@ -341,7 +378,7 @@ test("unconfigured AI goes straight to the deterministic fallback pool, no netwo
     await withFetchSpy({}, async (calls) => {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false);
       assert.equal(calls.length, 0);
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
     });
   });
 });
@@ -356,7 +393,7 @@ test("REQUIRED: BYO required+usable routes through the stored credential, never 
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false, { required: true, credential: BYO_CRED });
       assert.equal(calls.length, 1);
       assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
-      assert.ok(text.length > 0);
+      assert.ok(text && text.length > 0);
     });
   });
 });
@@ -369,8 +406,8 @@ test("REQUIRED: BYO required but unusable falls straight to the template pool, n
         "Kwan", persona, 2, false, { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: null } }
       );
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
-      assert.ok(missingCred.length > 0);
-      assert.ok(missingModel.length > 0);
+      assert.ok(missingCred && missingCred.length > 0);
+      assert.ok(missingModel && missingModel.length > 0);
     });
   });
 });
@@ -381,8 +418,8 @@ test("a normal (non-BYO) account's behavior is unaffected -- aiRouting undefined
       const withoutRouting = await generateMediaModerationWarning("Kwan", persona, 1, false);
       const withManaged = await generateMediaModerationWarning("Kwan", persona, 1, false, { required: false, credential: null });
       assert.equal(calls.length, 2);
-      assert.ok(withoutRouting.length > 0);
-      assert.ok(withManaged.length > 0);
+      assert.ok(withoutRouting && withoutRouting.length > 0);
+      assert.ok(withManaged && withManaged.length > 0);
     });
   });
 });

@@ -4,7 +4,8 @@ import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/cli
 import type { ModeratorPersona } from "./domain";
 import {
   SPAM_WARNING_LIMIT,
-  isNearDuplicateWarning,
+  maxWarningSimilarity,
+  NEAR_DUPLICATE_WARNING_THRESHOLD,
   resolveWarningResponseMode,
   warningTextExceedsAuthorizedFacts,
   type WarningResponseMode,
@@ -47,6 +48,16 @@ import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/w
  *  supported by a WARN-tier notice (nothing has actually been removed yet).
  *  A candidate that fails is discarded in favor of the deterministic
  *  fallback pool, never "corrected" in place.
+ *
+ * 2026-09-04, third pass -- returns `string | null` now: `null` means
+ * NO_PUBLIC_REPLY (a non-final warning whose candidate reads as near-
+ * identical to something this Watcher just said -- nothing new to
+ * communicate). `null` is NEVER returned as a result of generation FAILING
+ * (a failed attempt always falls to the fallback pool, a real string) --
+ * silence here is strictly a "nothing new to say" decision, never a symptom
+ * of AI being down. The caller is responsible for skipping the SEND_TEXT/
+ * insert entirely on `null` while running every other enforcement step
+ * exactly as before.
  */
 
 const WARNING_FALLBACK_TEMPLATES = [
@@ -90,7 +101,7 @@ export async function generateMediaModerationWarning(
   isFinalWarning: boolean,
   aiRouting?: AccountAiRouting,
   recentOwnWarnings: string[] = []
-): Promise<string> {
+): Promise<string | null> {
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
       `You are ${moderatorName}, a moderator in a Telegram community. You just removed a photo/video for possibly violating this community's content policy (borderline/uncertain explicit content).`,
@@ -155,13 +166,25 @@ export async function generateMediaModerationWarning(
   const first = await attemptGeneration(buildSystem());
   if (first === null) return fallbackTemplateFor(warningNumber);
 
-  const isDuplicate = recentOwnWarnings.length > 0 && isNearDuplicateWarning(first, recentOwnWarnings);
-  if (!isDuplicate) return sanitize(first);
+  // Response-mode resolution -- the final pre-kick warning is always
+  // ENFORCEMENT_NOTICE, unconditionally, regardless of similarity; a
+  // non-final warning's mode is driven by how similar this candidate
+  // already is to something this Watcher recently said.
+  const similarity = recentOwnWarnings.length ? maxWarningSimilarity(first, recentOwnWarnings) : 0;
+  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: isFinalWarning, similarityToRecent: similarity });
+  if (mode === "NO_PUBLIC_REPLY") return null;
+  if (mode === "WARNING") return sanitize(first);
+  // ENFORCEMENT_NOTICE is the mode whenever this is the final pre-kick
+  // warning, REGARDLESS of similarity -- retry only when there's an ACTUAL
+  // near-duplicate signal to react to (empty/no-match history forces
+  // similarity to 0); a final warning with nothing recently similar has no
+  // "sounds like a repeat" problem to solve, so it's returned as-is rather
+  // than spending a wasted retry call.
+  if (mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD) return sanitize(first);
 
-  // Bounded to exactly ONE retry, response-mode aware -- see
-  // buildAvoidRepeatingNote's own doc comment. The final pre-kick warning is
-  // always ENFORCEMENT_NOTICE and is never shortened by this retry.
-  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: isFinalWarning, isNearDuplicateOfRecent: true });
+  // SHORT_NUDGE or a genuinely-near-duplicate ENFORCEMENT_NOTICE: bounded to
+  // exactly ONE retry, response-mode aware -- see buildAvoidRepeatingNote's
+  // own doc comment.
   const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, mode)));
   return sanitize(retry ?? first);
 }

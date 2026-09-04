@@ -855,69 +855,121 @@ export function warningTextSimilarity(a: string, b: string): number {
  *  the mute number/username changed." */
 export const NEAR_DUPLICATE_WARNING_THRESHOLD = 0.45;
 
-/** True when `candidate` reads as a near-duplicate of ANY of `recentTexts`
- *  (a small, bounded set -- the caller passes at most a handful of this
- *  SAME Watcher's own recent messages in this SAME community, never an
- *  unbounded history). Used to decide whether to regenerate once, never to
- *  block/alter the underlying moderation decision itself. */
+/** Highest similarity score between `candidate` and ANY of `recentTexts` (a
+ *  small, bounded set -- the caller passes at most a handful of this SAME
+ *  Watcher's own recent messages in this SAME community, never an unbounded
+ *  history). 0 when `recentTexts` is empty. This is the raw signal
+ *  `resolveWarningResponseMode` needs a CONTINUOUS score for (distinguishing
+ *  "recognizably similar" from "near-identical, nothing new to say") -- see
+ *  its own doc comment. */
+export function maxWarningSimilarity(candidate: string, recentTexts: string[]): number {
+  return recentTexts.reduce((max, t) => Math.max(max, warningTextSimilarity(candidate, t)), 0);
+}
+
+/** True when `candidate` reads as a near-duplicate of ANY of `recentTexts`.
+ *  Used to decide whether to regenerate once, never to block/alter the
+ *  underlying moderation decision itself. */
 export function isNearDuplicateWarning(candidate: string, recentTexts: string[]): boolean {
-  return recentTexts.some((t) => warningTextSimilarity(candidate, t) >= NEAR_DUPLICATE_WARNING_THRESHOLD);
+  return maxWarningSimilarity(candidate, recentTexts) >= NEAR_DUPLICATE_WARNING_THRESHOLD;
 }
 
 /* -------------------------------------------- moderation-warning response mode ---- */
-// 2026-09-04, second pass: a Watcher should not narrate every minor deletion
-// with a full paragraph, especially when the same low-value violation was
-// just publicly corrected. This is a DETERMINISTIC, zero-cost decision --
-// computed entirely from state the caller already has (whether a real
-// consequence -- a mute, or media's final pre-kick warning -- is attached to
-// THIS specific violation, and whether the just-generated text already reads
-// as a near-duplicate of something this Watcher recently said) -- never an
-// extra model call whose only purpose is deciding whether to speak.
+// 2026-09-04, second pass (corrected the SAME day -- see the "no
+// NO_PUBLIC_REPLY" note below, which was itself an invented product rule,
+// not a technical or existing-policy constraint): a Watcher should not
+// narrate every minor deletion with a full paragraph, and should not keep
+// restating a correction the room has already just seen. This is a
+// DETERMINISTIC, zero-cost decision -- computed entirely from state the
+// caller already has (whether a real consequence is attached to THIS
+// specific violation, and HOW similar the just-generated candidate already
+// reads to something this Watcher recently said) -- never an extra model
+// call whose only purpose is deciding whether to speak.
 
-export type WarningResponseMode = "WARNING" | "SHORT_NUDGE" | "ENFORCEMENT_NOTICE";
+export type WarningResponseMode = "NO_PUBLIC_REPLY" | "WARNING" | "SHORT_NUDGE" | "ENFORCEMENT_NOTICE";
+
+/** A candidate this similar to something JUST said reads as the exact same
+ *  correction restated -- the community has already seen it, and saying it
+ *  again adds no information. Meaningfully higher than
+ *  NEAR_DUPLICATE_WARNING_THRESHOLD (0.45) specifically so a real SHORT_NUDGE
+ *  band (0.45-0.7 -- recognizably similar but still distinguishable) exists
+ *  between "ordinary" and "say nothing." */
+export const NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD = 0.7;
 
 /** Resolves how much a DELETE_WARN-tier moderation notice should say.
  *
  *   - ENFORCEMENT_NOTICE: a REAL consequence is attached to this specific
- *     violation (a mute is being applied, or -- for media, which has no
- *     mute concept -- this is the final warning immediately before a kick).
+ *     violation (a mute is being applied; for scam/phishing, EVERY notice is
+ *     an ENFORCEMENT_NOTICE, since it's always either a mute or an already-
+ *     executed kick, never a bare warning; for media, which has no mute
+ *     concept, this is the final warning immediately before a kick).
  *     Always communicated in full, every stated fact intact, and NEVER
- *     downgraded by near-duplicate detection -- the product needs the
- *     person/community to actually understand what just happened.
- *   - SHORT_NUDGE: no real consequence beyond the deletion itself (a
- *     first-offense-shaped warning with nothing else attached), AND this
- *     Watcher has just said something near-identical very recently in this
- *     same Community -- a brief, still persona-voiced acknowledgment
- *     instead of another full explanation of the same rule.
+ *     downgraded or suppressed by similarity to a recent message -- the
+ *     product needs the person/community to actually understand what just
+ *     happened. This is the one mode that can NEVER resolve to
+ *     NO_PUBLIC_REPLY or SHORT_NUDGE, checked first, unconditionally.
+ *   - NO_PUBLIC_REPLY: no real consequence beyond the deletion itself, AND
+ *     the candidate reads as NEAR-IDENTICAL (>= NO_PUBLIC_REPLY_SIMILARITY_
+ *     THRESHOLD) to something this Watcher said VERY recently in this same
+ *     Community -- the room has already just seen this exact correction
+ *     stated; restating it again adds no new information, so the deletion
+ *     itself is the only signal needed. Existing precedent for genuine
+ *     silence on a low-value repeat already exists elsewhere in this
+ *     runtime (a repeated non-scam spam/promotion KICK has no companion
+ *     public message at all today) -- this generalizes the same "not every
+ *     enforcement action needs its own sentence" principle to the WARN tier
+ *     specifically for the no-new-information case.
+ *   - SHORT_NUDGE: no real consequence, and the candidate is recognizably
+ *     similar to something recent (>= NEAR_DUPLICATE_WARNING_THRESHOLD but
+ *     below the NO_PUBLIC_REPLY bar) -- similar enough to vary the wording
+ *     for, not so identical that saying anything at all is redundant. A
+ *     brief, still persona-voiced acknowledgment instead of a second full
+ *     explanation.
  *   - WARNING: the ordinary case -- no real consequence attached, and
- *     nothing recently duplicate to react to. A normal, concise, persona-
- *     based correction (today's existing, unchanged shape for a genuine
- *     first-time-style notice).
+ *     nothing recently similar. A normal, concise, persona-based correction
+ *     (today's existing, unchanged shape for a genuine first-time notice).
  *
- *  Deliberately NEVER resolves to "no public reply at all": deleting a
- *  message with zero acknowledgment is itself an enforcement-clarity gap
- *  (the person/room has no idea why the message vanished) -- SHORT_NUDGE,
- *  not silence, is this decision's floor for a DELETE_WARN. */
-export function resolveWarningResponseMode(input: { hasEnforcementConsequence: boolean; isNearDuplicateOfRecent: boolean }): WarningResponseMode {
+ *  Silence is NEVER a symptom of generation failure -- a failed generation
+ *  attempt always falls back to the known-safe deterministic template
+ *  (never null/skipped), and this function is only ever consulted once a
+ *  candidate has ALREADY been successfully produced. Silence here is
+ *  strictly a "nothing new to communicate" decision, never a "couldn't
+ *  produce text" one -- so it can never suppress required enforcement
+ *  clarity for a reason unrelated to redundancy. */
+export function resolveWarningResponseMode(input: { hasEnforcementConsequence: boolean; similarityToRecent: number }): WarningResponseMode {
   if (input.hasEnforcementConsequence) return "ENFORCEMENT_NOTICE";
-  if (input.isNearDuplicateOfRecent) return "SHORT_NUDGE";
+  if (input.similarityToRecent >= NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD) return "NO_PUBLIC_REPLY";
+  if (input.similarityToRecent >= NEAR_DUPLICATE_WARNING_THRESHOLD) return "SHORT_NUDGE";
   return "WARNING";
 }
 
 /* --------------------------------------- generated-text authoritative-fact guard ---- */
 // Generated moderation prose is untrusted presentation output, never an
 // enforcement authority -- the real decision (what happened, whether a mute
-// applies, what number it is) was already made deterministically before this
-// text exists. This is a small, deliberately narrow, deterministic guard
-// against the model stating something that contradicts (or invents beyond)
-// that already-decided authoritative state -- not a semantic/NLP validator.
+// applies, what number it is, whether removal already occurred) was already
+// made deterministically before this text exists. This is a small,
+// deliberately narrow, deterministic guard against the model stating
+// something that contradicts (or invents beyond) that already-decided
+// authoritative state -- not a semantic/NLP validator.
 
 const MUTE_MENTION_RE = /\b(\d+)\s*[-\s]?\s*(?:min|mins|minute|minutes)\b/gi;
 
-// A DEFINITE, already-happened-sounding ban/kick/removal claim. This guard is
-// only ever run against DELETE_WARN-tier text, which by construction never
-// represents an actual ban/kick/removal having occurred -- so any claim
-// phrased as already-completed is categorically false. Deliberately does NOT
+// A raw link/URL must never appear in ANY generated moderation warning --
+// the existing "never speak a link" rule (previously prompt-instruction-only
+// for the solicitation-warning path) is now also code-enforced, universally.
+// This is what makes it structurally safe to realize a SCAM warning in
+// persona at all: the model is never given the malicious URL in the first
+// place (it's not part of any warning's facts, for any category), and even
+// if it somehow produced a link-shaped string anyway, this guard rejects it
+// before it can ever reach Telegram.
+const URL_OR_LINK_RE = /https?:\/\/|(?:^|\s)t\.me\/[a-z0-9_]/i;
+
+// A DEFINITE, already-happened-sounding ban/kick/removal claim. Rejected
+// UNLESS the caller's authoritative facts confirm removal genuinely already
+// happened (`removalHappened: true` -- the ONLY case this applies to today
+// is a scam/phishing REPEAT offense, where the kick executes BEFORE this
+// text is ever generated). For every other caller (a WARN-tier notice,
+// which by construction never represents an actual ban/kick/removal having
+// occurred), any such claim is categorically false. Deliberately does NOT
 // match a hedged, conditional mention of a possible FUTURE consequence
 // ("repeated offenses escalate to a kick or ban") -- that phrasing is
 // explicitly instructed/permitted (see link-classify.ts's requiredFacts) and
@@ -927,7 +979,7 @@ const DEFINITE_REMOVAL_CLAIM_RE =
   /\byou(?:'ve| have)?\s+(?:been|got)\s+(?:banned|kicked|removed)\b|\byou\s+(?:are|were)\s+(?:now\s+)?(?:banned|kicked|removed)\b|\bbanned\s+(?:now|already|permanently)\b|\bkicked\s+(?:now|already)\b|\bremoved\s+(?:now|already)\s+from\b/i;
 
 /** True when generated moderation-warning `text` states something the
- *  authoritative, already-decided facts don't support. Only two concrete,
+ *  authoritative, already-decided facts don't support. Three concrete,
  *  cheaply-checkable classes are caught:
  *
  *   1. A specific minute-count that doesn't match the REAL mute duration
@@ -937,9 +989,11 @@ const DEFINITE_REMOVAL_CLAIM_RE =
  *      garbled number produces (the live-reported concern: "next time
  *      you're banned" stated with no basis, generalized here to any
  *      invented specific fact).
- *   2. A DEFINITE, completed-tense ban/kick/removal claim -- since this
- *      function is only ever called for a WARN-tier notice, no such thing
- *      has actually happened yet.
+ *   2. A raw link/URL of any kind -- see URL_OR_LINK_RE above. Applies
+ *      unconditionally to every caller.
+ *   3. A DEFINITE, completed-tense ban/kick/removal claim, UNLESS
+ *      `authoritative.removalHappened` confirms it genuinely already did
+ *      (the scam-repeat-offense case).
  *
  *  What this deliberately does NOT (and, without a disproportionate NLP/
  *  semantic-parsing investment, cannot) guarantee: it cannot distinguish an
@@ -952,11 +1006,16 @@ const DEFINITE_REMOVAL_CLAIM_RE =
  *  mismatched narrative -- this guard's job is to catch the concrete,
  *  checkable cases, and fall back to the known-safe deterministic template
  *  on a match. */
-export function warningTextExceedsAuthorizedFacts(text: string, authoritative: { muteMinutes?: number | null }): boolean {
+export function warningTextExceedsAuthorizedFacts(
+  text: string,
+  authoritative: { muteMinutes?: number | null; removalHappened?: boolean }
+): boolean {
   const authoritativeMute = authoritative.muteMinutes ?? null;
   for (const match of text.matchAll(MUTE_MENTION_RE)) {
     const stated = Number(match[1]);
     if (authoritativeMute === null || stated !== authoritativeMute) return true;
   }
-  return DEFINITE_REMOVAL_CLAIM_RE.test(text);
+  if (URL_OR_LINK_RE.test(text)) return true;
+  if (!authoritative.removalHappened && DEFINITE_REMOVAL_CLAIM_RE.test(text)) return true;
+  return false;
 }

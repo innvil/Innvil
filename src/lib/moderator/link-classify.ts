@@ -6,8 +6,12 @@ import {
   SPAM_WARNING_LIMIT,
   SOLICITATION_WARNING_LIMIT,
   isNearDuplicateWarning,
+  maxWarningSimilarity,
+  NEAR_DUPLICATE_WARNING_THRESHOLD,
   resolveWarningResponseMode,
   warningTextExceedsAuthorizedFacts,
+  scamFirstOffenseWarningHtml,
+  scamRepeatOffenseWarningHtml,
   type LinkCategory,
   type ClassificationConfidence,
   type WarningResponseMode,
@@ -347,24 +351,39 @@ function buildAvoidRepeatingNote(recentOwnWarnings: string[], mode: WarningRespo
  *  same function:
  *  (3) the retry is now response-MODE aware (resolveWarningResponseMode,
  *  link-moderation.ts): a violation with a real mute attached is always an
- *  ENFORCEMENT_NOTICE and is never shortened even when it reads as a near-
- *  duplicate -- only a violation with no consequence beyond the deletion
- *  itself may become a brief SHORT_NUDGE on retry;
+ *  ENFORCEMENT_NOTICE and is never shortened/suppressed even when it reads
+ *  as a near-duplicate -- only a violation with no consequence beyond the
+ *  deletion itself may become a brief SHORT_NUDGE on retry, or (third pass,
+ *  same day) resolve to genuine silence when it's not just similar but
+ *  NEAR-IDENTICAL to something this Watcher just said (see the return type
+ *  below and NO_PUBLIC_REPLY's own doc comment);
  *  (4) EVERY generated candidate (both the no-retry fast path and the
  *  retry) is now passed through warningTextExceedsAuthorizedFacts before
  *  ever being returned -- generated text is treated as untrusted
  *  presentation output, never an enforcement authority; a candidate that
  *  states an unsupported specific fact (a wrong/invented mute-minute count,
- *  or a definite ban/kick/removal claim that never happened) is discarded
- *  in favor of the already-known-safe deterministic template, never
- *  "corrected" in place. */
+ *  a raw link, or a definite ban/kick/removal claim that never happened) is
+ *  discarded in favor of the already-known-safe deterministic template,
+ *  never "corrected" in place.
+ *
+ *  2026-09-04, third pass -- returns `string | null` now: `null` means
+ *  NO_PUBLIC_REPLY (this violation has no real consequence attached AND the
+ *  candidate reads as near-identical to something this Watcher just said in
+ *  this same room -- nothing new to communicate). The CALLER is responsible
+ *  for skipping the SEND_TEXT/insert entirely on `null` while still running
+ *  every other enforcement step (delete/mute/state-persistence) exactly as
+ *  before -- language realization never gates enforcement. `null` is NEVER
+ *  returned as a result of generation FAILING (a failed attempt always
+ *  falls to the deterministic template, a real string) -- silence here is
+ *  strictly a "nothing new to say" decision, never a symptom of AI being
+ *  down. */
 export async function generatePersonaSolicitationWarning(
   moderatorName: string,
   persona: ModeratorPersona,
   facts: SolicitationWarningFacts,
   aiRouting?: AccountAiRouting,
   recentOwnWarnings: string[] = []
-): Promise<string> {
+): Promise<string | null> {
   // Live feedback (2026-09-02): "it should not send the promotion link, it
   // should say promotion" -- the redirect destination is now ALWAYS spoken
   // by name only. promotionTopicLink is never surfaced in generated text at
@@ -505,17 +524,182 @@ export async function generatePersonaSolicitationWarning(
   const first = await attemptGeneration(buildSystem());
   if (first === null) return deterministicFallback();
 
-  const isDuplicate = recentOwnWarnings.length > 0 && isNearDuplicateWarning(first, recentOwnWarnings);
-  if (!isDuplicate) return sanitize(first);
+  // Response-mode resolution (2026-09-04, third pass) -- a REAL mute
+  // attached to this violation is always ENFORCEMENT_NOTICE, unconditionally,
+  // regardless of similarity (see resolveWarningResponseMode's own doc
+  // comment). Otherwise the mode is driven entirely by how similar this
+  // candidate already is to something this Watcher just said.
+  const similarity = recentOwnWarnings.length ? maxWarningSimilarity(first, recentOwnWarnings) : 0;
+  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: !!facts.muteMinutes, similarityToRecent: similarity });
+  if (mode === "NO_PUBLIC_REPLY") return null;
+  if (mode === "WARNING") return sanitize(first);
+  // ENFORCEMENT_NOTICE is the mode whenever a real mute is attached,
+  // REGARDLESS of similarity -- SHORT_NUDGE can only be reached with a
+  // genuine similarity signal (empty/no-match history forces similarity to
+  // 0, which never resolves to SHORT_NUDGE), but a mute-bearing notice with
+  // nothing recently similar has no "sounds like a repeat" problem to
+  // solve, so it's returned as-is rather than spending a wasted retry call.
+  if (mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD) return sanitize(first);
 
-  // Bounded to exactly ONE retry -- if the regenerated text is somehow
-  // still similar, or the retry itself fails, it's used/fallen-back-from
-  // exactly the same as any other generation outcome, never looped again.
-  // Mode-aware (resolveWarningResponseMode, link-moderation.ts): an actual
-  // mute attached to this violation is always an ENFORCEMENT_NOTICE and must
-  // still be stated in full on the retry; nothing beyond the deletion itself
-  // is SHORT_NUDGE-eligible -- see buildAvoidRepeatingNote's own doc comment.
-  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: !!facts.muteMinutes, isNearDuplicateOfRecent: true });
+  // SHORT_NUDGE or a genuinely-near-duplicate ENFORCEMENT_NOTICE: bounded to
+  // exactly ONE retry -- if the regenerated text is somehow still similar,
+  // or the retry itself fails, it's used/fallen-back-from exactly the same
+  // as any other generation outcome, never looped again. Mode-aware
+  // (buildAvoidRepeatingNote's own doc comment): ENFORCEMENT_NOTICE must
+  // still be stated in full on the retry, never shortened away.
   const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, mode)));
+  return sanitize(retry ?? first);
+}
+
+/* ==================== scam/phishing warnings, now ALSO persona-voiced ==== */
+// 2026-09-04, third pass -- explicit product correction: scam/phishing
+// DETECTION and the resulting ENFORCEMENT DECISION (whether this is a scam,
+// whether to delete, mute, or kick, the exact mute duration, the warning/
+// strike count) were NEVER at issue and remain 100% deterministic, entirely
+// inside decideLinkEnforcement (link-moderation.ts) -- untouched by this.
+// What was wrong was conflating that with "the VISIBLE WORDING must also be
+// deterministic," which is a separate, non-required constraint. Proven from
+// the actual code, not asserted: in community-runtime.ts, the mute
+// (`RESTRICT_USER mode:"MUTE"`) executes in a code block gated ONLY on
+// `enforcement.muteMinutes && token` -- it does not reference whether the
+// warning text/SEND_TEXT above it succeeded at all -- and the kick for a
+// repeat offense executes BEFORE any warning text is generated. Enforcement
+// is therefore ALREADY fully independent of language realization for this
+// category, exactly the same guarantee generatePersonaSolicitationWarning
+// already relies on for promotion warnings. There is no reliability
+// blocker, so there is no justification for exempting this one category.
+//
+// Safety is preserved by giving this function ONLY safe, structured facts
+// -- never the violating message's text, never the malicious URL/domain/
+// handle -- mirroring SolicitationWarningFacts' own "no raw content" shape
+// exactly. The existing "never reproduce the malicious URL" invariant is
+// now enforced TWICE: structurally (the URL is never part of ScamWarningFacts,
+// so the model has nothing to reproduce even if it tried) and by the shared
+// warningTextExceedsAuthorizedFacts guard's new URL_OR_LINK_RE check, which
+// rejects a generated candidate outright if it contains anything link-shaped
+// regardless of where it could have come from.
+
+export interface ScamWarningFacts {
+  /** False = first confirmed offense (message removed, user muted -- never
+   *  banned/kicked on a first offense). True = REPEAT confirmed offense
+   *  (message removed, user has ALREADY been kicked from the community by
+   *  the time this text is generated -- the kick already executed, see the
+   *  doc comment above). */
+  isRepeatOffense: boolean;
+  /** Real, exact mute duration for a FIRST offense only -- undefined/ignored
+   *  for a repeat offense (nothing is muted on a kick). Never invented by
+   *  the model; when present it MUST be stated verbatim. */
+  muteMinutes: number | undefined;
+}
+
+/** Persona-voiced scam/phishing warning -- supersedes scamFirstOffenseWarningHtml
+ *  / scamRepeatOffenseWarningHtml as the NORMAL path (both functions are kept,
+ *  unchanged, and are exactly what this falls back to on any generation
+ *  failure or when no AI provider is usable -- there is no scenario where
+ *  this produces a less safe or less accurate warning than before, only a
+ *  differently-phrased one when generation succeeds). Always resolves to
+ *  ENFORCEMENT_NOTICE mode (see resolveWarningResponseMode) -- a scam/
+ *  phishing notice is ALWAYS either a real mute or an already-executed kick,
+ *  never a bare no-consequence warning, so it can never legitimately go
+ *  silent or shorten itself away; the anti-repetition retry, when it
+ *  triggers, only ever varies PHRASING, never shortens or omits a required
+ *  fact. `mentionHtml` is embedded internally, deterministically, by this
+ *  function itself (never asked of the model) -- the returned string is
+ *  always the full, ready-to-send text for both the generated-success and
+ *  deterministic-fallback paths. */
+export async function generatePersonaScamWarning(
+  moderatorName: string,
+  persona: ModeratorPersona,
+  mentionHtml: string,
+  facts: ScamWarningFacts,
+  aiRouting?: AccountAiRouting,
+  recentOwnWarnings: string[] = []
+): Promise<string> {
+  // scamFirstOffenseWarningHtml always states SCAM_FIRST_WARNING_MUTE_MINUTES
+  // internally -- decideLinkEnforcement (link-moderation.ts) never produces
+  // any OTHER mute value for a first scam offense, so facts.muteMinutes is
+  // guaranteed to already equal that same constant; no separate parameter
+  // is needed for the fallback to stay accurate.
+  const deterministicFallback = () => (facts.isRepeatOffense ? scamRepeatOffenseWarningHtml(mentionHtml) : scamFirstOffenseWarningHtml(mentionHtml));
+
+  const requiredFacts: string[] = facts.isRepeatOffense
+    ? [
+        "This is a REPEAT confirmed scam/phishing offense from this same person.",
+        "They have ALREADY been removed (kicked) from this community as a direct result -- this has genuinely already happened, state it as a completed fact, not a threat.",
+      ]
+    : [
+        "This is their FIRST confirmed scam/phishing offense.",
+        `You also muted them for exactly ${facts.muteMinutes} minutes as a result -- state this real number verbatim, never a different one.`,
+        "Make clear that another confirmed scam/phishing violation will result in removal (a kick) from this community.",
+      ];
+
+  const buildSystem = (avoidRepeatingNote?: string): string =>
+    [
+      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it contained a suspected scam/phishing link.`,
+      `You were NOT shown the link/message content itself and do not know what it said -- you must NEVER mention, describe, guess, or invent any specific URL, domain, wallet address, project name, or account handle from it. Only refer to it generically as "a scam/phishing link" or "that link."`,
+      `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
+      ...personaVoiceBlock(persona),
+      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type a quick warning, not as a checklist:`,
+      ...requiredFacts.map((f) => `- ${f}`),
+      `Never output robotic/templated phrasing -- write like a real short chat message, not a form letter.`,
+      `Never include a link, URL, or @handle of any kind in your response.`,
+      `Always write the warning in English.`,
+      avoidRepeatingNote,
+      `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
+    ]
+      .filter((line): line is string => !!line)
+      .join("\n");
+
+  const attemptGeneration = async (system: string): Promise<string | null> => {
+    if (aiRouting?.required) {
+      const cred = aiRouting.credential;
+      if (!cred?.model) return null;
+      try {
+        const raw = await aiComplete({
+          system,
+          messages: [{ role: "user", content: "Write the warning now." }],
+          model: cred.model,
+          providerOverride: byoProviderOverride(cred),
+          maxTokens: 200,
+          automation: "SCAM_MODERATION_WARNING_BYO",
+        });
+        const text = raw.trim();
+        return text ? text.slice(0, 300) : null;
+      } catch {
+        return null;
+      }
+    }
+    if (!aiConfigured()) return null;
+    try {
+      const { model, effort } = getInnvilModelConfig();
+      const raw = await aiComplete({
+        system,
+        messages: [{ role: "user", content: "Write the warning now." }],
+        model,
+        effort,
+        maxTokens: 200,
+        automation: "SCAM_MODERATION_WARNING",
+      });
+      const text = raw.trim();
+      return text ? text.slice(0, 300) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const authoritativeFacts = { muteMinutes: facts.isRepeatOffense ? null : facts.muteMinutes ?? null, removalHappened: facts.isRepeatOffense };
+  const sanitize = (body: string) =>
+    warningTextExceedsAuthorizedFacts(body, authoritativeFacts) ? deterministicFallback() : `${mentionHtml}, ${body}`;
+
+  const first = await attemptGeneration(buildSystem());
+  if (first === null) return deterministicFallback();
+
+  if (!recentOwnWarnings.length || !isNearDuplicateWarning(first, recentOwnWarnings)) return sanitize(first);
+
+  // Bounded to exactly ONE retry -- ENFORCEMENT_NOTICE only (scam is never
+  // eligible for SHORT_NUDGE/NO_PUBLIC_REPLY, see this function's own doc
+  // comment), so the retry always asks for full-but-differently-phrased
+  // wording, never brevity/suppression.
+  const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, "ENFORCEMENT_NOTICE")));
   return sanitize(retry ?? first);
 }
