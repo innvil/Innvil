@@ -12,7 +12,7 @@ import {
 import { decideBotAcknowledgement, type BotAckMode, type EligibleTarget } from "./coordinator";
 import {
   selectChatterAction, resolveDirectedModerator, resolveMultiTargetAddress, requiresIndividualContribution,
-  isRoomWideAddress, roomWideResponderCount, classifyMessageKind,
+  isRoomWideAddress, roomWideResponderCount, classifyMessageKind, openerNamesOtherRecentParticipant,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback, resolveAdditionalReactors,
   MAX_ADDITIONAL_RESPONDERS, type ChatterCandidate, type ChatterPacingState,
 } from "./chatter-coordinator";
@@ -3249,6 +3249,20 @@ async function handleHumanMessage(
     deployments.map((d) => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername }))
   );
 
+  // Live bug: "morning martin" answered as if the room itself were greeted,
+  // then the reply fabricated "though i think you've got the wrong name" --
+  // a claim with no basis in what was actually said. A greeting that
+  // vocatively names a DIFFERENT, recently-active human is a personal
+  // greeting to that person, not the room -- see chatter-coordinator.ts's
+  // openerNamesOtherRecentParticipant for the exact matching rule. Only
+  // HUMAN senders other than this message's own sender are eligible names
+  // (a fellow moderator's name is handled separately, and correctly, via
+  // directedMatch/resolveDirectedModerator above).
+  const recentHumanNames = recentContext
+    .filter((m) => m.senderType === "HUMAN" && m.senderPlatformId !== event.sender.platformUserId && m.senderName)
+    .map((m) => m.senderName as string);
+  const openerAddressedToOtherParticipant = openerNamesOtherRecentParticipant(event.text, recentHumanNames);
+
   const candidates: ChatterCandidate[] = deployments.map((d, i) => ({
     deploymentId: d.deploymentId,
     isDirectedAtBot: repliedToDeploymentId === d.deploymentId || directedMatch?.deploymentId === d.deploymentId,
@@ -3331,7 +3345,7 @@ async function handleHumanMessage(
   // logic stays completely untouched by this feature.
   let action = selectChatterAction({
     text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman,
-    suppressAcknowledgementForSender, recentlyRespondedByAdminOrMod,
+    suppressAcknowledgementForSender, recentlyRespondedByAdminOrMod, openerAddressedToOtherParticipant,
   });
   timer.mark("coordinator_action_selected", { actionType: action.type });
 

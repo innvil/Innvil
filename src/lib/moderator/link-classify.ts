@@ -455,6 +455,17 @@ export async function generatePersonaSolicitationWarning(
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
       `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${violationDescription}.`,
+      // Live bug: a message asking "Dev I am your friend DM me" got a warning
+      // that opened with "i'm not the dev and we don't do promo deals over
+      // dms" -- this function is NEVER given the removed message's actual
+      // wording (see SolicitationWarningFacts, which carries no raw-text
+      // field at all), so any specific claim/denial about what it said --
+      // an identity ("I'm not the dev"), a role, a relationship, or anything
+      // else beyond violationDescription above -- is a pure invention with
+      // no basis in fact. Enforcing the "no promos here" policy is correct
+      // and required; reacting to invented specifics from a message the
+      // model was never shown is not.
+      `You were NOT shown the exact wording of the removed message -- you only know it was ${violationDescription}. Do NOT guess, invent, or react to specific words, names, or claims from it -- for example, never claim or deny being "the dev," an admin, or any other specific role/identity/relationship the message might have referenced. State only the required facts below, in your own voice, without responding to anything else the message may have said.`,
       `Write ONE short, natural, casual warning${facts.searchSpamPattern === "coordinated" ? " to the room" : " to the person"}, entirely in your own persona voice (see below).`,
       ...personaVoiceBlock(persona),
       escalationLine,

@@ -349,6 +349,24 @@ test("REQUIRED: the prompt requires the exact mute duration verbatim when one ap
   });
 });
 
+// Live bug: "Dev I am your friend DM me" got a warning that opened with
+// "i'm not the dev and we don't do promo deals over dms" -- this function is
+// NEVER given the removed message's raw wording (SolicitationWarningFacts
+// carries no such field), so any specific claim/denial the model states
+// about what the message said is a pure invention. The correct behavior is
+// to enforce the "no promos here" policy without reacting to fabricated
+// content from a message the model was never shown.
+test("REQUIRED: the prompt states the model was never shown the removed message's wording, and bans reacting to invented specifics from it", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("no promos in General please, thanks!"), async (calls) => {
+      await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /You were NOT shown the exact wording/i);
+      assert.match(system, /never claim or deny being "the dev,"/i);
+    });
+  });
+});
+
 // Corrected 2026-09-02, per explicit live feedback: "it should not send the
 // promotion link, it should say promotion" -- the redirect destination is
 // now ALWAYS spoken by name only. A raw link/URL must never appear anywhere

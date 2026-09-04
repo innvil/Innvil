@@ -417,7 +417,14 @@ const REFERENTIAL_PRECEDING_TOKENS = new Set([
 ]);
 // A name mention immediately preceded by one of these reads as a genuine
 // direct ADDRESS ("hey Kwan", "are you Kwan?") -- second-person framing.
-const VOCATIVE_PRECEDING_TOKENS = new Set(["hey", "hi", "yo", "hello", "you"]);
+// Widened (live bug) to include the tail word of every GREETING_RE
+// alternative too ("morning Martin"/"gm Martin"/"sup Martin"/"what's up
+// Martin" -- tokenize() drops "good"/apostrophes, so "good morning"/"what's
+// up" reduce to their own final word here) -- not a new/separate vocabulary,
+// just closing a gap between two lists that were meant to describe the same
+// thing: GREETING_RE already recognizes these as greeting words, so a name
+// immediately after one is just as much a direct address as "hey Kwan" is.
+const VOCATIVE_PRECEDING_TOKENS = new Set(["hey", "hi", "yo", "hello", "you", "gm", "morning", "evening", "afternoon", "sup", "up"]);
 
 /** True when the name-token at `tokens[idx]` reads as a direct address to
  *  that person rather than a third-person mention of them. Mentioning a
@@ -484,6 +491,42 @@ export function resolveDirectedModerator(text: string, moderators: ModeratorIden
   );
   if (fuzzy.length === 1) return { deploymentId: fuzzy[0].deploymentId, isTypo: true };
   return null; // no match, or an ambiguous fuzzy match across multiple moderators
+}
+
+/** True when a conversational-opener message ("morning martin") vocatively
+ *  names a DIFFERENT, recently-active HUMAN participant -- i.e. it's a
+ *  personal greeting to a specific person actually present in this room, not
+ *  a room-wide/ambient one ("gm everyone", "morning all"). Live bug: a
+ *  Watcher answered "morning martin" as if it had been greeted itself, then
+ *  fabricated "though i think you've got the wrong name" -- inventing a
+ *  claim (that the human meant to address it, but erred) with no basis in
+ *  what was actually said. resolveDirectedModerator already handles the case
+ *  where the named individual IS one of the deployed moderators (routes the
+ *  message to THEM instead, via the same widened vocative-cue detection
+ *  above); this covers the case where they're an ordinary human, so no
+ *  candidate should treat the greeting as its own to answer at all.
+ *
+ *  Deliberately keyed to REAL, recently-active identities (the caller passes
+ *  the display names of humans who've actually spoken in this community's
+ *  recent context -- see community-runtime.ts's loadRecentContext, already
+ *  loaded for every message, no new query) rather than a generic "looks like
+ *  a name" guess: a collective/slang room address ("gm frens", "morning
+ *  degens", "hey folks") never matches any specific recent sender's own
+ *  display name, so it's completely unaffected by this check. Reuses the
+ *  SAME vocative-position rule resolveDirectedModerator applies to moderator
+ *  names, so a referential mention ("morning, did martin already reply?")
+ *  still does not count, for the same reason it never counts there. */
+export function openerNamesOtherRecentParticipant(text: string, recentHumanNames: string[]): boolean {
+  const tokens = tokenize(text);
+  if (!tokens.length) return false;
+  const lower = text.toLowerCase();
+  return recentHumanNames.some((rawName) => {
+    const nameTokens = tokenize(rawName).filter((t) => t.length >= 2);
+    if (!nameTokens.length) return false;
+    return nameTokens.some(
+      (nt) => tokens.some((t, idx) => t === nt && isVocativeOccurrence(tokens, idx)) || commaPrecededVocative(lower, nt)
+    );
+  });
 }
 
 /* ============================================== explicit multi-target address ==========
@@ -753,6 +796,17 @@ export interface ChatterActionInput {
    *  has its own separate suppressAcknowledgementForSender gate above.
    *  Undefined/false preserves every existing behavior exactly. */
   recentlyRespondedByAdminOrMod?: boolean;
+  /** True when this message is a conversational-opener/greeting that
+   *  vocatively names a DIFFERENT, recently-active human -- a personal
+   *  greeting to a specific person present in the room, not the room in
+   *  general (see openerNamesOtherRecentParticipant's own doc comment for
+   *  the exact live bug this fixes). Checked only inside the
+   *  COMMUNITY_OPENER branch's undirected path -- a message that's ALSO
+   *  directed at a specific candidate (an @mention/reply/configured-name
+   *  match) is unaffected, since that's an explicit request to THIS
+   *  moderator regardless of what name also appears in the text. Undefined/
+   *  false preserves every existing behavior exactly. */
+  openerAddressedToOtherParticipant?: boolean;
 }
 
 export type ChatterAction =
@@ -962,6 +1016,15 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
     const directed = eligible.find((c) => c.isDirectedAtBot);
     if (directed) {
       return { type: "CASUAL_CHAT", deploymentId: directed.deploymentId, reasons: ["directed_opener"] };
+    }
+    // Live bug: "morning martin" (nobody directed at THIS candidate) was
+    // still answered as an ambient room greeting -- checked before the
+    // already_handled suppression so this correctly resolves the FIRST time
+    // too, not only on a repeat, and with its own distinct reason code for
+    // diagnostics rather than being indistinguishable from a genuinely
+    // already-handled room.
+    if (input.openerAddressedToOtherParticipant) {
+      return { type: "SILENCE", reasons: ["opener_addressed_to_other_participant"] };
     }
     if (input.recentlyAnsweredByModerator || input.recentlyRespondedByHuman) {
       return { type: "SILENCE", reasons: ["already_handled"] };

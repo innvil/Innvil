@@ -4,7 +4,7 @@ import {
   selectChatterAction, resolveDirectedModerator, isConversationalOpener,
   isAmbientOpenerFallbackCandidate, resolveAmbientOpenerFallback,
   resolveMultiTargetAddress, MAX_ADDITIONAL_RESPONDERS, isRoomWideAddress, roomWideResponderCount,
-  resolveAdditionalReactors, MAX_ADDITIONAL_REACTORS,
+  resolveAdditionalReactors, MAX_ADDITIONAL_REACTORS, openerNamesOtherRecentParticipant,
   type ChatterCandidate, type ChatterPacingState, type ModeratorIdentity,
 } from "./chatter-coordinator";
 
@@ -35,6 +35,7 @@ function single(opts: {
   recentlyRespondedByHuman?: boolean;
   suppressAcknowledgementForSender?: boolean;
   recentlyRespondedByAdminOrMod?: boolean;
+  openerAddressedToOtherParticipant?: boolean;
 }) {
   return selectChatterAction({
     text: opts.text,
@@ -51,6 +52,7 @@ function single(opts: {
     recentlyRespondedByHuman: opts.recentlyRespondedByHuman,
     suppressAcknowledgementForSender: opts.suppressAcknowledgementForSender,
     recentlyRespondedByAdminOrMod: opts.recentlyRespondedByAdminOrMod,
+    openerAddressedToOtherParticipant: opts.openerAddressedToOtherParticipant,
   });
 }
 
@@ -698,6 +700,86 @@ test('REQUIRED: closure in informal/shorthand form is acknowledgement/closure, n
 test("REQUIRED: unknown/ambiguous informal wording with no real signal stays silent rather than inventing a specific interpretation", () => {
   const result = single({ text: "vibes ig" });
   assert.equal(result.type, "SILENCE");
+});
+
+/* ------------------------------- widened greeting-word vocative cues ------ */
+// Live bug: "morning martin" wasn't recognized as addressing anyone by name
+// at all, because only a fixed short list (hey/hi/yo/hello/you) counted as a
+// vocative-preceding cue -- "morning" (and the rest of GREETING_RE's own
+// vocabulary) didn't. Widened VOCATIVE_PRECEDING_TOKENS to close the gap
+// between the two lists, which is what makes resolveDirectedModerator
+// correctly route a greeting-plus-name to an actual deployed moderator of
+// that name (a DIFFERENT bug from openerNamesOtherRecentParticipant below,
+// which covers the case where the named person ISN'T a moderator at all).
+
+const MARTIN: ModeratorIdentity = { deploymentId: "dep-martin", name: "Martin", botUsername: "martin_mod_bot" };
+
+test('REQUIRED (live bug repro, moderator case): "morning martin" resolves to Martin when Martin IS a deployed moderator', () => {
+  assert.deepEqual(resolveDirectedModerator("morning martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+});
+
+test("REQUIRED: every GREETING_RE-style cue works as a vocative preceding a moderator's name, not just morning", () => {
+  assert.deepEqual(resolveDirectedModerator("gm martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("good morning martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("good evening martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("evening martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("sup martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+  assert.deepEqual(resolveDirectedModerator("what's up martin", [KWAN, MARTIN]), { deploymentId: "dep-martin", isTypo: false });
+});
+
+test("REQUIRED: the widened cue set doesn't break referential exclusion -- a greeting word merely nearby still isn't a vocative on its own", () => {
+  // "martin" is not the token immediately after a greeting cue here -- no regression.
+  assert.equal(resolveDirectedModerator("morning, did martin already reply?", [KWAN, MARTIN]), null);
+});
+
+/* --------------------------- openerNamesOtherRecentParticipant ------------ */
+// Live bug: "morning martin" (Martin here is an ORDINARY HUMAN, not a
+// deployed moderator) was answered by Patricia as if she'd been greeted
+// herself, and the generated reply fabricated "though i think you've got the
+// wrong name" -- a claim with zero basis in what was actually said.
+
+test('REQUIRED (live bug repro): "morning martin" names a recently-active human other than the responder', () => {
+  assert.equal(openerNamesOtherRecentParticipant("morning martin", ["Martin"]), true);
+});
+
+test("REQUIRED: every widened greeting cue also works for a human name, not just a moderator name", () => {
+  assert.equal(openerNamesOtherRecentParticipant("gm martin", ["Martin"]), true);
+  assert.equal(openerNamesOtherRecentParticipant("good morning martin", ["Martin"]), true);
+  assert.equal(openerNamesOtherRecentParticipant("hey martin", ["Martin"]), true);
+  assert.equal(openerNamesOtherRecentParticipant("well, martin, morning", ["Martin"]), true); // comma-flanked
+});
+
+test("REQUIRED: a collective/slang room address never matches a specific recent sender's own name -- no false positive", () => {
+  assert.equal(openerNamesOtherRecentParticipant("gm frens", ["Martin", "Parker"]), false);
+  assert.equal(openerNamesOtherRecentParticipant("morning degens", ["Martin"]), false);
+  assert.equal(openerNamesOtherRecentParticipant("hey folks", ["Martin"]), false);
+  assert.equal(openerNamesOtherRecentParticipant("gm everyone", ["Martin"]), false);
+});
+
+test("REQUIRED: a referential (not vocative) mention of the recent name still does not count -- same rule as resolveDirectedModerator", () => {
+  assert.equal(openerNamesOtherRecentParticipant("morning, did martin already reply?", ["Martin"]), false);
+  assert.equal(openerNamesOtherRecentParticipant("I think martin said that already", ["Martin"]), false);
+});
+
+test("no recent names at all -> never a false trigger", () => {
+  assert.equal(openerNamesOtherRecentParticipant("morning martin", []), false);
+});
+
+test("REQUIRED end-to-end: an ambient greeting addressed to a different recent participant resolves to SILENCE, with its own distinct reason", () => {
+  const result = single({ text: "morning martin", openerAddressedToOtherParticipant: true });
+  assert.equal(result.type, "SILENCE");
+  assert.deepEqual(result.reasons, ["opener_addressed_to_other_participant"]);
+});
+
+test("REQUIRED: an opener addressed to another participant is STILL answered when this SAME message also directly addresses the candidate -- direction always overrides", () => {
+  const result = single({ text: "morning martin, and hey kwan too", isDirectedAtBot: true, openerAddressedToOtherParticipant: true });
+  assert.equal(result.type, "CASUAL_CHAT");
+  assert.deepEqual(result.reasons, ["directed_opener"]);
+});
+
+test("REQUIRED: without the flag, an ordinary undirected opener is unaffected and still answered normally", () => {
+  const result = single({ text: "morning everyone" });
+  assert.equal(result.type, "CASUAL_CHAT");
 });
 
 /* ---- continuity priority when combined with the real selection pipeline ---- */
