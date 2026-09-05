@@ -595,10 +595,12 @@ export async function generatePersonaSolicitationWarning(
 
 export interface ScamWarningFacts {
   /** False = first confirmed offense (message removed, user muted -- never
-   *  banned/kicked on a first offense). True = REPEAT confirmed offense
-   *  (message removed, user has ALREADY been kicked from the community by
-   *  the time this text is generated -- the kick already executed, see the
-   *  doc comment above). */
+   *  banned/kicked on a first offense). True = REPEAT confirmed offense --
+   *  the user has ALREADY been kicked from the community by the time this
+   *  text is generated. The resulting message is a COMMUNITY-facing
+   *  reminder, never addressed to the kicked person (see this function's
+   *  own doc comment) -- the kick is a real, already-recorded enforcement
+   *  fact, kept separate from what this public text says. */
   isRepeatOffense: boolean;
   /** Real, exact mute duration for a FIRST offense only -- undefined/ignored
    *  for a repeat offense (nothing is muted on a kick). Never invented by
@@ -608,19 +610,34 @@ export interface ScamWarningFacts {
 
 /** Persona-voiced scam/phishing warning -- supersedes scamFirstOffenseWarningHtml
  *  / scamRepeatOffenseWarningHtml as the NORMAL path (both functions are kept,
- *  unchanged, and are exactly what this falls back to on any generation
- *  failure or when no AI provider is usable -- there is no scenario where
- *  this produces a less safe or less accurate warning than before, only a
- *  differently-phrased one when generation succeeds). Always resolves to
- *  ENFORCEMENT_NOTICE mode (see resolveWarningResponseMode) -- a scam/
- *  phishing notice is ALWAYS either a real mute or an already-executed kick,
- *  never a bare no-consequence warning, so it can never legitimately go
- *  silent or shorten itself away; the anti-repetition retry, when it
- *  triggers, only ever varies PHRASING, never shortens or omits a required
- *  fact. `mentionHtml` is embedded internally, deterministically, by this
- *  function itself (never asked of the model) -- the returned string is
- *  always the full, ready-to-send text for both the generated-success and
- *  deterministic-fallback paths. */
+ *  unchanged for the first-offense case, and are exactly what this falls
+ *  back to on any generation failure or when no AI provider is usable --
+ *  there is no scenario where this produces a less safe or less accurate
+ *  warning than before, only a differently-phrased one when generation
+ *  succeeds). Always resolves to ENFORCEMENT_NOTICE mode (see
+ *  resolveWarningResponseMode) -- a scam/phishing notice is ALWAYS either a
+ *  real mute or an already-executed kick, never a bare no-consequence
+ *  warning, so it can never legitimately go silent or shorten itself away;
+ *  the anti-repetition retry, when it triggers, only ever varies PHRASING,
+ *  never shortens or omits a required fact.
+ *
+ *  Kick/ban public-message AUDIENCE semantics (2026-09-05, explicit product
+ *  correction): a successful kick/ban changes WHO the visible message is
+ *  for. The removed person may no longer be present to read anything
+ *  addressed to them ("you have been removed") -- that framing is simply
+ *  the wrong audience, not merely undesirable phrasing. So for a REPEAT
+ *  (kick) offense, this function generates a COMMUNITY-FACING moderation
+ *  notice instead of a personal warning: no mention/handle is embedded at
+ *  all (`mentionHtml` is only ever used for the FIRST-offense, still-user-
+ *  facing mute case), and the model is explicitly instructed never to
+ *  address/name/tag the removed person. It's fine, and expected, for this
+ *  notice to remind the room of the rule and state -- in general,
+ *  prospective policy terms -- that repeated/severe violations result in
+ *  removal; it must never claim that a specific named person was just
+ *  personally removed. The private Watcher Ops audit report (sent
+ *  separately, community-runtime.ts) is untouched and still records exactly
+ *  who was kicked, why, and when -- that internal enforcement fact is kept
+ *  fully separate from this public community message. */
 export async function generatePersonaScamWarning(
   moderatorName: string,
   persona: ModeratorPersona,
@@ -633,13 +650,16 @@ export async function generatePersonaScamWarning(
   // internally -- decideLinkEnforcement (link-moderation.ts) never produces
   // any OTHER mute value for a first scam offense, so facts.muteMinutes is
   // guaranteed to already equal that same constant; no separate parameter
-  // is needed for the fallback to stay accurate.
-  const deterministicFallback = () => (facts.isRepeatOffense ? scamRepeatOffenseWarningHtml(mentionHtml) : scamFirstOffenseWarningHtml(mentionHtml));
+  // is needed for the fallback to stay accurate. scamRepeatOffenseWarningHtml
+  // takes no mention -- it's a community-facing reminder, not addressed to
+  // the removed person.
+  const deterministicFallback = () => (facts.isRepeatOffense ? scamRepeatOffenseWarningHtml() : scamFirstOffenseWarningHtml(mentionHtml));
 
   const requiredFacts: string[] = facts.isRepeatOffense
     ? [
-        "This is a REPEAT confirmed scam/phishing offense from this same person.",
-        "They have ALREADY been removed (kicked) from this community as a direct result -- this has genuinely already happened, state it as a completed fact, not a threat.",
+        "Do NOT address, name, mention, tag, or otherwise refer to any specific person -- this message is for the community as a whole, not the person who was removed (they may no longer be present to read it).",
+        "Remind the community, in your own words, that posting scam/phishing links is not tolerated here.",
+        "State, in general policy terms, that repeated or severe violations of this result in removal from the community -- a plain rule/consequence statement, never a claim describing what specifically just happened to one named individual.",
       ]
     : [
         "This is their FIRST confirmed scam/phishing offense.",
@@ -649,17 +669,21 @@ export async function generatePersonaScamWarning(
 
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
-      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it contained a suspected scam/phishing link.`,
+      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it contained a suspected scam/phishing link${facts.isRepeatOffense ? ", and this was a repeat offense from that same person, so they have also just been removed from the community" : ""}.`,
       `You were NOT shown the link/message content itself and do not know what it said -- you must NEVER mention, describe, guess, or invent any specific URL, domain, wallet address, project name, or account handle from it. Only refer to it generically as "a scam/phishing link" or "that link."`,
-      `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
+      facts.isRepeatOffense
+        ? `Write ONE short, natural COMMUNITY-FACING moderation reminder, entirely in your own persona voice (see below) -- addressed to the room in general, never to the specific person who was just removed.`
+        : `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
       ...personaVoiceBlock(persona),
-      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type a quick warning, not as a checklist:`,
+      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type it, not as a checklist:`,
       ...requiredFacts.map((f) => `- ${f}`),
       `Never output robotic/templated phrasing -- write like a real short chat message, not a form letter.`,
       `Never include a link, URL, or @handle of any kind in your response.`,
       `Always write the warning in English.`,
       avoidRepeatingNote,
-      `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
+      facts.isRepeatOffense
+        ? `Respond with ONLY the message you'd actually post to the community -- no quotation marks, no explanation, no mention/handle of any kind. Keep it SHORT: one or two sentences, under 30 words.`
+        : `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
     ]
       .filter((line): line is string => !!line)
       .join("\n");
@@ -701,9 +725,17 @@ export async function generatePersonaScamWarning(
     }
   };
 
-  const authoritativeFacts = { muteMinutes: facts.isRepeatOffense ? null : facts.muteMinutes ?? null, removalHappened: facts.isRepeatOffense };
+  // No `removalHappened` escape hatch anymore (2026-09-05 correction) -- a
+  // definite, completed-tense "you have been removed"-style claim is now
+  // ALWAYS the wrong audience semantics, regardless of whether removal
+  // genuinely happened, so it's unconditionally rejected here too. General,
+  // prospective community-facing rule language ("repeated violations result
+  // in removal") is a structurally different statement shape and was never
+  // matched by this check to begin with -- see DEFINITE_REMOVAL_CLAIM_RE's
+  // own doc comment (link-moderation.ts).
+  const authoritativeFacts = { muteMinutes: facts.isRepeatOffense ? null : facts.muteMinutes ?? null };
   const sanitize = (body: string) =>
-    warningTextExceedsAuthorizedFacts(body, authoritativeFacts) ? deterministicFallback() : `${mentionHtml}, ${body}`;
+    warningTextExceedsAuthorizedFacts(body, authoritativeFacts) ? deterministicFallback() : facts.isRepeatOffense ? body : `${mentionHtml}, ${body}`;
 
   const first = await attemptGeneration(buildSystem());
   if (first === null) return deterministicFallback();
@@ -736,9 +768,10 @@ export async function generatePersonaScamWarning(
 export interface NegativeStatementWarningFacts {
   /** False = 2nd offense (message removed, user muted for muteMinutes).
    *  True = ESCALATED (3rd+) offense -- the user has ALREADY been banned for
-   *  banHours as a direct result, by the time this text is generated (same
-   *  "state a completed fact, not a threat" pattern as
-   *  ScamWarningFacts.isRepeatOffense). */
+   *  banHours by the time this text is generated. The resulting message is
+   *  a COMMUNITY-facing reminder, never addressed to the banned person (see
+   *  this function's own doc comment) -- the ban is a real, already-recorded
+   *  enforcement fact, kept separate from what this public text says. */
   isEscalatedOffense: boolean;
   /** Real, exact mute duration for the 2nd-offense case only -- never
    *  invented; NEGATIVE_STATEMENT_MUTE_MINUTES today, but the caller always
@@ -753,9 +786,16 @@ export interface NegativeStatementWarningFacts {
  *  deterministic template (unchanged shape regardless of generation success)
  *  on any failure or when no AI provider is usable, so a public notice
  *  always exists and is always accurate even when generation itself has an
- *  issue. Mirrors generatePersonaScamWarning's mention-embedding contract
- *  exactly: `mentionHtml` is embedded internally, deterministically, by this
- *  function itself -- never asked of the model. */
+ *  issue.
+ *
+ *  Kick/ban public-message AUDIENCE semantics (2026-09-05, explicit product
+ *  correction, same as generatePersonaScamWarning above): the ESCALATED
+ *  (ban) case is a COMMUNITY-facing moderation reminder, not a personal
+ *  message -- the banned person may no longer be present to read anything
+ *  addressed to them. `mentionHtml` is only ever used for the non-escalated
+ *  (2nd-offense, still-a-mute) case, which stays user-facing. The private
+ *  Watcher Ops audit report (community-runtime.ts) still records exactly
+ *  who was banned, why, and when -- kept fully separate from this message. */
 export async function generatePersonaNegativeStatementWarning(
   moderatorName: string,
   persona: ModeratorPersona,
@@ -766,13 +806,14 @@ export async function generatePersonaNegativeStatementWarning(
 ): Promise<string> {
   const deterministicFallback = () =>
     facts.isEscalatedOffense
-      ? `${mentionHtml}, you were already warned and muted for spreading unverified negative claims about this project here -- doing it again means a ${facts.banHours}-hour ban from this community.`
+      ? "Spreading unfounded negative claims or accusations about the project isn't allowed here -- repeated violations can result in a mute, and then a ban, from the community."
       : `${mentionHtml}, please stop spreading unverified negative claims about this project here -- that's a ${facts.muteMinutes}-minute mute. Repeated offenses escalate to a ban.`;
 
   const requiredFacts: string[] = facts.isEscalatedOffense
     ? [
-        "This is a REPEAT offense -- they were already warned and muted once before for the same thing (spreading unfounded negative claims/mockery about this project, with no real question or evidence behind it).",
-        `You just banned them for exactly ${facts.banHours} hours as a direct result -- state this real number verbatim, never a different one, and state it as a completed fact, not a threat. Make clear this ban is temporary/time-bound, not permanent.`,
+        "Do NOT address, name, mention, tag, or otherwise refer to any specific person -- this message is for the community as a whole, not the person who was banned (they may no longer be present to read it).",
+        "Remind the community, in your own words, that spreading unfounded negative claims, mockery, or accusations about the project (with no real question or evidence behind them) isn't allowed here.",
+        "State, in general policy terms, that repeated violations of this can result in a mute and, if it continues, a ban from the community -- a plain rule/consequence statement, never a claim describing what specifically just happened to one named individual.",
       ]
     : [
         "This is their FIRST offense of this specific kind (an unfounded, mocking scam/rug/fraud accusation with no real question or evidence behind it).",
@@ -782,16 +823,20 @@ export async function generatePersonaNegativeStatementWarning(
 
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
-      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it spread an unfounded, mocking negative claim/accusation about this project (e.g. calling it a scam/rug with no real question or evidence behind it) -- a genuine question about whether something is a scam is completely fine and is never what this is about.`,
+      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it spread an unfounded, mocking negative claim/accusation about this project (e.g. calling it a scam/rug with no real question or evidence behind it) -- a genuine question about whether something is a scam is completely fine and is never what this is about.${facts.isEscalatedOffense ? " This was a repeat offense from that same person, so they have also just been banned from the community for 24 hours." : ""}`,
       `You were NOT shown the exact wording of the removed message -- you only know what kind of violation it was, described above. Do NOT guess, invent, or react to specific words, names, or claims from it.`,
-      `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
+      facts.isEscalatedOffense
+        ? `Write ONE short, natural COMMUNITY-FACING moderation reminder, entirely in your own persona voice (see below) -- addressed to the room in general, never to the specific person who was just banned.`
+        : `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
       ...personaVoiceBlock(persona),
-      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type a quick warning, not as a checklist:`,
+      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type it, not as a checklist:`,
       ...requiredFacts.map((f) => `- ${f}`),
       `Never output robotic/templated phrasing -- write like a real short chat message, not a form letter.`,
       `Always write the warning in English.`,
       avoidRepeatingNote,
-      `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
+      facts.isEscalatedOffense
+        ? `Respond with ONLY the message you'd actually post to the community -- no quotation marks, no explanation, no mention/handle of any kind. Keep it SHORT: one or two sentences, under 30 words.`
+        : `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
     ]
       .filter((line): line is string => !!line)
       .join("\n");
@@ -833,9 +878,12 @@ export async function generatePersonaNegativeStatementWarning(
     }
   };
 
-  const authoritativeFacts = { muteMinutes: facts.isEscalatedOffense ? null : facts.muteMinutes ?? null, removalHappened: facts.isEscalatedOffense };
+  // No `removalHappened` escape hatch anymore -- see generatePersonaScamWarning's
+  // matching comment above; a definite "you have been banned"-style claim is
+  // now always the wrong audience semantics and is rejected unconditionally.
+  const authoritativeFacts = { muteMinutes: facts.isEscalatedOffense ? null : facts.muteMinutes ?? null };
   const sanitize = (body: string) =>
-    warningTextExceedsAuthorizedFacts(body, authoritativeFacts) ? deterministicFallback() : `${mentionHtml}, ${body}`;
+    warningTextExceedsAuthorizedFacts(body, authoritativeFacts) ? deterministicFallback() : facts.isEscalatedOffense ? body : `${mentionHtml}, ${body}`;
 
   const first = await attemptGeneration(buildSystem());
   if (first === null) return deterministicFallback();

@@ -1066,19 +1066,32 @@ test("REQUIRED: first-offense facts require the real mute duration stated verbat
   });
 });
 
-test("REQUIRED: repeat-offense facts state removal as an already-completed fact, never a threat, and never mention a mute", async () => {
+test("REQUIRED (2026-09-05 audience-semantics correction): repeat-offense (kick) generation instructs a COMMUNITY-facing reminder -- no mention/address of the removed person, no personal 'you have been removed' claim, never mentions a mute", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("that's it, you're out."), async (calls) => {
+    await withFetchSpy(anthropicTextResponse("posting scam links isn't tolerated here."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /ALREADY been removed \(kicked\)/i);
-      assert.match(system, /this has genuinely already happened, state it as a completed fact, not a threat/i);
+      assert.match(system, /do not address, name, mention, tag/i);
+      assert.match(system, /community as a whole, not the person who was removed/i);
+      assert.match(system, /community-facing moderation reminder/i);
+      assert.match(system, /repeated or severe violations of this result in removal/i);
       assert.doesNotMatch(system, /muted them for exactly/i);
     });
   });
 });
 
-test("REQUIRED: the mention is embedded deterministically by the function itself, never left to the model -- the returned text always starts with the exact mention passed in", async () => {
+test("REQUIRED: the repeat-offense (kick) returned text never carries the mention -- the community-facing generated body is returned as-is", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("posting scam links isn't tolerated here -- repeat offenders get removed."), async (calls) => {
+      const text = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, "posting scam links isn't tolerated here -- repeat offenders get removed.");
+      assert.ok(!text.includes(MENTION));
+    });
+  });
+});
+
+test("REQUIRED: the mention is embedded deterministically by the function itself, never left to the model -- the returned text always starts with the exact mention passed in (FIRST-offense, still user-facing, only)", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("your message was removed, be careful with links."), async (calls) => {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
@@ -1093,7 +1106,7 @@ test("REQUIRED: falls back to the EXACT existing deterministic templates on any 
     const firstText = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
     const repeatText = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
     assert.equal(firstText, scamFirstOffenseWarningHtml(MENTION));
-    assert.equal(repeatText, scamRepeatOffenseWarningHtml(MENTION));
+    assert.equal(repeatText, scamRepeatOffenseWarningHtml());
   });
 });
 
@@ -1139,12 +1152,13 @@ test("REQUIRED (untrusted-output guard): a FIRST-offense candidate falsely claim
   });
 });
 
-test("REQUIRED (untrusted-output guard, repeat offense): a candidate stating removal ALREADY happened is EXPLICITLY PERMITTED -- the kick genuinely already executed before this text is generated", async () => {
+test("REQUIRED (untrusted-output guard, repeat offense, 2026-09-05 audience-semantics correction): a candidate stating a personal 'you've been removed' claim is now REJECTED UNCONDITIONALLY (even though the kick genuinely did happen) -- that's the wrong audience for a community-facing notice, so it falls back to the deterministic template instead", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("You've been removed from this community already."), async (calls) => {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
-      assert.equal(calls.length, 1);
-      assert.equal(text, `${MENTION}, You've been removed from this community already.`);
+      assert.equal(calls.length, 1, "the guard rejecting a candidate must never itself trigger a retry");
+      assert.equal(text, scamRepeatOffenseWarningHtml());
+      assert.ok(!text.includes(MENTION));
     });
   });
 });
@@ -1299,20 +1313,32 @@ test("REQUIRED: warn-tier facts require the real mute duration stated verbatim, 
   });
 });
 
-test("REQUIRED: ban-tier facts state the ban as an already-completed, TIME-BOUND fact, never a threat, and never mention a mute", async () => {
+test("REQUIRED (2026-09-05 audience-semantics correction): ban-tier (escalated) generation instructs a COMMUNITY-facing reminder -- no mention/address of the banned person, general rule/consequence language only, never mentions a mute", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("that's it, you're banned for now."), async (calls) => {
+    await withFetchSpy(anthropicTextResponse("spreading unfounded claims about the project isn't allowed here."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /REPEAT offense/i);
-      assert.match(system, new RegExp(`banned them for exactly ${NEGATIVE_STATEMENT_BAN_MINUTES / 60} hours`, "i"));
-      assert.match(system, /temporary\/time-bound, not permanent/i);
+      assert.match(system, /do not address, name, mention, tag/i);
+      assert.match(system, /community as a whole, not the person who was banned/i);
+      assert.match(system, /community-facing moderation reminder/i);
+      assert.match(system, /repeated violations of this can result in a mute and, if it continues, a ban/i);
       assert.doesNotMatch(system, /muted them for exactly/i);
     });
   });
 });
 
-test("REQUIRED: the mention is embedded deterministically, never left to the model -- the returned text always starts with the exact mention passed in", async () => {
+test("REQUIRED: the ban-tier (escalated) returned text never carries the mention -- the community-facing generated body is returned as-is", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("spreading unfounded claims isn't allowed here -- repeat violations get you banned."), async (calls) => {
+      const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, "spreading unfounded claims isn't allowed here -- repeat violations get you banned.");
+      assert.ok(!text.includes(NS_MENTION));
+    });
+  });
+});
+
+test("REQUIRED: the mention is embedded deterministically, never left to the model -- the returned text always starts with the exact mention passed in (2nd-offense mute tier, still user-facing, only)", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("please keep it factual, that's a mute for now."), async (calls) => {
       const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
@@ -1327,9 +1353,14 @@ test("REQUIRED: falls back to a fixed, accurate deterministic template on any ge
     const warnText = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
     const banText = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
     assert.match(warnText, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
-    assert.match(banText, new RegExp(`${NEGATIVE_STATEMENT_BAN_MINUTES / 60}-hour ban`));
-    assert.ok(warnText.startsWith(NS_MENTION));
-    assert.ok(banText.startsWith(NS_MENTION));
+    assert.ok(warnText.startsWith(NS_MENTION), "the 2nd-offense mute-tier fallback is still user-facing, mention included");
+    // REQUIRED (2026-09-05 audience-semantics correction): the escalated
+    // (ban) deterministic fallback is a COMMUNITY-facing reminder -- no
+    // mention/address of the banned person, no personal "you were banned"
+    // claim.
+    assert.doesNotMatch(banText, /\byou(?:'ve| have)?\s+(?:been|got|are|were)\b/i);
+    assert.ok(!banText.includes(NS_MENTION));
+    assert.match(banText, /a mute, and then a ban, from the community/i);
   });
 });
 

@@ -127,6 +127,52 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-05 — Kick/ban public messages are now community-facing, never addressed to the removed person (v1.49.37)
+- **Explicit product correction: a successful kick or ban changes the AUDIENCE of the visible moderation
+  message.** The removed user may no longer be present to read anything addressed to them — "You have been
+  kicked", "you're banned now", "@user, you were kicked" are all the wrong audience semantics, not merely
+  undesirable phrasing. **Warn/mute stays user-facing** (unchanged — a mute doesn't remove anyone from the
+  room, so addressing them directly still makes sense); **kick/ban now generates a COMMUNITY-facing moderation
+  notice instead** — in the enforcing Watcher's own persona, reminding the room of the rule/boundary, stating
+  in general policy terms that repeated/severe violations result in removal, never pretending to speak
+  directly to the person who was just removed, and never repeating their mention/handle.
+- **Found exactly two places in the whole codebase that had this exact bug** — every other kick/ban path
+  (ordinary spam/promotion/competing-project/search-spam kicks, media's own explicit-content kicks) was
+  already silent with no public message at all, confirmed unaffected: (1) `generatePersonaScamWarning`'s
+  repeat-offense (kick) branch, and (2) `generatePersonaNegativeStatementWarning`'s escalated (ban) branch
+  (shipped in v1.49.35, same session).
+- **Both rewritten**: `mentionHtml` is only ever embedded for the still-user-facing WARN/mute tier now; the
+  kick/ban tier's system prompt explicitly instructs the model never to address/name/mention/tag the removed
+  person ("this message is for the community as a whole... they may no longer be present to read it"), and to
+  state the rule + general consequence instead of a personal completed-tense claim. `scamRepeatOffenseWarningHtml()`
+  (the deterministic fallback, `link-moderation.ts`) dropped its `mentionHtml` parameter entirely and now reads
+  "Posting scam or phishing links isn't tolerated here -- repeated or severe violations result in removal from
+  the community." The negative-statement escalated fallback is the equivalent generic reminder for that
+  category. Neither template, nor the AI-generated versions, ever mention a specific person again.
+- **`warningTextExceedsAuthorizedFacts`'s `removalHappened` escape hatch is removed entirely** — it used to
+  PERMIT a definite "you have been removed" claim specifically for these two repeat/escalated cases (since
+  removal genuinely had already happened by generation time). Per this correction, that specific claim SHAPE
+  is now always the wrong audience, regardless of whether removal happened — so the guard rejects a definite,
+  second-person, completed-tense removal claim **unconditionally**, for every caller. General, prospective
+  community-facing rule language ("repeated violations result in removal", "repeated offenses escalate to a
+  kick or ban") was never matched by this check to begin with and remains fully allowed — confirmed by a
+  dedicated test, not just asserted.
+- **The private Watcher Ops audit report is completely untouched** — it still records exactly who was
+  kicked/banned, why, the warning/escalation state, the timestamp, and the action taken (`sendModerationReport`,
+  unchanged call sites in `community-runtime.ts`). That internal enforcement fact stays fully separate from
+  the public community message, per the explicit requirement.
+- New/updated tests: `link-moderation.test.ts` (the two direct `scamRepeatOffenseWarningHtml()` tests rewritten
+  for its new zero-argument, mention-free signature; the `removalHappened`-permits-a-claim test replaced with
+  its exact opposite — unconditional rejection — plus a new test pinning that general community-facing rule
+  language is never confused with a definite claim), `link-classify.test.ts` (both repeat/escalated-tier tests
+  rewritten to assert the new no-mention/no-address system-prompt instructions and the mention-free returned
+  text, the untrusted-output-guard test for the scam-kick tier rewritten to prove a definite "you've been
+  removed" candidate is now REJECTED — even though the kick genuinely happened — falling back to the
+  deterministic template instead, and the deterministic-fallback test's ban-tier assertion corrected from
+  "starts with the mention" to "never contains the mention, never a personal claim"). 2362 tests pass (up from
+  2359), `tsc --noEmit` clean, production build clean. No migration (pure generation-logic/prompt change).
+- **Deployed to production this pass, continuing the same session's pattern.**
+
 ### 2026-09-05 — Media moderation's strike counter now renews with the tiered plan, not permanently (v1.49.36)
 - **Live follow-up question, answered honestly then fixed**: asked whether every offense counter has a
   reset/expiry. Confirmed scam-strike, promotion-warning, and the brand-new negative-statement counter (v1.49.35)

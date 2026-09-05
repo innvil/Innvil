@@ -954,9 +954,16 @@ export function scamFirstOffenseWarningHtml(mentionHtml: string): string {
 }
 
 /** Second confirmed high-confidence scam/phishing offense within the
- *  active strike window -- accompanies a DELETE_KICK (+ message purge). */
-export function scamRepeatOffenseWarningHtml(mentionHtml: string): string {
-  return `${mentionHtml}, another scam/phishing link was detected. You have been removed from this community.`;
+ *  active strike window -- accompanies a DELETE_KICK (+ message purge).
+ *  Deliberately takes NO mention (2026-09-05 audience-semantics correction):
+ *  a kick changes the audience of the visible message -- the removed person
+ *  may no longer be present to read anything addressed to them, so this is
+ *  a plain COMMUNITY-FACING reminder, never a personal "you have been
+ *  removed" notice. The private Watcher Ops audit report (community-
+ *  runtime.ts) still records exactly who was kicked and why -- that
+ *  internal enforcement fact is kept separate from this public message. */
+export function scamRepeatOffenseWarningHtml(): string {
+  return "Posting scam or phishing links isn't tolerated here -- repeated or severe violations result in removal from the community.";
 }
 
 /** Deterministic sentence appended to the AI-phrased unsolicited-promotion
@@ -1136,23 +1143,28 @@ const MUTE_MENTION_RE = /\b(\d+)\s*[-\s]?\s*(?:min|mins|minute|minutes)\b/gi;
 // before it can ever reach Telegram.
 const URL_OR_LINK_RE = /https?:\/\/|(?:^|\s)t\.me\/[a-z0-9_]/i;
 
-// A DEFINITE, already-happened-sounding ban/kick/removal claim. Rejected
-// UNLESS the caller's authoritative facts confirm removal genuinely already
-// happened (`removalHappened: true` -- the ONLY case this applies to today
-// is a scam/phishing REPEAT offense, where the kick executes BEFORE this
-// text is ever generated). For every other caller (a WARN-tier notice,
-// which by construction never represents an actual ban/kick/removal having
-// occurred), any such claim is categorically false. Deliberately does NOT
-// match a hedged, conditional mention of a possible FUTURE consequence
-// ("repeated offenses escalate to a kick or ban") -- that phrasing is
-// explicitly instructed/permitted (see link-classify.ts's requiredFacts) and
-// is the one form of forward-looking risk language this function must never
-// reject.
+// A DEFINITE, already-happened-sounding, SECOND-PERSON ban/kick/removal
+// claim ("you have been removed", "you're banned now"). REJECTED
+// UNCONDITIONALLY, for every caller (2026-09-05 audience-semantics
+// correction) -- a kick/ban changes WHO the visible message is for, and the
+// removed person may no longer be present to read anything addressed
+// directly to them, so this specific claim shape is now always the wrong
+// framing, regardless of whether removal genuinely happened. (Before this
+// correction, an explicit `removalHappened: true` escape hatch permitted
+// this claim for a scam-repeat/negative-statement-escalated offense --
+// removed; those two categories now generate a COMMUNITY-facing reminder
+// instead, which structurally never needs to make this kind of claim at
+// all.) Deliberately does NOT match a hedged, conditional mention of a
+// possible FUTURE consequence, nor a general community-facing policy
+// statement ("repeated violations result in removal", "repeated offenses
+// escalate to a kick or ban") -- both are explicitly instructed/permitted
+// (see link-classify.ts's requiredFacts) and are exactly the forward-
+// looking/general rule language this function must never reject.
 const DEFINITE_REMOVAL_CLAIM_RE =
   /\byou(?:'ve| have)?\s+(?:been|got)\s+(?:banned|kicked|removed)\b|\byou\s+(?:are|were)\s+(?:now\s+)?(?:banned|kicked|removed)\b|\bbanned\s+(?:now|already|permanently)\b|\bkicked\s+(?:now|already)\b|\bremoved\s+(?:now|already)\s+from\b/i;
 
 /** True when generated moderation-warning `text` states something the
- *  authoritative, already-decided facts don't support. Three concrete,
+ *  authoritative, already-decided facts don't support. Two concrete,
  *  cheaply-checkable classes are caught:
  *
  *   1. A specific minute-count that doesn't match the REAL mute duration
@@ -1164,9 +1176,9 @@ const DEFINITE_REMOVAL_CLAIM_RE =
  *      invented specific fact).
  *   2. A raw link/URL of any kind -- see URL_OR_LINK_RE above. Applies
  *      unconditionally to every caller.
- *   3. A DEFINITE, completed-tense ban/kick/removal claim, UNLESS
- *      `authoritative.removalHappened` confirms it genuinely already did
- *      (the scam-repeat-offense case).
+ *   3. A DEFINITE, completed-tense, second-person ban/kick/removal claim --
+ *      unconditionally rejected for every caller, see DEFINITE_REMOVAL_CLAIM_RE's
+ *      own doc comment above.
  *
  *  What this deliberately does NOT (and, without a disproportionate NLP/
  *  semantic-parsing investment, cannot) guarantee: it cannot distinguish an
@@ -1181,7 +1193,7 @@ const DEFINITE_REMOVAL_CLAIM_RE =
  *  on a match. */
 export function warningTextExceedsAuthorizedFacts(
   text: string,
-  authoritative: { muteMinutes?: number | null; removalHappened?: boolean }
+  authoritative: { muteMinutes?: number | null }
 ): boolean {
   const authoritativeMute = authoritative.muteMinutes ?? null;
   for (const match of text.matchAll(MUTE_MENTION_RE)) {
@@ -1189,6 +1201,6 @@ export function warningTextExceedsAuthorizedFacts(
     if (authoritativeMute === null || stated !== authoritativeMute) return true;
   }
   if (URL_OR_LINK_RE.test(text)) return true;
-  if (!authoritative.removalHappened && DEFINITE_REMOVAL_CLAIM_RE.test(text)) return true;
+  if (DEFINITE_REMOVAL_CLAIM_RE.test(text)) return true;
   return false;
 }

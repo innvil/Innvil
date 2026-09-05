@@ -710,19 +710,21 @@ test("the first-offense warning explicitly includes @username and the real 30-mi
 });
 
 test("REQUIRED (scenario 7): the second-offense (kick) warning never includes a URL either", () => {
-  const text = scamRepeatOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
+  const text = scamRepeatOffenseWarningHtml();
   assert.ok(!/https?:\/\//i.test(text));
-  assert.match(text, /removed from this community/i);
+  assert.match(text, /removal from the community/i);
 });
 
-test("the repeat-offense warning explicitly includes @username, matching the exact requested wording", () => {
-  const text = scamRepeatOffenseWarningHtml(renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur"));
-  assert.equal(text, "@jon_arthur1, another scam/phishing link was detected. You have been removed from this community.");
+test("REQUIRED (2026-09-05 audience-semantics correction): the repeat-offense (kick) warning is a COMMUNITY-facing reminder -- no mention/handle, no second-person 'you have been removed' claim", () => {
+  const text = scamRepeatOffenseWarningHtml();
+  assert.doesNotMatch(text, /@[a-z0-9_]/i);
+  assert.doesNotMatch(text, /\byou(?:'ve| have)?\s+(?:been|got|are|were)\b/i);
+  assert.match(text, /scam or phishing links isn'?t tolerated/i);
 });
 
 test("first-offense and repeat-offense warning texts are distinct (never the same message for both tiers)", () => {
   const mention = renderHumanModerationMention("1", "jon_arthur1", "Jon Arthur");
-  assert.notEqual(scamFirstOffenseWarningHtml(mention), scamRepeatOffenseWarningHtml(mention));
+  assert.notEqual(scamFirstOffenseWarningHtml(mention), scamRepeatOffenseWarningHtml());
 });
 
 /* ------------------------------------------------- scheme-less domain extraction ---- */
@@ -958,18 +960,23 @@ test("REQUIRED: a raw link/URL of any kind is caught unconditionally, for every 
   assert.equal(warningTextExceedsAuthorizedFacts("No promos in General, please. Post that in Promotion instead.", { muteMinutes: null }), false);
 });
 
-test("REQUIRED: a definite removal claim is REJECTED by default (no scam-repeat context), matching every existing WARN-tier caller", () => {
+test("REQUIRED: a definite removal claim is REJECTED, matching every WARN-tier caller", () => {
   assert.equal(warningTextExceedsAuthorizedFacts("You have been removed from this community.", { muteMinutes: null }), true);
 });
 
-test("REQUIRED: a definite removal claim is EXPLICITLY PERMITTED when authoritative facts confirm removal genuinely already happened (removalHappened: true) -- the scam-repeat-offense case, where the kick already executed before this text is generated", () => {
-  assert.equal(warningTextExceedsAuthorizedFacts("You have been removed from this community.", { muteMinutes: null, removalHappened: true }), false);
-  assert.equal(warningTextExceedsAuthorizedFacts("You've been kicked already.", { muteMinutes: null, removalHappened: true }), false);
+test("REQUIRED (2026-09-05 audience-semantics correction): a definite, second-person removal claim is REJECTED UNCONDITIONALLY now -- even when removal genuinely happened (the old scam-repeat-offense escape hatch is gone, since that framing is now always the wrong audience)", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("You have been removed from this community.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("You've been kicked already.", { muteMinutes: null }), true);
 });
 
-test("removalHappened:true still catches every OTHER unsupported claim -- it only narrows the removal-claim check, not the whole guard", () => {
-  assert.equal(warningTextExceedsAuthorizedFacts("That's a 45-minute mute too.", { muteMinutes: null, removalHappened: true }), true);
-  assert.equal(warningTextExceedsAuthorizedFacts("Here's the link: https://scam.example", { muteMinutes: null, removalHappened: true }), true);
+test("REQUIRED: general, prospective community-facing rule/consequence language is still allowed -- never confused with a definite second-person removal claim", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("Repeated violations result in removal from the community.", { muteMinutes: null }), false);
+  assert.equal(warningTextExceedsAuthorizedFacts("Repeated offenses escalate to a kick or ban.", { muteMinutes: null }), false);
+});
+
+test("the guard still catches every OTHER unsupported claim independent of the removal check", () => {
+  assert.equal(warningTextExceedsAuthorizedFacts("That's a 45-minute mute too.", { muteMinutes: null }), true);
+  assert.equal(warningTextExceedsAuthorizedFacts("Here's the link: https://scam.example", { muteMinutes: null }), true);
 });
 
 /* ================================================= negative statements ==== */
