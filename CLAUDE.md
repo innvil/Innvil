@@ -127,6 +127,39 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-05 — Fix: a rapid message burst from the same person produced duplicate kick/mute notices (v1.49.34)
+- **Live bug**: a scam-link offender was correctly muted for 30 minutes on their first offense, then THREE separate
+  "you have been removed from this community" messages went out within about a minute. Root cause, found by
+  tracing the actual code: `loadLinkWarningState`/`persistLinkWarningState` (`community-runtime.ts`) is a plain
+  SELECT followed LATER by a plain UPSERT, with no atomicity between the two. A rapid burst of messages from the
+  SAME sender (a classic scam-bot flooding pattern — several links dumped within a second or two, likely already
+  in flight before the first one's mute even completed) meant several concurrent webhook invocations each read
+  the SAME stale prior strike count, each independently computed the SAME "second offense, kick" decision, and
+  each independently executed the kick + sent its own copy of the notice.
+- **Fix: an atomic claim, not a broader pipeline rewrite.** New `claim_link_enforcement_notice` SQL function
+  (migration `0126`, a single `INSERT ... ON CONFLICT (community_id, platform_user_id) DO UPDATE ... WHERE ...
+  RETURNING` statement) lets only the FIRST caller within a 120-second window win, keyed by
+  `(community_id, platform_user_id, reason)` — a genuinely different reason, or the same reason after the window
+  has passed (e.g. the person rejoins and reoffends later), can always claim again. New
+  `claimLinkEnforcementNotice()` wraps the RPC; **fails OPEN (returns true) on any RPC error**, so this dedup
+  layer can never itself suppress real enforcement — the only downside of failing open is the pre-existing
+  duplicate-notice symptom this migration exists to fix, never a missed action.
+- **Critically, the claim NEVER gates the underlying Telegram mute/kick action itself** — that always executes
+  regardless of the race, since a duplicated `RESTRICT_USER` call is silently idempotent to Telegram and
+  invisible to the community, and the offender must always actually end up restricted. Only the VISIBLE
+  aftermath of a lost claim is skipped: the generated warning/kick text + `SEND_TEXT`, the message purge, and the
+  internal Watcher Ops report. Applied uniformly to both branches that can produce a notice
+  (`DELETE_WARN`/`DELETE_KICK`) in `runLinkModeration`, and to the identical structural pattern in
+  `runMediaModeration` (same shared `moderator_link_warning_state`/`persistLinkWarningState` machinery, same
+  race risk for a burst of flagged uploads) — one shared claim function, not a duplicated fix per call site.
+- New tests (`community-runtime.test.ts`, +4): the exact RPC call shape, a won claim, the exact live-bug-fix
+  case (a lost claim for the same reason), and the fail-open guarantee on an RPC error. 2334 tests pass (up from
+  2330), `tsc --noEmit` clean, production build clean.
+- **Run migration `0126`** before this governs anything live — until then, `claimLinkEnforcementNotice` fails
+  open (every caller wins), so behavior is unchanged from before this pass (the pre-existing duplicate-notice
+  bug persists) until the migration is applied.
+- **Not deployed automatically.**
+
 ### 2026-09-05 — Web3/crypto intent-aware Partnerships/Collaboration contact routing (v1.49.33)
 - **Extends the existing structured-contact-preset architecture** (`project-profile.ts`'s `resolveContactIntent`,
   Phase 4.N) to correctly distinguish informational Web3/crypto questions, ordinary conversational mentions,

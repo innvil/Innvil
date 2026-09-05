@@ -7,6 +7,7 @@ import {
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
   finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
   trialMediaModerationPeriod, isSyntheticChannelSender, SYNTHETIC_CHANNEL_SENDER_PREFIX,
+  claimLinkEnforcementNotice,
 } from "./community-runtime";
 import type { CommunityEvent } from "./event-types";
 import { DEFAULT_MODERATOR_PERSONA } from "./domain";
@@ -1773,4 +1774,61 @@ test("isSyntheticChannelSender recognizes the channel: prefix and rejects a real
 
 test("SYNTHETIC_CHANNEL_SENDER_PREFIX is never a value Telegram could produce as a real numeric user id", () => {
   assert.equal(/^\d+$/.test(SYNTHETIC_CHANNEL_SENDER_PREFIX), false);
+});
+
+/* ============================== claimLinkEnforcementNotice (migration 0126) ==== */
+// Live bug: a rapid burst of scam-link messages from the SAME person raced
+// the read-then-write of moderator_link_warning_state, producing THREE
+// duplicate "you have been removed from this community" messages for what
+// should have been one escalation. claimLinkEnforcementNotice wraps the
+// atomic claim_link_enforcement_notice() SQL RPC -- these tests verify the
+// wrapper's own contract (correct RPC call shape, honoring the RPC's real
+// true/false result, and failing OPEN on an RPC error so enforcement itself
+// can never be silently suppressed by this dedup layer).
+
+function fakeAdminForClaim(result: { data?: boolean; error?: unknown }) {
+  const calls: Array<{ fn: string; args: unknown }> = [];
+  return {
+    admin: {
+      rpc(fn: string, args: unknown) {
+        calls.push({ fn, args });
+        return Promise.resolve({ data: result.data ?? null, error: result.error ?? null });
+      },
+    } as any,
+    calls,
+  };
+}
+
+test("REQUIRED: calls the real atomic RPC with the exact community/user/reason/window shape", async () => {
+  const { admin, calls } = fakeAdminForClaim({ data: true });
+  const now = new Date("2026-09-05T03:06:00.000Z");
+  await claimLinkEnforcementNotice(admin, "community-1", "999", "repeated_scam_or_phishing", now);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fn, "claim_link_enforcement_notice");
+  assert.deepEqual(calls[0].args, {
+    p_community_id: "community-1",
+    p_platform_user_id: "999",
+    p_reason: "repeated_scam_or_phishing",
+    p_now: now.toISOString(),
+    p_dedup_window_seconds: 120,
+  });
+});
+
+test("REQUIRED: the FIRST caller in a burst wins the claim (RPC returns true)", async () => {
+  const { admin } = fakeAdminForClaim({ data: true });
+  const won = await claimLinkEnforcementNotice(admin, "community-1", "999", "repeated_scam_or_phishing", new Date());
+  assert.equal(won, true);
+});
+
+test("REQUIRED (the exact live-bug fix): a concurrent/near-simultaneous caller for the SAME reason loses the claim (RPC returns false)", async () => {
+  const { admin } = fakeAdminForClaim({ data: false });
+  const won = await claimLinkEnforcementNotice(admin, "community-1", "999", "repeated_scam_or_phishing", new Date());
+  assert.equal(won, false);
+});
+
+test("REQUIRED: fails OPEN (returns true) on an RPC error -- enforcement/notices must never be silently suppressed by this dedup layer, e.g. before migration 0126 has been run", () => {
+  const { admin } = fakeAdminForClaim({ error: { message: "function claim_link_enforcement_notice does not exist" } });
+  return claimLinkEnforcementNotice(admin, "community-1", "999", "repeated_scam_or_phishing", new Date()).then((won) => {
+    assert.equal(won, true);
+  });
 });

@@ -397,6 +397,27 @@ export const FLOOD_WINDOW_MS = 30 * 60_000;
  *  accident. */
 export const FLOOD_REPEAT_THRESHOLD = 3;
 
+/* -------------------------------------------------- enforcement-notice dedup ---- */
+// Live bug: loadLinkWarningState/persistLinkWarningState is a plain
+// SELECT-then-later-UPSERT with no atomicity between the two -- a rapid
+// burst of messages from the SAME sender (a classic scam-bot flooding
+// pattern) races this, so several concurrent webhook invocations each read
+// the SAME stale prior strike count and each independently send their own
+// copy of the same escalation notice (observed live: three separate
+// "you have been removed" messages for one person within about a minute).
+// This window only needs to be long enough to cover a realistic
+// webhook/classification/DB processing race for a fast burst -- 2 minutes
+// is generous for that while staying far short of a window where a
+// genuinely NEW re-offense (e.g. the person rejoins and reoffends later)
+// would be incorrectly suppressed. See community-runtime.ts's
+// claimLinkEnforcementNotice, which wraps the atomic
+// claim_link_enforcement_notice() SQL function (migration 0126) -- this
+// never gates the underlying Telegram mute/kick action itself (always
+// executed, since a duplicated moderation call is silently idempotent and
+// invisible), only the VISIBLE aftermath (generated warning text, the
+// SEND_TEXT, the message purge, and the internal Watcher Ops report).
+export const LINK_ENFORCEMENT_NOTICE_DEDUP_WINDOW_SECONDS = 120;
+
 export interface LinkWarningState {
   /** Solicitation/unsolicited-promotion's OWN 3(4)-strike counter --
    *  EXCLUSIVELY solicitation's, since the 2026-09-02 media/solicitation

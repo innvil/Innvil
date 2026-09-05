@@ -32,7 +32,7 @@ import {
   effectiveScamStrikeCount, renderHumanModerationMention,
   filterOutOwnBotMentions, looksLikeUnsolicitedPitch, looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   looksLikeAdminInformationRequest, findRecentAdminInformationRequest,
-  effectiveWarningCount,
+  effectiveWarningCount, LINK_ENFORCEMENT_NOTICE_DEDUP_WINDOW_SECONDS,
 } from "./link-moderation";
 import { classifyLinkIntent, generatePersonaSolicitationWarning, generatePersonaScamWarning } from "./link-classify";
 import {
@@ -2194,6 +2194,40 @@ async function persistLinkWarningState(
   );
 }
 
+/** Atomically claims the right to send a VISIBLE enforcement notice
+ *  (a generated warning/kick message, a purge, or the internal Watcher Ops
+ *  report) for this exact (community, platform user, reason) combination --
+ *  wraps migration 0126's claim_link_enforcement_notice() SQL function, a
+ *  real INSERT-ON-CONFLICT-DO-UPDATE-WHERE claim (not a read-then-write in
+ *  application code, which is exactly what let a rapid message burst from
+ *  the same person race in the first place -- see link-moderation.ts's
+ *  LINK_ENFORCEMENT_NOTICE_DEDUP_WINDOW_SECONDS for the full doc comment).
+ *  Returns true for the ONE caller that wins the claim (proceed with the
+ *  visible aftermath); false for every other concurrent/near-simultaneous
+ *  caller with the SAME reason within the dedup window (someone else
+ *  already handled this exact escalation -- skip the visible aftermath, but
+ *  the message deletion and the underlying Telegram mute/kick action itself
+ *  are NEVER gated by this and always still happen). A failed RPC call
+ *  (e.g. before migration 0126 has been run) fails OPEN -- treated as a win
+ *  -- so enforcement itself can never be silently suppressed by this dedup
+ *  layer; the only downside of failing open is the pre-existing duplicate-
+ *  notice symptom this migration exists to fix, never a missed enforcement
+ *  action. */
+export async function claimLinkEnforcementNotice(admin: SupabaseClient, communityId: string, platformUserId: string, reason: string, now: Date): Promise<boolean> {
+  const { data, error } = await admin.rpc("claim_link_enforcement_notice", {
+    p_community_id: communityId,
+    p_platform_user_id: platformUserId,
+    p_reason: reason,
+    p_now: now.toISOString(),
+    p_dedup_window_seconds: LINK_ENFORCEMENT_NOTICE_DEDUP_WINDOW_SECONDS,
+  });
+  if (error) {
+    console.error("[telegram/community] claim_link_enforcement_notice failed, failing open", error);
+    return true;
+  }
+  return data === true;
+}
+
 /** Same token-resolution shape as executeAction, exposed standalone for
  *  moderation's admin-role check (which needs a token BEFORE deciding which
  *  action, if any, to execute). Deliberately not refactored to share code
@@ -2438,8 +2472,17 @@ export async function runLinkModeration(
       : { ...observedState, warningCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now) + 1, warningAt: now.toISOString() };
     await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
 
+    // Live bug: a rapid burst of messages from the SAME person raced the
+    // read-then-write above, so several concurrent invocations each
+    // computed the SAME kick decision and each independently purged/
+    // announced/reported it -- three duplicate "you have been removed"
+    // messages for one real escalation. This atomic claim (migration 0126)
+    // lets only ONE of them proceed with the visible aftermath below; the
+    // kick itself, right above, is NEVER gated by it and always executes.
+    const noticeClaimed = await claimLinkEnforcementNotice(admin, community.id, senderPlatformId, enforcement.reason, now);
+
     let purgeResult: { attempted: number; purged: number; failed: boolean } = { attempted: 0, purged: 0, failed: false };
-    if (enforcement.purge && token && !kickFailed) {
+    if (noticeClaimed && enforcement.purge && token && !kickFailed) {
       purgeResult = await purgeUserMessages(admin, chatId, community.id, senderPlatformId, enforcer.deploymentId, now);
     }
 
@@ -2453,7 +2496,7 @@ export async function runLinkModeration(
     // the existing convention that only scam kicks announce themselves in
     // the community) -- the Watcher Ops report below is where every kick
     // is actually recorded regardless.
-    if (isScamEnforcement) {
+    if (noticeClaimed && isScamEnforcement) {
       const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
       // Loaded here, scoped to only this (relatively rare -- a user's 2nd
       // confirmed scam offense) branch, rather than moving the shared
@@ -2477,7 +2520,7 @@ export async function runLinkModeration(
       }
     }
 
-    if (community.project_id) {
+    if (noticeClaimed && community.project_id) {
       const violationCategory: ModerationViolationCategory = isScamEnforcement
         ? "scam_link"
         : enforcement.reason === "explicit_content"
@@ -2678,7 +2721,16 @@ export async function runLinkModeration(
         if (generatedWarning === null) return null;
         return searchSpamPattern === "coordinated" ? generatedWarning : `${mention}, ${generatedWarning}`;
       })();
-  if (warningText !== null && token) {
+  // Same live-bug protection as the DELETE_KICK branch above (migration
+  // 0126): a rapid burst of messages from the same person could otherwise
+  // race the read-then-write of moderator_link_warning_state and produce
+  // several duplicate "warning N of..." notices for what's really one
+  // escalation step. Never gates the mute itself, only the visible
+  // SEND_TEXT/report below -- see claimLinkEnforcementNotice's own doc
+  // comment.
+  const noticeClaimed = await claimLinkEnforcementNotice(admin, community.id, senderPlatformId, enforcement.reason, now);
+
+  if (noticeClaimed && warningText !== null && token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
       text: warningText,
@@ -2713,7 +2765,9 @@ export async function runLinkModeration(
 
   // The mute itself (a REAL Telegram restriction, separate from the SEND_TEXT
   // warning above) -- executed whenever this violation includes one,
-  // regardless of category.
+  // regardless of category, and NEVER gated by noticeClaimed: the offender
+  // must always actually end up muted regardless of any notice-dedup race,
+  // and a duplicated mute call is silently idempotent/invisible to Telegram.
   let muteFailed = false;
   let muteError: string | undefined;
   if (enforcement.muteMinutes && token) {
@@ -2727,7 +2781,7 @@ export async function runLinkModeration(
     }
   }
 
-  if (community.project_id) {
+  if (noticeClaimed && community.project_id) {
     const violationCategory: ModerationViolationCategory = isScamEnforcement
       ? "scam_link"
       : isCompetingProjectEnforcement
@@ -3040,12 +3094,20 @@ async function runMediaModeration(
     }
     await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, { ...priorState, mediaWarningCount: priorState.mediaWarningCount + 1 }, { kind: enforcement.reason, now });
 
+    // Same live-bug protection as runLinkModeration's DELETE_KICK branch
+    // (migration 0126) -- a rapid burst of flagged uploads from the same
+    // person could otherwise race the read-then-write above and produce
+    // several duplicate "you have been removed" notices for one real
+    // escalation. Never gates the kick itself, only the visible purge/
+    // report below.
+    const noticeClaimed = await claimLinkEnforcementNotice(admin, community.id, event.sender.platformUserId, enforcement.reason, now);
+
     let purgeResult: { attempted: number; purged: number; failed: boolean } = { attempted: 0, purged: 0, failed: false };
-    if (enforcement.purge && token && !kickFailed) {
+    if (noticeClaimed && enforcement.purge && token && !kickFailed) {
       purgeResult = await purgeUserMessages(admin, chatId, community.id, event.sender.platformUserId, enforcer.deploymentId, now);
     }
 
-    if (community.project_id) {
+    if (noticeClaimed && community.project_id) {
       await sendModerationReport({
         admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
         platformUserId: event.sender.platformUserId, username: event.sender.username ?? null, displayName: event.sender.displayName,
@@ -3086,7 +3148,10 @@ async function runMediaModeration(
   const warningText = await generateMediaModerationWarning(
     enforcer.moderatorName, enforcer.persona, enforcement.warningNumber, enforcement.warningNumber >= SPAM_WARNING_LIMIT, aiRouting, recentOwnMediaWarnings
   );
-  if (warningText !== null && token) {
+  // Same live-bug protection as runLinkModeration's DELETE_WARN branch
+  // (migration 0126) -- see claimLinkEnforcementNotice's own doc comment.
+  const noticeClaimed = await claimLinkEnforcementNotice(admin, community.id, event.sender.platformUserId, enforcement.reason, now);
+  if (noticeClaimed && warningText !== null && token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null, origin: "HUMAN", interactionDepth: 0, causationMessageId: event.messageId,
     });
