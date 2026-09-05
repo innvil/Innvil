@@ -127,6 +127,60 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-05 — Fix: non-question informational requests (job applications, bare crypto shorthand) were fabricating answers via the ungrounded CASUAL_CHAT path (v1.49.38)
+- **Live bug, from a real screenshot**: a moderator-application inquiry ("Am applying for a community
+  moderation space") got a FABRICATED reply — "nice, we do take mods sometimes. shoot me a quick dm..." — no
+  such hiring policy exists anywhere in Project Knowledge, and the account's real "Sales / Enterprise" contact
+  was never consulted. Separately, a bare "ca" (the well-known crypto-community shorthand for "what's the
+  contract address" — one of this product's own named example queries, WatchLanding.tsx's
+  `CryptoNativeSection`: "ca?"/"mc?"/"socials?"/"wen distro?") got a non-answer ("need something or just
+  testing the waters? :)") instead of being recognized as a real informational request.
+- **Root cause, traced through the actual pipeline, not guessed**: neither message ends in "?" or starts with
+  a question word, so `classifyMessageKind` (`chatter-coordinator.ts`) classified both as plain `SUBSTANTIVE`
+  — which **always** resolves to `CASUAL_CHAT`, never `ANSWER` (`selectChatterAction`'s SUBSTANTIVE branch).
+  `CASUAL_CHAT`'s system prompt (`chatter-generate.ts`) has **zero project-knowledge grounding and zero
+  structured-contact-preset routing** — `loadRelevantKnowledge`/`resolveContactIntent`
+  (`community-runtime.ts`/`project-profile.ts`), the mechanism that resolves a message's intent to a
+  configured Support/Partnerships/Sales/Technical-Support contact, is **only ever called for `action_kind ===
+  "ANSWER"`**. On top of that, CASUAL_CHAT's own framing ("this has already been selected as ordinary social
+  conversation — just respond naturally") actively invites a confident, improvised answer rather than an
+  honest "I don't know." The account's own `SHARED_RULES[0]` ("never invent project/business facts") exists
+  but wasn't strong enough on its own against that surrounding framing. This fully explains BOTH symptoms —
+  neither message ever reached the properly-grounded path at all.
+- **Fix 1 — widen classification, not the grounding rules.** New `looksLikeInformationalRequest()`
+  (`chatter-coordinator.ts`) recognizes two narrow, bounded signal groups: a genuine job/staff/moderator
+  recruitment inquiry (applying/hiring/recruiting/join the team/open position), and the product's own named
+  bare crypto-shorthand terms (ca/mc/fdv/ath/tge/wl/socials, plus "wen `<thing>`" meme-speak) when the ENTIRE
+  message consists of just that term — never a loose substring match, so an ordinary sentence merely
+  containing "mc" (e.g. "that market cap chart looks wild") is never misclassified. A match folds into the
+  EXISTING `QUESTION` classification (`classifyMessageKind`), reusing the already-correct QUESTION → `ANSWER`
+  pipeline (knowledge grounding, contact-preset routing, the mention-admin/escalate/silence fallback) rather
+  than duplicating any of it or broadly rerouting every non-question `SUBSTANTIVE` statement (which would risk
+  misclassifying ordinary ambient banter/continuity chatter that merely lacks a "?").
+- **Fix 2 — teach the contact-router about recruitment inquiries, per explicit product decision.** New
+  `RECRUITMENT_RE` (`project-profile.ts`) folded into the existing `sales` contact-intent matcher — a job/
+  staff/moderator-application inquiry now resolves to `sales` ("Sales / Enterprise", the closest existing
+  general "who handles this administratively" category) rather than matching none of the four existing
+  `ContactKind`s and leaving the bot with nothing configured to defer to. No new 5th `ContactKind` was
+  invented for a use case with no perfect existing fit.
+- **Fix 3 — a real, structural DM/private-message dead end, independent of the above.** Traced
+  `handleCommunityUpdate`'s webhook entry point: an ordinary (non-`/start`) message sent to a Watcher bot in a
+  **private 1:1 chat** can never match a `communities` row (private chat type is rejected at both creation and
+  the DB-constraint level, per the earlier Telegram-identity fix) — `resolveCommunity` returns `null` and the
+  function returns immediately with **zero reply, zero processing**. Confirms the live symptom exactly: any
+  AI-generated "shoot me a DM"/"pop it over in DM instead" invitation is a guaranteed dead end, since the
+  system cannot receive or respond to a DM at all. New `SHARED_RULES` entry (`chatter-generate.ts`, applies to
+  BOTH `ANSWER` and `CASUAL_CHAT`): never invite/tell someone to DM/PM/message the bot for any reason —
+  including things that would normally feel appropriate to "take offline" (a job application, personal
+  details) — defer to a real configured contact instead, or say nothing.
+- New tests: `chatter-coordinator.test.ts` (+5 — the exact live-bug repro for both messages, the product's own
+  named "mc"/"socials"/"wen distro" examples, other recruitment phrasings, and a guard proving an ordinary
+  sentence merely containing "ca"/"mc" as a substring is never misclassified), `project-profile.test.ts` (+1 —
+  five recruitment phrasings all resolve to `sales`), `chatter-generate.test.ts` (+1 — the new no-DM rule is
+  present in both the ANSWER and CASUAL_CHAT prompts). 2369 tests pass (up from 2362), `tsc --noEmit` clean,
+  production build clean. No migration (pure classification/prompt-logic change).
+- **Deployed to production this pass, continuing the same session's pattern.**
+
 ### 2026-09-05 — Kick/ban public messages are now community-facing, never addressed to the removed person (v1.49.37)
 - **Explicit product correction: a successful kick or ban changes the AUDIENCE of the visible moderation
   message.** The removed user may no longer be present to read anything addressed to them — "You have been

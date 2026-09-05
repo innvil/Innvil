@@ -24,6 +24,14 @@ test("REQUIRED: sales intent is resolved", () => {
   assert.equal(resolveContactIntent("bulk pricing question"), "sales");
 });
 
+test("REQUIRED (2026-09-05 live bug): a moderator/staff recruitment inquiry routes to sales -- the closest existing general 'who handles this' category, per explicit product decision, rather than the bot having nothing to defer to and fabricating a hiring policy", () => {
+  assert.equal(resolveContactIntent("Am applying for a community moderation space"), "sales");
+  assert.equal(resolveContactIntent("how do I apply to join the team"), "sales");
+  assert.equal(resolveContactIntent("is there a moderator position open"), "sales");
+  assert.equal(resolveContactIntent("are you guys hiring"), "sales");
+  assert.equal(resolveContactIntent("interested in becoming a mod"), "sales");
+});
+
 test("REQUIRED: plain support/help intent is the fallback", () => {
   assert.equal(resolveContactIntent("I have a problem with my order"), "support");
   assert.equal(resolveContactIntent("this is broken, please help"), "support");

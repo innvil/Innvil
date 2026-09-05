@@ -11,8 +11,8 @@
        SILENCE      — always a first-class, valid outcome
        REACT        — a real Telegram reaction, no text, no LLM call
        SHORT_ACK    — a lightweight canned text acknowledgement, no LLM call
-       CASUAL_CHAT  — a real conversational reply (Sonnet 5)
-       ANSWER       — a real informational reply (Sonnet 5)
+       CASUAL_CHAT  — a real conversational reply (cheap DeepSeek, low-stakes)
+       ANSWER       — a real, knowledge-grounded informational reply (Sonnet 5)
 
    (COMMUNITY_HANDOFF also exists as an action type for architectural
    completeness, but its actual selection logic lives in coordinator.ts's
@@ -69,6 +69,57 @@ function isLikelyQuestion(text: string): boolean {
   // of QUESTION, then got suppressed as "already handled").
   if (t.includes("?")) return true;
   return /^(who|what|when|where|why|how|which|does|do|is|are|can|could|should|would|will|anyone|anybody|someone)\b/.test(t);
+}
+
+// Live bug: "Am applying for a community moderation space" and a bare "ca"
+// (a well-known crypto-community shorthand for "what's the contract
+// address" -- one of the exact example queries this product's own
+// marketing names as understood shorthand, see WatchLanding.tsx's
+// CryptoNativeSection: "ca?"/"mc?"/"socials?"/"wen distro?") both fell
+// through to plain SUBSTANTIVE classification -- which, having no "?" and
+// no question-leading word, routes to CASUAL_CHAT. CASUAL_CHAT
+// (chatter-generate.ts) has NO project-knowledge grounding and NO
+// structured-contact-preset routing at all (loadRelevantKnowledge /
+// resolveContactIntent, community-runtime.ts, are ONLY ever consulted for
+// action_kind === "ANSWER"), and its own framing ("this has already been
+// selected as ordinary social conversation... just respond naturally")
+// actively invites a confident, improvised answer instead of an honest
+// "I don't have that, let me point you to the right person." Both example
+// messages are genuine INFORMATIONAL REQUESTS despite lacking a "?" or a
+// question-leading word -- this check recognizes that shape so
+// classifyMessageKind can route them through the SAME grounded QUESTION ->
+// ANSWER pipeline an ordinary "?"-ended question already gets, rather than
+// broadly rerouting every non-question SUBSTANTIVE statement (which would
+// risk misclassifying ordinary ambient banter/continuity chatter that
+// merely happens to lack a "?"). Deliberately narrow/bounded, matching this
+// file's own established convention for this class of check.
+const APPLICATION_REQUEST_RE =
+  /\b(?:am|i'?m)\s+apply(?:ing)?\b|\bhow\s+(?:do|can)\s+i\s+apply\b|\binterested\s+in\s+(?:joining|becoming)\b|\blooking\s+to\s+join\b|\bjoin(?:ing)?\s+the\s+team\b|\bopen\s+(?:position|role|spot)s?\b|\b(?:hiring|recruiting)\b|\bbecome\s+a\s+mod(?:erator)?\b|\bmod(?:erator)?\s+(?:position|role|space|application|opening)s?\b/i;
+
+// A small, bounded set of well-known crypto-community informational
+// shorthand terms -- matched only when the ENTIRE message (trimmed, minus
+// an optional leading "what's/what is the" and a trailing "?") IS one of
+// these terms, never as a loose substring match, so an unrelated message
+// merely containing one of these tokens mid-sentence is never
+// misclassified this way.
+const INFO_SHORTHAND_RE = /^(?:what'?s?\s+)?(?:the\s+)?(ca|mc|fdv|ath|tge|wl|socials?)\??$/i;
+// "wen <thing>" meme-speak ("wen distro", "wen moon", "wen launch") -- also
+// one of the product's own named example queries, and structurally never a
+// real English sentence otherwise, so a bare two-word "wen X" match is safe.
+const WEN_QUESTION_RE = /^wen\s+\S+\??$/i;
+
+/** Does this message read as a genuine informational REQUEST that deserves
+ *  the same grounded, careful handling as an ordinary "?"-ended question --
+ *  even though it isn't phrased as one? See the live-bug doc comment above.
+ *  A positive match here is folded into QUESTION by classifyMessageKind,
+ *  never a new/separate action type -- it reuses the existing, already-
+ *  correct QUESTION -> ANSWER pipeline (knowledge grounding, structured
+ *  contact-preset routing, the mention-admin/escalate/silence fallback)
+ *  rather than duplicating any of it. */
+export function looksLikeInformationalRequest(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return APPLICATION_REQUEST_RE.test(trimmed) || INFO_SHORTHAND_RE.test(trimmed) || WEN_QUESTION_RE.test(trimmed);
 }
 
 // ---- signals feeding isConversationalOpener ----
@@ -705,7 +756,7 @@ export function classifyMessageKind(trimmed: string): MessageKind {
   if (!trimmed) return "EMPTY";
   if (trimmed.length < 2) return "TOO_SHORT";
   if (COMMUNITY_CHECK_IN_RE.test(trimmed)) return "COMMUNITY_OPENER";
-  if (isLikelyQuestion(trimmed)) return "QUESTION";
+  if (isLikelyQuestion(trimmed) || looksLikeInformationalRequest(trimmed)) return "QUESTION";
   if (hasProblemWord(tokenize(trimmed)) || NOT_WORKING_RE.test(trimmed)) return "SUBSTANTIVE";
   if (CLOSING_ACK_RE.test(trimmed) || isPositiveClosing(trimmed) || isAcknowledgementOnly(trimmed) || DISMISSIVE_CLOSING_RE.test(trimmed)) return "TRIVIAL";
   if (isConversationalOpener(trimmed)) return "COMMUNITY_OPENER";

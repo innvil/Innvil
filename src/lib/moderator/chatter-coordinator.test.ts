@@ -348,6 +348,46 @@ test("a substantive unmentioned question -> ANSWER, never dropped for being unme
   assert.equal(result.type, "ANSWER");
 });
 
+/* ------------------------------------------ informational requests (no "?") ---- */
+// Live bug (2026-09-05): a moderator-recruitment inquiry and a bare crypto-
+// shorthand query both fell through to CASUAL_CHAT (no "?", no question-
+// leading word) -- CASUAL_CHAT has no project-knowledge/contact-preset
+// grounding at all, so the model fabricated a hiring policy for the former
+// and gave a non-answer for the latter. Both must now resolve to ANSWER,
+// exactly like an ordinary "?"-ended question.
+
+test("REQUIRED: a moderator/staff application inquiry with no question mark -> ANSWER, not CASUAL_CHAT", () => {
+  const result = single({ text: "Am applying for a community moderation space" });
+  assert.equal(result.type, "ANSWER");
+  assert.ok(result.reasons.includes("substantive_question"));
+});
+
+test("a bare crypto-shorthand 'ca' (no question mark) -> ANSWER, not a non-answer via CASUAL_CHAT", () => {
+  const result = single({ text: "ca" });
+  assert.equal(result.type, "ANSWER");
+});
+
+test("REQUIRED: the product's own named example shorthand queries (mc, socials, wen distro) without punctuation all route to ANSWER", () => {
+  assert.equal(single({ text: "mc" }).type, "ANSWER");
+  assert.equal(single({ text: "socials" }).type, "ANSWER");
+  assert.equal(single({ text: "wen distro" }).type, "ANSWER");
+});
+
+test("other recruitment phrasings (hiring, join the team, open position) also route to ANSWER", () => {
+  assert.equal(single({ text: "are you guys hiring right now" }).type, "ANSWER");
+  assert.equal(single({ text: "how do I apply to join the team" }).type, "ANSWER");
+  assert.equal(single({ text: "is there an open moderator position" }).type, "ANSWER");
+});
+
+test("an ordinary ambient statement that merely contains 'ca' or 'mc' as part of a longer sentence is NOT misclassified as an informational request", () => {
+  // Neither of these is the bare shorthand ON ITS OWN -- both are ordinary
+  // continuation chatter and must still resolve via the normal SUBSTANTIVE
+  // path (CASUAL_CHAT, gated on directed/continuity), never forced to
+  // ANSWER just because a two-letter substring happens to appear.
+  const result = single({ text: "yeah that market cap chart looks wild honestly" });
+  assert.notEqual(result.type, "ANSWER");
+});
+
 /* -------------------------------------------------------- conversation flow ---- */
 
 test("REQUIRED: an active conversation continuation is answered by the SAME moderator, not the quietest one", () => {

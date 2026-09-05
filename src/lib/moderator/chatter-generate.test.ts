@@ -175,6 +175,16 @@ test("prompt still bans generic support-chat closers (regression from the earlie
   assert.match(prompt, /do not manufacture a follow-up question/i);
 });
 
+test("REQUIRED (2026-09-05 live bug): prompt bans inviting someone to DM/private-message the bot, for BOTH actions -- the system does not receive or respond to direct messages at all, so that framing always sets up a dead end", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /never invite, ask, or tell someone to dm\/pm\/message\/private-message you/i);
+    assert.match(prompt, /you do not receive or respond to direct\/private messages at all/i);
+    assert.match(prompt, /even to things you'd normally want to take "offline"/i);
+  }
+});
+
 /* ------------------------------------------------------ persona identity ---- */
 // Live bug: "hey test, can you tell what persona are you?" got "just a
 // regular mod persona here... nothing fancier than that" instead of a real

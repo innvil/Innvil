@@ -44,6 +44,17 @@ export interface ProjectProfile {
 }
 
 const TECHNICAL_SUPPORT_RE = /\b(technical support|integration issue|api help|developer support|dev support|sdk help)\b/i;
+// Live bug (2026-09-05): "Am applying for a community moderation space" (a
+// staff/moderator recruitment inquiry) matched none of the four existing
+// categories, so the bot had no configured contact to defer to and, once
+// it also reached ungrounded CASUAL_CHAT (see chatter-coordinator.ts's
+// looksLikeInformationalRequest), fabricated an entire hiring policy
+// instead ("we do take mods sometimes... shoot me a dm"). Per explicit
+// product decision, a job/staff/moderator-recruitment inquiry routes to
+// Sales / Enterprise -- the closest existing general "who handles this
+// administratively" category, rather than inventing a dedicated 5th
+// ContactKind for a use case with no perfect existing fit.
+const RECRUITMENT_RE = /\b(?:am|i'?m)\s+apply(?:ing)?\b|\bhow\s+(?:do|can)\s+i\s+apply\b|\b(?:job|staff|moderator|mod)\s+(?:application|opening|vacanc(?:y|ies)|position|role)\b|\binterested\s+in\s+(?:joining|becoming\s+a\s+mod)\b|\blooking\s+to\s+join\s+(?:the\s+team|as\s+a\s+mod)\b|\bjoin(?:ing)?\s+the\s+team\b|\b(?:hiring|recruiting)\b|\bopen\s+(?:position|role|spot)s?\b/i;
 const SALES_RE = /\b(sales|enterprise (plan|pricing|inquiry)|pricing discussion|commercial (inquiry|license)|business inquiry|bulk (pricing|order))\b/i;
 const SUPPORT_RE = /\b(support|help|assistance|assist me|problem|issue|trouble|broken|not working|contact support)\b/i;
 
@@ -117,7 +128,7 @@ export function isPartnershipsIntent(text: string): boolean {
 const CONTACT_INTENT_MATCHERS: Record<ContactKind, (text: string) => boolean> = {
   technical_support: (t) => TECHNICAL_SUPPORT_RE.test(t),
   partnerships: isPartnershipsIntent,
-  sales: (t) => SALES_RE.test(t),
+  sales: (t) => SALES_RE.test(t) || RECRUITMENT_RE.test(t),
   support: (t) => SUPPORT_RE.test(t),
 };
 
