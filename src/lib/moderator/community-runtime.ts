@@ -29,7 +29,7 @@ import {
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
-  effectiveScamStrikeCount, effectiveNegativeStatementCount, renderHumanModerationMention,
+  effectiveScamStrikeCount, effectiveNegativeStatementCount, effectiveMediaWarningCount, renderHumanModerationMention,
   filterOutOwnBotMentions, looksLikeUnsolicitedPitch, looksLikeSearchInstructionSpam, looksLikeNegativeStatement, isBackToBackSpamPattern,
   looksLikeAdminInformationRequest, findRecentAdminInformationRequest,
   effectiveWarningCount, LINK_ENFORCEMENT_NOTICE_DEDUP_WINDOW_SECONDS,
@@ -2164,7 +2164,7 @@ async function loadLinkWarningState(admin: SupabaseClient, communityId: string, 
   const { data } = await admin
     .from("moderator_link_warning_state")
     .select(
-      "warning_count, warning_at, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count, negative_statement_count, negative_statement_at"
+      "warning_count, warning_at, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count, media_warning_at, negative_statement_count, negative_statement_at"
     )
     .eq("community_id", communityId)
     .eq("platform_user_id", platformUserId)
@@ -2179,6 +2179,7 @@ async function loadLinkWarningState(admin: SupabaseClient, communityId: string, 
     scamStrikeCount: data.scam_strike_count ?? 0,
     scamStrikeAt: data.scam_strike_at ?? null,
     mediaWarningCount: data.media_warning_count ?? 0,
+    mediaWarningAt: data.media_warning_at ?? null,
     negativeStatementCount: data.negative_statement_count ?? 0,
     negativeStatementAt: data.negative_statement_at ?? null,
   };
@@ -2205,6 +2206,7 @@ async function persistLinkWarningState(
       scam_strike_count: state.scamStrikeCount,
       scam_strike_at: state.scamStrikeAt,
       media_warning_count: state.mediaWarningCount,
+      media_warning_at: state.mediaWarningAt,
       negative_statement_count: state.negativeStatementCount,
       negative_statement_at: state.negativeStatementAt,
       ...(violation ? { last_violation_at: violation.now.toISOString(), last_violation_kind: violation.kind } : {}),
@@ -3173,7 +3175,15 @@ async function runMediaModeration(
   // (community, user) row as link moderation's warning state, rather than a
   // second parallel table.
   const priorState = await loadLinkWarningState(admin, community.id, event.sender.platformUserId);
-  const enforcement = decideMediaEnforcement({ result, priorWarningCount: priorState.mediaWarningCount });
+  // Renews together with the account's TIERED PLAN billing period, not a
+  // fixed rolling window like every other counter -- see
+  // effectiveMediaWarningCount's own doc comment. mediaUsagePeriod is only
+  // ever resolved above for a real self-serve/trial account; a genuinely
+  // unrepresentable account (mediaUsagePeriod stays null) falls back to the
+  // stored count as-is, never fabricating a reset boundary that doesn't
+  // exist.
+  const effectivePriorMediaWarningCount = effectiveMediaWarningCount(priorState.mediaWarningCount, priorState.mediaWarningAt, mediaUsagePeriod?.start ?? null);
+  const enforcement = decideMediaEnforcement({ result, priorWarningCount: effectivePriorMediaWarningCount });
 
   await logActivity(admin, panelId, community.id, enforcer.deploymentId, "media_moderation", enforcement.kind, result.ok ? result.verdict : result.failure, {
     mediaKind: media.kind,
@@ -3203,7 +3213,11 @@ async function runMediaModeration(
         kickError = kickResult.error;
       }
     }
-    await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, { ...priorState, mediaWarningCount: priorState.mediaWarningCount + 1 }, { kind: enforcement.reason, now });
+    await persistLinkWarningState(
+      admin, panelId, community.id, event.sender.platformUserId,
+      { ...priorState, mediaWarningCount: effectivePriorMediaWarningCount + 1, mediaWarningAt: now.toISOString() },
+      { kind: enforcement.reason, now }
+    );
 
     // Same live-bug protection as runLinkModeration's DELETE_KICK branch
     // (migration 0126) -- a rapid burst of flagged uploads from the same
@@ -3243,7 +3257,7 @@ async function runMediaModeration(
 
   // DELETE_WARN (borderline only -- a high-confidence explicit result never
   // reaches here, see decideMediaEnforcement)
-  const nextState: LinkWarningState = { ...priorState, mediaWarningCount: enforcement.warningNumber };
+  const nextState: LinkWarningState = { ...priorState, mediaWarningCount: enforcement.warningNumber, mediaWarningAt: now.toISOString() };
   await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
   // Anti-repetition context (2026-09-04, mirrors runLinkModeration's own
   // linkModerationContext exactly) -- loaded only here, not at the top of

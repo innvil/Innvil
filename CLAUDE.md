@@ -127,6 +127,42 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-05 — Media moderation's strike counter now renews with the tiered plan, not permanently (v1.49.36)
+- **Live follow-up question, answered honestly then fixed**: asked whether every offense counter has a
+  reset/expiry. Confirmed scam-strike, promotion-warning, and the brand-new negative-statement counter (v1.49.35)
+  all already reset on a rolling 30-day-since-last-offense window (`effectiveScamStrikeCount`/
+  `effectiveWarningCount`/`effectiveNegativeStatementCount`) — but **media moderation's own strike counter
+  (`mediaWarningCount`, governing repeated-borderline-explicit-content escalation) had NO reset mechanism at
+  all**, a genuine pre-existing gap, not introduced this pass. Explicit product decision: media's counter should
+  renew together with the account's **tiered plan billing period** instead of a fixed rolling window — "however
+  many [strikes] they had, even if 1 or the max, it resets" once the plan renews, mirroring the Media Moderation
+  Unit **allowance**'s own already-correct behavior (confirmed, not assumed: `getWatchMediaModerationUsage` is
+  keyed by `period_start`, so a new billing period always starts usage at 0 regardless of how much of the prior
+  period's real per-tier allowance — Bronze 300/mo, Silver 500, Gold 700, Platinum 1,000, BYO 20 2,000, Enterprise
+  Managed 1,500/BYO 50 2,000/BYO Unlimited 2,000 — was consumed).
+- **New `effectiveMediaWarningCount(storedCount, storedAt, periodStart)`** (`link-moderation.ts`) — deliberately a
+  DIFFERENT reset mechanism from the other three counters (which take a fixed duration): compares the stored
+  warning's timestamp against the account's real current billing-period start (already resolved by
+  `runMediaModeration` for the existing usage-metering gate, `resolveAccountBillingPeriod`/
+  `trialMediaModerationPeriod` — reused directly, never a second period resolver). A stored strike from BEFORE
+  the current period started reads as 0 — a full reset, never a partial carryover, however high it had climbed.
+  A genuinely unrepresentable account (no billing period resolvable, e.g. a legacy Panel-distributed deployment)
+  returns the stored count as-is, never fabricating a reset boundary that doesn't exist.
+- **New `moderator_link_warning_state.media_warning_at`** (migration `0128`) — media's own timestamp, structurally
+  separate from `warning_at`/`scam_strike_at`/`negative_statement_at`, exactly mirroring how `media_warning_count`
+  itself has always been kept independent from the other three counters on the same row.
+- **Wired into `runMediaModeration`**: the effective (period-reset-aware) count is computed once, right after
+  `loadLinkWarningState`, and fed into `decideMediaEnforcement` — so both the enforcement DECISION and the
+  persisted `warningNumber` are correctly based on the reset value, never the stale un-reset one. Both increment
+  points (the repeat-offense kick and the borderline warn) now stamp `mediaWarningAt` alongside the count, the
+  same way every other counter already stamps its own timestamp on every increment.
+- New tests (`link-moderation.test.ts`, +4): no-prior-timestamp reads as fresh, no-resolvable-period never
+  fabricates a reset, a strike from before the period start resets to 0 (incl. right at the kick threshold), a
+  strike from within the current period still counts. 2359 tests pass (up from 2355), `tsc --noEmit` clean,
+  production build clean.
+- **Run migration `0128`** before this governs anything live.
+- **Deployed to production this pass, alongside v1.49.33/34/35** (see the entries directly below).
+
 ### 2026-09-05 — New moderation category: unfounded negative statements/rumors — silent-delete, then warn+mute, then a time-bound ban, never a kick (v1.49.35)
 - **Explicit product spec, from a live screenshot pair**: "Scam Project 😂😂" (an unprompted, mocking, evidence-free
   accusation) should be deleted; "Is this a scam?" (a genuine question) must keep being answered normally, exactly

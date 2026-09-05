@@ -5,7 +5,7 @@ import {
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SOLICITATION_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
   looksLikeNegativeStatement, effectiveNegativeStatementCount, NEGATIVE_STATEMENT_WINDOW_MS,
-  NEGATIVE_STATEMENT_MUTE_MINUTES, NEGATIVE_STATEMENT_BAN_MINUTES,
+  NEGATIVE_STATEMENT_MUTE_MINUTES, NEGATIVE_STATEMENT_BAN_MINUTES, effectiveMediaWarningCount,
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   promotionContactSentence,
@@ -1070,4 +1070,31 @@ test("NEGATIVE_STATEMENT never falls into the unrelated UNSOLICITED_PROMOTION/wa
     adminSolicitedExemption: false,
   });
   assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "negative_statement", silent: true });
+});
+
+/* ==================================== media-warning period reset ==== */
+// Explicit product decision (2026-09-05): media's own strike counter renews
+// together with the account's TIERED PLAN billing period, NOT a fixed
+// rolling window like every other counter above -- a deliberately different
+// reset mechanism from effectiveScamStrikeCount/effectiveWarningCount/
+// effectiveNegativeStatementCount, which all take a fixed duration.
+
+test("effectiveMediaWarningCount: no prior timestamp reads as 0 (fresh)", () => {
+  assert.equal(effectiveMediaWarningCount(2, null, "2026-02-01T00:00:00.000Z"), 0);
+});
+
+test("REQUIRED: no real billing period resolvable -- the stored count is returned as-is, never fabricating a reset boundary that doesn't exist", () => {
+  assert.equal(effectiveMediaWarningCount(2, "2026-01-15T00:00:00.000Z", null), 2);
+});
+
+test("REQUIRED: a strike from BEFORE the current billing period started resets to 0 -- however high it had climbed, even at the kick threshold", () => {
+  const periodStart = "2026-02-01T00:00:00.000Z";
+  assert.equal(effectiveMediaWarningCount(1, "2026-01-15T00:00:00.000Z", periodStart), 0);
+  assert.equal(effectiveMediaWarningCount(5, "2026-01-31T23:59:59.999Z", periodStart), 0);
+});
+
+test("a strike from WITHIN (at or after) the current billing period still counts", () => {
+  const periodStart = "2026-02-01T00:00:00.000Z";
+  assert.equal(effectiveMediaWarningCount(1, "2026-02-01T00:00:00.000Z", periodStart), 1);
+  assert.equal(effectiveMediaWarningCount(2, "2026-02-15T00:00:00.000Z", periodStart), 2);
 });

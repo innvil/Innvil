@@ -488,6 +488,18 @@ export interface LinkWarningState {
    *  (flood window, scam strike) -- only the warning-count semantics were
    *  ever actually conflated, so only that needed its own column. */
   mediaWarningCount: number;
+  /** Timestamp of the most recent media-moderation warning/kick. Explicit
+   *  product decision (2026-09-05): media's own strike counter renews
+   *  together with the account's TIERED PLAN billing period, NOT a fixed
+   *  rolling window like every other counter on this row -- "however many
+   *  [strikes] they had, even if 1 or the max, it resets" once the plan
+   *  renews, mirroring the exact same full-reset-no-carryover behavior the
+   *  Media Moderation Unit ALLOWANCE already has (getWatchMediaModerationUsage
+   *  is keyed by period_start, so a new period always starts usage at 0,
+   *  regardless of how much of the prior period's allowance was consumed).
+   *  See effectiveMediaWarningCount below -- resolved against the account's
+   *  real current billing-period start, never a fixed duration. */
+  mediaWarningAt: string | null;
   /** NEGATIVE_STATEMENT's OWN 3-strike ladder counter -- structurally
    *  SEPARATE from every other counter on this row (an unfounded scam/rug
    *  accusation is never conflated with an ordinary promotion warning or a
@@ -498,7 +510,7 @@ export interface LinkWarningState {
 
 export const EMPTY_WARNING_STATE: LinkWarningState = {
   warningCount: 0, warningAt: null, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0,
-  scamStrikeCount: 0, scamStrikeAt: null, mediaWarningCount: 0,
+  scamStrikeCount: 0, scamStrikeAt: null, mediaWarningCount: 0, mediaWarningAt: null,
   negativeStatementCount: 0, negativeStatementAt: null,
 };
 
@@ -543,6 +555,31 @@ export const NEGATIVE_STATEMENT_BAN_MINUTES = 24 * 60;
 export function effectiveNegativeStatementCount(storedCount: number, storedAt: string | null, now: Date): number {
   if (!storedAt) return 0;
   if (now.getTime() - new Date(storedAt).getTime() >= NEGATIVE_STATEMENT_WINDOW_MS) return 0;
+  return storedCount;
+}
+
+/** Media moderation's OWN strike counter renews together with the account's
+ *  TIERED PLAN billing period -- explicit product decision, deliberately a
+ *  DIFFERENT reset mechanism from every other counter above (which all use a
+ *  fixed rolling duration since the last offense). "However many strikes
+ *  they had, even if 1 or the max, it resets" once the plan renews: a stored
+ *  warning from BEFORE the current billing period started reads as 0 (a
+ *  full reset, never a partial carryover), regardless of how high it had
+ *  climbed -- mirroring the Media Moderation Unit ALLOWANCE's own existing
+ *  full-reset-no-carryover behavior exactly.
+ *
+ *  `periodStart` is the account's real current billing-period start (already
+ *  resolved by the caller via resolveAccountBillingPeriod/
+ *  trialMediaModerationPeriod -- this function never resolves a period
+ *  itself, staying pure/no-I/O like every other counter here). `null` means
+ *  no real period could be resolved (a genuinely unrepresentable account,
+ *  e.g. a legacy Panel-distributed deployment with no billing period at
+ *  all) -- in that case the stored count is returned AS-IS, never fabricating
+ *  a reset boundary that doesn't exist. */
+export function effectiveMediaWarningCount(storedCount: number, storedAt: string | null, periodStart: string | null): number {
+  if (!storedAt) return 0;
+  if (!periodStart) return storedCount;
+  if (new Date(storedAt).getTime() < new Date(periodStart).getTime()) return 0;
   return storedCount;
 }
 
