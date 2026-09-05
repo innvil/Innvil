@@ -116,18 +116,24 @@ export type CommunityAction =
    *  message. Acts as whichever deployment is doing the moderating (the
    *  bot needs delete rights in that community). */
   | { kind: "DELETE_MESSAGE"; targetDeploymentId: string; targetMessageId: string }
-  /** Removes the violating user from the community. `mode: "BAN"` is
-   *  permanent (Telegram banChatMember) -- kept for a possible future
-   *  manual admin action, no automatic enforcement path produces it as of
-   *  the Watcher Ops moderation-reporting expansion (2026-08-27). `mode:
-   *  "KICK"` is REMOVABLE, not permanent -- implemented as banChatMember
-   *  immediately followed by unbanChatMember (Telegram's own documented
-   *  kick idiom; there is no separate "kick" API method). `mode: "MUTE"`
-   *  temporarily restricts the user's ability to send messages via Telegram
+  /** Removes the violating user from the community. `mode: "BAN"` with no
+   *  `banMinutes` is permanent (Telegram banChatMember, no until_date) --
+   *  kept for a possible future manual admin action, no automatic
+   *  enforcement path produced a PERMANENT ban as of the Watcher Ops
+   *  moderation-reporting expansion (2026-08-27). `banMinutes`, when set
+   *  (2026-09-05, negative-statement moderation), makes this a real
+   *  TIME-BOUND ban via Telegram's own until_date parameter on
+   *  banChatMember -- the user is automatically unbanned/can rejoin after
+   *  that duration, never left permanently removed. `mode: "KICK"` is
+   *  REMOVABLE, not permanent -- implemented as banChatMember immediately
+   *  followed by unbanChatMember (Telegram's own documented kick idiom;
+   *  there is no separate "kick" API method). `mode: "MUTE"` temporarily
+   *  restricts the user's ability to send messages via Telegram
    *  restrictChatMember, for `muteMinutes` minutes from execution time --
    *  used for the first one/two graduated spam/scam warnings, always
    *  alongside (never instead of) a DELETE_WARN. */
-  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN" | "KICK" }
+  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "BAN"; banMinutes?: number }
+  | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "KICK" }
   | { kind: "RESTRICT_USER"; targetDeploymentId: string; targetPlatformUserId: string; mode: "MUTE"; muteMinutes: number };
 
 /* --------------------------------------------------- sender classification ---- */

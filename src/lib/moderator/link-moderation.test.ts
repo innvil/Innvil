@@ -4,6 +4,8 @@ import {
   extractLinks, normalizeLink, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement,
   EMPTY_WARNING_STATE, FLOOD_WINDOW_MS, FLOOD_REPEAT_THRESHOLD, SOLICITATION_WARNING_LIMIT,
   effectiveScamStrikeCount, SCAM_STRIKE_WINDOW_MS, renderHumanModerationMention, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  looksLikeNegativeStatement, effectiveNegativeStatementCount, NEGATIVE_STATEMENT_WINDOW_MS,
+  NEGATIVE_STATEMENT_MUTE_MINUTES, NEGATIVE_STATEMENT_BAN_MINUTES,
   normalizeTelegramUsername, isOwnBotMention, filterOutOwnBotMentions, looksLikeUnsolicitedPitch,
   looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
   promotionContactSentence,
@@ -281,6 +283,7 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
     floodRepeat: false,
     priorWarningCount: 0,
     priorScamStrikeCount: 0,
+    priorNegativeStatementCount: 0,
     solicitationAllowed: false,
     adminSolicitedExemption: false,
     ...over,
@@ -967,4 +970,104 @@ test("REQUIRED: a definite removal claim is EXPLICITLY PERMITTED when authoritat
 test("removalHappened:true still catches every OTHER unsupported claim -- it only narrows the removal-claim check, not the whole guard", () => {
   assert.equal(warningTextExceedsAuthorizedFacts("That's a 45-minute mute too.", { muteMinutes: null, removalHappened: true }), true);
   assert.equal(warningTextExceedsAuthorizedFacts("Here's the link: https://scam.example", { muteMinutes: null, removalHappened: true }), true);
+});
+
+/* ================================================= negative statements ==== */
+
+test("looksLikeNegativeStatement: matches an unfounded scam accusation with no question", () => {
+  assert.equal(looksLikeNegativeStatement("Scam Project 😂😂"), true);
+  assert.equal(looksLikeNegativeStatement("Definitely scam😂"), true);
+  assert.equal(looksLikeNegativeStatement("this is a rugpull"), true);
+  assert.equal(looksLikeNegativeStatement("it is a ponzi, everyone knows"), true);
+  assert.equal(looksLikeNegativeStatement("fraudulent project, stay away"), true);
+  assert.equal(looksLikeNegativeStatement("dead project lol"), true);
+  assert.equal(looksLikeNegativeStatement("trash project honestly"), true);
+  assert.equal(looksLikeNegativeStatement("exit scam confirmed"), true);
+  assert.equal(looksLikeNegativeStatement("this is going to zero"), true);
+  assert.equal(looksLikeNegativeStatement("worthless token, avoid it"), true);
+});
+
+test("REQUIRED: looksLikeNegativeStatement never matches a genuine question, even with identical scam wording -- a question mark anywhere unconditionally excludes it", () => {
+  assert.equal(looksLikeNegativeStatement("Is this a scam?"), false);
+  assert.equal(looksLikeNegativeStatement("Why does everyone say this is a rug?"), false);
+  assert.equal(looksLikeNegativeStatement("scam project?"), false);
+  assert.equal(looksLikeNegativeStatement("is this a scam ? asking for a friend"), false);
+});
+
+test("looksLikeNegativeStatement returns false for ordinary, unrelated chat", () => {
+  assert.equal(looksLikeNegativeStatement("hey how is everyone doing today"), false);
+  assert.equal(looksLikeNegativeStatement(""), false);
+  assert.equal(looksLikeNegativeStatement("   "), false);
+});
+
+test("effectiveNegativeStatementCount: no prior timestamp reads as 0 (fresh)", () => {
+  assert.equal(effectiveNegativeStatementCount(3, null, new Date()), 0);
+});
+
+test("effectiveNegativeStatementCount: a strike within the 30-day window still counts", () => {
+  const now = new Date("2026-01-31T00:00:00.000Z");
+  const recentAt = new Date(now.getTime() - (NEGATIVE_STATEMENT_WINDOW_MS - 60_000)).toISOString();
+  assert.equal(effectiveNegativeStatementCount(1, recentAt, now), 1);
+});
+
+test("REQUIRED: effectiveNegativeStatementCount expires exactly at the 30-day boundary -- a stale strike reads as a fresh first offense", () => {
+  const now = new Date("2026-01-31T00:00:00.000Z");
+  const exactlyAtBoundary = new Date(now.getTime() - NEGATIVE_STATEMENT_WINDOW_MS).toISOString();
+  assert.equal(effectiveNegativeStatementCount(2, exactlyAtBoundary, now), 0);
+});
+
+function negativeStatementDecide(priorNegativeStatementCount: number, isAdminOrTrusted = false) {
+  return decideLinkEnforcement({
+    category: "NEGATIVE_STATEMENT",
+    confidence: "high",
+    isAdminOrTrusted,
+    floodRepeat: false,
+    priorWarningCount: 0,
+    priorScamStrikeCount: 0,
+    priorNegativeStatementCount,
+    solicitationAllowed: false,
+    adminSolicitedExemption: false,
+  });
+}
+
+test("REQUIRED (1st offense): NEGATIVE_STATEMENT deletes SILENTLY -- no mute, no public warning text", () => {
+  assert.deepEqual(negativeStatementDecide(0), { kind: "DELETE_WARN", warningNumber: 1, reason: "negative_statement", silent: true });
+});
+
+test("REQUIRED (2nd offense): NEGATIVE_STATEMENT deletes plus warns plus mutes for exactly NEGATIVE_STATEMENT_MUTE_MINUTES", () => {
+  assert.deepEqual(negativeStatementDecide(1), {
+    kind: "DELETE_WARN", warningNumber: 2, reason: "repeated_negative_statement", muteMinutes: NEGATIVE_STATEMENT_MUTE_MINUTES,
+  });
+  assert.equal(NEGATIVE_STATEMENT_MUTE_MINUTES, 30);
+});
+
+test("REQUIRED (3rd offense): NEGATIVE_STATEMENT bans for a fixed, TIME-BOUND duration -- never a kick, never a permanent ban", () => {
+  const result = negativeStatementDecide(2);
+  assert.deepEqual(result, { kind: "DELETE_BAN", reason: "escalated_negative_statement", banMinutes: NEGATIVE_STATEMENT_BAN_MINUTES });
+  assert.equal(NEGATIVE_STATEMENT_BAN_MINUTES, 24 * 60);
+});
+
+test("REQUIRED: every subsequent offense beyond the 3rd also bans -- never escalates back to a kick, never a different kind", () => {
+  assert.equal(negativeStatementDecide(5).kind, "DELETE_BAN");
+  assert.equal(negativeStatementDecide(10).kind, "DELETE_BAN");
+});
+
+test("REQUIRED: an admin/trusted sender is exempt from NEGATIVE_STATEMENT enforcement entirely -- their own framing of their own community is their call", () => {
+  assert.deepEqual(negativeStatementDecide(0, true), { kind: "ALLOW" });
+  assert.deepEqual(negativeStatementDecide(5, true), { kind: "ALLOW" });
+});
+
+test("NEGATIVE_STATEMENT never falls into the unrelated UNSOLICITED_PROMOTION/warningCount ladder -- its own counter is completely independent", () => {
+  const result = decideLinkEnforcement({
+    category: "NEGATIVE_STATEMENT",
+    confidence: "high",
+    isAdminOrTrusted: false,
+    floodRepeat: false,
+    priorWarningCount: 10, // a large unrelated promotion-warning count must have zero effect here
+    priorScamStrikeCount: 10,
+    priorNegativeStatementCount: 0,
+    solicitationAllowed: false,
+    adminSolicitedExemption: false,
+  });
+  assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "negative_statement", silent: true });
 });

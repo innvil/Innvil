@@ -41,6 +41,7 @@ const CATEGORIES: LinkCategory[] = [
   "COMPETING_PROJECT_PROMOTION",
   "LINK_SPAM_OR_FLOOD",
   "SEARCH_SPAM",
+  "NEGATIVE_STATEMENT",
   "PHISHING_OR_SCAM",
   "EXPLICIT_CONTENT",
   "UNKNOWN_OR_AMBIGUOUS",
@@ -61,6 +62,7 @@ Context matters more than the link itself — the SAME url can be legitimate out
 - "Let's rally and go shill $OTHERCOIN over at @somegroup" / "everyone go support @unrelatedproject, they're a great token" -> COMPETING_PROJECT_PROMOTION, a SEPARATE category from UNSOLICITED_PROMOTION (see its own definition below). Here the thing being promoted is a DIFFERENT, specifically named project/token that is NOT this community's own subject -- this community's own members are effectively being organized to advertise someone else's unrelated (often competing) project, regardless of whether it's framed as a "raid."
 The decisive question for a raid/rally message is always WHAT is being promoted, never WHERE: rallying members to promote THIS community's own project (wherever the venue is, even an external group) is allowed (SAFE_RELEVANT_LINK); rallying members to promote a different, specifically named project is COMPETING_PROJECT_PROMOTION.
 - "Search miniairdrops" (posted by one member alone, or by several different members within minutes of each other) -> SEARCH_SPAM. This has zero connection to this project -- it's an off-topic engagement-farming instruction, not a promotion or a link, and should be flagged as SEARCH_SPAM even from a single sender.
+- "Scam Project 😂😂" / "Definitely scam lol" -> NEGATIVE_STATEMENT. A bare mocking accusation, no question, no evidence. But "Is this a scam?" or "Why does everyone say this is a rug?" -> NOT NEGATIVE_STATEMENT, these are genuine questions and must be handled/answered normally like any other question.
 
 A bare @username mention by itself, with no accompanying suspicious content (no urgent call to action, no promise of rewards/free money, no request for credentials/private keys/funds, no impersonation of a known project or official account), is NOT sufficient on its own to classify as PHISHING_OR_SCAM or UNSOLICITED_PROMOTION — someone addressing another person or bot by @username is ordinary conversation, not a link/promotion signal. Only classify a message as suspicious when the actual evidence (a scam-shaped URL, an urgent/impersonation pattern, a promotional call-to-action, etc.) is present.
 
@@ -83,6 +85,7 @@ IMPORTANT — a common spam evasion tactic dresses up an unsolicited marketing-s
 A GENUINE COLLABORATION_REQUEST or PARTNERSHIP_REQUEST instead proposes a specific joint action ("we'd like to co-host an AMA with you next week", "our team wants to explore an integration — who should I talk to?") or is itself the SOLICITED response to an admin's own request (see the SOLICITED-content rule above). When genuinely unsure which of the two this is, weigh the presence of a generic "DM me to grow/boost/promote" call-to-action heavily toward UNSOLICITED_PROMOTION.
 - LINK_SPAM_OR_FLOOD: looks like an automated or repetitive advertising burst.
 - SEARCH_SPAM: a short instruction telling members to search, google, or look something up that has NO connection whatsoever to this project/community (e.g. "Search miniairdrops", "Google [some unrelated app name]"). This is a distinct off-topic engagement-farming/search-manipulation pattern -- flag it as SEARCH_SPAM even when it's a single, isolated message from one sender, with no link/handle/promotion wording of any kind. It's especially common (but NOT required) for several different, unrelated accounts to post the exact same instruction within minutes of each other -- treat every occurrence as SEARCH_SPAM regardless of whether you can see other similar messages nearby. Never UNSOLICITED_PROMOTION (it doesn't advertise a project/service or ask for contact) and never LINK_SPAM_OR_FLOOD (no link is involved).
+- NEGATIVE_STATEMENT: an unfounded, mocking, or dismissive ASSERTION that this project is a scam/rug/fraud/dead/worthless, with NO genuine question and NO specific evidence or reasoning behind it (e.g. "Scam Project 😂😂", "Definitely scam", "This is a rugpull lol", "trash project, avoid this"). CRITICAL -- do NOT classify a genuine QUESTION this way, even one using the exact same words (e.g. "Is this a scam?", "Why do people keep calling this a rug?") -- a real question is asking for information and must be answered normally like any other question, never treated as this category. Also do NOT classify a SUBSTANTIVE, evidence-backed concern this way (e.g. "I checked the contract and there's a hidden mint function letting the team create unlimited tokens, here's the code: ...", "the team wallet just dumped 40% of supply, here's the transaction hash") -- a real, reasoned red-flag report with specific evidence is legitimate community information the room should be able to see, even though it's negative, and is NEVER this category. NEGATIVE_STATEMENT is specifically for baseless mockery/accusation with no real question and no real content behind it.
 - PHISHING_OR_SCAM: a link designed to steal credentials/funds (fake exchange, fake support, wallet drainer, impersonation of a known project's official domain).
 - EXPLICIT_CONTENT: pornographic/explicit content.
 - UNKNOWN_OR_AMBIGUOUS: genuinely unclear — an unfamiliar resource with no strong signal either way.
@@ -711,6 +714,134 @@ export async function generatePersonaScamWarning(
   // eligible for SHORT_NUDGE/NO_PUBLIC_REPLY, see this function's own doc
   // comment), so the retry always asks for full-but-differently-phrased
   // wording, never brevity/suppression.
+  const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, "ENFORCEMENT_NOTICE")));
+  return sanitize(retry ?? first);
+}
+
+/* ================= negative-statement (unfounded scam/rug accusation) warnings ==== */
+// 2026-09-05, explicit product decision: an unfounded, mocking scam/rug/fraud
+// ACCUSATION (never a genuine question, never a substantive evidence-backed
+// report -- see link-classify's own NEGATIVE_STATEMENT category definition
+// and decideLinkEnforcement's dedicated ladder in link-moderation.ts) gets a
+// deliberately QUIET 1st offense (deleted with no public text at all -- this
+// function is never even called for that case, see community-runtime.ts),
+// then a real warning+mute on the 2nd, then a real time-bound ban on the
+// 3rd+. This function ONLY ever handles the 2nd/escalated cases -- mirrors
+// generatePersonaScamWarning's exact safety shape: given ONLY safe,
+// structured facts, NEVER the violating message's own text (same "you were
+// not shown the message" invariant that fixed a real live bug where a
+// generator invented a specific identity denial from a message it was never
+// shown -- extended here from day one rather than needing a later fix).
+
+export interface NegativeStatementWarningFacts {
+  /** False = 2nd offense (message removed, user muted for muteMinutes).
+   *  True = ESCALATED (3rd+) offense -- the user has ALREADY been banned for
+   *  banHours as a direct result, by the time this text is generated (same
+   *  "state a completed fact, not a threat" pattern as
+   *  ScamWarningFacts.isRepeatOffense). */
+  isEscalatedOffense: boolean;
+  /** Real, exact mute duration for the 2nd-offense case only -- never
+   *  invented; NEGATIVE_STATEMENT_MUTE_MINUTES today, but the caller always
+   *  supplies the real value rather than this function assuming a constant. */
+  muteMinutes: number | undefined;
+  /** Real, exact ban duration in HOURS for the escalated case only -- always
+   *  a genuine, time-bound removal, never implying it's permanent. */
+  banHours: number | undefined;
+}
+
+/** Persona-voiced negative-statement warning -- falls back to a fixed
+ *  deterministic template (unchanged shape regardless of generation success)
+ *  on any failure or when no AI provider is usable, so a public notice
+ *  always exists and is always accurate even when generation itself has an
+ *  issue. Mirrors generatePersonaScamWarning's mention-embedding contract
+ *  exactly: `mentionHtml` is embedded internally, deterministically, by this
+ *  function itself -- never asked of the model. */
+export async function generatePersonaNegativeStatementWarning(
+  moderatorName: string,
+  persona: ModeratorPersona,
+  mentionHtml: string,
+  facts: NegativeStatementWarningFacts,
+  aiRouting?: AccountAiRouting,
+  recentOwnWarnings: string[] = []
+): Promise<string> {
+  const deterministicFallback = () =>
+    facts.isEscalatedOffense
+      ? `${mentionHtml}, you were already warned and muted for spreading unverified negative claims about this project here -- doing it again means a ${facts.banHours}-hour ban from this community.`
+      : `${mentionHtml}, please stop spreading unverified negative claims about this project here -- that's a ${facts.muteMinutes}-minute mute. Repeated offenses escalate to a ban.`;
+
+  const requiredFacts: string[] = facts.isEscalatedOffense
+    ? [
+        "This is a REPEAT offense -- they were already warned and muted once before for the same thing (spreading unfounded negative claims/mockery about this project, with no real question or evidence behind it).",
+        `You just banned them for exactly ${facts.banHours} hours as a direct result -- state this real number verbatim, never a different one, and state it as a completed fact, not a threat. Make clear this ban is temporary/time-bound, not permanent.`,
+      ]
+    : [
+        "This is their FIRST offense of this specific kind (an unfounded, mocking scam/rug/fraud accusation with no real question or evidence behind it).",
+        `You also muted them for exactly ${facts.muteMinutes} minutes as a result -- state this real number verbatim, never a different one.`,
+        "Make clear that doing this again will result in a ban from this community.",
+      ];
+
+  const buildSystem = (avoidRepeatingNote?: string): string =>
+    [
+      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it spread an unfounded, mocking negative claim/accusation about this project (e.g. calling it a scam/rug with no real question or evidence behind it) -- a genuine question about whether something is a scam is completely fine and is never what this is about.`,
+      `You were NOT shown the exact wording of the removed message -- you only know what kind of violation it was, described above. Do NOT guess, invent, or react to specific words, names, or claims from it.`,
+      `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
+      ...personaVoiceBlock(persona),
+      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type a quick warning, not as a checklist:`,
+      ...requiredFacts.map((f) => `- ${f}`),
+      `Never output robotic/templated phrasing -- write like a real short chat message, not a form letter.`,
+      `Always write the warning in English.`,
+      avoidRepeatingNote,
+      `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
+    ]
+      .filter((line): line is string => !!line)
+      .join("\n");
+
+  const attemptGeneration = async (system: string): Promise<string | null> => {
+    if (aiRouting?.required) {
+      const cred = aiRouting.credential;
+      if (!cred?.model) return null;
+      try {
+        const raw = await aiComplete({
+          system,
+          messages: [{ role: "user", content: "Write the warning now." }],
+          model: cred.model,
+          providerOverride: byoProviderOverride(cred),
+          maxTokens: 200,
+          automation: "NEGATIVE_STATEMENT_WARNING_BYO",
+        });
+        const text = raw.trim();
+        return text ? text.slice(0, 300) : null;
+      } catch {
+        return null;
+      }
+    }
+    if (!aiConfigured()) return null;
+    try {
+      const { model, effort } = getInnvilModelConfig();
+      const raw = await aiComplete({
+        system,
+        messages: [{ role: "user", content: "Write the warning now." }],
+        model,
+        effort,
+        maxTokens: 200,
+        automation: "NEGATIVE_STATEMENT_WARNING",
+      });
+      const text = raw.trim();
+      return text ? text.slice(0, 300) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const authoritativeFacts = { muteMinutes: facts.isEscalatedOffense ? null : facts.muteMinutes ?? null, removalHappened: facts.isEscalatedOffense };
+  const sanitize = (body: string) =>
+    warningTextExceedsAuthorizedFacts(body, authoritativeFacts) ? deterministicFallback() : `${mentionHtml}, ${body}`;
+
+  const first = await attemptGeneration(buildSystem());
+  if (first === null) return deterministicFallback();
+
+  if (!recentOwnWarnings.length || !isNearDuplicateWarning(first, recentOwnWarnings)) return sanitize(first);
+
   const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, "ENFORCEMENT_NOTICE")));
   return sanitize(retry ?? first);
 }

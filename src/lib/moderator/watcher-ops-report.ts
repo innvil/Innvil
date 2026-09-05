@@ -22,7 +22,7 @@
    is a different message from the one this module formats.)
    ========================================================= */
 
-export type ModerationViolationCategory = "spam" | "competing_project" | "off_topic_spam" | "scam_link" | "nsfw" | "explicit_link";
+export type ModerationViolationCategory = "spam" | "competing_project" | "off_topic_spam" | "scam_link" | "nsfw" | "explicit_link" | "negative_statement";
 
 export type ModerationActionKind = "warning" | "temporary_mute" | "kick" | "ban" | "message_purge" | "moderation_failure";
 
@@ -78,6 +78,7 @@ function violationLabel(category: ModerationViolationCategory): string {
     case "scam_link": return "Scam Link";
     case "nsfw": return "Prohibited NSFW Content";
     case "explicit_link": return "Explicit Link";
+    case "negative_statement": return "Negative Statement";
   }
 }
 
@@ -99,6 +100,10 @@ export function moderationReportHeading(event: ModerationReportEvent): string {
   if (event.violationCategory === "off_topic_spam") {
     if (kicked) return "User Removed — Repeated Off-Topic Spam";
     return event.warningNumber === 1 ? "Off-Topic Spam Warning" : "Repeated Off-Topic Spam";
+  }
+  if (event.violationCategory === "negative_statement") {
+    if (kicked) return "User Removed — Repeated Negative Statements";
+    return event.actionsTaken.includes("temporary_mute") ? "Negative Statement Warning" : "Negative Statement Removed (Silent)";
   }
   // spam
   if (kicked) return "User Removed — Repeated Spam";

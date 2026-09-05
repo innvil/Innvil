@@ -127,6 +127,76 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-05 — New moderation category: unfounded negative statements/rumors — silent-delete, then warn+mute, then a time-bound ban, never a kick (v1.49.35)
+- **Explicit product spec, from a live screenshot pair**: "Scam Project 😂😂" (an unprompted, mocking, evidence-free
+  accusation) should be deleted; "Is this a scam?" (a genuine question) must keep being answered normally, exactly
+  as it already is (Patricia's real conversational reply explaining what's actually flagged vs. not, unchanged).
+  Ladder, verbatim: 1st offense — delete silently, no warning message at all; 2nd offense (same behavior repeats)
+  — delete + a real warning ("please stop spreading negative rumors...") + a 30-minute mute; 3rd+ offense — delete
+  + tell them they were already warned/muted + a **24-hour ban, never a kick**.
+- **New `LinkCategory`: `NEGATIVE_STATEMENT`** (`link-moderation.ts`) — an unfounded, mocking, or dismissive
+  assertion that the project is a scam/rug/fraud/dead/worthless, with **no genuine question and no substantive
+  evidence** behind it. The classifier prompt (`link-classify.ts`) explicitly carves out both exclusions with
+  worked examples matching the live screenshots exactly: a real question ("Is this a scam?", "Why does everyone
+  say this is a rug?") is NEVER this category, and neither is a real, reasoned, evidence-backed concern (e.g. "I
+  checked the contract, there's a hidden mint function, here's the code") — that's legitimate community
+  information, not this category, even though it reads as negative.
+- **New link-less pre-filter `looksLikeNegativeStatement()`** (mirrors `looksLikeSearchInstructionSpam`'s
+  established shape) — matches scam/rug/ponzi/fraud/dead-project/exit-scam/worthless-token-style vocabulary,
+  **unconditionally excludes any message containing a "?" anywhere** (a genuine question is never even offered
+  to this category), and is deliberately generous (never the verdict itself — a false match here only costs one
+  extra real classifier call, which correctly resolves elsewhere).
+- **A dedicated, fully independent 3-strike ladder** — new `negative_statement_count`/`negative_statement_at`
+  columns on `moderator_link_warning_state` (migration `0127`), with the same 30-day-inactivity expiry pattern as
+  every other counter on that row (`effectiveNegativeStatementCount`). Never conflated with the promotion
+  warning ladder, the scam-link strike counter, or media's own counter — verified by a dedicated test that a
+  large unrelated `priorWarningCount`/`priorScamStrikeCount` has zero effect on this ladder.
+- **Role-exempt, unlike the "global no-go" categories (COMPETING_PROJECT_PROMOTION/SEARCH_SPAM/scam/explicit)** —
+  placed in `decideLinkEnforcement` (`link-moderation.ts`) AFTER the existing `isAdminOrTrusted` check, so an
+  admin/trusted member's own framing of their own community is their call, matching ordinary
+  `UNSOLICITED_PROMOTION`'s existing exemption, not the never-exempt abuse categories.
+- **New `silent` field on `DELETE_WARN`** — `ModerationEnforcement`'s type gained an optional `silent?: boolean`,
+  set `true` only for negative-statement's 1st offense: the caller (`runLinkModeration`) deletes the message and
+  persists the incremented counter, then returns immediately — no warning text is even generated, no `SEND_TEXT`,
+  no Watcher Ops report (nothing beyond a plain deletion happened). Every other existing `DELETE_WARN` reason is
+  completely unaffected (the field is additive and undefined everywhere else).
+- **New time-bound ban support, extending `DELETE_BAN` and `RESTRICT_USER` for the first time** — `DELETE_BAN`
+  gained an optional `banMinutes` (undefined = permanent, unused by any automatic policy today except this one);
+  `RESTRICT_USER`'s BAN mode (`event-types.ts`) gained the same field, and `executeAction`'s BAN branch
+  (`community-runtime.ts`) now computes Telegram's own `until_date` for `banChatMember` when `banMinutes` is set
+  — mirroring the MUTE branch's existing `until_date` computation exactly (execution time, not decision time, to
+  avoid clock-skew). A negative-statement ban is genuinely temporary — the user can rejoin after 24 hours — never
+  a silent permanent removal.
+- **New persona-voiced warning generator `generatePersonaNegativeStatementWarning`** (`link-classify.ts`) —
+  mirrors `generatePersonaScamWarning`'s exact safety contract from day one (learned from that function's own
+  earlier live-bug fix, not repeated here): given ONLY safe, structured facts (`isEscalatedOffense`,
+  `muteMinutes`, `banHours`), **never the violating message's own text** — so it can never invent a specific
+  identity/relationship claim the way an earlier promotion-warning bug once did. Explicitly states the
+  distinction in its own system prompt ("a genuine question about whether something is a scam is completely fine
+  and is never what this is about"). Falls back to a fixed, accurate deterministic template on any generation
+  failure; the escalated-offense text states the ban as a completed, time-bound fact ("temporary/time-bound, not
+  permanent"), never a threat.
+- **Reuses the same rapid-burst notice dedup this session already shipped (migration `0126`)** — the new
+  time-bound ban branch in `runLinkModeration`'s `DELETE_BAN` handling calls `claimLinkEnforcementNotice` before
+  its own public notice/Watcher Ops report, exactly like the scam-repeat-kick and promotion-warning paths already
+  do; the underlying Telegram ban action itself is never gated by this claim.
+- **New Watcher Ops violation category `negative_statement`** (`watcher-ops-report.ts`) — headings "Negative
+  Statement Removed (Silent)" is never actually sent (the silent 1st offense skips the report entirely, by
+  design — nothing beyond a plain deletion happened), "Negative Statement Warning" for the 2nd offense, "User
+  Removed — Repeated Negative Statements" for the 3rd+.
+- New tests: `link-moderation.test.ts` (+15 — the pre-filter's vocabulary and its unconditional question-mark
+  exclusion, the 30-day expiry boundary, every rung of the ladder incl. the silent 1st/warn+mute 2nd/time-bound-
+  ban 3rd+/every-subsequent-offense-still-bans, the admin/trusted exemption, and the independence-from-other-
+  counters guard), `link-classify.test.ts` (+9 — Sonnet-only routing, the never-shown-the-message safety
+  instruction, the question-vs-accusation distinction present in the actual prompt, warn-tier vs. ban-tier fact
+  requirements incl. the "never claims a mute on a ban" and "never claims a REPEAT offense on a warn" cross-
+  checks, deterministic mention embedding, the deterministic fallback for both tiers, the untrusted-output guard
+  rejecting a wrong stated mute duration, and BYO-required-but-unusable making zero network calls). 2355 tests
+  pass (up from 2334), `tsc --noEmit` clean, production build clean.
+- **Run migration `0127`** before this governs anything live.
+- **Deployed to production this pass, per explicit instruction** (bundled with v1.49.33's Web3/crypto intent
+  routing and v1.49.34's duplicate-notice fix — all three pushed and deployed together).
+
 ### 2026-09-05 — Fix: a rapid message burst from the same person produced duplicate kick/mute notices (v1.49.34)
 - **Live bug**: a scam-link offender was correctly muted for 30 minutes on their first offense, then THREE separate
   "you have been removed from this community" messages went out within about a minute. Root cause, found by

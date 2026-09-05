@@ -54,6 +54,19 @@ export type LinkCategory =
    *  an abuse signal, not ordinary self-promotion, same category of
    *  never-exempt as COMPETING_PROJECT_PROMOTION above. */
   | "SEARCH_SPAM"
+  /** An unfounded, mocking, or dismissive assertion that the project is a
+   *  scam/rug/fraud/dead/worthless -- with NO genuine question and NO
+   *  specific evidence behind it (e.g. "Scam Project 😂😂", "Definitely
+   *  scam lol"). Explicit product decision: this is a conduct/community-
+   *  health category, not a safety category -- a genuine question ("Is
+   *  this a scam?") or a substantive, evidence-backed concern is NEVER
+   *  this category, both are still handled normally (see
+   *  link-classify.ts's own category definition for the exact carve-out).
+   *  Role-exempt via decideLinkEnforcement's existing isAdminOrTrusted
+   *  check (an admin/trusted member's own framing of their own community
+   *  is their call, unlike the never-exempt abuse categories above) --
+   *  reached only for an ordinary member. */
+  | "NEGATIVE_STATEMENT"
   | "PHISHING_OR_SCAM"
   | "EXPLICIT_CONTENT"
   | "UNKNOWN_OR_AMBIGUOUS";
@@ -397,6 +410,28 @@ export const FLOOD_WINDOW_MS = 30 * 60_000;
  *  accident. */
 export const FLOOD_REPEAT_THRESHOLD = 3;
 
+/* ------------------------------------------------------ negative statements ---- */
+// Live product decision (2026-09-05): an unfounded, mocking scam/rug/fraud
+// accusation with no link/handle at all ("Scam Project 😂😂") needs the same
+// link-less pre-filter treatment SEARCH_SPAM/looksLikeUnsolicitedPitch already
+// get -- otherwise it never reaches the real classifier at all. Deliberately
+// generous (never the verdict itself, same "never the sole ban authority"
+// principle as every other pre-filter here) -- a false positive here only
+// costs one extra classifyLinkIntent call, which correctly resolves to
+// something else (SAFE_RELEVANT_LINK/UNKNOWN_OR_AMBIGUOUS) rather than a
+// fabricated deletion. Any message containing a "?" ANYWHERE is excluded
+// unconditionally -- a genuine question ("Is this a scam?") must always be
+// handled normally, never even offered to this category.
+const NEGATIVE_STATEMENT_RE =
+  /\b(scam(?:mer|med)?|rug\s?pull(?:ed)?|is\s+a\s+rug|ponzi|fraud(?:ulent)?|fake\s+project|dead\s+(?:project|coin|token)|trash\s+project|garbage\s+project|exit\s+scam|going\s+to\s+zero|worthless\s+(?:project|token|coin)|stay\s+away(?:\s+from)?|avoid\s+this\s+(?:project|coin|token)|do\s?n['’]?t\s+(?:trust|buy|invest\s+in)\s+(?:this|it)|shit\s?coin)\b/i;
+
+export function looksLikeNegativeStatement(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes("?")) return false;
+  return NEGATIVE_STATEMENT_RE.test(trimmed);
+}
+
 /* -------------------------------------------------- enforcement-notice dedup ---- */
 // Live bug: loadLinkWarningState/persistLinkWarningState is a plain
 // SELECT-then-later-UPSERT with no atomicity between the two -- a rapid
@@ -453,11 +488,18 @@ export interface LinkWarningState {
    *  (flood window, scam strike) -- only the warning-count semantics were
    *  ever actually conflated, so only that needed its own column. */
   mediaWarningCount: number;
+  /** NEGATIVE_STATEMENT's OWN 3-strike ladder counter -- structurally
+   *  SEPARATE from every other counter on this row (an unfounded scam/rug
+   *  accusation is never conflated with an ordinary promotion warning or a
+   *  real scam-LINK strike). See effectiveNegativeStatementCount below. */
+  negativeStatementCount: number;
+  negativeStatementAt: string | null;
 }
 
 export const EMPTY_WARNING_STATE: LinkWarningState = {
   warningCount: 0, warningAt: null, recentLinkHash: null, recentLinkAt: null, recentLinkCountInWindow: 0,
   scamStrikeCount: 0, scamStrikeAt: null, mediaWarningCount: 0,
+  negativeStatementCount: 0, negativeStatementAt: null,
 };
 
 /** Same 30-day expiry pattern as effectiveScamStrikeCount below -- a
@@ -483,6 +525,24 @@ export const SCAM_STRIKE_WINDOW_MS = 30 * 24 * 60 * 60_000;
 export function effectiveScamStrikeCount(storedCount: number, storedAt: string | null, now: Date): number {
   if (!storedAt) return 0;
   if (now.getTime() - new Date(storedAt).getTime() >= SCAM_STRIKE_WINDOW_MS) return 0;
+  return storedCount;
+}
+
+/** Same 30-day-inactivity expiry pattern as effectiveScamStrikeCount --
+ *  chosen for consistency with the only two precedents in this file, rather
+ *  than inventing a third window length. A negative-statement strike more
+ *  than this old reads as a fresh first offense, never a permanent record. */
+export const NEGATIVE_STATEMENT_WINDOW_MS = 30 * 24 * 60 * 60_000;
+
+/** Deterministic mute for the 2nd negative-statement offense, and a
+ *  deterministic (time-bound, never permanent) ban for the 3rd+ -- explicit
+ *  product decision: "should only be mute/ban, no kick." */
+export const NEGATIVE_STATEMENT_MUTE_MINUTES = 30;
+export const NEGATIVE_STATEMENT_BAN_MINUTES = 24 * 60;
+
+export function effectiveNegativeStatementCount(storedCount: number, storedAt: string | null, now: Date): number {
+  if (!storedAt) return 0;
+  if (now.getTime() - new Date(storedAt).getTime() >= NEGATIVE_STATEMENT_WINDOW_MS) return 0;
   return storedCount;
 }
 
@@ -518,7 +578,29 @@ export type ModerationEnforcement =
    *  executed alongside the delete+warn, never inferred by the caller from
    *  warningNumber alone. Undefined means no mute (e.g. media's borderline
    *  path, which was never specified to include one). */
-  | { kind: "DELETE_WARN"; warningNumber: number; reason: "unsolicited_promotion" | "repeated_unsolicited_promotion" | "competing_project_promotion" | "repeated_competing_project_promotion" | "search_spam" | "repeated_search_spam" | "explicit_content_borderline" | "scam_or_phishing"; muteMinutes?: number }
+  | {
+      kind: "DELETE_WARN";
+      warningNumber: number;
+      reason:
+        | "unsolicited_promotion"
+        | "repeated_unsolicited_promotion"
+        | "competing_project_promotion"
+        | "repeated_competing_project_promotion"
+        | "search_spam"
+        | "repeated_search_spam"
+        | "explicit_content_borderline"
+        | "scam_or_phishing"
+        | "negative_statement"
+        | "repeated_negative_statement";
+      muteMinutes?: number;
+      /** True ONLY for a negative-statement's very FIRST offense -- the
+       *  caller must delete the message but send NO public warning text at
+       *  all (explicit product decision: "should be deleted without
+       *  warning, just deleted"). Undefined/false for every other reason,
+       *  every other category, unchanged from before this field existed --
+       *  this is additive and never alters existing behavior. */
+      silent?: boolean;
+    }
   /** Removes (kicks) the user — NOT a permanent ban (structurally distinct
    *  from DELETE_BAN, so a caller can never confuse "temporary removal, can
    *  rejoin" with "permanent"). `purge: true` means the caller should also
@@ -536,7 +618,16 @@ export type ModerationEnforcement =
    *  permanent ban" model). Kept in the union so existing callers/tests
    *  referencing it don't need to be restructured for a type that's simply
    *  unreachable today. */
-  | { kind: "DELETE_BAN"; reason: "explicit_content" | "flood" | "repeated_unsolicited_promotion" | "repeated_explicit_content" | "repeated_scam_or_phishing" };
+  | {
+      kind: "DELETE_BAN";
+      reason: "explicit_content" | "flood" | "repeated_unsolicited_promotion" | "repeated_explicit_content" | "repeated_scam_or_phishing" | "escalated_negative_statement";
+      /** Time-bound ban duration in minutes -- undefined means permanent
+       *  (unused by any automatic policy today, per the doc comment above,
+       *  EXCEPT "escalated_negative_statement", which always sets this to
+       *  NEGATIVE_STATEMENT_BAN_MINUTES: explicit product decision, "banned
+       *  for 24 hours," never a silent permanent ban). */
+      banMinutes?: number;
+    };
 
 /** Maximum number of WARNINGS (with escalating mutes) before the next
  *  violation removes the user — 2 warnings, then the 3rd violation kicks.
@@ -595,6 +686,9 @@ export function decideLinkEnforcement(input: {
   /** Already expiry-resolved via effectiveScamStrikeCount — this function
    *  stays pure and never reasons about time itself. */
   priorScamStrikeCount: number;
+  /** Already expiry-resolved via effectiveNegativeStatementCount -- same
+   *  contract as priorScamStrikeCount above. */
+  priorNegativeStatementCount: number;
   /** The Community's own "Allow Solicitation / Allow Promotion" override
    *  (communities.allow_solicitation, default false). When true, ORDINARY
    *  unsolicited promotion (UNSOLICITED_PROMOTION, and only that category)
@@ -727,6 +821,27 @@ export function decideLinkEnforcement(input: {
   // UNSOLICITED_PROMOTION | LINK_SPAM_OR_FLOOD | PHISHING_OR_SCAM |
   // EXPLICIT_CONTENT), not just by convention.
   if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
+
+  // NEGATIVE_STATEMENT -- reached here ONLY for an ordinary, non-admin/
+  // trusted sender (the check above already exempted an admin/trusted
+  // member's own message, deliberately -- their own framing of their own
+  // community is their call, unlike the never-exempt abuse categories
+  // above). Its own dedicated 3-strike ladder, deliberately separate from
+  // every other counter/ladder in this file (explicit product decision,
+  // 2026-09-05): 1st offense deletes SILENTLY, no public warning of any
+  // kind ("should be deleted without warning, just deleted"); 2nd offense
+  // deletes + warns + mutes for NEGATIVE_STATEMENT_MUTE_MINUTES; the 3rd
+  // (and every subsequent) offense bans for a fixed, TIME-BOUND
+  // NEGATIVE_STATEMENT_BAN_MINUTES -- NEVER a kick ("things like negative
+  // comment should only be mute/ban, no kick") and never permanent.
+  if (input.category === "NEGATIVE_STATEMENT") {
+    const nextCount = input.priorNegativeStatementCount + 1;
+    if (nextCount === 1) return { kind: "DELETE_WARN", warningNumber: nextCount, reason: "negative_statement", silent: true };
+    if (nextCount === 2) {
+      return { kind: "DELETE_WARN", warningNumber: nextCount, reason: "repeated_negative_statement", muteMinutes: NEGATIVE_STATEMENT_MUTE_MINUTES };
+    }
+    return { kind: "DELETE_BAN", reason: "escalated_negative_statement", banMinutes: NEGATIVE_STATEMENT_BAN_MINUTES };
+  }
 
   // Solicitation progression: UNSOLICITED_PROMOTION and an obvious
   // automated flood burst share ONE escalation counter/response shape. A

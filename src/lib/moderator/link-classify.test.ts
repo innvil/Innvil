@@ -2,10 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   classifyLinkIntent, generateModerationWarning, generatePersonaSolicitationWarning, generatePersonaScamWarning,
-  type SolicitationWarningFacts, type ScamWarningFacts,
+  generatePersonaNegativeStatementWarning,
+  type SolicitationWarningFacts, type ScamWarningFacts, type NegativeStatementWarningFacts,
 } from "./link-classify";
 import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
-import { SPAM_WARNING_LIMIT, SCAM_FIRST_WARNING_MUTE_MINUTES, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml } from "./link-moderation";
+import {
+  SPAM_WARNING_LIMIT, SCAM_FIRST_WARNING_MUTE_MINUTES, scamFirstOffenseWarningHtml, scamRepeatOffenseWarningHtml,
+  NEGATIVE_STATEMENT_MUTE_MINUTES, NEGATIVE_STATEMENT_BAN_MINUTES,
+} from "./link-moderation";
 
 /**
  * Phase 4.M (C)-(E): the AI-touching half of link moderation. Both
@@ -1233,6 +1237,119 @@ test("REQUIRED: BYO required but unusable falls straight to the deterministic fa
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, { required: true, credential: null });
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
       assert.equal(text, scamFirstOffenseWarningHtml(MENTION));
+    });
+  });
+});
+
+/* ==================== generatePersonaNegativeStatementWarning (2026-09-05) ====
+   Explicit product decision: an unfounded, mocking scam/rug/fraud
+   ACCUSATION about the project (never a genuine question, never a
+   substantive evidence-backed report) gets a silent 1st-offense delete
+   (this function is never called for that case), then a real warning+mute
+   on the 2nd, then a real time-bound ban on the 3rd+. This function ONLY
+   ever handles the 2nd/escalated cases -- mirrors generatePersonaScamWarning's
+   exact safety shape: given ONLY safe structured facts, never the violating
+   message's own text. */
+
+const NS_WARN_FACTS: NegativeStatementWarningFacts = { isEscalatedOffense: false, muteMinutes: NEGATIVE_STATEMENT_MUTE_MINUTES, banHours: undefined };
+const NS_BAN_FACTS: NegativeStatementWarningFacts = { isEscalatedOffense: true, muteMinutes: undefined, banHours: NEGATIVE_STATEMENT_BAN_MINUTES / 60 };
+const NS_MENTION = "@AccuserUser";
+
+test("REQUIRED: negative-statement warning generation routes to Sonnet 5, never DeepSeek", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("please don't spread claims like that here -- you're muted for a bit."), async (calls) => {
+      await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /anthropic/i);
+      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+    });
+  });
+});
+
+test("REQUIRED: the model is never given the removed message's own text -- explicit safety instruction present in the prompt", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("keep it factual, please."), async (calls) => {
+      await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /you were not shown the exact wording of the removed message/i);
+      assert.match(system, /do not guess, invent, or react to specific words/i);
+    });
+  });
+});
+
+test("REQUIRED: a genuine question about whether something is a scam is explicitly distinguished as fine, not the violation being warned about", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("keep it factual, please."), async (calls) => {
+      await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /a genuine question about whether something is a scam is completely fine/i);
+    });
+  });
+});
+
+test("REQUIRED: warn-tier facts require the real mute duration stated verbatim, and make clear a ban follows next time -- never a claim removal already happened", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("please stop, that's a 30-minute mute."), async (calls) => {
+      await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, new RegExp(`muted them for exactly ${NEGATIVE_STATEMENT_MUTE_MINUTES} minutes`, "i"));
+      assert.match(system, /doing this again will result in a ban/i);
+      assert.doesNotMatch(system, /REPEAT offense/i);
+    });
+  });
+});
+
+test("REQUIRED: ban-tier facts state the ban as an already-completed, TIME-BOUND fact, never a threat, and never mention a mute", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("that's it, you're banned for now."), async (calls) => {
+      await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /REPEAT offense/i);
+      assert.match(system, new RegExp(`banned them for exactly ${NEGATIVE_STATEMENT_BAN_MINUTES / 60} hours`, "i"));
+      assert.match(system, /temporary\/time-bound, not permanent/i);
+      assert.doesNotMatch(system, /muted them for exactly/i);
+    });
+  });
+});
+
+test("REQUIRED: the mention is embedded deterministically, never left to the model -- the returned text always starts with the exact mention passed in", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("please keep it factual, that's a mute for now."), async (calls) => {
+      const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+      assert.equal(calls.length, 1);
+      assert.equal(text, `${NS_MENTION}, please keep it factual, that's a mute for now.`);
+    });
+  });
+});
+
+test("REQUIRED: falls back to a fixed, accurate deterministic template on any generation failure -- public wording never depends on AI succeeding", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+    const warnText = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+    const banText = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
+    assert.match(warnText, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
+    assert.match(banText, new RegExp(`${NEGATIVE_STATEMENT_BAN_MINUTES / 60}-hour ban`));
+    assert.ok(warnText.startsWith(NS_MENTION));
+    assert.ok(banText.startsWith(NS_MENTION));
+  });
+});
+
+test("REQUIRED (untrusted-output guard): a candidate stating a WRONG mute duration is discarded for the deterministic fallback", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("that's a 90-minute mute, please stop."), async (calls) => {
+      const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
+      assert.equal(calls.length, 1);
+      assert.match(text, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
+      assert.doesNotMatch(text, /90-minute/);
+    });
+  });
+});
+
+test("REQUIRED: BYO required but unusable falls straight to the deterministic fallback, no network call at all", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS, { required: true, credential: null });
+      assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
+      assert.match(text, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
     });
   });
 });

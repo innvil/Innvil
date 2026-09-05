@@ -29,12 +29,12 @@ import {
 import {
   extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
-  effectiveScamStrikeCount, renderHumanModerationMention,
-  filterOutOwnBotMentions, looksLikeUnsolicitedPitch, looksLikeSearchInstructionSpam, isBackToBackSpamPattern,
+  effectiveScamStrikeCount, effectiveNegativeStatementCount, renderHumanModerationMention,
+  filterOutOwnBotMentions, looksLikeUnsolicitedPitch, looksLikeSearchInstructionSpam, looksLikeNegativeStatement, isBackToBackSpamPattern,
   looksLikeAdminInformationRequest, findRecentAdminInformationRequest,
   effectiveWarningCount, LINK_ENFORCEMENT_NOTICE_DEDUP_WINDOW_SECONDS,
 } from "./link-moderation";
-import { classifyLinkIntent, generatePersonaSolicitationWarning, generatePersonaScamWarning } from "./link-classify";
+import { classifyLinkIntent, generatePersonaSolicitationWarning, generatePersonaScamWarning, generatePersonaNegativeStatementWarning } from "./link-classify";
 import {
   DEFAULT_PENDING_REPLY_DELAY_MS, clampPendingReplyDelaySeconds, pendingReplyScheduledFor, isPendingReplyDue, isPendingReplyStale,
   isWithinPendingReplyWindow, revalidatePendingReply, isAdminMessageHandlingConversation, type DeferredActionKind, type PendingReplyRow,
@@ -1389,7 +1389,20 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
       const unbanRes = await telegramApiCall(token, "unbanChatMember", { chat_id: chatId, user_id: action.targetPlatformUserId, only_if_banned: true });
       return { sentMessageId: null, ok: unbanRes.ok, error: unbanRes.ok ? undefined : unbanRes.error };
     }
-    const res = await telegramApiCall(token, "banChatMember", { chat_id: chatId, user_id: action.targetPlatformUserId });
+    // A real BAN -- time-bound via Telegram's own until_date when banMinutes
+    // is set (2026-09-05, negative-statement moderation: "banned for 24
+    // hours," never a silent permanent ban), computed from EXECUTION time
+    // (not decision time) exactly like MUTE's own until_date above, to
+    // avoid any clock-skew. Omitting until_date entirely (banMinutes
+    // undefined) is a genuine permanent ban -- unused by any automatic
+    // policy today except the negative-statement escalation, which always
+    // supplies banMinutes.
+    const untilDate = action.banMinutes ? Math.floor(Date.now() / 1000) + action.banMinutes * 60 : undefined;
+    const res = await telegramApiCall(token, "banChatMember", {
+      chat_id: chatId,
+      user_id: action.targetPlatformUserId,
+      ...(untilDate ? { until_date: untilDate } : {}),
+    });
     return { sentMessageId: null, ok: res.ok, error: res.ok ? undefined : res.error };
   }
 
@@ -2150,7 +2163,9 @@ async function routeConversationTask(
 async function loadLinkWarningState(admin: SupabaseClient, communityId: string, platformUserId: string): Promise<LinkWarningState> {
   const { data } = await admin
     .from("moderator_link_warning_state")
-    .select("warning_count, warning_at, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count")
+    .select(
+      "warning_count, warning_at, recent_link_hash, recent_link_at, recent_link_count_in_window, scam_strike_count, scam_strike_at, media_warning_count, negative_statement_count, negative_statement_at"
+    )
     .eq("community_id", communityId)
     .eq("platform_user_id", platformUserId)
     .maybeSingle();
@@ -2164,6 +2179,8 @@ async function loadLinkWarningState(admin: SupabaseClient, communityId: string, 
     scamStrikeCount: data.scam_strike_count ?? 0,
     scamStrikeAt: data.scam_strike_at ?? null,
     mediaWarningCount: data.media_warning_count ?? 0,
+    negativeStatementCount: data.negative_statement_count ?? 0,
+    negativeStatementAt: data.negative_statement_at ?? null,
   };
 }
 
@@ -2188,6 +2205,8 @@ async function persistLinkWarningState(
       scam_strike_count: state.scamStrikeCount,
       scam_strike_at: state.scamStrikeAt,
       media_warning_count: state.mediaWarningCount,
+      negative_statement_count: state.negativeStatementCount,
+      negative_statement_at: state.negativeStatementAt,
       ...(violation ? { last_violation_at: violation.now.toISOString(), last_violation_kind: violation.kind } : {}),
     },
     { onConflict: "community_id,platform_user_id" }
@@ -2305,7 +2324,8 @@ export async function runLinkModeration(
   // Also covers the SEARCH_SPAM pre-filter (2026-09-03) -- an off-topic
   // "search X" instruction has no link/handle/contact-ask at all either, so
   // it needs the same link-less gate to even reach classification.
-  let isTextModerationCandidate = !hasRealLinkCandidate && (looksLikeUnsolicitedPitch(event.text) || looksLikeSearchInstructionSpam(event.text));
+  let isTextModerationCandidate =
+    !hasRealLinkCandidate && (looksLikeUnsolicitedPitch(event.text) || looksLikeSearchInstructionSpam(event.text) || looksLikeNegativeStatement(event.text));
   // Language-agnostic backstop, only reached when the free regex already
   // said no -- a real pitch in Russian/Chinese/any other language has no
   // English vocabulary for the regex to match, no matter how that list
@@ -2381,6 +2401,7 @@ export async function runLinkModeration(
   }
 
   const priorScamStrikeCount = effectiveScamStrikeCount(priorState.scamStrikeCount, priorState.scamStrikeAt, now);
+  const priorNegativeStatementCount = effectiveNegativeStatementCount(priorState.negativeStatementCount, priorState.negativeStatementAt, now);
 
   // Solicitation is allowed either via the community-WIDE toggle, or when
   // this message was posted in a topic the owner has explicitly assigned
@@ -2401,6 +2422,7 @@ export async function runLinkModeration(
     floodRepeat,
     priorWarningCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now),
     priorScamStrikeCount,
+    priorNegativeStatementCount,
     solicitationAllowed: solicitationAllowedHere,
     adminSolicitedExemption,
   });
@@ -2418,7 +2440,11 @@ export async function runLinkModeration(
     // strike state on an ALLOW.
     await persistLinkWarningState(
       admin, panelId, community.id, senderPlatformId,
-      { ...observedState, warningCount: priorState.warningCount, warningAt: priorState.warningAt, scamStrikeCount: priorState.scamStrikeCount, scamStrikeAt: priorState.scamStrikeAt },
+      {
+        ...observedState, warningCount: priorState.warningCount, warningAt: priorState.warningAt,
+        scamStrikeCount: priorState.scamStrikeCount, scamStrikeAt: priorState.scamStrikeAt,
+        negativeStatementCount: priorState.negativeStatementCount, negativeStatementAt: priorState.negativeStatementAt,
+      },
       null
     );
     return { handled: false, collabRoutable: COLLAB_ROUTABLE_CATEGORIES.has(classification.category) };
@@ -2436,14 +2462,72 @@ export async function runLinkModeration(
   }
 
   if (enforcement.kind === "DELETE_BAN") {
+    const isNegativeStatementEscalation = enforcement.reason === "escalated_negative_statement";
+    let banFailed = false;
+    let banError: string | undefined;
     if (token) {
-      const banResult = await executeAction(admin, chatId, { kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "BAN" });
-      if (!banResult.ok) console.error("[telegram/community] link moderation RESTRICT_USER failed", banResult.error);
+      const banResult = await executeAction(admin, chatId, {
+        kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "BAN", banMinutes: enforcement.banMinutes,
+      });
+      if (!banResult.ok) {
+        console.error("[telegram/community] link moderation RESTRICT_USER failed", banResult.error);
+        banFailed = true;
+        banError = banResult.error;
+      }
     }
     const nextState: LinkWarningState = isScamEnforcement
       ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
-      : observedState;
+      : isNegativeStatementEscalation
+        ? { ...observedState, negativeStatementCount: priorNegativeStatementCount + 1, negativeStatementAt: now.toISOString() }
+        : observedState;
     await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
+
+    // Same rapid-burst dedup as every other visible enforcement aftermath
+    // (migration 0126) -- the ban itself, right above, is NEVER gated by
+    // this and always executes; only the public notice + Watcher Ops report
+    // below can be skipped for a losing concurrent caller.
+    const noticeClaimed = await claimLinkEnforcementNotice(admin, community.id, senderPlatformId, enforcement.reason, now);
+
+    if (noticeClaimed && isNegativeStatementEscalation) {
+      const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
+      const recentOwnNegativeStatementWarnings = recentOwnModeratorMessages(await loadRecentContext(admin, community.id, 8), enforcer.deploymentId);
+      const warningText = await generatePersonaNegativeStatementWarning(
+        enforcer.moderatorName, enforcer.persona, mention,
+        { isEscalatedOffense: true, muteMinutes: undefined, banHours: Math.round((enforcement.banMinutes ?? 0) / 60) },
+        aiRouting, recentOwnNegativeStatementWarnings
+      );
+      if (token) {
+        const sendResult = await executeAction(admin, chatId, {
+          kind: "SEND_TEXT", text: warningText, targetDeploymentId: enforcer.deploymentId, replyToMessageId: null,
+          origin: "HUMAN", interactionDepth: 0, causationMessageId: event.messageId, parseMode: "HTML",
+        });
+        if (sendResult.sentMessageId) {
+          await admin.from("community_messages").insert({
+            panel_id: panelId, community_id: community.id, platform_message_id: sendResult.sentMessageId,
+            sender_type: "INNVIL_MODERATOR", sender_platform_id: null, sender_display_name: enforcer.moderatorName,
+            deployment_id: enforcer.deploymentId, text: warningText, origin: "MODERATION_WARNING",
+          });
+        }
+      }
+    }
+
+    if (noticeClaimed && isNegativeStatementEscalation && community.project_id) {
+      await sendModerationReport({
+        admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
+        platformUserId: senderPlatformId, username: event.sender.username ?? null, displayName: event.sender.displayName,
+        event: {
+          userMention: renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName),
+          violationCategory: "negative_statement", warningNumber: null, warningLimit: null, muteMinutes: null,
+          actionsTaken: ["ban"],
+          reasonText: "Repeated unfounded negative claims/accusations about the project after a prior warning and mute.",
+          previousEnforcementSummary: [],
+          purgedCount: null, purgeFailed: false, purgeFailureReason: null,
+          telegramActionFailed: banFailed,
+          telegramFailureReason: banFailed ? (banError ?? "The Watcher does not currently have permission to remove members.") : null,
+        },
+      });
+    }
+
     return { handled: true, collabRoutable: false };
   }
 
@@ -2564,10 +2648,24 @@ export async function runLinkModeration(
   // appended) or a FIRST confirmed scam/phishing offense (deterministic/
   // template-based ONLY -- never a model call, never reproduces the
   // malicious URL).
+  const isNegativeStatementWarn = enforcement.reason === "negative_statement" || enforcement.reason === "repeated_negative_statement";
   const nextState: LinkWarningState = isScamEnforcement
     ? { ...observedState, scamStrikeCount: priorScamStrikeCount + 1, scamStrikeAt: now.toISOString() }
-    : { ...observedState, warningCount: enforcement.warningNumber, warningAt: now.toISOString() };
+    : isNegativeStatementWarn
+      ? { ...observedState, negativeStatementCount: priorNegativeStatementCount + 1, negativeStatementAt: now.toISOString() }
+      : { ...observedState, warningCount: enforcement.warningNumber, warningAt: now.toISOString() };
   await persistLinkWarningState(admin, panelId, community.id, senderPlatformId, nextState, { kind: enforcement.reason, now });
+
+  // NEGATIVE_STATEMENT's 1st offense is deliberately SILENT (explicit
+  // product decision: "should be deleted without warning, just deleted") --
+  // the message is already removed and the strike above is already
+  // persisted, so there is nothing further to generate/send, and no
+  // Watcher Ops report either (nothing beyond a plain deletion happened).
+  // The 2nd offense (repeated_negative_statement, real warning + mute)
+  // falls through to the ordinary flow below.
+  if (enforcement.silent) {
+    return { handled: true, collabRoutable: false };
+  }
 
   // Every DELETE_WARN now explicitly mentions the offender -- deterministic
   // in both cases (never AI-decided formatting): the scam template embeds
@@ -2699,7 +2797,16 @@ export async function runLinkModeration(
         aiRouting,
         recentOwnWarnings
       )
-    : await (async () => {
+    : isNegativeStatementWarn
+      ? await generatePersonaNegativeStatementWarning(
+          enforcer.moderatorName,
+          enforcer.persona,
+          mention,
+          { isEscalatedOffense: false, muteMinutes: enforcement.muteMinutes, banHours: undefined },
+          aiRouting,
+          recentOwnWarnings
+        )
+      : await (async () => {
         const generatedWarning = await generatePersonaSolicitationWarning(
           enforcer.moderatorName,
           enforcer.persona,
@@ -2788,7 +2895,9 @@ export async function runLinkModeration(
         ? "competing_project"
         : isSearchSpamEnforcement
           ? "off_topic_spam"
-          : "spam";
+          : isNegativeStatementWarn
+            ? "negative_statement"
+            : "spam";
     await sendModerationReport({
       admin, projectId: community.project_id, sourceCommunityId: community.id, watcherId: enforcer.moderatorId,
       platformUserId: senderPlatformId, username: event.sender.username ?? null, displayName: event.sender.displayName,
@@ -2796,7 +2905,7 @@ export async function runLinkModeration(
         userMention: mention,
         violationCategory,
         warningNumber: enforcement.warningNumber,
-        warningLimit: isScamEnforcement ? 1 : SOLICITATION_WARNING_LIMIT,
+        warningLimit: isScamEnforcement ? 1 : isNegativeStatementWarn ? 2 : SOLICITATION_WARNING_LIMIT,
         muteMinutes: enforcement.muteMinutes ?? null,
         actionsTaken: enforcement.muteMinutes ? ["warning", "temporary_mute"] : ["warning"],
         reasonText: isScamEnforcement
@@ -2809,9 +2918,11 @@ export async function runLinkModeration(
               ? (enforcement.warningNumber === 1
                   ? `First confirmed off-topic spam instruction, unrelated to this project${searchSpamPattern === "coordinated" ? " (part of a coordinated multi-account pattern)" : ""}.`
                   : "Repeated off-topic spam instruction after a prior warning.")
-              : enforcement.warningNumber === 1
-                ? "First confirmed spam/unsolicited-promotion violation."
-                : "Repeated spam/unsolicited-promotion after a prior warning.",
+              : isNegativeStatementWarn
+                ? "Second confirmed unfounded negative claim/accusation about the project after a silently-removed first offense."
+                : enforcement.warningNumber === 1
+                  ? "First confirmed spam/unsolicited-promotion violation."
+                  : "Repeated spam/unsolicited-promotion after a prior warning.",
         previousEnforcementSummary: [],
         purgedCount: null, purgeFailed: false, purgeFailureReason: null,
         telegramActionFailed: muteFailed,
