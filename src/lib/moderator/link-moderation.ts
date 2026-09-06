@@ -1053,6 +1053,48 @@ export function isNearDuplicateWarning(candidate: string, recentTexts: string[])
   return maxWarningSimilarity(candidate, recentTexts) >= NEAR_DUPLICATE_WARNING_THRESHOLD;
 }
 
+/* ------------------------------------------ structural (rhetorical) repetition ---- */
+// 2026-09-06, live product feedback: the reported warnings repeated the same
+// SKELETON -- offense count, rule, destination topic, punishment, future
+// escalation -- even when the individual words changed, so bag-of-words
+// Jaccard (warningTextSimilarity above) scored them as comfortably
+// "different" and the anti-repetition retry never fired. Lexical similarity
+// alone structurally cannot catch "same schema, new synonyms." This detects
+// the SHAPE instead: which rhetorical beats a warning actually hits.
+
+export type WarningStructuralBeat = "OFFENSE_COUNT" | "RULE" | "DESTINATION" | "PUNISHMENT" | "ESCALATION";
+
+const STRUCTURAL_BEAT_PATTERNS: ReadonlyArray<{ beat: WarningStructuralBeat; re: RegExp }> = [
+  { beat: "OFFENSE_COUNT", re: /\b(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))\s+(?:time|warning|offense)\b|\btime\s+number\s+\d+\b|\balready\s+(?:been\s+)?(?:warned|told)\b|\bhad\s+(?:your|the)\s+warning\b/i },
+  { beat: "RULE", re: /\bno\s+(?:more\s+)?(?:promo|promos|promotion|spam|shill)|isn'?t\s+allowed|not\s+allowed|\bbelongs?\s+in\b|\bstays?\s+in\b/i },
+  { beat: "DESTINATION", re: /\b(?:head|go|take\s+it|post\s+that|share\s+that|use)\b[^.!?]{0,30}\b(?:to|in|over|instead)\b|\bis\s+(?:the\s+)?place\s+for\b|\bthat'?s\s+what\s+[^.!?]{0,25}\s+is\s+for\b/i },
+  { beat: "PUNISHMENT", re: /\b\d+\s*-?\s*(?:min|minute|hour|hr)s?\b|\bmuted?\b|\btimeout\b|\bsee\s+you\s+in\b|\btake\s+(?:ten|five|an?\s+hour)\b/i },
+  { beat: "ESCALATION", re: /\bkeep\s+it\s+up\b|\bnext\s+(?:one|time)\b|\bescalat|\bdo\s+(?:it|this)\s+again\b/i },
+];
+
+/** The rhetorical beats this warning actually hits, in canonical order. */
+export function warningStructureSignature(text: string): WarningStructuralBeat[] {
+  return STRUCTURAL_BEAT_PATTERNS.filter(({ re }) => re.test(text)).map(({ beat }) => beat);
+}
+
+/** 3 is the floor deliberately: one or two shared beats is unavoidable and
+ *  perfectly natural (almost every promo correction names the rule, and a
+ *  mute-bearing one names the mute). It's the full multi-beat assembly --
+ *  count + rule + destination + punishment + escalation stacked into one
+ *  message, the exact shape from the live report -- that reads as machine
+ *  output rather than as a person talking. */
+export const STRUCTURAL_REPEAT_BEAT_THRESHOLD = 3;
+
+/** True when `candidate` is built from the same rhetorical schema as
+ *  something this Watcher recently said, regardless of word overlap. Used
+ *  ONLY to trigger the same single bounded regeneration the lexical check
+ *  already triggers -- never to block, alter, or suppress enforcement. */
+export function isStructurallyRepetitiveWarning(candidate: string, recentTexts: string[]): boolean {
+  const candidateBeats = new Set(warningStructureSignature(candidate));
+  if (candidateBeats.size < STRUCTURAL_REPEAT_BEAT_THRESHOLD) return false;
+  return recentTexts.some((t) => warningStructureSignature(t).filter((b) => candidateBeats.has(b)).length >= STRUCTURAL_REPEAT_BEAT_THRESHOLD);
+}
+
 /* -------------------------------------------- moderation-warning response mode ---- */
 // 2026-09-04, second pass (corrected the SAME day -- see the "no
 // NO_PUBLIC_REPLY" note below, which was itself an invented product rule,

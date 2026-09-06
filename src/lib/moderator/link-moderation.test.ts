@@ -12,6 +12,9 @@ import {
   warningTextSimilarity, isNearDuplicateWarning, maxWarningSimilarity, NEAR_DUPLICATE_WARNING_THRESHOLD,
   resolveWarningResponseMode, NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD, warningTextExceedsAuthorizedFacts,
   type LinkWarningState,
+  warningStructureSignature,
+  isStructurallyRepetitiveWarning,
+  STRUCTURAL_REPEAT_BEAT_THRESHOLD,
 } from "./link-moderation";
 
 /**
@@ -1104,4 +1107,66 @@ test("a strike from WITHIN (at or after) the current billing period still counts
   const periodStart = "2026-02-01T00:00:00.000Z";
   assert.equal(effectiveMediaWarningCount(1, "2026-02-01T00:00:00.000Z", periodStart), 1);
   assert.equal(effectiveMediaWarningCount(2, "2026-02-15T00:00:00.000Z", periodStart), 2);
+});
+
+/* ================================ structural (rhetorical) repetition ====
+   2026-09-06 live product feedback: the reported warnings repeated the same
+   SKELETON even when the words changed, so bag-of-words similarity scored
+   them as comfortably different and the anti-repetition retry never fired.
+   These pin the shape-based detector that closes that gap. */
+
+// The exact production messages from the live report.
+const LIVE_1 = "@Mark6co, hey, no promo allowed in this topic - if you want to share that, Promotion is the place for it. keep it up and it'll escalate past just a deletion.";
+const LIVE_2 = "@Mark6co, second time now - no promo in announcement, that's what promotion topic is for. 10 min mute this round, keep it up and it's a longer mute then a boot.";
+const LIVE_3 = "@NolanKols_ads, this is the fourth time now, no more promo in this topic - that's a 60 min mute, head to Promotion instead, next one's a kick or ban.";
+
+test("REQUIRED (live bug): the reported warnings share a rhetorical skeleton, and the structural detector catches it", () => {
+  // Every one of them walks rule -> destination -> punishment -> escalation.
+  for (const text of [LIVE_2, LIVE_3]) {
+    const beats = warningStructureSignature(text);
+    assert.ok(beats.length >= STRUCTURAL_REPEAT_BEAT_THRESHOLD, `expected a multi-beat skeleton for: ${text}`);
+  }
+  assert.equal(isStructurallyRepetitiveWarning(LIVE_2, [LIVE_1]), true);
+  assert.equal(isStructurallyRepetitiveWarning(LIVE_3, [LIVE_1, LIVE_2]), true);
+});
+
+test("REQUIRED: structural repetition is caught even when LEXICAL similarity stays under the near-duplicate threshold -- the exact gap that let this ship", () => {
+  // Different offender, different topic wording, different mute number:
+  // low word overlap, identical shape.
+  const a = "@alice no promo in general - take it to Promotion. 10 min mute, next one's longer.";
+  const b = "@bob shilling isn't allowed here, use the Promotion channel instead. 30 min timeout, keep it up and you're gone.";
+  assert.ok(warningTextSimilarity(a, b) < NEAR_DUPLICATE_WARNING_THRESHOLD, "precondition: lexically these look different");
+  assert.equal(isNearDuplicateWarning(b, [a]), false, "precondition: the lexical check alone misses it");
+  assert.equal(isStructurallyRepetitiveWarning(b, [a]), true, "the structural check catches it");
+});
+
+test("a genuinely varied, short, human-sounding reaction is NOT flagged as structurally repetitive", () => {
+  const priorTemplated = [LIVE_1, LIVE_2];
+  for (const natural of [
+    "@Mark6co we literally just went over this, come on",
+    "@Mark6co take ten and read the rules when you're back",
+    "@Mark6co not again mate",
+  ]) {
+    assert.equal(isStructurallyRepetitiveWarning(natural, priorTemplated), false, `should not flag: ${natural}`);
+  }
+});
+
+test("one or two shared beats is normal and never flagged -- only the full stacked assembly is", () => {
+  // Both name the rule; nothing else lines up.
+  const a = "no promo here please";
+  const b = "shilling isn't allowed, thanks";
+  assert.equal(isStructurallyRepetitiveWarning(b, [a]), false);
+});
+
+test("an empty recent-history list can never be structurally repetitive", () => {
+  assert.equal(isStructurallyRepetitiveWarning(LIVE_2, []), false);
+});
+
+test("warningStructureSignature reports beats in canonical order, and is stable/deterministic", () => {
+  const beats = warningStructureSignature(LIVE_3);
+  assert.deepEqual(beats, warningStructureSignature(LIVE_3));
+  assert.deepEqual([...beats].sort(), [...new Set(beats)].sort(), "no duplicate beats");
+  assert.ok(beats.includes("OFFENSE_COUNT"));
+  assert.ok(beats.includes("PUNISHMENT"));
+  assert.ok(beats.includes("ESCALATION"));
 });

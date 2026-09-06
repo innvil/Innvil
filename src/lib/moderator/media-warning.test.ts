@@ -116,8 +116,11 @@ test("the final pre-kick warning is explicitly framed as such -- the model is to
     await withFetchSpy(anthropicTextResponse("last chance, please stop."), async (calls) => {
       await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, new RegExp(`warning #${SPAM_WARNING_LIMIT} of ${SPAM_WARNING_LIMIT}`, "i"));
-      assert.match(system, /FINAL warning/i);
+      // The FINAL warning is the one case where a real consequence must not
+      // be misleadingly concealed (spec §16) -- but it's stated as an
+      // authorized fact in the persona's own words, never a formal notice.
+      assert.match(system, /removed from the group/i);
+      assert.match(system, /Not a checklist/i);
     });
   });
 });
@@ -338,8 +341,8 @@ test("REQUIRED: never outputs robotic 'Violation N/3' style wording -- the promp
     await withFetchSpy(anthropicTextResponse("Please keep uploads appropriate -- I've removed that one."), async (calls) => {
       await generateMediaModerationWarning("Kwan", persona, 2, false);
       const body = calls[0].body as { system: string };
-      assert.match(body.system, /never output "violation/i);
-      assert.match(body.system, /warning #2 of 2/i);
+      assert.match(body.system, /Not a checklist/i);
+      assert.match(body.system, /time 2/i);
     });
   });
 });
@@ -349,7 +352,7 @@ test("the FINAL warning tells the model to make removal-on-next-violation explic
     await withFetchSpy(anthropicTextResponse("This is your final warning -- next time you're removed."), async (calls) => {
       await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true);
       const body = calls[0].body as { system: string };
-      assert.match(body.system, /FINAL warning/);
+      assert.match(body.system, /removed from the group/i);
     });
   });
 });

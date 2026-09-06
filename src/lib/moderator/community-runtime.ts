@@ -1853,6 +1853,71 @@ export function recentOwnModeratorMessages(context: ChatterContextMessage[], dep
   return context.filter((m) => m.senderType === "INNVIL_MODERATOR" && m.deploymentId === deploymentId && m.origin === "MODERATION_WARNING").map((m) => m.text);
 }
 
+/** LIVE BUG FIX (2026-09-06): every warning-generation call site used to feed
+ *  `recentOwnModeratorMessages` from `loadRecentContext`/`linkModerationContext`/
+ *  `mediaModerationContext` -- a small, SHARED window capped to a handful of
+ *  the community's most recent messages TOTAL (across every sender, for the
+ *  classifier's own "what was just being discussed" purpose). In anything but
+ *  a near-silent room, a Watcher's own prior warning scrolls out of that tiny
+ *  window within minutes -- long before the SAME offender's next violation,
+ *  which in practice is often hours apart (confirmed via a live screenshot:
+ *  two warnings to the same person ~8 hours apart, and two DIFFERENT people's
+ *  warnings hours apart, all reading as the same reused "skeleton"). Once the
+ *  prior warning has scrolled out, `recentOwnWarnings` computes as empty,
+ *  `maxWarningSimilarity` is FORCED to 0 by every caller's own `.length ?
+ *  ... : 0` guard, and the anti-repetition retry never fires -- so the model
+ *  keeps reconverging on the same phrasing with nothing to actually compare
+ *  it against, even though the Watcher's own real warning history (and the
+ *  community members reading it) can see the repeat plainly.
+ *
+ *  This queries directly for THIS Watcher's own last N real moderation-warning
+ *  sends in THIS community, filtered SERVER-SIDE by community/deployment/
+ *  sender_type/origin -- completely independent of how much unrelated chat
+ *  happened in between, and of the classifier-context window's own small,
+ *  unrelated size. Returns the same `ChatterContextMessage[]` shape
+ *  `loadRecentContext` does specifically so it composes with the EXISTING,
+ *  already-tested `recentOwnModeratorMessages` filter above unchanged -- this
+ *  only fixes WHERE the candidate rows come from, never the filtering
+ *  contract itself (every returned row already satisfies that filter by
+ *  construction, so the extra pass is a cheap, harmless defense-in-depth
+ *  check, not redundant risk). */
+export async function loadRecentModerationWarnings(admin: SupabaseClient, communityId: string, deploymentId: string, limit = 8): Promise<ChatterContextMessage[]> {
+  const { data } = await admin
+    .from("community_messages")
+    .select("sender_type, sender_display_name, sender_platform_id, text, deployment_id, created_at, message_thread_id, platform_message_id, reply_to_platform_message_id, origin")
+    .eq("community_id", communityId)
+    .eq("deployment_id", deploymentId)
+    .eq("sender_type", "INNVIL_MODERATOR")
+    .eq("origin", "MODERATION_WARNING")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  return (
+    (data ?? []) as Array<{
+      sender_type: string;
+      sender_display_name: string | null;
+      sender_platform_id: string | null;
+      text: string;
+      deployment_id: string | null;
+      created_at: string;
+      message_thread_id: number | null;
+      platform_message_id: string | null;
+      reply_to_platform_message_id: string | null;
+      origin: string | null;
+    }>
+  ).map((r) => ({
+    senderType: r.sender_type as ChatterContextMessage["senderType"],
+    senderName: r.sender_display_name,
+    text: r.text,
+    deploymentId: r.deployment_id,
+    createdAt: r.created_at,
+    senderPlatformId: r.sender_platform_id,
+    messageThreadId: r.message_thread_id ?? null,
+    platformMessageId: r.platform_message_id ?? null,
+    replyToPlatformMessageId: r.reply_to_platform_message_id ?? null,
+    origin: r.origin ?? null,
+  }));
+}
+
 /* -------------------------------------------------- trial reactive quota ---- */
 // Phase 4.M (B): 20 successfully-executed reactive conversational text
 // responses (CASUAL_CHAT/ANSWER/SHORT_ACK) per community per local
@@ -2492,7 +2557,10 @@ export async function runLinkModeration(
 
     if (noticeClaimed && isNegativeStatementEscalation) {
       const mention = renderHumanModerationMention(senderPlatformId, event.sender.username ?? null, event.sender.displayName);
-      const recentOwnNegativeStatementWarnings = recentOwnModeratorMessages(await loadRecentContext(admin, community.id, 8), enforcer.deploymentId);
+      const recentOwnNegativeStatementWarnings = recentOwnModeratorMessages(
+        await loadRecentModerationWarnings(admin, community.id, enforcer.deploymentId),
+        enforcer.deploymentId
+      );
       const warningText = await generatePersonaNegativeStatementWarning(
         enforcer.moderatorName, enforcer.persona, mention,
         { isEscalatedOffense: true, muteMinutes: undefined, banHours: Math.round((enforcement.banMinutes ?? 0) / 60) },
@@ -2587,7 +2655,10 @@ export async function runLinkModeration(
       // Loaded here, scoped to only this (relatively rare -- a user's 2nd
       // confirmed scam offense) branch, rather than moving the shared
       // linkModerationContext load earlier for every enforcement kind.
-      const recentScamWarnings = recentOwnModeratorMessages(await loadRecentContext(admin, community.id, 8), enforcer.deploymentId);
+      const recentScamWarnings = recentOwnModeratorMessages(
+        await loadRecentModerationWarnings(admin, community.id, enforcer.deploymentId),
+        enforcer.deploymentId
+      );
       const warningText = await generatePersonaScamWarning(
         enforcer.moderatorName, enforcer.persona, mention, { isRepeatOffense: true, muteMinutes: undefined }, aiRouting, recentScamWarnings
       );
@@ -2759,11 +2830,17 @@ export async function runLinkModeration(
   // to the exact previous deterministic template on any generation failure.
   //
   // Anti-repetition context (2026-09-04, live feedback: a Watcher was
-  // producing near-identical warnings across different offenders): reuses
-  // the SAME already-loaded linkModerationContext (no new query), via
-  // recentOwnModeratorMessages -- see its own doc comment for the scoping
-  // guarantee.
-  const recentOwnWarnings = recentOwnModeratorMessages(linkModerationContext, enforcer.deploymentId);
+  // producing near-identical warnings across different offenders; corrected
+  // 2026-09-06 after the SAME symptom recurred hours apart -- linkModerationContext
+  // is a tiny SHARED window sized for the classifier, not for this, and a
+  // prior warning routinely scrolls out of it long before the next offense.
+  // See loadRecentModerationWarnings' own doc comment for the full root
+  // cause.) via recentOwnModeratorMessages -- see its own doc comment for
+  // the scoping guarantee.
+  const recentOwnWarnings = recentOwnModeratorMessages(
+    await loadRecentModerationWarnings(admin, community.id, enforcer.deploymentId),
+    enforcer.deploymentId
+  );
   // 2026-09-04, third pass: scam/phishing warnings are now ALSO persona-
   // voiced (generatePersonaScamWarning, link-classify.ts) -- the earlier
   // "must stay deterministic" framing conflated enforcement DECISION
@@ -3259,12 +3336,16 @@ async function runMediaModeration(
   // reaches here, see decideMediaEnforcement)
   const nextState: LinkWarningState = { ...priorState, mediaWarningCount: enforcement.warningNumber, mediaWarningAt: now.toISOString() };
   await persistLinkWarningState(admin, panelId, community.id, event.sender.platformUserId, nextState, { kind: enforcement.reason, now });
-  // Anti-repetition context (2026-09-04, mirrors runLinkModeration's own
-  // linkModerationContext exactly) -- loaded only here, not at the top of
-  // this function, since ALLOW/DELETE_KICK never reach this branch and would
-  // otherwise pay for a query they don't need.
-  const mediaModerationContext = await loadRecentContext(admin, community.id, 8);
-  const recentOwnMediaWarnings = recentOwnModeratorMessages(mediaModerationContext, enforcer.deploymentId);
+  // Anti-repetition context -- loaded only here, not at the top of this
+  // function, since ALLOW/DELETE_KICK never reach this branch and would
+  // otherwise pay for a query they don't need. Corrected 2026-09-06: now
+  // sourced from loadRecentModerationWarnings (this Watcher's own real
+  // warning history, server-side scoped), never the small shared
+  // conversational-context window -- see that function's own doc comment.
+  const recentOwnMediaWarnings = recentOwnModeratorMessages(
+    await loadRecentModerationWarnings(admin, community.id, enforcer.deploymentId),
+    enforcer.deploymentId
+  );
   // May be null -- NO_PUBLIC_REPLY (a non-final warning whose candidate
   // reads as near-identical to something this Watcher just said, so there's
   // nothing new to communicate). Enforcement/state-persistence above is

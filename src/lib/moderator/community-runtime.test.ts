@@ -4,6 +4,7 @@ import {
   isDuplicateUpdate, resolveEventOrigin, isRecentMessage, RECENT_EXCHANGE_WINDOW_MS, humanRecentlyResponded,
   reactiveQuotaDay, hasReactiveQuotaRemaining, recordReactiveQuotaUse, getCommunityReactiveQuotaUsage,
   raceWithTimeout, createRequestTimer, resolveAdditionalResponderIds, deploymentRecentlyParticipated, recentOwnModeratorMessages,
+  loadRecentModerationWarnings,
   classifySender, loadRelevantKnowledge, detectSupportedMedia, START_COMMAND_RE, resolveCommunity, type TelegramMessage,
   finalizeCommunityConnection, runLinkModeration, respondAsDeployment, type ChatterDeployment,
   trialMediaModerationPeriod, isSyntheticChannelSender, SYNTHETIC_CHANNEL_SENDER_PREFIX,
@@ -581,6 +582,140 @@ test("REQUIRED (completeness gap #4): a bot-ack reply or community handoff from 
     ownMsg("dep-a", "a proactive good-morning post", "INNVIL_MODERATOR", "PROACTIVE"),
   ];
   assert.deepEqual(recentOwnModeratorMessages(context, "dep-a"), []);
+});
+
+/* ========================================= loadRecentModerationWarnings ====
+   LIVE BUG FIX (2026-09-06): recentOwnModeratorMessages' filtering logic
+   above was always correct -- the bug was in what fed it. Every call site
+   used to pass `loadRecentContext(admin, community.id, 8)` (or its already-
+   loaded variable) -- a SHARED window capped to the community's 8 most
+   recent messages TOTAL, across every sender, sized for the classifier's
+   "what was just being discussed" purpose. In an active room, or simply
+   across a few hours, a Watcher's own prior warning scrolls out of that tiny
+   window long before the SAME (or a different) offender's next violation --
+   at which point recentOwnWarnings computes as empty, similarity is FORCED
+   to 0 by every caller's own `.length ? ... : 0` guard, and the anti-
+   repetition retry never fires. loadRecentModerationWarnings fixes this by
+   querying directly for a deployment's own real warning history, filtered
+   SERVER-SIDE, completely independent of how much unrelated chat happened
+   in between. */
+
+interface FakeWarningRow {
+  community_id: string;
+  deployment_id: string | null;
+  sender_type: string;
+  sender_display_name: string | null;
+  sender_platform_id: string | null;
+  text: string;
+  created_at: string;
+  message_thread_id: number | null;
+  platform_message_id: string | null;
+  reply_to_platform_message_id: string | null;
+  origin: string | null;
+}
+
+function warningRow(communityId: string, deploymentId: string, text: string, createdAt: string, opts: { senderType?: string; origin?: string | null } = {}): FakeWarningRow {
+  return {
+    community_id: communityId,
+    deployment_id: deploymentId,
+    sender_type: opts.senderType ?? "INNVIL_MODERATOR",
+    sender_display_name: null,
+    sender_platform_id: null,
+    text,
+    created_at: createdAt,
+    message_thread_id: null,
+    platform_message_id: null,
+    reply_to_platform_message_id: null,
+    origin: opts.origin === undefined ? "MODERATION_WARNING" : opts.origin,
+  };
+}
+
+/** Fakes the real .select().eq().eq().eq().eq().order().limit() chain --
+ *  `.limit()` itself resolves the query (mirrors real supabase-js: the
+ *  chain is awaited directly, with no terminal .maybeSingle()/.single()
+ *  call for a multi-row select). */
+function fakeAdminForModerationWarnings(rows: FakeWarningRow[]) {
+  return {
+    from(_table: string) {
+      const filters: Record<string, string> = {};
+      const api = {
+        select() { return api; },
+        eq(column: string, value: string) { filters[column] = value; return api; },
+        order() { return api; },
+        limit(n: number) {
+          const matches = rows
+            .filter((r) => Object.entries(filters).every(([k, v]) => (r as unknown as Record<string, unknown>)[k] === v))
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))
+            .slice(0, n);
+          return Promise.resolve({ data: matches, error: null });
+        },
+      };
+      return api;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+test("REQUIRED (exact live-bug repro): a Watcher's own warning is still found even after MANY unrelated messages from other senders/deployments happened in between -- the old loadRecentContext(...,8)-based approach would have missed this entirely", async () => {
+  const rows: FakeWarningRow[] = [warningRow("community-1", "dep-patricia", "no promo allowed in this topic - keep it up and it'll escalate past just a deletion.", "2026-09-06T01:16:00Z")];
+  // 20 unrelated messages (other senders, other deployments, ordinary
+  // chatter) -- more than enough to have scrolled the above warning out of
+  // any small fixed-size shared context window.
+  for (let i = 0; i < 20; i++) {
+    rows.push({ community_id: "community-1", deployment_id: i % 2 === 0 ? "dep-other" : null, sender_type: i % 2 === 0 ? "INNVIL_MODERATOR" : "HUMAN", sender_display_name: null, sender_platform_id: null, text: `unrelated chat ${i}`, created_at: `2026-09-06T0${2 + Math.floor(i / 10)}:${(i % 10).toString().padStart(2, "0")}:00Z`, message_thread_id: null, platform_message_id: null, reply_to_platform_message_id: null, origin: i % 2 === 0 ? null : null });
+  }
+  rows.push(warningRow("community-1", "dep-patricia", "second time now - promo in announcement, that's what promotion topic is for. 10 min mute this round, keep it up and it'll escalate past just a deletion.", "2026-09-06T09:57:00Z"));
+
+  const admin = fakeAdminForModerationWarnings(rows);
+  const result = await loadRecentModerationWarnings(admin, "community-1", "dep-patricia");
+  const texts = recentOwnModeratorMessages(result, "dep-patricia");
+  // BOTH real warnings are found, even though 20 unrelated rows separate
+  // them -- the OLD loadRecentContext(admin, community.id, 8) approach would
+  // have returned only the last 8 messages TOTAL (regardless of sender),
+  // meaning the first warning would have been invisible by the time the
+  // second one's anti-repetition check ran, forcing similarity=0 and
+  // silently skipping the retry that would have caught this exact repeat.
+  assert.equal(texts.length, 2);
+  assert.ok(texts.every((t) => t.includes("keep it up and it'll escalate")));
+});
+
+test("scoped strictly to one community + one deployment -- a different community's or a different deployment's warnings never leak in", async () => {
+  const admin = fakeAdminForModerationWarnings([
+    warningRow("community-1", "dep-a", "A's warning in community 1", "2026-09-06T00:00:00Z"),
+    warningRow("community-2", "dep-a", "A's warning in community 2", "2026-09-06T00:01:00Z"),
+    warningRow("community-1", "dep-b", "B's warning in community 1", "2026-09-06T00:02:00Z"),
+  ]);
+  const texts = recentOwnModeratorMessages(await loadRecentModerationWarnings(admin, "community-1", "dep-a"), "dep-a");
+  assert.deepEqual(texts, ["A's warning in community 1"]);
+});
+
+test("only origin==='MODERATION_WARNING' rows count -- ordinary chatter/bot-ack from the same deployment is excluded server-side, same guarantee as before", async () => {
+  const admin = fakeAdminForModerationWarnings([
+    warningRow("community-1", "dep-a", "ordinary chatter", "2026-09-06T00:00:00Z", { origin: null }),
+    warningRow("community-1", "dep-a", "a bot-ack reply", "2026-09-06T00:01:00Z", { origin: "BOT_ACK" }),
+    warningRow("community-1", "dep-a", "a real warning", "2026-09-06T00:02:00Z", { origin: "MODERATION_WARNING" }),
+  ]);
+  const texts = recentOwnModeratorMessages(await loadRecentModerationWarnings(admin, "community-1", "dep-a"), "dep-a");
+  assert.deepEqual(texts, ["a real warning"]);
+});
+
+test("a HUMAN sender row is never counted even if it somehow matched the deployment id", async () => {
+  const admin = fakeAdminForModerationWarnings([warningRow("community-1", "dep-a", "not really a moderator message", "2026-09-06T00:00:00Z", { senderType: "HUMAN" })]);
+  const texts = recentOwnModeratorMessages(await loadRecentModerationWarnings(admin, "community-1", "dep-a"), "dep-a");
+  assert.deepEqual(texts, []);
+});
+
+test("respects the limit parameter -- returns at most N rows even when more real warnings exist", async () => {
+  const rows: FakeWarningRow[] = [];
+  for (let i = 0; i < 12; i++) rows.push(warningRow("community-1", "dep-a", `warning #${i}`, `2026-09-06T00:${i.toString().padStart(2, "0")}:00Z`));
+  const admin = fakeAdminForModerationWarnings(rows);
+  const texts = recentOwnModeratorMessages(await loadRecentModerationWarnings(admin, "community-1", "dep-a", 5), "dep-a");
+  assert.equal(texts.length, 5);
+});
+
+test("no matching rows at all returns an empty array, never throws", async () => {
+  const admin = fakeAdminForModerationWarnings([]);
+  assert.deepEqual(await loadRecentModerationWarnings(admin, "community-1", "dep-a"), []);
 });
 
 /* ==================================================== classifySender: display name ====

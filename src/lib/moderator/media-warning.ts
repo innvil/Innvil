@@ -5,6 +5,7 @@ import type { ModeratorPersona } from "./domain";
 import {
   SPAM_WARNING_LIMIT,
   maxWarningSimilarity,
+  isStructurallyRepetitiveWarning,
   NEAR_DUPLICATE_WARNING_THRESHOLD,
   resolveWarningResponseMode,
   warningTextExceedsAuthorizedFacts,
@@ -104,16 +105,23 @@ export async function generateMediaModerationWarning(
 ): Promise<string | null> {
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
-      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a photo/video for possibly violating this community's content policy (borderline/uncertain explicit content).`,
-      `Write ONE short, natural warning to the person, entirely in your own persona voice (see below).`,
+      `You are ${moderatorName} -- a real, familiar presence in this Telegram community, the same person who chats here normally. You are NOT a moderation system, a support agent, or a policy bot, and you must never sound like one.`,
       ...personaVoiceBlock(persona),
-      `This is warning #${warningNumber} of ${SPAM_WARNING_LIMIT}.`,
+      `WHAT JUST HAPPENED: You removed a photo/video someone posted because it looked like it might not be appropriate for this group. That's already done.`,
+      `You should not describe the media, or repeat what was in it.`,
+      // AUTHORIZED facts, not required sentence content (2026-09-06) -- same
+      // architecture correction as link-classify.ts's generators.
+      `THINGS YOU'RE ALLOWED TO SAY -- all true; use whichever fit. Not a checklist, and you do not need to cover them all:`,
+      `- Uploads here need to stay appropriate for the group.`,
+      warningNumber > 1
+        ? `- You've already had to say this to this same person before (this is time ${warningNumber}). You may let that show in how you say it -- shorter, less patient -- but you don't need to state the number, and counting out loud usually sounds automated.`
+        : `- This looks like the first time for this person, so they may genuinely not have realized.`,
       isFinalWarning
-        ? `This is their FINAL warning — make clear that the next violation results in removal from the community.`
-        : `Keep it firm but not harsh — a normal warning, not a threat.`,
-      `Do not describe the media in detail or repeat exactly what the content was. Never output "Violation ${warningNumber}/${SPAM_WARNING_LIMIT}" or similar robotic/templated wording — write like a real person would.`,
+        ? `- Doing it again means they're removed from the group. Don't quietly leave that out this time -- but say it the way you'd actually say it, not as a formal notice.`
+        : `- Nothing else happened beyond removing the upload -- no mute, no kick, no ban. Never claim or imply otherwise.`,
+      `Never state anything beyond that list -- no invented rule, punishment, or prior offense.`,
       avoidRepeatingNote,
-      `Respond with ONLY the message you'd actually send — no quotation marks, no explanation, under 30 words.`,
+      `Now: say the brief, natural thing YOU would actually say right now, having just done that -- not an announcement or a notice. Let the length fit the moment; often just a few words. Don't reach for the same opening you'd use every time. Respond with ONLY the message itself -- no quotes, no explanation.`,
     ]
       .filter((line): line is string => !!line)
       .join("\n");
@@ -171,16 +179,19 @@ export async function generateMediaModerationWarning(
   // non-final warning's mode is driven by how similar this candidate
   // already is to something this Watcher recently said.
   const similarity = recentOwnWarnings.length ? maxWarningSimilarity(first, recentOwnWarnings) : 0;
+  // Structural repetition (2026-09-06) -- same rationale as link-classify.ts's
+  // own generators: catches "same skeleton, new synonyms."
+  const structurallyRepetitive = recentOwnWarnings.length ? isStructurallyRepetitiveWarning(first, recentOwnWarnings) : false;
   const mode = resolveWarningResponseMode({ hasEnforcementConsequence: isFinalWarning, similarityToRecent: similarity });
   if (mode === "NO_PUBLIC_REPLY") return null;
-  if (mode === "WARNING") return sanitize(first);
+  if (mode === "WARNING" && !structurallyRepetitive) return sanitize(first);
   // ENFORCEMENT_NOTICE is the mode whenever this is the final pre-kick
   // warning, REGARDLESS of similarity -- retry only when there's an ACTUAL
   // near-duplicate signal to react to (empty/no-match history forces
   // similarity to 0); a final warning with nothing recently similar has no
   // "sounds like a repeat" problem to solve, so it's returned as-is rather
   // than spending a wasted retry call.
-  if (mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD) return sanitize(first);
+  if (mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD && !structurallyRepetitive) return sanitize(first);
 
   // SHORT_NUDGE or a genuinely-near-duplicate ENFORCEMENT_NOTICE: bounded to
   // exactly ONE retry, response-mode aware -- see buildAvoidRepeatingNote's

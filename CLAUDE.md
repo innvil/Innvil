@@ -127,6 +127,70 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-06 — Moderation speech is persona-native, not a persona-colored template: authorized-vs-required facts, real warning history, structural anti-repetition (v1.49.39)
+- **Live product-quality bug, reported with a screenshot of four real Patricia warnings**: "technically persona-aware,
+  but the visible moderation warnings still sound like AI-generated preset warnings... it's still doing the same thing
+  over and over again." Every one walked the same skeleton — MENTION → OFFENSE COUNT → RULE → DESTINATION → MUTE
+  DURATION → FUTURE ESCALATION — with only synonyms/numbers swapped ("keep it up and it'll escalate past just a
+  deletion" appeared verbatim in two messages ~8h apart to the same person).
+- **Root cause #1 (the anti-repetition mechanism was structurally blind).** All four warning generators computed their
+  anti-repetition history from `recentOwnModeratorMessages(linkModerationContext, …)` — where
+  `linkModerationContext` is `loadRecentContext(admin, community.id, 8)`, a SHARED window of the community's **8 most
+  recent messages TOTAL across every sender**, sized for the link classifier's "what was just being discussed" purpose.
+  In any active room a Watcher's own prior warning scrolls out of that window within minutes, long before the same
+  offender's next violation hours later — at which point `recentOwnWarnings` is empty, every caller's own
+  `recentOwnWarnings.length ? maxWarningSimilarity(…) : 0` guard **forces similarity to 0**, and the bounded
+  regeneration retry never fires. The mechanism only ever worked for back-to-back messages inside one tiny window.
+  **Fix**: new `loadRecentModerationWarnings()` (`community-runtime.ts`) queries directly for THIS Watcher's own last
+  N real warning sends in THIS community, filtered SERVER-SIDE by `community_id`+`deployment_id`+`sender_type`+
+  `origin='MODERATION_WARNING'` — independent of intervening chat volume. Returns the same `ChatterContextMessage[]`
+  shape so it composes with the EXISTING, already-tested `recentOwnModeratorMessages` filter unchanged (only the
+  SOURCE of candidate rows changed, never the filtering contract). Wired into all 4 call sites (promotion, scam,
+  negative-statement, media); the now-dead `mediaModerationContext` load was removed.
+- **Root cause #2 (the prompt WAS the template).** The system prompts literally demanded the skeleton: *"Facts you
+  must include, stated accurately — never invent, omit, or alter any of these"*, *"State the real N-minute mute"*,
+  *"Mention the real Promotion destination BY NAME ONLY"*, *"Briefly note repeated offenses escalate"*, *"warning N of
+  4"*, *"under 30 words"*. Varying synonyms could never fix output whose SCHEMA was mandated. **Fix — the
+  architecture-level correction**: every generator's `requiredFacts` became `authorizedFacts` — things the Watcher is
+  *allowed* to say accurately, explicitly *"Not a checklist… you do not need to cover them all"*, with per-fact
+  permission to omit ("you do NOT need to state the number, and counting it out loud usually sounds automated";
+  "Skip it when it would be redundant"; mute duration may be expressed naturally — "take ten", "see you in ten" —
+  provided any stated length matches the real one). System framing flipped from *"You are a moderator… write ONE short
+  warning"* to persona-first: *"You are Patricia — a real, familiar presence in this community, the same person who
+  chats here normally. You are NOT a moderation system, a support agent, or a policy bot"* + `WHAT JUST HAPPENED:` (the
+  already-executed deterministic event) + *"say the brief, natural thing YOU would actually say right now."* The fixed
+  length cap is gone (length follows the moment; repeat offenses usually get SHORTER). Applied to all four generators
+  (`generatePersonaSolicitationWarning`, `generatePersonaScamWarning`, `generatePersonaNegativeStatementWarning`,
+  `generateMediaModerationWarning`).
+- **Root cause #3 (lexical similarity can't see shape).** Bag-of-words Jaccard scored two same-skeleton/different-word
+  warnings as comfortably different. New `warningStructureSignature()` / `isStructurallyRepetitiveWarning()` /
+  `STRUCTURAL_REPEAT_BEAT_THRESHOLD = 3` (`link-moderation.ts`) fingerprint which rhetorical beats a warning hits
+  (OFFENSE_COUNT / RULE / DESTINATION / PUNISHMENT / ESCALATION); 3+ shared beats with any recent warning triggers the
+  SAME single bounded retry the lexical check already did (never a second decision, never a second model call beyond
+  the existing bound). 1-2 shared beats is normal and never flagged. `buildAvoidRepeatingNote` now tells the model to
+  change the SHAPE, not just the words, and to drop beats the person has already heard.
+- **Verified already-correct, no change needed (reported rather than assumed)**: (1) **Model routing** — all three
+  link/media generators already call `getInnvilModelConfig()` = **`claude-sonnet-5`, effort `medium`**, hard-asserted
+  (`assertInnvilModel` throws rather than substituting). Zero DeepSeek references exist in `link-classify.ts`/
+  `media-warning.ts`; DeepSeek is confined to Natural Chatter's CASUAL_CHAT and presence messages. (2) **Quota
+  separation** — `incrementWatchAiGenerationUsage`/`recordReactiveQuotaUse` are called ONLY inside
+  `respondAsDeployment` (the conversational path); `runLinkModeration`/`runMediaModeration` never touch either, so
+  moderation realization has never consumed the AI-Generation pool or the trial reactive quota. Real provider
+  telemetry (`[ai-usage]`, BYO usage events) is untouched and still records honestly.
+- **Enforcement independence unchanged and re-verified**: delete/mute/kick/ban/state-persistence/purge all execute
+  before and independently of language realization; a failed/empty/invalid generation still falls back to the
+  unchanged deterministic templates, which are never placed in the prompt (proven by test).
+- New tests: `link-classify.test.ts` (+10 — no fact is mandatory, offense-count never required across offenses 1→4,
+  natural mute phrasing survives the validator, destination is skippable, persona-first framing, fallback never in the
+  prompt, real Sonnet-5 routing on the ACTUAL outgoing request for all 3 generators with DeepSeek configured-but-unused,
+  empty-response fallback, wrong-mute-duration rejection, scam safety isolation), `link-moderation.test.ts` (+6 — the
+  exact live messages detected as structurally repetitive, the lexical-check-misses-it gap proven directly, natural
+  short reactions not flagged, 1-2 shared beats never flagged), `community-runtime.test.ts` (+6 — the exact live repro:
+  a warning still found after 20 unrelated intervening messages, community/deployment scoping, origin filtering, limit,
+  empty safety). ~22 pre-existing assertions that encoded the OLD required-facts contract were rewritten to the new one
+  (each with a comment explaining why), rather than preserved. **2391 tests pass** (up from 2369), `tsc --noEmit`
+  clean, production build clean, 8 files changed (4 implementation + 4 test), no migration.
+
 ### 2026-09-05 — Fix: non-question informational requests (job applications, bare crypto shorthand) were fabricating answers via the ungrounded CASUAL_CHAT path (v1.49.38)
 - **Live bug, from a real screenshot**: a moderator-application inquiry ("Am applying for a community
   moderation space") got a FABRICATED reply — "nice, we do take mods sometimes. shoot me a quick dm..." — no

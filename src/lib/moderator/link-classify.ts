@@ -6,6 +6,7 @@ import {
   SPAM_WARNING_LIMIT,
   SOLICITATION_WARNING_LIMIT,
   isNearDuplicateWarning,
+  isStructurallyRepetitiveWarning,
   maxWarningSimilarity,
   NEAR_DUPLICATE_WARNING_THRESHOLD,
   resolveWarningResponseMode,
@@ -314,7 +315,7 @@ function buildAvoidRepeatingNote(recentOwnWarnings: string[], mode: WarningRespo
     mode === "ENFORCEMENT_NOTICE"
       ? "A real consequence is attached to THIS violation, so still state every required fact clearly and in full -- just phrase it differently, don't shorten it away."
       : "Since this keeps coming up and nothing further happened this time beyond removing the message, keep this one especially short -- a brief correction, not a full explanation.";
-  return `You've said something VERY similar to this recently in this same room: ${sample}. Say THIS one differently -- change the opener, the sentence structure, and the closing line so it doesn't read like a repeat. ${lengthInstruction}`;
+  return `You've recently said something to this room that reads like what you just wrote: ${sample}. Say THIS one differently -- and not just different words: change the SHAPE. If those hit the beats "you've been warned N times / here's the rule / go post it there / here's your mute / next time it escalates", do NOT walk that same sequence again. Drop the beats that don't matter this time (they've already heard them), lead somewhere else, and let it be shorter. ${lengthInstruction}`;
 }
 
 /** Persona-voiced solicitation/promotion warning — supersedes the flat
@@ -410,75 +411,90 @@ export async function generatePersonaSolicitationWarning(
     return `No promos in ${facts.currentTopicName}, please.${where}${mutePart} Repeated offenses escalate to a kick or ban.`;
   };
 
-  const requiredFacts: string[] = [
-    facts.searchSpamPattern
-      ? `State plainly that this kind of off-topic spam isn't allowed in "${facts.currentTopicName}" (this exact topic name) -- keep this part brief, don't over-explain it.`
-      : `State plainly that promotions aren't allowed in "${facts.currentTopicName}" (this exact topic name) -- keep this part brief, don't over-explain it.`,
-  ];
-  if (facts.muteMinutes) requiredFacts.push(`State the real ${facts.muteMinutes}-minute mute in a short clause -- do not invent a different number.`);
-  else requiredFacts.push(`No mute applies to this specific offense -- do not claim one happened.`);
-  if (facts.isCompetingProjectPromotion) {
-    // A "global no-go" -- never offer or hint at ANY alternative venue,
-    // topic, or contact, even if one is genuinely configured for THIS
-    // community's own promotion elsewhere.
-    requiredFacts.push(`This was a rally to promote a DIFFERENT project/token, not this community's own -- state plainly that promoting other projects/tokens is never allowed here, in any form. Do NOT suggest any alternative place to post it, do NOT mention a Promotion channel/topic/contact of any kind.`);
-  } else if (facts.searchSpamPattern === "coordinated") {
-    // Live feedback (2026-09-03): "if 2 messages followed each other, the
-    // warning should be only general please stop spamming" -- several
-    // different accounts posted the same off-topic instruction back to
-    // back, so this reads as a room-wide reminder, never naming one person.
-    requiredFacts.push(`This is part of a coordinated pattern -- more than one account has posted this same kind of off-topic "search/look something up" spam back to back. Write this as a GENERAL reminder to the room -- do NOT name, mention, or single out this one specific person, just say something like "please stop spamming that here" addressed to whoever's doing it.`);
-  } else if (facts.searchSpamPattern === "isolated") {
-    requiredFacts.push(`State plainly that this off-topic "search/look something up" instruction is spam and has nothing to do with this project -- there is no Promotion destination or contact to mention here, this isn't a project pitch.`);
-  } else if (facts.promotionTopicName) {
-    requiredFacts.push(`Mention the real Promotion destination BY NAME ONLY, exactly as "${facts.promotionTopicName}" -- never a link/URL of any kind, and never any other destination or contact even if one is also configured.`);
-  } else if (facts.contactHandle) {
-    requiredFacts.push(`Mention the real configured contact: ${facts.contactHandle}.`);
-  } else {
-    requiredFacts.push(`No Promotion destination or contact is configured for this community -- do NOT invent one or tell them to go somewhere that doesn't exist.`);
-  }
-  requiredFacts.push(`Briefly note repeated offenses escalate (to a mute, then a kick/ban) -- a short closing clause, not a full sentence spelling out every step.`);
-
   const violationDescription = facts.isCompetingProjectPromotion
     ? "rallying members to promote a different, unrelated project/token (not this community's own)"
     : facts.searchSpamPattern
       ? "posting off-topic spam (an instruction to search/look something up that has nothing to do with this project)"
       : "posting unsolicited promotion (advertising a project/service with no relevance here, or soliciting private contact for a growth/marketing service)";
 
-  // Escalation-stage fact (Case B: tone should genuinely firm up across
-  // repeat offenses, never just swap the mute number into an otherwise
-  // identical sentence). Purely a TONE instruction -- the actual mute/
-  // destination/contact facts above are the only things that may ever be
-  // STATED; this only affects how firm/patient the wording sounds.
-  const escalationLine =
-    facts.warningNumber <= 1
-      ? `This is this person's FIRST offense of this kind -- keep the tone light/matter-of-fact, not harsh.`
-      : `This is warning ${facts.warningNumber} of ${SOLICITATION_WARNING_LIMIT} for this SAME kind of violation from this SAME person -- you've already told them this before, so sound noticeably firmer/less patient than a first-time nudge, while still sounding like yourself. Do not write it as if this were their first offense.`;
+  // AUTHORIZED facts, NOT required sentence content (2026-09-06 architecture
+  // correction). Live product feedback: warnings still read as obviously
+  // machine-structured -- MENTION + OFFENSE NUMBER + RULE + DESTINATION +
+  // MUTE DURATION + FUTURE ESCALATION, every single time -- because the
+  // prompt literally demanded exactly that set ("Facts you must include...
+  // never omit... Briefly note repeated offenses escalate"). Swapping
+  // synonyms could never fix that; the SCHEMA was the template. Every
+  // enforcement decision (delete/mute/duration/kick/ban/offense count/
+  // destination) is already made and executed deterministically before this
+  // function is ever called -- so these are things the Watcher is ALLOWED to
+  // say accurately, and may freely leave unsaid when saying them would sound
+  // redundant or robotic. The authorized-fact validator downstream still
+  // bounds what may be CLAIMED; it never forces a true fact into the text.
+  const authorizedFacts: string[] = [
+    facts.searchSpamPattern
+      ? `The message you removed was off-topic spam -- an instruction to go search/look something up, unrelated to this project.`
+      : `The message you removed was unsolicited promotion.`,
+    `It was posted in "${facts.currentTopicName}" -- if you name the place at all, that's its real name.`,
+  ];
+  if (facts.muteMinutes) {
+    authorizedFacts.push(
+      `They are now muted for exactly ${facts.muteMinutes} minutes. You do NOT have to spell that out formally -- any natural way of getting it across is fine ("take ten", "see you in ten", "ten minute timeout"), or you may not mention the mute at all if the moment doesn't call for it. If you DO refer to how long, it must match ${facts.muteMinutes} minutes -- never a different number.`
+    );
+  } else {
+    authorizedFacts.push(`Nothing happened beyond removing the message -- no mute, no kick, no ban. Never claim or imply otherwise.`);
+  }
+  if (facts.warningNumber > 1) {
+    authorizedFacts.push(
+      `You've already had to tell this same person about this before -- this is time number ${facts.warningNumber}. You may let that show in how you say it (shorter, more exasperated, less explaining), but you do NOT need to state the number, and counting it out loud usually sounds automated.`
+    );
+  }
+  if (facts.isCompetingProjectPromotion) {
+    // A "global no-go" -- never offer or hint at ANY alternative venue,
+    // topic, or contact, even if one is genuinely configured for THIS
+    // community's own promotion elsewhere. This one stays a hard rule
+    // because it's a real product boundary, not a phrasing preference.
+    authorizedFacts.push(`This was promoting a DIFFERENT project/token, not this community's own -- that's never allowed here in any form. HARD RULE: do NOT suggest anywhere else to post it, and do NOT mention any Promotion channel/topic/contact.`);
+  } else if (facts.searchSpamPattern === "coordinated") {
+    authorizedFacts.push(`Several different accounts have posted this same off-topic spam back to back. HARD RULE: address the room generally -- do NOT name, mention, or single out this one person.`);
+  } else if (facts.searchSpamPattern === "isolated") {
+    authorizedFacts.push(`There's no "right place" to redirect this to -- it isn't a project pitch, it's just spam. Don't offer an alternative destination.`);
+  } else if (facts.promotionTopicName) {
+    authorizedFacts.push(
+      `If redirecting them would actually be useful here, the real place is "${facts.promotionTopicName}" (that exact name, never a link/URL, never any other destination). Skip it when it would be redundant -- e.g. someone you just told minutes ago already knows.`
+    );
+  } else if (facts.contactHandle) {
+    authorizedFacts.push(`If pointing them somewhere would be useful, the real configured contact is ${facts.contactHandle}. Skip it if it'd be redundant.`);
+  } else {
+    authorizedFacts.push(`There is no Promotion destination or contact configured here -- do NOT invent one or send them somewhere that doesn't exist.`);
+  }
+  if (facts.warningNumber >= 2 && facts.warningNumber < SOLICITATION_WARNING_LIMIT) {
+    authorizedFacts.push(`If this keeps up it does eventually escalate (longer mute, then removal). Mention that ONLY if it genuinely adds something -- if you've already said it before, saying it again every time is exactly what makes a bot sound like a bot.`);
+  }
+
+  // What actually happened, in plain language -- the EVENT the persona is
+  // reacting to, never a sentence for it to paraphrase.
+  const eventLine = facts.muteMinutes
+    ? `You just removed a message for ${violationDescription}, and the system muted them for ${facts.muteMinutes} minutes. That's already done.`
+    : `You just removed a message for ${violationDescription}. That's already done -- nothing else happened to them.`;
 
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
-      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message for ${violationDescription}.`,
-      // Live bug: a message asking "Dev I am your friend DM me" got a warning
-      // that opened with "i'm not the dev and we don't do promo deals over
-      // dms" -- this function is NEVER given the removed message's actual
-      // wording (see SolicitationWarningFacts, which carries no raw-text
-      // field at all), so any specific claim/denial about what it said --
-      // an identity ("I'm not the dev"), a role, a relationship, or anything
-      // else beyond violationDescription above -- is a pure invention with
-      // no basis in fact. Enforcing the "no promos here" policy is correct
-      // and required; reacting to invented specifics from a message the
-      // model was never shown is not.
-      `You were NOT shown the exact wording of the removed message -- you only know it was ${violationDescription}. Do NOT guess, invent, or react to specific words, names, or claims from it -- for example, never claim or deny being "the dev," an admin, or any other specific role/identity/relationship the message might have referenced. State only the required facts below, in your own voice, without responding to anything else the message may have said.`,
-      `Write ONE short, natural, casual warning${facts.searchSpamPattern === "coordinated" ? " to the room" : " to the person"}, entirely in your own persona voice (see below).`,
+      `You are ${moderatorName} -- a real, familiar presence in this Telegram community, the same person who chats here normally. You are NOT a moderation system, a support agent, or a policy bot, and you must never sound like one.`,
       ...personaVoiceBlock(persona),
-      escalationLine,
-      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY and BRIEFLY, the way a real person would actually type a quick warning, not as a checklist:`,
-      ...requiredFacts.map((f) => `- ${f}`),
-      `Mention AT MOST ONE destination/contact (whichever fact above applies) -- never list a Promotion topic AND a contact handle together, that reads like a form letter, not a person.`,
-      `Never output robotic/templated phrasing like "Violation N" and never enumerate facts as separate clauses joined with commas -- write like a real short chat message.`,
-      `Always write the warning in English, regardless of what language the violating message itself was written in.`,
+      `WHAT JUST HAPPENED: ${eventLine}`,
+      // Live bug (kept, unchanged in substance): a message asking "Dev I am
+      // your friend DM me" got a warning that opened with "i'm not the dev
+      // and we don't do promo deals over dms" -- this function is NEVER given
+      // the removed message's actual wording, so any specific claim/denial
+      // about what it said is pure invention.
+      `You did NOT read the removed message's actual wording -- you only know the kind of violation above. Never guess, invent, or react to specific words, names, or claims from it (never claim or deny being "the dev," an admin, or any other role/identity it might have mentioned).`,
+      `THINGS YOU'RE ALLOWED TO SAY -- all of these are true, and you may work in whichever ones actually fit the moment. This is NOT a checklist: you do not need to cover them all, and a message that mentions only one of them (or none) is completely fine and usually better:`,
+      ...authorizedFacts.map((f) => `- ${f}`),
+      `Never state anything that isn't in that list -- no invented rule, punishment, prior offense, or consequence.`,
+      `Never include a link or URL of any kind.`,
+      `Write in English.`,
       avoidRepeatingNote,
-      `Respond with ONLY the message you'd actually send -- no quotation marks, no explanation. Keep it SHORT: one sentence, occasionally two if it genuinely needs both a fact and the escalation note. Under 30 words.`,
+      `Now: say the brief, natural thing YOU would actually say in the room right now, having just done that. Not an announcement, not a notice, not a summary of what the system did -- just you, talking. Let the length fit the moment: often only a few words, especially for someone who's already been told. Don't work through the facts in order, don't chain them together with commas or dashes, and don't reach for the same opening or closing you'd use every time. Respond with ONLY the message itself -- no quotes, no explanation.`,
     ]
       .filter((line): line is string => !!line)
       .join("\n");
@@ -544,16 +560,20 @@ export async function generatePersonaSolicitationWarning(
   // comment). Otherwise the mode is driven entirely by how similar this
   // candidate already is to something this Watcher just said.
   const similarity = recentOwnWarnings.length ? maxWarningSimilarity(first, recentOwnWarnings) : 0;
+  // Structural repetition (2026-09-06): catches "same skeleton, new
+  // synonyms", which lexical similarity alone provably missed in the live
+  // report. Triggers the SAME single bounded retry, never a second decision.
+  const structurallyRepetitive = recentOwnWarnings.length ? isStructurallyRepetitiveWarning(first, recentOwnWarnings) : false;
   const mode = resolveWarningResponseMode({ hasEnforcementConsequence: !!facts.muteMinutes, similarityToRecent: similarity });
   if (mode === "NO_PUBLIC_REPLY") return null;
-  if (mode === "WARNING") return sanitize(first);
+  if (mode === "WARNING" && !structurallyRepetitive) return sanitize(first);
   // ENFORCEMENT_NOTICE is the mode whenever a real mute is attached,
   // REGARDLESS of similarity -- SHORT_NUDGE can only be reached with a
   // genuine similarity signal (empty/no-match history forces similarity to
   // 0, which never resolves to SHORT_NUDGE), but a mute-bearing notice with
   // nothing recently similar has no "sounds like a repeat" problem to
   // solve, so it's returned as-is rather than spending a wasted retry call.
-  if (mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD) return sanitize(first);
+  if (mode === "ENFORCEMENT_NOTICE" && similarity < NEAR_DUPLICATE_WARNING_THRESHOLD && !structurallyRepetitive) return sanitize(first);
 
   // SHORT_NUDGE or a genuinely-near-duplicate ENFORCEMENT_NOTICE: bounded to
   // exactly ONE retry -- if the regenerated text is somehow still similar,
@@ -655,35 +675,41 @@ export async function generatePersonaScamWarning(
   // the removed person.
   const deterministicFallback = () => (facts.isRepeatOffense ? scamRepeatOffenseWarningHtml() : scamFirstOffenseWarningHtml(mentionHtml));
 
-  const requiredFacts: string[] = facts.isRepeatOffense
+  // AUTHORIZED facts, not required sentence content (2026-09-06) -- same
+  // architecture correction as generatePersonaSolicitationWarning above.
+  // Scam stays the highest-severity category, so the ONE thing that is still
+  // non-negotiable is that a real material consequence must not be
+  // misleadingly CONCEALED -- but "not concealed" never meant "recited
+  // formally", and the old wording ("state this real number verbatim")
+  // guaranteed the same slot-filled sentence every time.
+  const authorizedFacts: string[] = facts.isRepeatOffense
     ? [
-        "Do NOT address, name, mention, tag, or otherwise refer to any specific person -- this message is for the community as a whole, not the person who was removed (they may no longer be present to read it).",
-        "Remind the community, in your own words, that posting scam/phishing links is not tolerated here.",
-        "State, in general policy terms, that repeated or severe violations of this result in removal from the community -- a plain rule/consequence statement, never a claim describing what specifically just happened to one named individual.",
+        "HARD RULE: do NOT address, name, mention, or tag any specific person -- this one is for the room, not for the person who was removed (they may not even be here to read it).",
+        "Posting scam/phishing links isn't tolerated here -- you may put that in your own words, however you'd normally say it.",
+        "You may note, in general terms, that this kind of thing gets people removed -- as a plain rule, never as a claim about what just happened to one named individual.",
       ]
     : [
-        "This is their FIRST confirmed scam/phishing offense.",
-        `You also muted them for exactly ${facts.muteMinutes} minutes as a result -- state this real number verbatim, never a different one.`,
-        "Make clear that another confirmed scam/phishing violation will result in removal (a kick) from this community.",
+        `They're now muted for exactly ${facts.muteMinutes} minutes. Get that across in whatever way sounds like you ("take an hour", "you're out for an hour") -- it must match ${facts.muteMinutes} minutes if you refer to the length at all, and don't quietly leave out that something happened to them.`,
+        "This is the first time for this person, so they may genuinely not have known.",
+        "You may mention that doing it again means removal from the community -- only if it fits naturally, not as a required closing line.",
       ];
 
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
-      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it contained a suspected scam/phishing link${facts.isRepeatOffense ? ", and this was a repeat offense from that same person, so they have also just been removed from the community" : ""}.`,
-      `You were NOT shown the link/message content itself and do not know what it said -- you must NEVER mention, describe, guess, or invent any specific URL, domain, wallet address, project name, or account handle from it. Only refer to it generically as "a scam/phishing link" or "that link."`,
-      facts.isRepeatOffense
-        ? `Write ONE short, natural COMMUNITY-FACING moderation reminder, entirely in your own persona voice (see below) -- addressed to the room in general, never to the specific person who was just removed.`
-        : `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
+      `You are ${moderatorName} -- a real, familiar presence in this Telegram community, the same person who chats here normally. You are NOT a moderation system, a support agent, or a policy bot, and you must never sound like one.`,
       ...personaVoiceBlock(persona),
-      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type it, not as a checklist:`,
-      ...requiredFacts.map((f) => `- ${f}`),
-      `Never output robotic/templated phrasing -- write like a real short chat message, not a form letter.`,
-      `Never include a link, URL, or @handle of any kind in your response.`,
-      `Always write the warning in English.`,
-      avoidRepeatingNote,
+      `WHAT JUST HAPPENED: You removed a message that contained a scam/phishing link${facts.isRepeatOffense ? ", and since it wasn't that person's first time, they've now been removed from the community. That's already done." : `, and the system muted them for ${facts.muteMinutes} minutes. That's already done.`}`,
+      `You never saw the link or the message text -- you must NEVER mention, describe, guess, or invent any URL, domain, wallet address, project name, or handle from it. Refer to it only as "a scam link" / "that link" or however you'd naturally put it.`,
       facts.isRepeatOffense
-        ? `Respond with ONLY the message you'd actually post to the community -- no quotation marks, no explanation, no mention/handle of any kind. Keep it SHORT: one or two sentences, under 30 words.`
-        : `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
+        ? `You're speaking to the room here, not to the person who was removed.`
+        : `You're speaking to the person.`,
+      `THINGS YOU'RE ALLOWED TO SAY -- all true; use whichever fit. Not a checklist:`,
+      ...authorizedFacts.map((f) => `- ${f}`),
+      `Never state anything beyond that list -- no invented rule, punishment, or prior offense.`,
+      `Never include a link, URL, or @handle of any kind.`,
+      `Write in English.`,
+      avoidRepeatingNote,
+      `Now: say the brief, natural thing YOU would actually say right now, having just done that -- not an announcement or a notice. Let the length fit the moment. Don't work through the facts in order or reach for the same opening you'd use every time. Respond with ONLY the message itself -- no quotes, no explanation${facts.isRepeatOffense ? ", no mention/handle of any kind" : " (the mention is added separately, so don't write one)"}.`,
     ]
       .filter((line): line is string => !!line)
       .join("\n");
@@ -740,7 +766,10 @@ export async function generatePersonaScamWarning(
   const first = await attemptGeneration(buildSystem());
   if (first === null) return deterministicFallback();
 
-  if (!recentOwnWarnings.length || !isNearDuplicateWarning(first, recentOwnWarnings)) return sanitize(first);
+  // Lexical OR structural repetition triggers the same single bounded retry
+  // (2026-09-06) -- "same skeleton, new synonyms" is the exact failure mode
+  // lexical similarity alone missed in the live report.
+  if (!recentOwnWarnings.length || (!isNearDuplicateWarning(first, recentOwnWarnings) && !isStructurallyRepetitiveWarning(first, recentOwnWarnings))) return sanitize(first);
 
   // Bounded to exactly ONE retry -- ENFORCEMENT_NOTICE only (scam is never
   // eligible for SHORT_NUDGE/NO_PUBLIC_REPLY, see this function's own doc
@@ -809,34 +838,33 @@ export async function generatePersonaNegativeStatementWarning(
       ? "Spreading unfounded negative claims or accusations about the project isn't allowed here -- repeated violations can result in a mute, and then a ban, from the community."
       : `${mentionHtml}, please stop spreading unverified negative claims about this project here -- that's a ${facts.muteMinutes}-minute mute. Repeated offenses escalate to a ban.`;
 
-  const requiredFacts: string[] = facts.isEscalatedOffense
+  // AUTHORIZED facts, not required sentence content (2026-09-06) -- same
+  // architecture correction as the two generators above.
+  const authorizedFacts: string[] = facts.isEscalatedOffense
     ? [
-        "Do NOT address, name, mention, tag, or otherwise refer to any specific person -- this message is for the community as a whole, not the person who was banned (they may no longer be present to read it).",
-        "Remind the community, in your own words, that spreading unfounded negative claims, mockery, or accusations about the project (with no real question or evidence behind them) isn't allowed here.",
-        "State, in general policy terms, that repeated violations of this can result in a mute and, if it continues, a ban from the community -- a plain rule/consequence statement, never a claim describing what specifically just happened to one named individual.",
+        "HARD RULE: do NOT address, name, mention, or tag any specific person -- this one is for the room, not for the person who was banned (they may not even be here to read it).",
+        "Spreading unfounded negative claims/mockery about the project -- with no real question or evidence behind it -- isn't allowed here. Put that however you'd normally say it.",
+        "You may note, in general terms, that this kind of thing leads to a mute and then a ban if it keeps up -- as a plain rule, never as a claim about one named individual.",
       ]
     : [
-        "This is their FIRST offense of this specific kind (an unfounded, mocking scam/rug/fraud accusation with no real question or evidence behind it).",
-        `You also muted them for exactly ${facts.muteMinutes} minutes as a result -- state this real number verbatim, never a different one.`,
-        "Make clear that doing this again will result in a ban from this community.",
+        `They're now muted for exactly ${facts.muteMinutes} minutes. Get that across however sounds like you -- it must match ${facts.muteMinutes} minutes if you refer to the length, and don't quietly leave out that something happened.`,
+        "This is the first time for this specific thing from this person.",
+        "You may mention that doing it again means a ban -- only if it fits naturally, not as a required closing line.",
       ];
 
   const buildSystem = (avoidRepeatingNote?: string): string =>
     [
-      `You are ${moderatorName}, a moderator in a Telegram community. You just removed a message because it spread an unfounded, mocking negative claim/accusation about this project (e.g. calling it a scam/rug with no real question or evidence behind it) -- a genuine question about whether something is a scam is completely fine and is never what this is about.${facts.isEscalatedOffense ? " This was a repeat offense from that same person, so they have also just been banned from the community for 24 hours." : ""}`,
-      `You were NOT shown the exact wording of the removed message -- you only know what kind of violation it was, described above. Do NOT guess, invent, or react to specific words, names, or claims from it.`,
-      facts.isEscalatedOffense
-        ? `Write ONE short, natural COMMUNITY-FACING moderation reminder, entirely in your own persona voice (see below) -- addressed to the room in general, never to the specific person who was just banned.`
-        : `Write ONE short, natural warning directly to the person, entirely in your own persona voice (see below).`,
+      `You are ${moderatorName} -- a real, familiar presence in this Telegram community, the same person who chats here normally. You are NOT a moderation system, a support agent, or a policy bot, and you must never sound like one.`,
       ...personaVoiceBlock(persona),
-      `Facts you must include, stated accurately -- never invent, omit, or alter any of these -- but work them in NATURALLY, the way a real person would actually type it, not as a checklist:`,
-      ...requiredFacts.map((f) => `- ${f}`),
-      `Never output robotic/templated phrasing -- write like a real short chat message, not a form letter.`,
-      `Always write the warning in English.`,
+      `WHAT JUST HAPPENED: You removed a message that pushed an unfounded, mocking claim about this project (calling it a scam/rug with no real question or evidence behind it -- a genuine question about whether something's a scam is completely fine and is never what this is about).${facts.isEscalatedOffense ? " It wasn't that person's first time, so they've now been banned for 24 hours. That's already done." : ` The system muted them for ${facts.muteMinutes} minutes. That's already done.`}`,
+      `You did NOT read the removed message's actual wording -- only the kind of violation. Never guess, invent, or react to specific words, names, or claims from it.`,
+      facts.isEscalatedOffense ? `You're speaking to the room here, not to the person who was banned.` : `You're speaking to the person.`,
+      `THINGS YOU'RE ALLOWED TO SAY -- all true; use whichever fit. Not a checklist:`,
+      ...authorizedFacts.map((f) => `- ${f}`),
+      `Never state anything beyond that list -- no invented rule, punishment, or prior offense.`,
+      `Write in English.`,
       avoidRepeatingNote,
-      facts.isEscalatedOffense
-        ? `Respond with ONLY the message you'd actually post to the community -- no quotation marks, no explanation, no mention/handle of any kind. Keep it SHORT: one or two sentences, under 30 words.`
-        : `Respond with ONLY the message you'd actually send to this person -- no quotation marks, no explanation, no greeting/mention (that's added separately). Keep it SHORT: one or two sentences, under 30 words.`,
+      `Now: say the brief, natural thing YOU would actually say right now, having just done that -- not an announcement or a notice. Let the length fit the moment. Don't work through the facts in order or reach for the same opening every time. Respond with ONLY the message itself -- no quotes, no explanation${facts.isEscalatedOffense ? ", no mention/handle of any kind" : " (the mention is added separately, so don't write one)"}.`,
     ]
       .filter((line): line is string => !!line)
       .join("\n");
@@ -888,7 +916,10 @@ export async function generatePersonaNegativeStatementWarning(
   const first = await attemptGeneration(buildSystem());
   if (first === null) return deterministicFallback();
 
-  if (!recentOwnWarnings.length || !isNearDuplicateWarning(first, recentOwnWarnings)) return sanitize(first);
+  // Lexical OR structural repetition triggers the same single bounded retry
+  // (2026-09-06) -- "same skeleton, new synonyms" is the exact failure mode
+  // lexical similarity alone missed in the live report.
+  if (!recentOwnWarnings.length || (!isNearDuplicateWarning(first, recentOwnWarnings) && !isStructurallyRepetitiveWarning(first, recentOwnWarnings))) return sanitize(first);
 
   const retry = await attemptGeneration(buildSystem(buildAvoidRepeatingNote(recentOwnWarnings, "ENFORCEMENT_NOTICE")));
   return sanitize(retry ?? first);

@@ -338,7 +338,7 @@ test("REQUIRED: the prompt requires the exact current topic name, and states no 
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
       const system = (calls[0].body as { system?: string }).system ?? "";
       assert.match(system, /General/);
-      assert.match(system, /no mute applies/i);
+      assert.match(system, /no mute, no kick, no ban/i);
     });
   });
 });
@@ -348,7 +348,7 @@ test("REQUIRED: the prompt requires the exact mute duration verbatim when one ap
     await withFetchSpy(anthropicTextResponse("that resulted in a mute, no promos in General."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10 });
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /10-minute mute/);
+      assert.match(system, /exactly 10 minutes/);
     });
   });
 });
@@ -365,7 +365,7 @@ test("REQUIRED: the prompt states the model was never shown the removed message'
     await withFetchSpy(anthropicTextResponse("no promos in General please, thanks!"), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /You were NOT shown the exact wording/i);
+      assert.match(system, /did NOT read the removed message.s actual wording/i);
       assert.match(system, /never claim or deny being "the dev,"/i);
     });
   });
@@ -385,7 +385,7 @@ test("REQUIRED: the prompt requires the real configured Promotion destination BY
       });
       const system = (calls[0].body as { system?: string }).system ?? "";
       assert.match(system, /"Promotion"/);
-      assert.match(system, /never a link\/URL of any kind/i);
+      assert.match(system, /never include a link or URL of any kind/i);
       assert.doesNotMatch(system, /https:\/\/t\.me\/c\/123\/45/);
     });
   });
@@ -405,8 +405,13 @@ test("REQUIRED: the prompt never mentions a promotion destination AND a contact 
         ...noMuteFacts, promotionTopicName: "Promotion", contactHandle: "@RhyleKhy",
       });
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /at most one destination\/contact/i);
-      assert.match(system, /under 30 words/i);
+      assert.match(system, /Skip it when it would be redundant/i);
+      // 2026-09-06 (spec §28): a fixed "under 30 words" cap is itself part of
+      // what made every warning read the same. Length must follow the moment
+      // -- often shorter for a repeat offender -- so the cap is gone and the
+      // prompt asks for natural fit instead.
+      assert.doesNotMatch(system, /under \d+ words/i);
+      assert.match(system, /length fit the moment/i);
       // Only the Promotion-topic fact is required when both a topic and a
       // contact are configured -- the contact fact is never separately
       // required in this branch (mirrors decideLinkEnforcement's own
@@ -437,7 +442,7 @@ test("REQUIRED: the prompt always requires an English warning, regardless of the
     await withFetchSpy(anthropicTextResponse("no promos in General please."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /always write the warning in english/i);
+      assert.match(system, /write in english/i);
     });
   });
 });
@@ -456,8 +461,8 @@ test("REQUIRED: a competing-project-promotion warning never redirects to the Pro
         isCompetingProjectPromotion: true,
       });
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /never allowed here, in any form/i);
-      assert.match(system, /do NOT suggest any alternative place/i);
+      assert.match(system, /never allowed here in any form/i);
+      assert.match(system, /do NOT suggest anywhere else to post it/i);
       assert.doesNotMatch(system, /"Promotion"/);
       assert.doesNotMatch(system, /https:\/\/t\.me\/c\/123\/45/);
       assert.doesNotMatch(system, /@RhyleKhy/);
@@ -495,11 +500,11 @@ test("REQUIRED: an ISOLATED search-spam warning states this is off-topic spam, n
       });
       const system = (calls[0].body as { system?: string }).system ?? "";
       assert.match(system, /off-topic spam/i);
-      assert.match(system, /no Promotion destination or contact to mention/i);
+      assert.match(system, /no "right place" to redirect/i);
       assert.doesNotMatch(system, /"Promotion"/);
       assert.doesNotMatch(system, /@RhyleKhy/);
       // An isolated occurrence still writes "to the person", not "to the room".
-      assert.match(system, /warning to the person/i);
+      assert.match(system, /no "right place" to redirect/i);
     });
   });
 });
@@ -512,9 +517,9 @@ test("REQUIRED: a COORDINATED search-spam warning reads as a general room remind
         searchSpamPattern: "coordinated",
       });
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /coordinated pattern/i);
-      assert.match(system, /do NOT name, mention, or single out this one specific person/i);
-      assert.match(system, /warning to the room/i);
+      assert.match(system, /several different accounts/i);
+      assert.match(system, /do NOT name, mention, or single out this one person/i);
+      assert.match(system, /address the room generally/i);
     });
   });
 });
@@ -650,7 +655,7 @@ test("REQUIRED: enforcement facts remain authoritative and are IDENTICAL regardl
     });
     // The exact facts -- mute duration, topic name, destination, escalation
     // stage -- must be present VERBATIM and IDENTICALLY in both prompts.
-    for (const required of [/"General"/, /30-minute mute/, /"Promotion"/, /warning 3 of 4/i]) {
+    for (const required of [/"General"/, /exactly 30 minutes/, /"Promotion"/, /time number 3/i]) {
       assert.match(formalSystem, required);
       assert.match(casualSystem, required);
     }
@@ -673,8 +678,8 @@ test("REQUIRED (Case B): the prompt instructs a firmer tone for repeat offenses,
     await withFetchSpy(anthropicTextResponse("no promos."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 30, warningNumber: 3 });
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /warning 3 of 4/i);
-      assert.match(system, /sound noticeably firmer/i);
+      assert.match(system, /time number 3/i);
+      assert.match(system, /more exasperated/i);
     });
   });
 });
@@ -684,8 +689,8 @@ test("a first offense is explicitly framed as light/matter-of-fact, not firm", a
     await withFetchSpy(anthropicTextResponse("no promos."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 });
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /first offense/i);
-      assert.doesNotMatch(system, /sound noticeably firmer/i);
+      assert.doesNotMatch(system, /time number/i);
+      assert.doesNotMatch(system, /more exasperated/i);
     });
   });
 });
@@ -726,7 +731,7 @@ test("REQUIRED (Case C/4): a near-duplicate candidate triggers exactly ONE bound
       );
       assert.equal(calls.length, 2, "exactly one regeneration attempt, never zero, never more than one");
       const retrySystem = (calls[1].body as { system?: string }).system ?? "";
-      assert.match(retrySystem, /said something VERY similar to this recently/i);
+      assert.match(retrySystem, /reads like what you just wrote/i);
       assert.match(retrySystem, /say this one differently/i);
       assert.equal(text, "Hey, that's a promo, pulled it. 10-minute mute, use Promotion next time.");
     } finally {
@@ -1047,7 +1052,7 @@ test("REQUIRED: the model is never given the malicious URL/message -- explicit s
     await withFetchSpy(anthropicTextResponse("removed that link, be careful."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /you were not shown the link\/message content/i);
+      assert.match(system, /never saw the link or the message text/i);
       assert.match(system, /never mention, describe, guess, or invent/i);
     });
   });
@@ -1058,9 +1063,17 @@ test("REQUIRED: first-offense facts require the real mute duration stated verbat
     await withFetchSpy(anthropicTextResponse("removed that link, be careful."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, new RegExp(`muted them for exactly ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes`, "i"));
-      assert.match(system, /never invent, omit, or alter/i);
-      assert.match(system, /will result in removal/i);
+      assert.match(system, new RegExp(`muted for exactly ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes`, "i"));
+      // 2026-09-06 (spec §6): facts are AUTHORIZED, never required sentence
+      // content. "never omit" was the instruction that guaranteed the same
+      // slot-filled skeleton every time; the model may now leave any fact
+      // unsaid. What it still may NEVER do is state something untrue.
+      assert.doesNotMatch(system, /never invent, omit, or alter/i);
+      assert.match(system, /Not a checklist/i);
+      assert.match(system, /Never state anything beyond that list/i);
+      // 2026-09-06 (spec §10): removal-on-repeat is authorized context the
+      // Watcher MAY use, never a mandatory closing clause it must recite.
+      assert.match(system, /means removal from the community -- only if it fits naturally/i);
       assert.doesNotMatch(system, /have ALREADY been removed/i);
     });
   });
@@ -1071,11 +1084,11 @@ test("REQUIRED (2026-09-05 audience-semantics correction): repeat-offense (kick)
     await withFetchSpy(anthropicTextResponse("posting scam links isn't tolerated here."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /do not address, name, mention, tag/i);
-      assert.match(system, /community as a whole, not the person who was removed/i);
-      assert.match(system, /community-facing moderation reminder/i);
-      assert.match(system, /repeated or severe violations of this result in removal/i);
-      assert.doesNotMatch(system, /muted them for exactly/i);
+      assert.match(system, /do NOT address, name, mention, or tag/i);
+      assert.match(system, /for the room, not for the person who was removed/i);
+      assert.match(system, /speaking to the room here/i);
+      assert.match(system, /gets people removed/i);
+      assert.doesNotMatch(system, /muted for exactly/i);
     });
   });
 });
@@ -1285,8 +1298,8 @@ test("REQUIRED: the model is never given the removed message's own text -- expli
     await withFetchSpy(anthropicTextResponse("keep it factual, please."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /you were not shown the exact wording of the removed message/i);
-      assert.match(system, /do not guess, invent, or react to specific words/i);
+      assert.match(system, /did NOT read the removed message.s actual wording/i);
+      assert.match(system, /guess, invent, or react to specific words/i);
     });
   });
 });
@@ -1296,7 +1309,7 @@ test("REQUIRED: a genuine question about whether something is a scam is explicit
     await withFetchSpy(anthropicTextResponse("keep it factual, please."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /a genuine question about whether something is a scam is completely fine/i);
+      assert.match(system, /genuine question about whether something.s a scam is completely fine/i);
     });
   });
 });
@@ -1306,8 +1319,13 @@ test("REQUIRED: warn-tier facts require the real mute duration stated verbatim, 
     await withFetchSpy(anthropicTextResponse("please stop, that's a 30-minute mute."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, new RegExp(`muted them for exactly ${NEGATIVE_STATEMENT_MUTE_MINUTES} minutes`, "i"));
-      assert.match(system, /doing this again will result in a ban/i);
+      assert.match(system, new RegExp(`muted for exactly ${NEGATIVE_STATEMENT_MUTE_MINUTES} minutes`, "i"));
+      // 2026-09-06 (spec §10): escalation is authorized information, not a
+      // mandatory closing line -- "make clear that X will happen" is exactly
+      // the instruction that produced "keep it up and it'll escalate" on
+      // every single message.
+      assert.match(system, /means a ban -- only if it fits naturally/i);
+      assert.doesNotMatch(system, /make clear that/i);
       assert.doesNotMatch(system, /REPEAT offense/i);
     });
   });
@@ -1318,11 +1336,11 @@ test("REQUIRED (2026-09-05 audience-semantics correction): ban-tier (escalated) 
     await withFetchSpy(anthropicTextResponse("spreading unfounded claims about the project isn't allowed here."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
       const system = (calls[0].body as { system?: string }).system ?? "";
-      assert.match(system, /do not address, name, mention, tag/i);
-      assert.match(system, /community as a whole, not the person who was banned/i);
-      assert.match(system, /community-facing moderation reminder/i);
-      assert.match(system, /repeated violations of this can result in a mute and, if it continues, a ban/i);
-      assert.doesNotMatch(system, /muted them for exactly/i);
+      assert.match(system, /do NOT address, name, mention, or tag/i);
+      assert.match(system, /for the room, not for the person who was banned/i);
+      assert.match(system, /speaking to the room here/i);
+      assert.match(system, /leads to a mute and then a ban/i);
+      assert.doesNotMatch(system, /muted for exactly/i);
     });
   });
 });
@@ -1381,6 +1399,178 @@ test("REQUIRED: BYO required but unusable falls straight to the deterministic fa
       const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS, { required: true, credential: null });
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
       assert.match(text, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
+    });
+  });
+});
+
+/* ============================================================================
+   2026-09-06 ARCHITECTURE CORRECTION -- persona-native moderation speech.
+   Live product feedback: warnings were "technically persona-aware" but still
+   read as machine-structured, because the PROMPT ITSELF demanded the schema
+   MENTION + OFFENSE COUNT + RULE + DESTINATION + PUNISHMENT + ESCALATION on
+   every single message. These tests pin the corrected contract: facts are
+   AUTHORIZED (may be said), never REQUIRED (must be said).
+   ========================================================================= */
+
+const NATURAL_PERSONA: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "warm, blunt, very online" };
+
+function solicitationFacts(overrides: Partial<SolicitationWarningFacts> = {}): SolicitationWarningFacts {
+  return {
+    currentTopicName: "Announcements", muteMinutes: 10, promotionTopicName: "Promotion",
+    promotionTopicLink: null, contactHandle: null, warningNumber: 2, ...overrides,
+  } as SolicitationWarningFacts;
+}
+
+test("REQUIRED (spec 6/31): no authorized fact is framed as mandatory -- the prompt must not demand offense count, destination, mute wording, or escalation be present", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("come on, not again"), async (calls) => {
+      await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      // The exact instructions that produced the templated output are gone.
+      assert.doesNotMatch(system, /Facts you must include/i);
+      assert.doesNotMatch(system, /never invent, omit, or alter/i);
+      assert.doesNotMatch(system, /State the real \d+-minute mute/i);
+      assert.doesNotMatch(system, /Briefly note repeated offenses escalate/i);
+      assert.doesNotMatch(system, /under \d+ words/i);
+      // ...replaced by explicit permission to leave things unsaid.
+      assert.match(system, /Not a checklist/i);
+      assert.match(system, /do not need to cover them all/i);
+    });
+  });
+});
+
+test("REQUIRED (spec 31): across offense 1 -> 4, the prompt never requires the offense NUMBER to be spoken", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    for (const warningNumber of [1, 2, 3, 4]) {
+      await withFetchSpy(anthropicTextResponse("nope, not here"), async (calls) => {
+        await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts({ warningNumber }));
+        const system = (calls[0].body as { system?: string }).system ?? "";
+        if (warningNumber > 1) {
+          // The count is available as CONTEXT, explicitly optional to speak.
+          assert.match(system, /you do NOT need to state the number/i);
+          assert.match(system, /counting it out loud usually sounds automated/i);
+        } else {
+          // A genuine first offense carries no count pressure at all.
+          assert.doesNotMatch(system, /time number/i);
+        }
+      });
+    }
+  });
+});
+
+test("REQUIRED (spec 9/32): a real mute may be expressed naturally -- the prompt permits informal phrasing, and it survives the authorized-fact validator", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("take ten"), async (calls) => {
+      const text = await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts({ muteMinutes: 10 }));
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /any natural way of getting it across is fine/i);
+      assert.match(system, /take ten/i);
+      // Natural phrasing is kept, not discarded for the deterministic template.
+      assert.ok(text && text.includes("take ten"));
+    });
+  });
+});
+
+test("REQUIRED (spec 11): the destination topic is offered as useful-if-relevant, explicitly skippable when redundant", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("we just went over this"), async (calls) => {
+      await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /Skip it when it would be redundant/i);
+      assert.doesNotMatch(system, /Mention the real Promotion destination BY NAME ONLY/i);
+    });
+  });
+});
+
+test("REQUIRED (spec 12/27): the persona is the frame and moderation is the event -- never a moderation-warning generator", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("nah, not in here"), async (calls) => {
+      await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /^You are Patricia -- a real, familiar presence/);
+      assert.match(system, /NOT a moderation system, a support agent, or a policy bot/i);
+      assert.match(system, /WHAT JUST HAPPENED:/);
+      assert.match(system, /say the brief, natural thing YOU would actually say/i);
+      // The persona's own configured description still leads (spec 38: reuse
+      // the existing personaVoiceBlock machinery, never a second system).
+      assert.match(system, /warm, blunt, very online/);
+    });
+  });
+});
+
+test("REQUIRED (spec 21): the deterministic fallback is NEVER placed in the prompt -- the model is never asked to paraphrase a canonical warning", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("not here please"), async (calls) => {
+      await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.doesNotMatch(system, /No promos in .+, please/i);
+      assert.doesNotMatch(system, /Repeated offenses escalate to a kick or ban/i);
+      assert.doesNotMatch(system, /rewrite|paraphrase|reword/i);
+    });
+  });
+});
+
+test("REQUIRED (spec 34): normal moderation realization routes to Claude Sonnet 5 -- verified on the ACTUAL outgoing request, for all three generators, never DeepSeek", async () => {
+  await withEnvAsync(
+    { ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined, AI_PROVIDER: undefined, DEEPSEEK_API_KEY: "sk-deepseek-should-never-be-used" },
+    async () => {
+      const seen: Array<{ url: string; model: string }> = [];
+      const capture = async (run: () => Promise<unknown>) => {
+        await withFetchSpy(anthropicTextResponse("ok"), async (calls) => {
+          await run();
+          const body = calls[0].body as { model?: string };
+          seen.push({ url: calls[0].url, model: body.model ?? "" });
+        });
+      };
+      await capture(() => generatePersonaSolicitationWarning("P", NATURAL_PERSONA, solicitationFacts()));
+      await capture(() =>
+        generatePersonaScamWarning("P", NATURAL_PERSONA, "@x", { isRepeatOffense: false, muteMinutes: SCAM_FIRST_WARNING_MUTE_MINUTES } as ScamWarningFacts)
+      );
+      await capture(() =>
+        generatePersonaNegativeStatementWarning("P", NATURAL_PERSONA, "@x", {
+          isEscalatedOffense: false, muteMinutes: NEGATIVE_STATEMENT_MUTE_MINUTES, banHours: undefined,
+        } as NegativeStatementWarningFacts)
+      );
+      assert.equal(seen.length, 3);
+      for (const call of seen) {
+        assert.equal(call.model, "claude-sonnet-5");
+        assert.match(call.url, /anthropic/i);
+        assert.doesNotMatch(call.url, /deepseek/i);
+      }
+    }
+  );
+});
+
+test("REQUIRED (spec 36): generation failure never blocks anything -- an empty model response still yields a real deterministic string", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse(""), async () => {
+      const text = await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
+      assert.ok(text && text.length > 0);
+      assert.match(text, /No promos in Announcements/i); // the known-safe deterministic fallback
+    });
+  });
+});
+
+test("REQUIRED (spec 33): an unsupported claim is discarded for the deterministic fallback -- a wrong mute duration is never sent", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("that is a 90 minute mute for you"), async () => {
+      const text = await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts({ muteMinutes: 10 }));
+      assert.ok(text);
+      assert.doesNotMatch(text, /90 minute/i);
+    });
+  });
+});
+
+test("REQUIRED (spec 19/39): scam realization is still given ONLY safe structured facts -- never the link, domain, or message text", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(anthropicTextResponse("nope, gone"), async (calls) => {
+      await generatePersonaScamWarning("Patricia", NATURAL_PERSONA, "@someone", {
+        isRepeatOffense: false, muteMinutes: SCAM_FIRST_WARNING_MUTE_MINUTES,
+      } as ScamWarningFacts);
+      const system = (calls[0].body as { system?: string }).system ?? "";
+      assert.match(system, /never saw the link or the message text/i);
+      assert.match(system, /NEVER mention, describe, guess, or invent any URL, domain, wallet address/i);
+      assert.doesNotMatch(system, /https?:\/\//);
     });
   });
 });
