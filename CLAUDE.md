@@ -127,6 +127,87 @@ innvil/
 
 ## Recent Updates
 
+### 2026-09-06 — Moderation warning generation moved to DeepSeek (cost decision) + launch/listing questions defer to the promotional admin + Watchers may push back on spam-justification remarks (v1.49.40)
+- **Explicit product/cost decision: the 4 real, persona-voiced moderation-warning generators
+  now route through the same cheap DeepSeek tier Natural Chatter's CASUAL_CHAT already uses,
+  never Sonnet 5** — `generatePersonaSolicitationWarning`, `generatePersonaScamWarning`,
+  `generatePersonaNegativeStatementWarning` (`link-classify.ts`), and
+  `generateMediaModerationWarning` (`media-warning.ts`). Rationale, stated explicitly: by the
+  time any of these functions runs, the enforcement DECISION (delete/mute/kick/ban) has already
+  been made deterministically — these functions are presentation-layer text only, and every
+  candidate they produce is still passed through `warningTextExceedsAuthorizedFacts` before being
+  sent. `classifyLinkIntent` (the actual scam/spam/phishing classification that determines
+  enforcement) is **unchanged, still hard-locked to Sonnet 5** via `getInnvilModelConfig()` — this
+  change is scoped strictly to warning WORDING, never to what triggers an action.
+  - Each generator's non-BYO `attemptGeneration` branch now calls `deepseekChatterProvider()`
+    (same helper `chatter-generate.ts`'s `resolveChatterRoute` already uses for CASUAL_CHAT) —
+    `model: deepseek.model`, `providerOverride: {provider, apiKey, baseUrl}`,
+    `disableThinking: true`. When DeepSeek is unconfigured or the call fails, generation returns
+    `null` — every one of these functions already treats `null` as "fall back to the deterministic
+    template," so an unconfigured/failed DeepSeek call **never silently escalates to Sonnet or
+    Innvil's own Anthropic key** — same fail-safe shape a missing AI key already produced before
+    this change.
+  - **BYO Enterprise is completely unaffected** — a customer's own stored credential (which can be
+    ANY provider they choose, including Anthropic) is still used verbatim via the existing
+    `aiRouting?.required` branch, checked first in every generator; this change only touches
+    Innvil's own non-BYO (Managed) routing choice.
+  - Module-level doc comments in both files corrected — no longer claim these are "hard
+    INNVIL_REQUIRED_MODEL" automations; the header explicitly states the classification/generation
+    split now.
+  - Test migration: `link-classify.test.ts` (96 tests) and `media-warning.test.ts` (23 tests) —
+    every non-BYO test's env setup (`ANTHROPIC_API_KEY` → `DEEPSEEK_API_KEY`), mocked response shape
+    (`anthropicTextResponse` → new `deepseekTextResponse`, the real OpenAI-compatible
+    `{choices:[{message:{content}}]}` shape `openaiComplete()` actually parses), and system-prompt
+    extraction (`(calls[0].body as {system}).system` → new `systemOf(calls[0].body)`, which reads
+    either a top-level `system` field OR the first `role:"system"` message, since DeepSeek/OpenAI-
+    compatible has no separate `system` field at all) all updated; the 4 dedicated "routes to Sonnet
+    5, never DeepSeek" tests rewritten to assert the opposite; the one genuine BYO-credential test
+    (`generatePersonaScamWarning`'s "BYO required+usable", whose fixture credential is
+    `provider:"anthropic"`) correctly kept on the real Anthropic response shape, since a BYO
+    customer's own chosen provider is untouched by this change either way.
+- **"Why so quiet? When launch on raydium" now defers to the Partnerships/Promotional contact
+  when the question goes unanswered, not just generic Support.** Investigated the real pipeline
+  before changing anything: the message already correctly reaches ANSWER (`isLikelyQuestion`
+  matches the "?" after "quiet"), and the LAST-RESORT fallback mechanism (`answerFallbackInstruction`/
+  `knowledgeOrEscalationLine` in `chatter-generate.ts`) already existed and already worked — it was
+  just **hardcoded to always mention `.contacts?.support`**, regardless of the question's own topic,
+  even though a launch/listing/DEX-timing question is more naturally something a Partnerships/
+  Promotional contact would field.
+  - Deliberately did **NOT** widen `isPartnershipsIntent`/`resolveContactIntent` for this — that
+    function decides whether to inject an AUTHORITATIVE preset for a genuine commercial ASK, and an
+    existing, deliberately-scoped test (`isPartnershipsIntent("When is the TGE?") === false`) already
+    established that a bare informational timing question is never itself treated as a commercial
+    request. Widening that function would have contradicted an already-tested product decision.
+  - Instead, new `project-profile.ts` exports: `looksLikePromotionalTopic(text)` (a much SOFTER
+    signal — reuses the existing `COMMERCIAL_TOPIC_RE` vocabulary plus a new `LAUNCH_TIMING_RE`
+    covering "when will it launch/list/go live/moon/drop", "when launch/listing/live on `<venue>`",
+    "when is the launch/listing/TGE/presale/IDO/ICO") and `resolveFallbackContact(contacts, text)`
+    (prefers `contacts.partnerships` when the topic looks promotional AND one is configured, else
+    `contacts.support`, else `null` — never fabricates a destination). Neither function ever
+    authorizes a preset injection or changes whether the model answers/escalates/stays silent — they
+    only decide WHICH already-configured contact the existing "I genuinely don't know, hand off to
+    someone" fallback mentions.
+  - `community-runtime.ts`'s one `fallbackAdminMention` computation site (used for every real ANSWER
+    reply — confirmed by grep there's only one) now calls `resolveFallbackContact(profile.contacts,
+    row.message_text)` instead of reading `.contacts?.support` directly.
+  - New tests (`project-profile.test.ts`, +8): the exact live repro, further launch/listing
+    phrasings, an ordinary support-shaped question staying non-promotional, `resolveFallbackContact`'s
+    full precedence (Partnerships-when-configured / falls back to Support / never fabricates), and an
+    explicit regression guard proving this never changes `isPartnershipsIntent`'s own authoritative-
+    preset decision for the exact same "When is the TGE?" case the pre-existing test suite already
+    pins.
+- **New standing rule: a Watcher may naturally push back on someone reframing already-moderated
+  behavior (spam/promo) as helpful, instead of staying neutral or giving a vague non-answer.** Live
+  example: after being warned for spam, someone said "Besides I was just trying to support the
+  community" and got a bland "Ok dear" in response. New `SHARED_RULES` entry (`chatter-generate.ts`,
+  applies to both ANSWER and CASUAL_CHAT) explicitly permits — never mandates — a brief, in-voice
+  disagreement in exactly this situation (e.g. "spamming doesn't actually help the community, it
+  just clutters the chat"), while still requiring it stay short/matter-of-fact and not repeat the
+  earlier warning verbatim. New test in `chatter-generate.test.ts` asserts the rule's presence in
+  both action prompts and that it's phrased as a permission, never a requirement.
+- 2401 tests pass (up from 2391), `tsc --noEmit` clean, production build clean. No migration.
+- **Not deployed automatically.**
+
 ### 2026-09-06 — Moderation speech is persona-native, not a persona-colored template: authorized-vs-required facts, real warning history, structural anti-repetition (v1.49.39)
 - **Live product-quality bug, reported with a screenshot of four real Patricia warnings**: "technically persona-aware,
   but the visible moderation warnings still sound like AI-generated preset warnings... it's still doing the same thing

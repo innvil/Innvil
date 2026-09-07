@@ -19,7 +19,7 @@ import {
 import { generateChatterReply, shortAckText, classifyAmbientGreeting, classifyPitchLikelihood, personaReactionEmoji, type ChatterContextMessage, type ChatterGenerationUsage } from "./chatter-generate";
 import { normalizeModeratorPersona, type ModeratorPersona } from "./domain";
 import { retrieveRelevantKnowledge, combineKnowledgeRetrieval, type KnowledgeSource, type KnowledgeContextEntry } from "./knowledge";
-import { resolveContactIntent, findCommunityContactOverride, CONTACT_LABELS, type ProjectContacts } from "./project-profile";
+import { resolveContactIntent, findCommunityContactOverride, resolveFallbackContact, CONTACT_LABELS, type ProjectContacts } from "./project-profile";
 import { classifySender as classifySenderPure, type CommunityEvent, type CommunityAction } from "./event-types";
 import {
   detectSequenceTaskIntent, classifyTaskInstruction, pauseTask, resumeTask, cancelTask, resetSequenceTask,
@@ -4569,8 +4569,14 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
   const communityKnowledge = row.action_kind === "ANSWER"
     ? await loadCommunityKnowledgeGrounding(admin, row.community_id, row.message_thread_id, row.chat_id, null, row.message_text, token)
     : undefined;
+  // Prefers the Partnerships/Promotional contact for a launch/listing/
+  // growth-shaped unanswered question (2026-09-06 live feedback: "when
+  // launch on raydium" should defer to the promotional admin, not generic
+  // support); falls back to Support for everything else. Never authoritative
+  // -- only consulted once a question has already gone completely unanswered
+  // by every other mechanism (see answerFallbackInstruction/knowledgeOrEscalationLine).
   const fallbackAdminMention = row.action_kind === "ANSWER" && community.project_id
-    ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.support ?? null
+    ? resolveFallbackContact((await loadProjectProfileRow(admin, community.project_id))?.contacts ?? {}, row.message_text)
     : null;
   const escalationTarget = row.action_kind === "ANSWER" && community.project_id ? await resolveProjectEscalationTarget(admin, community.project_id) : null;
 

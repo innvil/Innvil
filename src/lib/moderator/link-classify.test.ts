@@ -51,6 +51,27 @@ function anthropicTextResponse(text: string) {
   return { content: [{ type: "text", text }] };
 }
 
+/** DeepSeek/OpenAI-compatible response shape -- generatePersonaSolicitationWarning/
+ *  generatePersonaScamWarning/generatePersonaNegativeStatementWarning (2026-09-06,
+ *  explicit product decision) now route through deepseekChatterProvider() for
+ *  their non-BYO generation, same as chatter-generate.ts's CASUAL_CHAT. */
+function deepseekTextResponse(text: string) {
+  return { choices: [{ message: { content: text } }] };
+}
+
+/** Extracts the system-prompt text from a captured fetch call's body,
+ *  regardless of which provider shape sent it -- Anthropic puts it in a
+ *  top-level `system` field; DeepSeek/OpenAI-compatible (client.ts's
+ *  openaiComplete()) sends it as the FIRST `messages` entry, role
+ *  "system", since that API has no separate system field. Warning
+ *  generation routes through DeepSeek by default since 2026-09-06, so
+ *  most calls in this file now use the latter shape. */
+function systemOf(body: unknown): string {
+  const b = body as { system?: string; messages?: Array<{ role: string; content: string }> };
+  if (typeof b.system === "string") return b.system;
+  return b.messages?.find((m) => m.role === "system")?.content ?? "";
+}
+
 /* ------------------------------------------------------------ classifyLinkIntent ---- */
 
 test("REQUIRED: classification routes to the hard Sonnet 5 default, never DeepSeek", async () => {
@@ -320,23 +341,37 @@ const noMuteFacts: SolicitationWarningFacts = {
   currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: null, warningNumber: 1,
 };
 
-test("REQUIRED: persona solicitation warning also routes to Sonnet 5, never DeepSeek", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("hey, no promos in General please -- pulled that one."), async (calls) => {
+test("REQUIRED (2026-09-06, explicit product decision): persona solicitation warning routes to DeepSeek, never Sonnet 5", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("hey, no promos in General please -- pulled that one."), async (calls) => {
       const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
       assert.equal(calls.length, 1);
-      assert.match(calls[0].url, /anthropic/i);
-      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.match(calls[0].url, /deepseek/i);
+      assert.doesNotMatch(calls[0].url, /anthropic/i);
+      const body = calls[0].body as { model?: string; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.notEqual(body.model, "claude-sonnet-5");
+      assert.equal(body.thinking?.type, "disabled");
       assert.ok(text && text.length > 0);
     });
   });
 });
 
+test("REQUIRED: unconfigured DeepSeek falls straight to the deterministic fallback -- no network call, never escalates to Sonnet", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
+      assert.equal(calls.length, 0, "must not attempt any network call when DeepSeek is unconfigured");
+      assert.ok(text && text.length > 0, "a real deterministic fallback string is still returned");
+    });
+  });
+});
+
 test("REQUIRED: the prompt requires the exact current topic name, and states no mute applies when none does", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos in General, thanks!"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos in General, thanks!"), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /General/);
       assert.match(system, /no mute, no kick, no ban/i);
     });
@@ -344,10 +379,10 @@ test("REQUIRED: the prompt requires the exact current topic name, and states no 
 });
 
 test("REQUIRED: the prompt requires the exact mute duration verbatim when one applies", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("that resulted in a mute, no promos in General."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("that resulted in a mute, no promos in General."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 10 });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /exactly 10 minutes/);
     });
   });
@@ -361,10 +396,10 @@ test("REQUIRED: the prompt requires the exact mute duration verbatim when one ap
 // to enforce the "no promos here" policy without reacting to fabricated
 // content from a message the model was never shown.
 test("REQUIRED: the prompt states the model was never shown the removed message's wording, and bans reacting to invented specifics from it", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos in General please, thanks!"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos in General please, thanks!"), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /did NOT read the removed message.s actual wording/i);
       assert.match(system, /never claim or deny being "the dev,"/i);
     });
@@ -378,33 +413,33 @@ test("REQUIRED: the prompt states the model was never shown the removed message'
 // facts object (kept there only for a possible future non-message use, per
 // the field's own doc comment -- never read by this function's prompt).
 test("REQUIRED: the prompt requires the real configured Promotion destination BY NAME ONLY (never a link), and bans inventing one when none exists", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("head to Promotion instead."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("head to Promotion instead."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, {
         ...noMuteFacts, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45",
       });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /"Promotion"/);
       assert.match(system, /never include a link or URL of any kind/i);
       assert.doesNotMatch(system, /https:\/\/t\.me\/c\/123\/45/);
     });
   });
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos here, sorry."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos here, sorry."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /do NOT invent one/i);
     });
   });
 });
 
 test("REQUIRED: the prompt never mentions a promotion destination AND a contact together, and asks for genuine brevity", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos here, use Promotion instead."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos here, use Promotion instead."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, {
         ...noMuteFacts, promotionTopicName: "Promotion", contactHandle: "@RhyleKhy",
       });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /Skip it when it would be redundant/i);
       // 2026-09-06 (spec §28): a fixed "under 30 words" cap is itself part of
       // what made every warning read the same. Length must follow the moment
@@ -422,10 +457,10 @@ test("REQUIRED: the prompt never mentions a promotion destination AND a contact 
 });
 
 test("REQUIRED: the prompt requires the real configured contact handle when one exists", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("hit up the contact if you want to talk business."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("hit up the contact if you want to talk business."), async (calls) => {
       await generatePersonaSolicitationWarning("Patricia", persona, { ...noMuteFacts, contactHandle: "@RhyleKhy" });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /@RhyleKhy/);
     });
   });
@@ -438,10 +473,10 @@ test("REQUIRED: the prompt requires the real configured contact handle when one 
 // chatter-generate.ts), but the warning text sent back must always be
 // English regardless.
 test("REQUIRED: the prompt always requires an English warning, regardless of the violating message's own language", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos in General please."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos in General please."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /write in english/i);
     });
   });
@@ -453,14 +488,14 @@ test("REQUIRED: the prompt always requires an English warning, regardless of the
 // is never allowed anywhere in the community, not just outside the
 // Promotion destination.
 test("REQUIRED: a competing-project-promotion warning never redirects to the Promotion destination or contact, even when both are configured (isCompetingProjectPromotion overrides them)", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("promoting other projects isn't allowed here at all."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("promoting other projects isn't allowed here at all."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, {
         ...noMuteFacts,
         promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45", contactHandle: "@RhyleKhy",
         isCompetingProjectPromotion: true,
       });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /never allowed here in any form/i);
       assert.match(system, /do NOT suggest anywhere else to post it/i);
       assert.doesNotMatch(system, /"Promotion"/);
@@ -470,7 +505,7 @@ test("REQUIRED: a competing-project-promotion warning never redirects to the Pro
   });
   // The deterministic fallback (used on any generation failure) must honor
   // the same rule -- verified with no AI provider configured at all.
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       ...noMuteFacts,
       promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/123/45", contactHandle: "@RhyleKhy",
@@ -491,14 +526,14 @@ test("REQUIRED: a competing-project-promotion warning never redirects to the Pro
 // specific person named, "isolated" still explicitly addresses the sender.
 
 test("REQUIRED: an ISOLATED search-spam warning states this is off-topic spam, never mentions a Promotion destination or contact even when both are configured", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("that's spam, not allowed here."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("that's spam, not allowed here."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, {
         ...noMuteFacts,
         promotionTopicName: "Promotion", contactHandle: "@RhyleKhy",
         searchSpamPattern: "isolated",
       });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /off-topic spam/i);
       assert.match(system, /no "right place" to redirect/i);
       assert.doesNotMatch(system, /"Promotion"/);
@@ -510,13 +545,13 @@ test("REQUIRED: an ISOLATED search-spam warning states this is off-topic spam, n
 });
 
 test("REQUIRED: a COORDINATED search-spam warning reads as a general room reminder and explicitly bans naming the specific sender", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("please stop spamming that here."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("please stop spamming that here."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, {
         ...noMuteFacts,
         searchSpamPattern: "coordinated",
       });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /several different accounts/i);
       assert.match(system, /do NOT name, mention, or single out this one person/i);
       assert.match(system, /address the room generally/i);
@@ -525,7 +560,7 @@ test("REQUIRED: a COORDINATED search-spam warning reads as a general room remind
 });
 
 test("deterministic fallback (isolated): states the off-topic-spam framing, never 'no promos'/a Promotion redirect", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       ...noMuteFacts, muteMinutes: 10, searchSpamPattern: "isolated",
     });
@@ -534,7 +569,7 @@ test("deterministic fallback (isolated): states the off-topic-spam framing, neve
 });
 
 test("deterministic fallback (coordinated): a general room reminder, never singles out a name/mention", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       ...noMuteFacts, searchSpamPattern: "coordinated",
     });
@@ -543,7 +578,7 @@ test("deterministic fallback (coordinated): a general room reminder, never singl
 });
 
 test("REQUIRED: falls back to a short deterministic template on any generation failure -- never a broken/missing warning, never speaks a link", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts);
     assert.equal(text, "No promos in General, please. Repeated offenses escalate to a kick or ban.");
   });
@@ -556,7 +591,7 @@ test("REQUIRED: falls back to a short deterministic template on any generation f
 // precedence), and the raw link is never included even though it's present
 // on the facts object.
 test("deterministic fallback states the mute duration and the Promotion topic NAME only -- never the link, never both a topic and a contact together", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       currentTopicName: "General", muteMinutes: 30, promotionTopicName: "Promotion", promotionTopicLink: "https://t.me/c/1/2", contactHandle: "@RhyleKhy", warningNumber: 2,
     });
@@ -569,7 +604,7 @@ test("deterministic fallback states the mute duration and the Promotion topic NA
 });
 
 test("deterministic fallback falls back to the contact when no Promotion topic name is known", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const text = await generatePersonaSolicitationWarning("Kwan", persona, {
       currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: "@RhyleKhy", warningNumber: 1,
     });
@@ -579,7 +614,7 @@ test("deterministic fallback falls back to the contact when no Promotion topic n
 });
 
 test("REQUIRED: BYO required but unusable falls straight to the deterministic fallback, no network call at all", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy({}, async (calls) => {
       const text = await generatePersonaSolicitationWarning("Kwan", persona, noMuteFacts, { required: true, credential: null });
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
@@ -607,10 +642,10 @@ const CASUAL_PERSONA: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, formal:
 /* -------------------------------------------------- (1) persona respected ---- */
 
 test("REQUIRED: persona is included and respected in moderation-language generation -- the system prompt carries real style mechanics derived from the configured persona, not just a bare description sentence", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos in General."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos in General."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, { ...noMuteFacts, warningNumber: 1 });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /always capitalize the start/i);
       assert.match(system, /avoid slang/i);
     });
@@ -620,17 +655,17 @@ test("REQUIRED: persona is included and respected in moderation-language generat
 /* --------------------------------------- (2) two personas, same facts, different voice ---- */
 
 test("REQUIRED: two different personas realize the SAME moderation facts differently", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const facts: SolicitationWarningFacts = { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 };
     let formalSystem = "";
     let casualSystem = "";
-    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("no promos here."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, facts);
-      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+      formalSystem = systemOf(calls[0].body);
     });
-    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("no promos here."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", CASUAL_PERSONA, facts);
-      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+      casualSystem = systemOf(calls[0].body);
     });
     assert.notEqual(formalSystem, casualSystem);
     assert.match(formalSystem, /always capitalize the start/i);
@@ -641,17 +676,17 @@ test("REQUIRED: two different personas realize the SAME moderation facts differe
 /* ------------------------------------------- (3) facts stay authoritative ---- */
 
 test("REQUIRED: enforcement facts remain authoritative and are IDENTICAL regardless of persona -- only the style mechanics differ", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const facts: SolicitationWarningFacts = { ...noMuteFacts, muteMinutes: 30, promotionTopicName: "Promotion", warningNumber: 3 };
     let formalSystem = "";
     let casualSystem = "";
-    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("no promos here."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, facts);
-      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+      formalSystem = systemOf(calls[0].body);
     });
-    await withFetchSpy(anthropicTextResponse("no promos here."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("no promos here."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", CASUAL_PERSONA, facts);
-      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+      casualSystem = systemOf(calls[0].body);
     });
     // The exact facts -- mute duration, topic name, destination, escalation
     // stage -- must be present VERBATIM and IDENTICALLY in both prompts.
@@ -663,7 +698,7 @@ test("REQUIRED: enforcement facts remain authoritative and are IDENTICAL regardl
 });
 
 test("REQUIRED: a persona can never alter what the fallback (or any generation attempt) states as fact -- the deterministic fallback ignores persona entirely by design", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const facts: SolicitationWarningFacts = { currentTopicName: "General", muteMinutes: 10, promotionTopicName: "Promotion", promotionTopicLink: null, contactHandle: null, warningNumber: 2 };
     const formalText = await generatePersonaSolicitationWarning("Kwan", FORMAL_PERSONA, facts);
     const casualText = await generatePersonaSolicitationWarning("Kwan", CASUAL_PERSONA, facts);
@@ -674,10 +709,10 @@ test("REQUIRED: a persona can never alter what the fallback (or any generation a
 /* --------------------------------------------- escalation-stage tone fact ---- */
 
 test("REQUIRED (Case B): the prompt instructs a firmer tone for repeat offenses, and explicitly states the real warning number/limit -- never left for the model to guess", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, muteMinutes: 30, warningNumber: 3 });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /time number 3/i);
       assert.match(system, /more exasperated/i);
     });
@@ -685,10 +720,10 @@ test("REQUIRED (Case B): the prompt instructs a firmer tone for repeat offenses,
 });
 
 test("a first offense is explicitly framed as light/matter-of-fact, not firm", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("no promos."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("no promos."), async (calls) => {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 });
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.doesNotMatch(system, /time number/i);
       assert.doesNotMatch(system, /more exasperated/i);
     });
@@ -706,7 +741,7 @@ function multiCallFetchSpy(responses: string[]): { calls: Array<{ url: string; b
       calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
       const text = responses[Math.min(i, responses.length - 1)];
       i++;
-      return new Response(JSON.stringify(anthropicTextResponse(text)), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(deepseekTextResponse(text)), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     return () => {
       globalThis.fetch = originalFetch;
@@ -716,7 +751,7 @@ function multiCallFetchSpy(responses: string[]): { calls: Array<{ url: string; b
 }
 
 test("REQUIRED (Case C/4): a near-duplicate candidate triggers exactly ONE bounded regeneration, whose prompt explicitly says to avoid repeating the recent wording", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
     // First call returns near-identical text to the recent one; second
     // (retry) call returns something genuinely different.
@@ -730,7 +765,7 @@ test("REQUIRED (Case C/4): a near-duplicate candidate triggers exactly ONE bound
         "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
       );
       assert.equal(calls.length, 2, "exactly one regeneration attempt, never zero, never more than one");
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /reads like what you just wrote/i);
       assert.match(retrySystem, /say this one differently/i);
       assert.equal(text, "Hey, that's a promo, pulled it. 10-minute mute, use Promotion next time.");
@@ -741,7 +776,7 @@ test("REQUIRED (Case C/4): a near-duplicate candidate triggers exactly ONE bound
 });
 
 test("REQUIRED: when the candidate is NOT similar to any recent warning, only ONE call is made -- no wasted regeneration", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["That's off-topic spam, not allowed here."];
     const { calls, install } = multiCallFetchSpy(["No promo in this topic, please -- 10 minute mute. Use Promotion instead."]);
     const restore = install();
@@ -755,7 +790,7 @@ test("REQUIRED: when the candidate is NOT similar to any recent warning, only ON
 });
 
 test("REQUIRED: the retry is bounded to exactly ONE attempt -- even if the regenerated text is STILL similar, it's used as-is, never retried again", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
     const sameSimilarText = "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.";
     const { calls, install } = multiCallFetchSpy([sameSimilarText, sameSimilarText]);
@@ -773,7 +808,7 @@ test("REQUIRED: the retry is bounded to exactly ONE attempt -- even if the regen
 });
 
 test("an empty recentOwnWarnings list never triggers a regeneration, regardless of candidate content", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead."]);
     const restore = install();
     try {
@@ -786,7 +821,7 @@ test("an empty recentOwnWarnings list never triggers a regeneration, regardless 
 });
 
 test("REQUIRED: an ENFORCEMENT_NOTICE (a real mute attached) with NOTHING recently similar is returned as-is, without a wasted retry call -- ENFORCEMENT_NOTICE alone is not a reason to retry, only a genuine near-duplicate signal is", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead."]);
     const restore = install();
     try {
@@ -800,7 +835,7 @@ test("REQUIRED: an ENFORCEMENT_NOTICE (a real mute attached) with NOTHING recent
 });
 
 test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR (but not near-identical) to a recent warning, with no mute attached, gets the brevity instruction", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     // ~0.64 similarity measured -- above NEAR_DUPLICATE_WARNING_THRESHOLD
     // (0.45), below NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD (0.7).
     const recentOwnWarnings = ["Hey, no promos in General please -- pulled that link for now."];
@@ -812,7 +847,7 @@ test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR
     try {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, recentOwnWarnings);
       assert.equal(calls.length, 2, "the two fixture texts must actually register as similar enough to exercise the retry path");
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /keep this one especially short/i);
     } finally {
       restore();
@@ -821,7 +856,7 @@ test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR
 });
 
 test("REQUIRED (NO_PUBLIC_REPLY): a candidate NEAR-IDENTICAL to a recent warning, with no consequence attached, resolves to genuine silence -- null, not another short reply", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promos in General, please. Repeated offenses escalate to a kick or ban."];
     const { calls, install } = multiCallFetchSpy(["No promos in General, please -- repeated offenses can escalate to a kick or ban."]);
     const restore = install();
@@ -838,7 +873,7 @@ test("REQUIRED (NO_PUBLIC_REPLY): a candidate NEAR-IDENTICAL to a recent warning
 /* -------------------------------------- generation-failure never blocks enforcement ---- */
 
 test("REQUIRED: a failed FIRST generation call falls straight to the deterministic fallback -- no retry is ever attempted (there's nothing successful to compare for similarity)", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const originalFetch = globalThis.fetch;
     let callCount = 0;
     globalThis.fetch = (async () => {
@@ -859,7 +894,7 @@ test("REQUIRED: a failed FIRST generation call falls straight to the determinist
 });
 
 test("REQUIRED: a successful first generation that IS a near-duplicate, whose retry then fails, still returns the first (already-valid) text -- never discarded for an unrelated retry failure", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
     const firstText = "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.";
     const originalFetch = globalThis.fetch;
@@ -867,7 +902,7 @@ test("REQUIRED: a successful first generation that IS a near-duplicate, whose re
     globalThis.fetch = (async () => {
       callCount++;
       if (callCount === 1) {
-        return new Response(JSON.stringify(anthropicTextResponse(firstText)), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(deepseekTextResponse(firstText)), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response("server error", { status: 500 }); // the retry attempt fails
     }) as typeof fetch;
@@ -893,7 +928,7 @@ test("REQUIRED: a successful first generation that IS a near-duplicate, whose re
 // authority.
 
 test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate WITH a real mute attached gets a retry instruction that explicitly demands the consequence still be stated in full, never shortened", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
     const { calls, install } = multiCallFetchSpy([
       "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.",
@@ -904,7 +939,7 @@ test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate WITH a r
       await generatePersonaSolicitationWarning(
         "Kwan", persona, { ...noMuteFacts, muteMinutes: 10, promotionTopicName: "Promotion", warningNumber: 2 }, undefined, recentOwnWarnings
       );
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /real consequence is attached.*still state every required fact.*in full/i);
       assert.doesNotMatch(retrySystem, /keep this one especially short/i);
     } finally {
@@ -914,7 +949,7 @@ test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate WITH a r
 });
 
 test("REQUIRED (mode-aware retry, SHORT_NUDGE): a near-duplicate with NO consequence attached (no mute -- a genuine first-offense-shaped warning) gets the brevity instruction instead", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promos in General, please. Post that in Promotion instead."];
     const { calls, install } = multiCallFetchSpy([
       "No promos in General, please -- take it to Promotion.",
@@ -923,7 +958,7 @@ test("REQUIRED (mode-aware retry, SHORT_NUDGE): a near-duplicate with NO consequ
     const restore = install();
     try {
       await generatePersonaSolicitationWarning("Kwan", persona, { ...noMuteFacts, warningNumber: 1 }, undefined, recentOwnWarnings);
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /keep this one especially short/i);
       assert.doesNotMatch(retrySystem, /real consequence is attached/i);
     } finally {
@@ -933,7 +968,7 @@ test("REQUIRED (mode-aware retry, SHORT_NUDGE): a near-duplicate with NO consequ
 });
 
 test("REQUIRED (untrusted-output guard, fast path): a generated candidate that invents an unsupported fact is discarded for the deterministic fallback, WITHOUT ever attempting a retry (no near-duplicate detected -- the guard is a separate check from anti-repetition)", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     // "no consequence beyond deletion" facts (muteMinutes undefined) --
     // the generated text nonetheless invents a specific mute duration.
     const { calls, install } = multiCallFetchSpy(["No promos in General, please -- that's a 30-minute mute for you."]);
@@ -949,7 +984,7 @@ test("REQUIRED (untrusted-output guard, fast path): a generated candidate that i
 });
 
 test("REQUIRED (untrusted-output guard, exact live-quoted example): a candidate claiming a definite ban ('next time you're banned') that isn't actually authorized is discarded", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["Careful -- you've been banned from posting that here."]);
     const restore = install();
     try {
@@ -965,7 +1000,7 @@ test("REQUIRED (untrusted-output guard, exact live-quoted example): a candidate 
 });
 
 test("REQUIRED (untrusted-output guard applies to the RETRY too): a near-duplicate whose regenerated retry ALSO invents an unsupported fact is discarded for the deterministic fallback, not silently returned", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["No promo in this topic, friend — that's a 10-min mute. Take that energy to Promotion instead. Keep it up and we'll escalate to boot city."];
     const { calls, install } = multiCallFetchSpy([
       "No promo in this topic, friend — that's a 10 min mute. Take it to Promotion instead, or next time it escalates further.",
@@ -990,7 +1025,7 @@ test("REQUIRED (untrusted-output guard applies to the RETRY too): a near-duplica
 });
 
 test("a normal, fact-accurate candidate with no unsupported claims is returned unchanged -- the guard is not overzealous against ordinary correct wording", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const text = await (async () => {
       const { calls, install } = multiCallFetchSpy(["No promos in General, please -- that's a 10-minute mute. Repeated offenses can escalate to a kick or ban."]);
       const restore = install();
@@ -1018,28 +1053,31 @@ const FIRST_OFFENSE_FACTS: ScamWarningFacts = { isRepeatOffense: false, muteMinu
 const REPEAT_OFFENSE_FACTS: ScamWarningFacts = { isRepeatOffense: true, muteMinutes: undefined };
 const MENTION = "@ScammedUser";
 
-test("REQUIRED: scam warning generation routes to Sonnet 5, never DeepSeek", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("Careful with links like that -- I've removed it and muted you for a bit."), async (calls) => {
+test("REQUIRED (2026-09-06, explicit product decision): scam warning generation routes to DeepSeek, never Sonnet 5", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("Careful with links like that -- I've removed it and muted you for a bit."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
       assert.equal(calls.length, 1);
-      assert.match(calls[0].url, /anthropic/i);
-      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.match(calls[0].url, /deepseek/i);
+      assert.doesNotMatch(calls[0].url, /anthropic/i);
+      const body = calls[0].body as { model?: string; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.thinking?.type, "disabled");
     });
   });
 });
 
 test("REQUIRED: persona is respected -- two differently-configured Watchers produce genuinely different prompts for the identical scam facts", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     let formalSystem = "";
     let casualSystem = "";
-    await withFetchSpy(anthropicTextResponse("removed that, be careful."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("removed that, be careful."), async (calls) => {
       await generatePersonaScamWarning("Kwan", FORMAL_PERSONA, MENTION, FIRST_OFFENSE_FACTS);
-      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+      formalSystem = systemOf(calls[0].body);
     });
-    await withFetchSpy(anthropicTextResponse("removed that, be careful."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("removed that, be careful."), async (calls) => {
       await generatePersonaScamWarning("Kwan", CASUAL_PERSONA, MENTION, FIRST_OFFENSE_FACTS);
-      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+      casualSystem = systemOf(calls[0].body);
     });
     assert.notEqual(formalSystem, casualSystem);
     assert.match(formalSystem, /always capitalize the start/i);
@@ -1048,10 +1086,10 @@ test("REQUIRED: persona is respected -- two differently-configured Watchers prod
 });
 
 test("REQUIRED: the model is never given the malicious URL/message -- explicit safety instruction present in the prompt for every call", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("removed that link, be careful."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("removed that link, be careful."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /never saw the link or the message text/i);
       assert.match(system, /never mention, describe, guess, or invent/i);
     });
@@ -1059,10 +1097,10 @@ test("REQUIRED: the model is never given the malicious URL/message -- explicit s
 });
 
 test("REQUIRED: first-offense facts require the real mute duration stated verbatim and the real future-removal risk, never a claim that removal already happened", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("removed that link, be careful."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("removed that link, be careful."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, new RegExp(`muted for exactly ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes`, "i"));
       // 2026-09-06 (spec §6): facts are AUTHORIZED, never required sentence
       // content. "never omit" was the instruction that guaranteed the same
@@ -1080,10 +1118,10 @@ test("REQUIRED: first-offense facts require the real mute duration stated verbat
 });
 
 test("REQUIRED (2026-09-05 audience-semantics correction): repeat-offense (kick) generation instructs a COMMUNITY-facing reminder -- no mention/address of the removed person, no personal 'you have been removed' claim, never mentions a mute", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("posting scam links isn't tolerated here."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("posting scam links isn't tolerated here."), async (calls) => {
       await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /do NOT address, name, mention, or tag/i);
       assert.match(system, /for the room, not for the person who was removed/i);
       assert.match(system, /speaking to the room here/i);
@@ -1094,8 +1132,8 @@ test("REQUIRED (2026-09-05 audience-semantics correction): repeat-offense (kick)
 });
 
 test("REQUIRED: the repeat-offense (kick) returned text never carries the mention -- the community-facing generated body is returned as-is", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("posting scam links isn't tolerated here -- repeat offenders get removed."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("posting scam links isn't tolerated here -- repeat offenders get removed."), async (calls) => {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
       assert.equal(calls.length, 1);
       assert.equal(text, "posting scam links isn't tolerated here -- repeat offenders get removed.");
@@ -1105,8 +1143,8 @@ test("REQUIRED: the repeat-offense (kick) returned text never carries the mentio
 });
 
 test("REQUIRED: the mention is embedded deterministically by the function itself, never left to the model -- the returned text always starts with the exact mention passed in (FIRST-offense, still user-facing, only)", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("your message was removed, be careful with links."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("your message was removed, be careful with links."), async (calls) => {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
       assert.equal(calls.length, 1);
       assert.equal(text, `${MENTION}, your message was removed, be careful with links.`);
@@ -1115,7 +1153,7 @@ test("REQUIRED: the mention is embedded deterministically by the function itself
 });
 
 test("REQUIRED: falls back to the EXACT existing deterministic templates on any generation failure -- scam enforcement's public wording never depends on AI succeeding", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const firstText = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS);
     const repeatText = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
     assert.equal(firstText, scamFirstOffenseWarningHtml(MENTION));
@@ -1124,7 +1162,7 @@ test("REQUIRED: falls back to the EXACT existing deterministic templates on any 
 });
 
 test("REQUIRED (untrusted-output guard): a candidate stating a WRONG mute duration is discarded for the deterministic fallback", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["Careful -- that's a 5-minute mute for you."]);
     const restore = install();
     try {
@@ -1138,7 +1176,7 @@ test("REQUIRED (untrusted-output guard): a candidate stating a WRONG mute durati
 });
 
 test("REQUIRED (untrusted-output guard): a candidate containing a raw link/URL is discarded even though none was ever given to the model", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["That was a fake link, https://not-real.example, be careful."]);
     const restore = install();
     try {
@@ -1152,7 +1190,7 @@ test("REQUIRED (untrusted-output guard): a candidate containing a raw link/URL i
 });
 
 test("REQUIRED (untrusted-output guard): a FIRST-offense candidate falsely claiming removal already happened is discarded (nothing was actually removed -- only muted)", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["You've been removed from this community already."]);
     const restore = install();
     try {
@@ -1166,8 +1204,8 @@ test("REQUIRED (untrusted-output guard): a FIRST-offense candidate falsely claim
 });
 
 test("REQUIRED (untrusted-output guard, repeat offense, 2026-09-05 audience-semantics correction): a candidate stating a personal 'you've been removed' claim is now REJECTED UNCONDITIONALLY (even though the kick genuinely did happen) -- that's the wrong audience for a community-facing notice, so it falls back to the deterministic template instead", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("You've been removed from this community already."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("You've been removed from this community already."), async (calls) => {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, REPEAT_OFFENSE_FACTS);
       assert.equal(calls.length, 1, "the guard rejecting a candidate must never itself trigger a retry");
       assert.equal(text, scamRepeatOffenseWarningHtml());
@@ -1179,7 +1217,7 @@ test("REQUIRED (untrusted-output guard, repeat offense, 2026-09-05 audience-sema
 /* -------------------------------------- scam anti-repetition ---- */
 
 test("REQUIRED: a near-duplicate scam warning triggers exactly ONE bounded regeneration, always in ENFORCEMENT_NOTICE (full, never shortened) style", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = [`${MENTION}, your message was removed because it contained a suspected scam/phishing link. You've been muted for ${SCAM_FIRST_WARNING_MUTE_MINUTES} minutes. Another confirmed violation will result in removal from this community.`];
     const { calls, install } = multiCallFetchSpy([
       "your message was removed because it contained a suspected scam/phishing link. You've been muted for 30 minutes. Another confirmed violation will result in removal from this community.",
@@ -1189,7 +1227,7 @@ test("REQUIRED: a near-duplicate scam warning triggers exactly ONE bounded regen
     try {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, undefined, recentOwnWarnings);
       assert.equal(calls.length, 2, "exactly one regeneration attempt, never zero, never more than one");
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /still make that consequence clear|still state every required fact/i);
       assert.doesNotMatch(retrySystem, /keep this one especially short/i);
       assert.equal(text, `${MENTION}, Careful with that link -- it's gone, and you're on a 30-minute timeout because of it.`);
@@ -1200,7 +1238,7 @@ test("REQUIRED: a near-duplicate scam warning triggers exactly ONE bounded regen
 });
 
 test("REQUIRED: when the candidate is NOT similar to any recent scam warning, only ONE call is made -- no wasted regeneration", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["That's off-topic spam, not allowed here."];
     const { calls, install } = multiCallFetchSpy(["Careful with that link -- removed it and muted you for a bit."]);
     const restore = install();
@@ -1214,7 +1252,7 @@ test("REQUIRED: when the candidate is NOT similar to any recent scam warning, on
 });
 
 test("an empty recentOwnWarnings list never triggers a regeneration, regardless of candidate content", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["Careful with that link -- removed it and muted you for a bit."]);
     const restore = install();
     try {
@@ -1227,7 +1265,7 @@ test("an empty recentOwnWarnings list never triggers a regeneration, regardless 
 });
 
 test("the retry is bounded to exactly ONE attempt -- even if the regenerated text is STILL similar, it's used as-is, never retried again", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const sameSimilarText = "your message was removed because it contained a suspected scam/phishing link. You've been muted for 30 minutes. Another confirmed violation will result in removal from this community.";
     const recentOwnWarnings = [`${MENTION}, ${sameSimilarText}`];
     const { calls, install } = multiCallFetchSpy([sameSimilarText, sameSimilarText]);
@@ -1244,8 +1282,8 @@ test("the retry is bounded to exactly ONE attempt -- even if the regenerated tex
 
 /* -------------------------------------- BYO Enterprise routing ---- */
 
-test("REQUIRED: BYO required+usable routes through the stored credential, never Innvil's own key", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+test("REQUIRED: BYO required+usable routes through the CUSTOMER'S OWN stored credential (whatever provider/model they picked), never Innvil's own DeepSeek key -- BYO is unaffected by Innvil's own non-BYO routing choice either way", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy(anthropicTextResponse("Careful with that link -- removed it."), async (calls) => {
       const text = await generatePersonaScamWarning(
         "Kwan", persona, MENTION, FIRST_OFFENSE_FACTS,
@@ -1259,7 +1297,7 @@ test("REQUIRED: BYO required+usable routes through the stored credential, never 
 });
 
 test("REQUIRED: BYO required but unusable falls straight to the deterministic fallback, no network call at all", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy({}, async (calls) => {
       const text = await generatePersonaScamWarning("Kwan", persona, MENTION, FIRST_OFFENSE_FACTS, { required: true, credential: null });
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
@@ -1282,22 +1320,25 @@ const NS_WARN_FACTS: NegativeStatementWarningFacts = { isEscalatedOffense: false
 const NS_BAN_FACTS: NegativeStatementWarningFacts = { isEscalatedOffense: true, muteMinutes: undefined, banHours: NEGATIVE_STATEMENT_BAN_MINUTES / 60 };
 const NS_MENTION = "@AccuserUser";
 
-test("REQUIRED: negative-statement warning generation routes to Sonnet 5, never DeepSeek", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("please don't spread claims like that here -- you're muted for a bit."), async (calls) => {
+test("REQUIRED (2026-09-06, explicit product decision): negative-statement warning generation routes to DeepSeek, never Sonnet 5", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("please don't spread claims like that here -- you're muted for a bit."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
       assert.equal(calls.length, 1);
-      assert.match(calls[0].url, /anthropic/i);
-      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.match(calls[0].url, /deepseek/i);
+      assert.doesNotMatch(calls[0].url, /anthropic/i);
+      const body = calls[0].body as { model?: string; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.thinking?.type, "disabled");
     });
   });
 });
 
 test("REQUIRED: the model is never given the removed message's own text -- explicit safety instruction present in the prompt", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("keep it factual, please."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("keep it factual, please."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /did NOT read the removed message.s actual wording/i);
       assert.match(system, /guess, invent, or react to specific words/i);
     });
@@ -1305,20 +1346,20 @@ test("REQUIRED: the model is never given the removed message's own text -- expli
 });
 
 test("REQUIRED: a genuine question about whether something is a scam is explicitly distinguished as fine, not the violation being warned about", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("keep it factual, please."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("keep it factual, please."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /genuine question about whether something.s a scam is completely fine/i);
     });
   });
 });
 
 test("REQUIRED: warn-tier facts require the real mute duration stated verbatim, and make clear a ban follows next time -- never a claim removal already happened", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("please stop, that's a 30-minute mute."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("please stop, that's a 30-minute mute."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, new RegExp(`muted for exactly ${NEGATIVE_STATEMENT_MUTE_MINUTES} minutes`, "i"));
       // 2026-09-06 (spec §10): escalation is authorized information, not a
       // mandatory closing line -- "make clear that X will happen" is exactly
@@ -1332,10 +1373,10 @@ test("REQUIRED: warn-tier facts require the real mute duration stated verbatim, 
 });
 
 test("REQUIRED (2026-09-05 audience-semantics correction): ban-tier (escalated) generation instructs a COMMUNITY-facing reminder -- no mention/address of the banned person, general rule/consequence language only, never mentions a mute", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("spreading unfounded claims about the project isn't allowed here."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("spreading unfounded claims about the project isn't allowed here."), async (calls) => {
       await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /do NOT address, name, mention, or tag/i);
       assert.match(system, /for the room, not for the person who was banned/i);
       assert.match(system, /speaking to the room here/i);
@@ -1346,8 +1387,8 @@ test("REQUIRED (2026-09-05 audience-semantics correction): ban-tier (escalated) 
 });
 
 test("REQUIRED: the ban-tier (escalated) returned text never carries the mention -- the community-facing generated body is returned as-is", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("spreading unfounded claims isn't allowed here -- repeat violations get you banned."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("spreading unfounded claims isn't allowed here -- repeat violations get you banned."), async (calls) => {
       const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
       assert.equal(calls.length, 1);
       assert.equal(text, "spreading unfounded claims isn't allowed here -- repeat violations get you banned.");
@@ -1357,8 +1398,8 @@ test("REQUIRED: the ban-tier (escalated) returned text never carries the mention
 });
 
 test("REQUIRED: the mention is embedded deterministically, never left to the model -- the returned text always starts with the exact mention passed in (2nd-offense mute tier, still user-facing, only)", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("please keep it factual, that's a mute for now."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("please keep it factual, that's a mute for now."), async (calls) => {
       const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
       assert.equal(calls.length, 1);
       assert.equal(text, `${NS_MENTION}, please keep it factual, that's a mute for now.`);
@@ -1367,7 +1408,7 @@ test("REQUIRED: the mention is embedded deterministically, never left to the mod
 });
 
 test("REQUIRED: falls back to a fixed, accurate deterministic template on any generation failure -- public wording never depends on AI succeeding", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_FALLBACK_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     const warnText = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
     const banText = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_BAN_FACTS);
     assert.match(warnText, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
@@ -1383,8 +1424,8 @@ test("REQUIRED: falls back to a fixed, accurate deterministic template on any ge
 });
 
 test("REQUIRED (untrusted-output guard): a candidate stating a WRONG mute duration is discarded for the deterministic fallback", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("that's a 90-minute mute, please stop."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("that's a 90-minute mute, please stop."), async (calls) => {
       const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS);
       assert.equal(calls.length, 1);
       assert.match(text, new RegExp(`${NEGATIVE_STATEMENT_MUTE_MINUTES}-minute mute`));
@@ -1394,7 +1435,7 @@ test("REQUIRED (untrusted-output guard): a candidate stating a WRONG mute durati
 });
 
 test("REQUIRED: BYO required but unusable falls straight to the deterministic fallback, no network call at all", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy({}, async (calls) => {
       const text = await generatePersonaNegativeStatementWarning("Kwan", persona, NS_MENTION, NS_WARN_FACTS, { required: true, credential: null });
       assert.equal(calls.length, 0, "must never reach Innvil's own key when BYO is required but unusable");
@@ -1422,10 +1463,10 @@ function solicitationFacts(overrides: Partial<SolicitationWarningFacts> = {}): S
 }
 
 test("REQUIRED (spec 6/31): no authorized fact is framed as mandatory -- the prompt must not demand offense count, destination, mute wording, or escalation be present", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("come on, not again"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("come on, not again"), async (calls) => {
       await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       // The exact instructions that produced the templated output are gone.
       assert.doesNotMatch(system, /Facts you must include/i);
       assert.doesNotMatch(system, /never invent, omit, or alter/i);
@@ -1440,11 +1481,11 @@ test("REQUIRED (spec 6/31): no authorized fact is framed as mandatory -- the pro
 });
 
 test("REQUIRED (spec 31): across offense 1 -> 4, the prompt never requires the offense NUMBER to be spoken", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
     for (const warningNumber of [1, 2, 3, 4]) {
-      await withFetchSpy(anthropicTextResponse("nope, not here"), async (calls) => {
+      await withFetchSpy(deepseekTextResponse("nope, not here"), async (calls) => {
         await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts({ warningNumber }));
-        const system = (calls[0].body as { system?: string }).system ?? "";
+        const system = systemOf(calls[0].body);
         if (warningNumber > 1) {
           // The count is available as CONTEXT, explicitly optional to speak.
           assert.match(system, /you do NOT need to state the number/i);
@@ -1459,10 +1500,10 @@ test("REQUIRED (spec 31): across offense 1 -> 4, the prompt never requires the o
 });
 
 test("REQUIRED (spec 9/32): a real mute may be expressed naturally -- the prompt permits informal phrasing, and it survives the authorized-fact validator", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("take ten"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("take ten"), async (calls) => {
       const text = await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts({ muteMinutes: 10 }));
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /any natural way of getting it across is fine/i);
       assert.match(system, /take ten/i);
       // Natural phrasing is kept, not discarded for the deterministic template.
@@ -1472,10 +1513,10 @@ test("REQUIRED (spec 9/32): a real mute may be expressed naturally -- the prompt
 });
 
 test("REQUIRED (spec 11): the destination topic is offered as useful-if-relevant, explicitly skippable when redundant", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("we just went over this"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("we just went over this"), async (calls) => {
       await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /Skip it when it would be redundant/i);
       assert.doesNotMatch(system, /Mention the real Promotion destination BY NAME ONLY/i);
     });
@@ -1483,10 +1524,10 @@ test("REQUIRED (spec 11): the destination topic is offered as useful-if-relevant
 });
 
 test("REQUIRED (spec 12/27): the persona is the frame and moderation is the event -- never a moderation-warning generator", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("nah, not in here"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("nah, not in here"), async (calls) => {
       await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /^You are Patricia -- a real, familiar presence/);
       assert.match(system, /NOT a moderation system, a support agent, or a policy bot/i);
       assert.match(system, /WHAT JUST HAPPENED:/);
@@ -1499,10 +1540,10 @@ test("REQUIRED (spec 12/27): the persona is the frame and moderation is the even
 });
 
 test("REQUIRED (spec 21): the deterministic fallback is NEVER placed in the prompt -- the model is never asked to paraphrase a canonical warning", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("not here please"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("not here please"), async (calls) => {
       await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.doesNotMatch(system, /No promos in .+, please/i);
       assert.doesNotMatch(system, /Repeated offenses escalate to a kick or ban/i);
       assert.doesNotMatch(system, /rewrite|paraphrase|reword/i);
@@ -1510,16 +1551,16 @@ test("REQUIRED (spec 21): the deterministic fallback is NEVER placed in the prom
   });
 });
 
-test("REQUIRED (spec 34): normal moderation realization routes to Claude Sonnet 5 -- verified on the ACTUAL outgoing request, for all three generators, never DeepSeek", async () => {
+test("REQUIRED (spec 34, revised 2026-09-06): normal moderation-warning realization routes to DeepSeek, never Sonnet 5 -- verified on the ACTUAL outgoing request, for all three generators, with Innvil's own Anthropic key never even reachable", async () => {
   await withEnvAsync(
-    { ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined, AI_PROVIDER: undefined, DEEPSEEK_API_KEY: "sk-deepseek-should-never-be-used" },
+    { DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined, AI_PROVIDER: undefined, ANTHROPIC_API_KEY: "sk-innvil-anthropic-should-never-be-used" },
     async () => {
-      const seen: Array<{ url: string; model: string }> = [];
+      const seen: Array<{ url: string; model: string; thinking?: string }> = [];
       const capture = async (run: () => Promise<unknown>) => {
-        await withFetchSpy(anthropicTextResponse("ok"), async (calls) => {
+        await withFetchSpy(deepseekTextResponse("ok"), async (calls) => {
           await run();
-          const body = calls[0].body as { model?: string };
-          seen.push({ url: calls[0].url, model: body.model ?? "" });
+          const body = calls[0].body as { model?: string; thinking?: { type: string } };
+          seen.push({ url: calls[0].url, model: body.model ?? "", thinking: body.thinking?.type });
         });
       };
       await capture(() => generatePersonaSolicitationWarning("P", NATURAL_PERSONA, solicitationFacts()));
@@ -1533,17 +1574,19 @@ test("REQUIRED (spec 34): normal moderation realization routes to Claude Sonnet 
       );
       assert.equal(seen.length, 3);
       for (const call of seen) {
-        assert.equal(call.model, "claude-sonnet-5");
-        assert.match(call.url, /anthropic/i);
-        assert.doesNotMatch(call.url, /deepseek/i);
+        assert.equal(call.model, "deepseek-v4-flash");
+        assert.notEqual(call.model, "claude-sonnet-5");
+        assert.match(call.url, /deepseek/i);
+        assert.doesNotMatch(call.url, /anthropic/i);
+        assert.equal(call.thinking, "disabled");
       }
     }
   );
 });
 
 test("REQUIRED (spec 36): generation failure never blocks anything -- an empty model response still yields a real deterministic string", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse(""), async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse(""), async () => {
       const text = await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts());
       assert.ok(text && text.length > 0);
       assert.match(text, /No promos in Announcements/i); // the known-safe deterministic fallback
@@ -1552,8 +1595,8 @@ test("REQUIRED (spec 36): generation failure never blocks anything -- an empty m
 });
 
 test("REQUIRED (spec 33): an unsupported claim is discarded for the deterministic fallback -- a wrong mute duration is never sent", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("that is a 90 minute mute for you"), async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("that is a 90 minute mute for you"), async () => {
       const text = await generatePersonaSolicitationWarning("Patricia", NATURAL_PERSONA, solicitationFacts({ muteMinutes: 10 }));
       assert.ok(text);
       assert.doesNotMatch(text, /90 minute/i);
@@ -1562,12 +1605,12 @@ test("REQUIRED (spec 33): an unsupported claim is discarded for the deterministi
 });
 
 test("REQUIRED (spec 19/39): scam realization is still given ONLY safe structured facts -- never the link, domain, or message text", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test", AI_MODEL: undefined }, async () => {
-    await withFetchSpy(anthropicTextResponse("nope, gone"), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", AI_MODEL: undefined }, async () => {
+    await withFetchSpy(deepseekTextResponse("nope, gone"), async (calls) => {
       await generatePersonaScamWarning("Patricia", NATURAL_PERSONA, "@someone", {
         isRepeatOffense: false, muteMinutes: SCAM_FIRST_WARNING_MUTE_MINUTES,
       } as ScamWarningFacts);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /never saw the link or the message text/i);
       assert.match(system, /NEVER mention, describe, guess, or invent any URL, domain, wallet address/i);
       assert.doesNotMatch(system, /https?:\/\//);

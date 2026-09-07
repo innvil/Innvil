@@ -1,6 +1,6 @@
 import "server-only";
 
-import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
+import { aiComplete, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import {
   SPAM_WARNING_LIMIT,
@@ -18,9 +18,19 @@ import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/w
  * Persona-voiced warning line for BORDERLINE media-safety results (mirrors
  * link-classify.ts's generatePersonaSolicitationWarning exactly, kept in a
  * separate file only because the wording is specific to media rather than
- * link spam -- same hard INNVIL_REQUIRED_MODEL routing, same "never robotic
- * wording" requirement, same deterministic fallback pool so enforcement
- * never depends on this succeeding).
+ * link spam -- same "never robotic wording" requirement, same deterministic
+ * fallback pool so enforcement never depends on this succeeding).
+ *
+ * MODEL ROUTING (revised 2026-09-06, explicit product decision): this is
+ * presentation-layer output only -- the media-safety CLASSIFICATION and the
+ * resulting delete/warn/kick decision have already happened deterministically
+ * before this is ever called (see media-moderation.ts), and every candidate
+ * is still checked against warningTextExceedsAuthorizedFacts before being
+ * sent. Routes through the same cheap DeepSeek tier Natural Chatter's
+ * CASUAL_CHAT already uses (deepseekChatterProvider()) rather than Sonnet 5.
+ * Unconfigured/failed DeepSeek NEVER silently escalates to Sonnet -- it falls
+ * straight to the deterministic fallback pool below, the same safe path a
+ * missing AI key already produced before this change.
  *
  * BYO Enterprise (Phase 2, 2026-08-24): `aiRouting?.required` is checked
  * FIRST — when true, generation routes through the account's own stored
@@ -149,14 +159,15 @@ export async function generateMediaModerationWarning(
         return null;
       }
     }
-    if (!aiConfigured()) return null;
+    const deepseek = deepseekChatterProvider();
+    if (!deepseek) return null;
     try {
-      const { model, effort } = getInnvilModelConfig();
       const raw = await aiComplete({
         system,
         messages: [{ role: "user", content: "Write the warning now." }],
-        model,
-        effort,
+        model: deepseek.model,
+        providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+        disableThinking: true,
         maxTokens: 200,
         automation: "MEDIA_MODERATION_WARNING",
       });

@@ -125,6 +125,42 @@ export function isPartnershipsIntent(text: string): boolean {
   return COMMERCIAL_ASK_RE.test(text) && COMMERCIAL_TOPIC_RE.test(text);
 }
 
+/* ================= last-resort fallback-contact PREFERENCE (2026-09-06) ====
+   Distinct from isPartnershipsIntent above, which decides whether to inject
+   an AUTHORITATIVE Partnerships preset for a genuine commercial ASK. This is
+   a much softer signal, consulted ONLY when a question has already gone
+   completely unanswered (no specific contact intent matched, no Project/
+   Community Knowledge covered it) -- it just decides WHICH configured contact
+   the last-resort "hand this off to someone" fallback should mention: a
+   launch/listing/timing-shaped question ("why so quiet, when launch on
+   raydium") is more usefully deferred to Partnerships/Promotional than to
+   generic Support, when one is actually configured. Never used to decide
+   WHETHER to answer/defer at all, and never treated as authoritative --
+   see resolveFallbackContact below. */
+const LAUNCH_TIMING_RE =
+  /\bwhen\s+(?:will\s+(?:it|this|we|the\s+\w+)\s+|does\s+it\s+|is\s+it\s+|are\s+we\s+)?(?:launch(?:ing)?|list(?:ing)?|go(?:es)?\s+live|drop(?:ping)?|moon(?:ing)?)\b|\bwhen\s+(?:launch|listing|live|moon)\s+on\b|\bwhen\s+(?:is\s+the\s+)?(?:launch|listing|tge|presale|ido|ico)\b/i;
+
+/** True when the message's TOPIC (not necessarily its grammatical shape)
+ *  looks promotional/growth-related -- reuses the same COMMERCIAL_TOPIC_RE
+ *  vocabulary already established for Partnerships intent, plus the launch/
+ *  listing-timing pattern above. Never used to inject an authoritative
+ *  preset on its own (see this section's own doc comment). */
+export function looksLikePromotionalTopic(text: string): boolean {
+  return COMMERCIAL_TOPIC_RE.test(text) || LAUNCH_TIMING_RE.test(text);
+}
+
+/** Resolves which configured contact the LAST-RESORT fallback should mention
+ *  once a question has genuinely gone unanswered by every other mechanism
+ *  (structured contact-intent match, Project/Community Knowledge, escalation
+ *  group). Prefers Partnerships/Promotional for a promotional-shaped topic
+ *  WHEN one is actually configured; otherwise (or for any other topic) falls
+ *  back to the general Support contact. Returns null when neither is
+ *  configured -- callers must never fabricate a destination. */
+export function resolveFallbackContact(contacts: ProjectContacts, text: string): string | null {
+  if (looksLikePromotionalTopic(text) && contacts.partnerships) return contacts.partnerships;
+  return contacts.support ?? null;
+}
+
 const CONTACT_INTENT_MATCHERS: Record<ContactKind, (text: string) => boolean> = {
   technical_support: (t) => TECHNICAL_SUPPORT_RE.test(t),
   partnerships: isPartnershipsIntent,

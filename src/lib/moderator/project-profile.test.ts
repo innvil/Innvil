@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveContactIntent, findCommunityContactOverride, isPartnershipsIntent, CONTACT_LABELS, CONTACT_KINDS } from "./project-profile";
+import {
+  resolveContactIntent, findCommunityContactOverride, isPartnershipsIntent, CONTACT_LABELS, CONTACT_KINDS,
+  looksLikePromotionalTopic, resolveFallbackContact,
+} from "./project-profile";
 
 /**
  * Web3/crypto intent-aware Partnerships/Collaboration contact routing.
@@ -185,4 +188,56 @@ test("findCommunityContactOverride still resolves correctly for every OTHER cont
 test("CONTACT_LABELS still identifies partnerships as 'Partnerships / Collaboration' -- the canonical field this whole feature routes onto, no new contact kind was invented", () => {
   assert.equal(CONTACT_LABELS.partnerships, "Partnerships / Collaboration");
   assert.deepEqual(CONTACT_KINDS, ["support", "partnerships", "sales", "technical_support"]);
+});
+
+/* -------------------------- looksLikePromotionalTopic / resolveFallbackContact ---- */
+// 2026-09-06 live feedback: "Why so quiet? When launch on raydium" went
+// unanswered with no fallback -- resolveFallbackContact is the LAST-RESORT
+// preference (never authoritative, never gates whether an answer/escalation
+// happens at all) deciding WHICH configured contact a genuinely-unanswered
+// question defers to.
+
+test("REQUIRED (exact live-bug repro): 'When launch on raydium' looks like a promotional topic", () => {
+  assert.equal(looksLikePromotionalTopic("Why so quiet? When launch on raydium"), true);
+});
+
+test("other launch/listing timing phrasings also look promotional", () => {
+  for (const q of ["when will we launch?", "when does it list on binance", "when is the launch", "when moon", "when will this go live"]) {
+    assert.equal(looksLikePromotionalTopic(q), true, `expected promotional topic for: "${q}"`);
+  }
+});
+
+test("an ordinary support-shaped question does NOT look like a promotional topic", () => {
+  assert.equal(looksLikePromotionalTopic("I have a problem with my order"), false);
+  assert.equal(looksLikePromotionalTopic("my wallet isn't connecting, can you help"), false);
+});
+
+test("REQUIRED: resolveFallbackContact prefers Partnerships for a promotional-shaped question when configured", () => {
+  const contacts = { support: "@support_admin", partnerships: "@promo_admin" };
+  assert.equal(resolveFallbackContact(contacts, "Why so quiet? When launch on raydium"), "@promo_admin");
+});
+
+test("resolveFallbackContact falls back to Support when Partnerships isn't configured, even for a promotional-shaped question", () => {
+  const contacts = { support: "@support_admin" };
+  assert.equal(resolveFallbackContact(contacts, "Why so quiet? When launch on raydium"), "@support_admin");
+});
+
+test("resolveFallbackContact uses Support (never Partnerships) for a non-promotional question", () => {
+  const contacts = { support: "@support_admin", partnerships: "@promo_admin" };
+  assert.equal(resolveFallbackContact(contacts, "I have a problem with my order"), "@support_admin");
+});
+
+test("resolveFallbackContact returns null when nothing at all is configured -- never fabricates a destination", () => {
+  assert.equal(resolveFallbackContact({}, "when launch on raydium"), null);
+  assert.equal(resolveFallbackContact({}, "I have a problem"), null);
+});
+
+test("resolveFallbackContact never affects isPartnershipsIntent's own authoritative-preset decision -- a bare informational timing question still never gets an authoritative preset injected", () => {
+  // Pins the precedent this feature deliberately does NOT disturb (REQUIRED
+  // test 1/2/6/8 above): a genuinely informational timing question is not
+  // itself a commercial ASK, so it must never resolveContactIntent to
+  // "partnerships" just because it also happens to look promotional-topic-ish.
+  assert.equal(isPartnershipsIntent("When is the TGE?"), false);
+  assert.equal(looksLikePromotionalTopic("When is the TGE?"), true);
+  assert.notEqual(resolveContactIntent("When is the TGE?"), "partnerships");
 });

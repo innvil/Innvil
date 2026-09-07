@@ -1,6 +1,6 @@
 import "server-only";
 
-import { aiComplete, aiConfigured, getInnvilModelConfig } from "@/src/lib/ai/client";
+import { aiComplete, aiConfigured, getInnvilModelConfig, deepseekChatterProvider } from "@/src/lib/ai/client";
 import type { ModeratorPersona } from "./domain";
 import {
   SPAM_WARNING_LIMIT,
@@ -23,13 +23,26 @@ import { byoProviderOverride, type AccountAiRouting } from "@/src/lib/products/w
 /**
  * The AI-touching half of link moderation, kept separate from
  * link-moderation.ts (pure policy/no I/O) — mirrors the existing chatter-
- * coordinator.ts / chatter-generate.ts split. Link-intent classification and
- * the natural warning line are both genuinely new automations, not part of
- * the existing CASUAL_CHAT/ANSWER carve-out, so both stay on the hard
+ * coordinator.ts / chatter-generate.ts split.
+ *
+ * MODEL ROUTING (revised 2026-09-06, explicit product decision): the
+ * CLASSIFICATION decision (classifyLinkIntent) stays on the hard
  * INNVIL_REQUIRED_MODEL default (Sonnet 5, medium effort) via
- * getInnvilModelConfig() rather than DeepSeek — moderation decisions can
- * delete content and ban people, which is exactly the class of consequence
- * the model-routing invariant exists to protect.
+ * getInnvilModelConfig() -- it's what actually determines whether a message
+ * gets deleted/muted/banned, exactly the class of consequence the model-
+ * routing invariant exists to protect. The WARNING TEXT generators
+ * (generatePersonaSolicitationWarning / generatePersonaScamWarning /
+ * generatePersonaNegativeStatementWarning) are presentation-layer output
+ * only -- the enforcement decision has already been made deterministically
+ * before any of them are even called, and every candidate they produce is
+ * still checked against warningTextExceedsAuthorizedFacts before being sent
+ * -- so they now route through the same cheap DeepSeek tier Natural
+ * Chatter's CASUAL_CHAT already uses (deepseekChatterProvider(), mirroring
+ * chatter-generate.ts's resolveChatterRoute exactly). Unconfigured/failed
+ * DeepSeek NEVER silently escalates to Sonnet -- it returns null, which
+ * every one of these functions already treats as "fall back to the
+ * deterministic template," the same safe path a missing AI key already
+ * produced before this change.
  */
 
 const CATEGORIES: LinkCategory[] = [
@@ -524,14 +537,15 @@ export async function generatePersonaSolicitationWarning(
         return null;
       }
     }
-    if (!aiConfigured()) return null;
+    const deepseek = deepseekChatterProvider();
+    if (!deepseek) return null;
     try {
-      const { model, effort } = getInnvilModelConfig();
       const raw = await aiComplete({
         system,
         messages: [{ role: "user", content: "Write the warning now." }],
-        model,
-        effort,
+        model: deepseek.model,
+        providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+        disableThinking: true,
         maxTokens: 220,
         automation: "LINK_MODERATION_WARNING",
       });
@@ -733,14 +747,15 @@ export async function generatePersonaScamWarning(
         return null;
       }
     }
-    if (!aiConfigured()) return null;
+    const deepseek = deepseekChatterProvider();
+    if (!deepseek) return null;
     try {
-      const { model, effort } = getInnvilModelConfig();
       const raw = await aiComplete({
         system,
         messages: [{ role: "user", content: "Write the warning now." }],
-        model,
-        effort,
+        model: deepseek.model,
+        providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+        disableThinking: true,
         maxTokens: 200,
         automation: "SCAM_MODERATION_WARNING",
       });
@@ -888,14 +903,15 @@ export async function generatePersonaNegativeStatementWarning(
         return null;
       }
     }
-    if (!aiConfigured()) return null;
+    const deepseek = deepseekChatterProvider();
+    if (!deepseek) return null;
     try {
-      const { model, effort } = getInnvilModelConfig();
       const raw = await aiComplete({
         system,
         messages: [{ role: "user", content: "Write the warning now." }],
-        model,
-        effort,
+        model: deepseek.model,
+        providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
+        disableThinking: true,
         maxTokens: 200,
         automation: "NEGATIVE_STATEMENT_WARNING",
       });

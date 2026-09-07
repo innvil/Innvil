@@ -185,6 +185,17 @@ test("REQUIRED (2026-09-05 live bug): prompt bans inviting someone to DM/private
   }
 });
 
+test("REQUIRED (2026-09-06 live feedback): prompt permits a natural, brief pushback against someone reframing already-moderated behavior (spam/promo) as helpful, for BOTH actions -- never required to stay neutral or give a vague non-answer", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /allowed to naturally push back or disagree/i);
+    assert.match(prompt, /reframe or justify something that was already moderated/i);
+    assert.match(prompt, /spamming doesn't actually help the community/i);
+    assert.doesNotMatch(prompt, /you must always push back/i); // permitted, never mandated
+  }
+});
+
 /* ------------------------------------------------------ persona identity ---- */
 // Live bug: "hey test, can you tell what persona are you?" got "just a
 // regular mod persona here... nothing fancier than that" instead of a real

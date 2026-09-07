@@ -36,7 +36,7 @@ function multiCallFetchSpy(responses: string[]): { calls: Array<{ url: string; b
       calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
       const text = responses[Math.min(i, responses.length - 1)];
       i++;
-      return new Response(JSON.stringify(anthropicTextResponse(text)), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify(deepseekTextResponse(text)), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     return () => {
       globalThis.fetch = originalFetch;
@@ -64,6 +64,23 @@ function anthropicTextResponse(text: string) {
   return { content: [{ type: "text", text }] };
 }
 
+/** DeepSeek/OpenAI-compatible response shape -- generateMediaModerationWarning
+ *  (2026-09-06, explicit product decision) now routes through
+ *  deepseekChatterProvider() for its non-BYO generation, same as
+ *  chatter-generate.ts's CASUAL_CHAT and link-classify.ts's warning generators. */
+function deepseekTextResponse(text: string) {
+  return { choices: [{ message: { content: text } }] };
+}
+
+/** Extracts the system-prompt text regardless of provider shape -- Anthropic
+ *  sends a top-level `system` field; DeepSeek/OpenAI-compatible sends it as
+ *  the first `messages` entry, role "system" (client.ts's openaiComplete()). */
+function systemOf(body: unknown): string {
+  const b = body as { system?: string; messages?: Array<{ role: string; content: string }> };
+  if (typeof b.system === "string") return b.system;
+  return b.messages?.find((m) => m.role === "system")?.content ?? "";
+}
+
 const FORMAL_PERSONA: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, formal: true, formality: 90, slang: 5, description: "" };
 const CASUAL_PERSONA: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, formal: false, formality: 10, slang: 85, description: "" };
 const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "laid-back, dry humor" };
@@ -71,10 +88,10 @@ const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "
 /* ------------------------------------------------------------ persona voicing ---- */
 
 test("REQUIRED: persona is included and respected -- the system prompt carries real style mechanics derived from the configured persona, not just a bare description sentence", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("hey, keep uploads appropriate please."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("hey, keep uploads appropriate please."), async (calls) => {
       await generateMediaModerationWarning("Kwan", FORMAL_PERSONA, 1, false);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.match(system, /always capitalize the start/i);
       assert.match(system, /avoid slang/i);
     });
@@ -82,16 +99,16 @@ test("REQUIRED: persona is included and respected -- the system prompt carries r
 });
 
 test("REQUIRED: two different personas realize the SAME warning differently", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     let formalSystem = "";
     let casualSystem = "";
-    await withFetchSpy(anthropicTextResponse("keep it appropriate please."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("keep it appropriate please."), async (calls) => {
       await generateMediaModerationWarning("Kwan", FORMAL_PERSONA, 1, false);
-      formalSystem = (calls[0].body as { system?: string }).system ?? "";
+      formalSystem = systemOf(calls[0].body);
     });
-    await withFetchSpy(anthropicTextResponse("keep it appropriate please."), async (calls) => {
+    await withFetchSpy(deepseekTextResponse("keep it appropriate please."), async (calls) => {
       await generateMediaModerationWarning("Kwan", CASUAL_PERSONA, 1, false);
-      casualSystem = (calls[0].body as { system?: string }).system ?? "";
+      casualSystem = systemOf(calls[0].body);
     });
     assert.notEqual(formalSystem, casualSystem);
     assert.match(formalSystem, /always capitalize the start/i);
@@ -100,10 +117,10 @@ test("REQUIRED: two different personas realize the SAME warning differently", as
 });
 
 test("a bare persona with nothing configured still produces a sensible prompt -- never crashes, never fabricates traits", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("keep it appropriate please."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("keep it appropriate please."), async (calls) => {
       await generateMediaModerationWarning("Kwan", DEFAULT_MODERATOR_PERSONA, 1, false);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       assert.ok(system && system.length > 0);
     });
   });
@@ -112,10 +129,10 @@ test("a bare persona with nothing configured still produces a sensible prompt --
 /* ------------------------------------------------------------ escalation stage ---- */
 
 test("the final pre-kick warning is explicitly framed as such -- the model is told the real limit, never left to guess", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("last chance, please stop."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("last chance, please stop."), async (calls) => {
       await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true);
-      const system = (calls[0].body as { system?: string }).system ?? "";
+      const system = systemOf(calls[0].body);
       // The FINAL warning is the one case where a real consequence must not
       // be misleadingly concealed (spec §16) -- but it's stated as an
       // authorized fact in the persona's own words, never a formal notice.
@@ -128,7 +145,7 @@ test("the final pre-kick warning is explicitly framed as such -- the model is to
 /* --------------------------------------------------------- anti-repetition ---- */
 
 test("REQUIRED: a near-duplicate candidate triggers exactly ONE bounded regeneration", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["Hey, that media looks like it might not be appropriate for this group, so I've taken it down for now. Please keep uploads appropriate for the community."];
     const { calls, install } = multiCallFetchSpy([
       "Hey, that media isn't appropriate for this group, so I've removed it for now. Please keep uploads appropriate here.",
@@ -138,7 +155,7 @@ test("REQUIRED: a near-duplicate candidate triggers exactly ONE bounded regenera
     try {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false, undefined, recentOwnWarnings);
       assert.equal(calls.length, 2, "exactly one regeneration attempt, never zero, never more than one");
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /said something VERY similar to this recently/i);
       assert.equal(text, "Yeah that one's not staying up -- keep it clean going forward.");
     } finally {
@@ -148,7 +165,7 @@ test("REQUIRED: a near-duplicate candidate triggers exactly ONE bounded regenera
 });
 
 test("REQUIRED: when the candidate is NOT similar to any recent warning, only ONE call is made -- no wasted regeneration", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["That's off-topic and not allowed here."];
     const { calls, install } = multiCallFetchSpy(["Hey, that media isn't appropriate for this group -- I've taken it down."]);
     const restore = install();
@@ -162,7 +179,7 @@ test("REQUIRED: when the candidate is NOT similar to any recent warning, only ON
 });
 
 test("an empty recentOwnWarnings list never triggers a regeneration, regardless of candidate content", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["Hey, that media isn't appropriate for this group -- I've taken it down."]);
     const restore = install();
     try {
@@ -175,7 +192,7 @@ test("an empty recentOwnWarnings list never triggers a regeneration, regardless 
 });
 
 test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate on the FINAL pre-kick warning gets a retry instruction that keeps the removal consequence clear, never a brevity-only instruction", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["Hey, this is your final warning -- one more violation and you're removed from this community."];
     const { calls, install } = multiCallFetchSpy([
       "Hey, this is your final warning -- one more violation and you're removed from this group.",
@@ -185,7 +202,7 @@ test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate on the F
     try {
       await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true, undefined, recentOwnWarnings);
       assert.equal(calls.length, 2, "the two fixture texts must actually register as near-duplicates for this test to exercise the retry path");
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /FINAL warning before removal.*still make that consequence clear/i);
       assert.doesNotMatch(retrySystem, /keep this one especially short/i);
     } finally {
@@ -195,7 +212,7 @@ test("REQUIRED (mode-aware retry, ENFORCEMENT_NOTICE): a near-duplicate on the F
 });
 
 test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR (but not near-identical) to a recent warning gets the brevity instruction", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     // Chosen to land in the SHORT_NUDGE band specifically (>= NEAR_DUPLICATE_
     // WARNING_THRESHOLD but < NO_PUBLIC_REPLY_SIMILARITY_THRESHOLD, ~0.52
     // measured) -- similar enough to react to, distinguishable enough that
@@ -209,7 +226,7 @@ test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR
     try {
       await generateMediaModerationWarning("Kwan", persona, 1, false, undefined, recentOwnWarnings);
       assert.equal(calls.length, 2, "the two fixture texts must actually register as similar enough to exercise the retry path");
-      const retrySystem = (calls[1].body as { system?: string }).system ?? "";
+      const retrySystem = systemOf(calls[1].body);
       assert.match(retrySystem, /keep this one especially short/i);
     } finally {
       restore();
@@ -218,7 +235,7 @@ test("REQUIRED (mode-aware retry, SHORT_NUDGE): a candidate RECOGNIZABLY SIMILAR
 });
 
 test("REQUIRED (NO_PUBLIC_REPLY): a candidate NEAR-IDENTICAL to a recent warning (no consequence attached) resolves to genuine silence -- null, not another short reply", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const recentOwnWarnings = ["Hey, that media isn't appropriate for this group, so I've taken it down for now. Please keep it appropriate."];
     const { calls, install } = multiCallFetchSpy([
       "Hey, that media isn't appropriate for this group, so I've taken it down for now. Please keep it clean.",
@@ -235,7 +252,7 @@ test("REQUIRED (NO_PUBLIC_REPLY): a candidate NEAR-IDENTICAL to a recent warning
 });
 
 test("REQUIRED: a FINAL (consequence-bearing) warning with NOTHING recently similar is returned as-is, without a wasted retry call", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["This is your final warning -- next time results in removal."]);
     const restore = install();
     try {
@@ -251,7 +268,7 @@ test("REQUIRED: a FINAL (consequence-bearing) warning with NOTHING recently simi
 /* --------------------------------------- untrusted-output guard ---- */
 
 test("REQUIRED: media has no mute concept at all -- a candidate stating ANY mute-minute count is discarded for the deterministic fallback", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["That's not allowed -- 10-minute mute for you."]);
     const restore = install();
     try {
@@ -266,7 +283,7 @@ test("REQUIRED: media has no mute concept at all -- a candidate stating ANY mute
 });
 
 test("REQUIRED: a candidate claiming a definite ban/removal that hasn't actually happened (this is only a WARN) is discarded", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["You've been removed from this community already."]);
     const restore = install();
     try {
@@ -281,7 +298,7 @@ test("REQUIRED: a candidate claiming a definite ban/removal that hasn't actually
 });
 
 test("a hedged future-conditional consequence mention (the FINAL-warning framing itself) is explicitly permitted, never caught by the guard", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const { calls, install } = multiCallFetchSpy(["This is your final warning -- next violation results in removal from the community."]);
     const restore = install();
     try {
@@ -297,7 +314,7 @@ test("a hedged future-conditional consequence mention (the FINAL-warning framing
 /* -------------------------------------- generation-failure never blocks enforcement ---- */
 
 test("REQUIRED: a failed generation call falls to the deterministic template pool -- enforcement (the delete/kick decision) never depends on this succeeding", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const originalFetch = globalThis.fetch;
     let callCount = 0;
     globalThis.fetch = (async () => {
@@ -324,41 +341,45 @@ test("REQUIRED: a failed generation call falls to the deterministic template poo
  * all completely unchanged by this pass's persona/anti-repetition/guard
  * additions), rather than deleted or silently left out. ========================= */
 
-test("REQUIRED: warning generation routes to Sonnet 5, never DeepSeek", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("Hey, that upload looked borderline so I've taken it down."), async (calls) => {
+test("REQUIRED (2026-09-06, explicit product decision): warning generation routes to DeepSeek, never Sonnet 5", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("Hey, that upload looked borderline so I've taken it down."), async (calls) => {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false);
       assert.equal(calls.length, 1);
-      assert.match(calls[0].url, /anthropic/i);
-      assert.equal((calls[0].body as { model?: string }).model, "claude-sonnet-5");
+      assert.match(calls[0].url, /deepseek/i);
+      assert.doesNotMatch(calls[0].url, /anthropic/i);
+      const body = calls[0].body as { model?: string; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.notEqual(body.model, "claude-sonnet-5");
+      assert.equal(body.thinking?.type, "disabled");
       assert.ok(text && text.length > 0);
     });
   });
 });
 
 test("REQUIRED: never outputs robotic 'Violation N/3' style wording -- the prompt explicitly bans it", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("Please keep uploads appropriate -- I've removed that one."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("Please keep uploads appropriate -- I've removed that one."), async (calls) => {
       await generateMediaModerationWarning("Kwan", persona, 2, false);
-      const body = calls[0].body as { system: string };
-      assert.match(body.system, /Not a checklist/i);
-      assert.match(body.system, /time 2/i);
+      const system = systemOf(calls[0].body);
+      assert.match(system, /Not a checklist/i);
+      assert.match(system, /time 2/i);
     });
   });
 });
 
 test("the FINAL warning tells the model to make removal-on-next-violation explicit", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("This is your final warning -- next time you're removed."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("This is your final warning -- next time you're removed."), async (calls) => {
       await generateMediaModerationWarning("Kwan", persona, SPAM_WARNING_LIMIT, true);
-      const body = calls[0].body as { system: string };
-      assert.match(body.system, /removed from the group/i);
+      const system = systemOf(calls[0].body);
+      assert.match(system, /removed from the group/i);
     });
   });
 });
 
 test("REQUIRED: a failed generation call falls back to a VARIED deterministic template pool, never one fixed sentence", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
     try {
@@ -377,7 +398,7 @@ test("REQUIRED: a failed generation call falls back to a VARIED deterministic te
 });
 
 test("unconfigured AI goes straight to the deterministic fallback pool, no network call", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: undefined, AI_API_KEY: undefined }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
     await withFetchSpy({}, async (calls) => {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false);
       assert.equal(calls.length, 0);
@@ -390,8 +411,8 @@ test("unconfigured AI goes straight to the deterministic fallback pool, no netwo
 
 const BYO_CRED = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" };
 
-test("REQUIRED: BYO required+usable routes through the stored credential, never Innvil's own key", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+test("REQUIRED: BYO required+usable routes through the CUSTOMER'S OWN stored credential, never Innvil's own DeepSeek key", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy(anthropicTextResponse("Hey, keep uploads appropriate please."), async (calls) => {
       const text = await generateMediaModerationWarning("Kwan", persona, 1, false, { required: true, credential: BYO_CRED });
       assert.equal(calls.length, 1);
@@ -402,7 +423,7 @@ test("REQUIRED: BYO required+usable routes through the stored credential, never 
 });
 
 test("REQUIRED: BYO required but unusable falls straight to the template pool, no network call at all", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-innvil-should-never-be-used" }, async () => {
     await withFetchSpy({}, async (calls) => {
       const missingCred = await generateMediaModerationWarning("Kwan", persona, 1, false, { required: true, credential: null });
       const missingModel = await generateMediaModerationWarning(
@@ -416,8 +437,8 @@ test("REQUIRED: BYO required but unusable falls straight to the template pool, n
 });
 
 test("a normal (non-BYO) account's behavior is unaffected -- aiRouting undefined or required:false", async () => {
-  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
-    await withFetchSpy(anthropicTextResponse("Please keep uploads appropriate here."), async (calls) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("Please keep uploads appropriate here."), async (calls) => {
       const withoutRouting = await generateMediaModerationWarning("Kwan", persona, 1, false);
       const withManaged = await generateMediaModerationWarning("Kwan", persona, 1, false, { required: false, credential: null });
       assert.equal(calls.length, 2);
