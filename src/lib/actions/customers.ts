@@ -28,12 +28,86 @@ async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string)
 export interface PanelCustomerVM {
   id: string; // customer_account id
   userId: string;
+  username: string | null;
   email: string | null;
   balance: number;
   status: CustomerStatus;
   orders: number;
   spent: number;
   joinedAt: string;
+}
+
+export interface OwnerCustomerVM extends PanelCustomerVM {
+  panelId: string;
+  panelName: string;
+}
+
+export interface CustomerManageDetails {
+  customerAccountId: string;
+  panelId: string;
+  userId: string;
+  username: string | null;
+  email: string | null;
+  status: CustomerStatus;
+  balance: number;
+}
+
+/** Customers across ALL panels the owner controls (app-level Customers page). */
+export async function listAllOwnerCustomers(): Promise<OwnerCustomerVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return [];
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+  const panelIds = list.map((p) => p.id);
+
+  const { data: accts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id, panel_id, balance, status, created_at")
+    .in("panel_id", panelIds)
+    .order("created_at", { ascending: false });
+  if (!accts?.length) return [];
+
+  const { data: orders } = await admin
+    .from("orders")
+    .select("customer_id, charge, status")
+    .in("panel_id", panelIds);
+  const agg = new Map<string, { orders: number; spent: number }>();
+  for (const o of orders ?? []) {
+    const a = agg.get(o.customer_id as string) ?? { orders: 0, spent: 0 };
+    a.orders++;
+    if (o.status !== "refunded") a.spent += Number(o.charge);
+    agg.set(o.customer_id as string, a);
+  }
+
+  const userIds = [...new Set((accts ?? []).map((c) => c.user_id as string).filter(Boolean))];
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", userIds);
+  const usernameByUserId = new Map<string, string | null>(
+    (profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null])
+  );
+
+  const result: OwnerCustomerVM[] = [];
+  for (const c of accts) {
+    const a = agg.get(c.id as string) ?? { orders: 0, spent: 0 };
+    result.push({
+      id: c.id as string,
+      userId: c.user_id as string,
+      username: usernameByUserId.get(c.user_id as string) ?? null,
+      email: null,
+      balance: Number(c.balance),
+      status: c.status as CustomerStatus,
+      orders: a.orders,
+      spent: round4(a.spent),
+      joinedAt: c.created_at as string,
+      panelId: c.panel_id as string,
+      panelName: nameById.get(c.panel_id as string) ?? "Panel",
+    });
+  }
+  return result;
 }
 
 /** All customers on a panel the owner controls, with order count + spend. */
@@ -62,20 +136,23 @@ export async function listPanelCustomers(panelId: string): Promise<PanelCustomer
     agg.set(o.customer_id as string, a);
   }
 
+  const userIds = [...new Set((accts ?? []).map((c) => c.user_id as string).filter(Boolean))];
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", userIds);
+  const usernameByUserId = new Map<string, string | null>(
+    (profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null])
+  );
+
   const result: PanelCustomerVM[] = [];
   for (const c of accts) {
-    let email: string | null = null;
-    try {
-      const { data } = await admin.auth.admin.getUserById(c.user_id as string);
-      email = data.user?.email ?? null;
-    } catch {
-      // ignore — email is best-effort
-    }
     const a = agg.get(c.id as string) ?? { orders: 0, spent: 0 };
     result.push({
       id: c.id as string,
       userId: c.user_id as string,
-      email,
+      username: usernameByUserId.get(c.user_id as string) ?? null,
+      email: null,
       balance: Number(c.balance),
       status: c.status as CustomerStatus,
       orders: a.orders,
@@ -149,4 +226,49 @@ export async function setCustomerStatus(
     .eq("id", customerAccountId);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+/** Owner-side manage details for one customer account (username/user id/email). */
+export async function getCustomerManageDetails(
+  customerAccountId: string
+): Promise<Result<CustomerManageDetails>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: acct } = await admin
+    .from("customer_accounts")
+    .select("id, panel_id, user_id, status, balance")
+    .eq("id", customerAccountId)
+    .maybeSingle();
+  if (!acct) return { ok: false, error: "Customer not found" };
+  if (!(await ownsPanel(admin, user.id, acct.panel_id as string))) {
+    return { ok: false, error: "Not authorized for this panel" };
+  }
+
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("display_name")
+    .eq("id", acct.user_id as string)
+    .maybeSingle();
+
+  let email: string | null = null;
+  try {
+    const { data } = await admin.auth.admin.getUserById(acct.user_id as string);
+    email = data.user?.email ?? null;
+  } catch {
+    // best-effort
+  }
+
+  return {
+    ok: true,
+    data: {
+      customerAccountId: acct.id as string,
+      panelId: acct.panel_id as string,
+      userId: acct.user_id as string,
+      username: (profile?.display_name as string | null) ?? null,
+      email,
+      status: acct.status as CustomerStatus,
+      balance: Number(acct.balance),
+    },
+  };
 }

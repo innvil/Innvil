@@ -1,0 +1,1498 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { __testables, shortAckText, classifyAmbientGreeting, classifyPitchLikelihood, personaReactionEmoji, generateChatterReply, personaVoiceBlock, type GenerateChatterReplyInput, type ChatterContextMessage } from "./chatter-generate";
+import { requiresIndividualContribution } from "./chatter-coordinator";
+import { DEFAULT_MODERATOR_PERSONA, type ModeratorPersona } from "./domain";
+import { resolvePersonaPreset, personaFromPreset } from "./presets";
+import type { KnowledgeContextEntry } from "./knowledge";
+
+const {
+  buildSystemPrompt, buildContextLines, personaStyle, personaIdentityLine, personaCustomInstructionsLine, obligationContextLines, collabContactLine,
+  projectKnowledgeContextLines, knowledgeOrEscalationLine, communityKnowledgeContextLines, answerFallbackInstruction,
+} = __testables;
+
+/**
+ * These test the PROMPT/DATA ASSEMBLY directly (per the user's explicit
+ * request) rather than live model output — asserting on the actual strings
+ * fed to the model, which is deterministic and doesn't depend on Sonnet's
+ * probabilistic generation.
+ */
+
+const FORMAL_MODERATOR_A: ModeratorPersona = {
+  ...DEFAULT_MODERATOR_PERSONA,
+  formality: 90,
+  slang: 5,
+  teasing: 5,
+  chattiness: 30,
+};
+
+const CASUAL_MODERATOR_B: ModeratorPersona = {
+  ...DEFAULT_MODERATOR_PERSONA,
+  formality: 10,
+  slang: 85,
+  teasing: 70,
+  chattiness: 80,
+};
+
+function baseInput(over: Partial<GenerateChatterReplyInput> = {}): GenerateChatterReplyInput {
+  return {
+    action: "CASUAL_CHAT",
+    selfDeploymentId: "dep-a",
+    moderatorName: "Alex",
+    persona: DEFAULT_MODERATOR_PERSONA,
+    recentContext: [],
+    triggerMessage: { senderName: "K", text: "hey" },
+    isDirectedAtBot: false,
+    addressedWithTypo: false,
+    otherActiveModeratorNames: [],
+    ...over,
+  };
+}
+
+/* ------------------------------------------------------- persona isolation ---- */
+
+test("REQUIRED: the selected moderator's OWN persona is present and authoritative in its prompt", () => {
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Alex", persona: FORMAL_MODERATOR_A }));
+  assert.match(prompt, /always capitalize the start/i);
+  assert.match(prompt, /Avoid slang/i);
+});
+
+test("REQUIRED: a different moderator's persona traits are NOT injected as the current speaker's persona", () => {
+  const promptForA = buildSystemPrompt(baseInput({ moderatorName: "Alex", persona: FORMAL_MODERATOR_A }));
+  // B's traits (heavy slang, very casual, heavy teasing) must not appear as
+  // instructions for A, who is formal/low-slang/low-teasing.
+  assert.doesNotMatch(promptForA, /Slang and internet-speak are welcome/i);
+  assert.doesNotMatch(promptForA, /playful teasing\/ribbing is fine/i);
+  assert.doesNotMatch(promptForA, /always write in lowercase/i);
+});
+
+test("REQUIRED: prompt contains an explicit anti-imitation / persona-isolation rule", () => {
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /conversational context only/i);
+  assert.match(prompt, /do not imitate their voice/i);
+  assert.match(prompt, /not their capitalization, punctuation habits, slang, phrasing, or temperament/i);
+});
+
+test("REQUIRED: other moderators' messages are clearly labeled with identity (not-you), the speaker's own past messages are labeled (you)", () => {
+  const context: ChatterContextMessage[] = [
+    { senderType: "HUMAN", senderName: "K", text: "hows everyone" },
+    { senderType: "INNVIL_MODERATOR", senderName: "Bella", text: "lowercase reply here", deploymentId: "dep-b" },
+    { senderType: "INNVIL_MODERATOR", senderName: "Alex", text: "Proper reply here.", deploymentId: "dep-a" },
+  ];
+  const lines = buildContextLines(baseInput({ selfDeploymentId: "dep-a", recentContext: context }));
+  assert.match(lines, /Bella \(a different moderator, not you\): lowercase reply here/);
+  assert.match(lines, /Alex \(you\): Proper reply here\./);
+});
+
+test("reversed: generating for Bella (casual persona) does not copy Alex's formal style, and Alex's messages are labeled not-you", () => {
+  const context: ChatterContextMessage[] = [
+    { senderType: "INNVIL_MODERATOR", senderName: "Alex", text: "Good afternoon, everyone.", deploymentId: "dep-a" },
+    { senderType: "INNVIL_MODERATOR", senderName: "Alex", text: "How may I be of assistance?", deploymentId: "dep-a" },
+  ];
+  const promptForB = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-b", moderatorName: "Bella", persona: CASUAL_MODERATOR_B, recentContext: context }));
+  const lines = buildContextLines(baseInput({ selfDeploymentId: "dep-b", recentContext: context }));
+  // B's own prompt still reflects B's configured casual voice, not A's formal one.
+  assert.match(promptForB, /always write in lowercase/i);
+  assert.doesNotMatch(promptForB, /always capitalize the start/i);
+  // Both of A's lines are labeled as a different moderator, never "(you)" for B.
+  assert.match(lines, /Alex \(a different moderator, not you\): Good afternoon, everyone\./);
+  assert.match(lines, /Alex \(a different moderator, not you\): How may I be of assistance\?/);
+  assert.doesNotMatch(lines, /Alex \(you\)/);
+});
+
+test("personaStyle: formality/slang/teasing are actually read from the persona (previously silently ignored)", () => {
+  assert.ok(personaStyle(FORMAL_MODERATOR_A).some((s) => /always capitalize the start/i.test(s)));
+  assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /always write in lowercase/i.test(s)));
+  assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /Slang and internet-speak are welcome/i.test(s)));
+  assert.ok(personaStyle(CASUAL_MODERATOR_B).some((s) => /playful teasing\/ribbing is fine/i.test(s)));
+});
+
+test("REQUIRED: prompt forbids drifting writing style over a conversation or in response to being asked about tone", () => {
+  // Live bug: Kwan's capitalization flipped from initial-caps to all-lowercase
+  // right after a human asked "why are you so formal though, kwan?" -- the
+  // model was treating the question as an instruction to change its style.
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /is FIXED by your configuration above and must stay consistent/i);
+  assert.match(prompt, /does not change just because a human comments on it or asks about it/i);
+  assert.match(prompt, /do not actually shift your tone\/casing in response to being asked about it/i);
+});
+
+/* ------------------------------------------------------- history grounding ---- */
+
+test("REQUIRED: prompt forbids inventing explanations for silence or another moderator's actions", () => {
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /Never invent claims about the conversation history/i);
+  assert.match(prompt, /don't make up a reason why you were silent/i);
+  assert.match(prompt, /don't claim to know what another moderator was doing/i);
+});
+
+test("REQUIRED: prompt instructs a neutral fallback instead of a fabricated explanation when asked why it didn't respond", () => {
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /give a brief, honest, neutral reply/i);
+});
+
+/* --------------------------------------------------- presence grounding ---- */
+
+test("no other moderators active -> prompt states that plainly, doesn't imply others might exist", () => {
+  const prompt = buildSystemPrompt(baseInput({ otherActiveModeratorNames: [] }));
+  assert.match(prompt, /you're the only one/i);
+});
+
+test("other moderators active -> prompt lists them by the REAL current names, nothing invented", () => {
+  const prompt = buildSystemPrompt(baseInput({ otherActiveModeratorNames: ["Kwan", "Test"] }));
+  assert.match(prompt, /Kwan, Test/);
+});
+
+/* ----------------------------------------------------------------- typo hint ---- */
+
+test("typo hint appears only when addressedWithTypo is true", () => {
+  const withTypo = buildSystemPrompt(baseInput({ addressedWithTypo: true }));
+  const withoutTypo = buildSystemPrompt(baseInput({ addressedWithTypo: false }));
+  assert.match(withTypo, /slight misspelling of your name/i);
+  assert.doesNotMatch(withoutTypo, /slight misspelling of your name/i);
+});
+
+/* ---------------------------------------------------------- support-tone rule ---- */
+
+test("REQUIRED: prompt forbids inventing a stronger accusation/emotion/motive than the human actually expressed (live bug: fabricated 'impersonation' framing)", () => {
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /do not invent a stronger accusation, emotion, criticism, motive, or premise/i);
+  assert.match(prompt, /is NOT an accusation of impersonation/i);
+});
+
+test("REQUIRED: prompt hardcodes a ban on sliding into generic AI customer-support mode, for BOTH actions", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /do not turn into a generic ai customer-support assistant/i);
+    assert.match(prompt, /this applies to every reply, not just casual chatter/i);
+  }
+});
+
+test("prompt still bans generic support-chat closers (regression from the earlier fix)", () => {
+  const prompt = buildSystemPrompt(baseInput());
+  assert.match(prompt, /anything else on your mind/i);
+  assert.match(prompt, /do not manufacture a follow-up question/i);
+});
+
+test("REQUIRED (2026-09-05 live bug): prompt bans inviting someone to DM/private-message the bot, for BOTH actions -- the system does not receive or respond to direct messages at all, so that framing always sets up a dead end", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /never invite, ask, or tell someone to dm\/pm\/message\/private-message you/i);
+    assert.match(prompt, /you do not receive or respond to direct\/private messages at all/i);
+    assert.match(prompt, /even to things you'd normally want to take "offline"/i);
+  }
+});
+
+test("REQUIRED (2026-09-06 live feedback): prompt permits a natural, brief pushback against someone reframing already-moderated behavior (spam/promo) as helpful, for BOTH actions -- never required to stay neutral or give a vague non-answer", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /allowed to naturally push back or disagree/i);
+    assert.match(prompt, /reframe or justify something that was already moderated/i);
+    assert.match(prompt, /spamming doesn't actually help the community/i);
+    assert.doesNotMatch(prompt, /you must always push back/i); // permitted, never mandated
+  }
+});
+
+/* ------------------------------------------------------ persona identity ---- */
+// Live bug: "hey test, can you tell what persona are you?" got "just a
+// regular mod persona here... nothing fancier than that" instead of a real
+// persona answer -- the moderator collapsed persona questions into generic
+// AI/mod identity. Root cause: the prompt had writing-STYLE mechanics
+// (personaStyle: capitalization, slang, emoji frequency) but no first-person-
+// usable self-DESCRIPTION, and no rule distinguishing a persona question from
+// an AI-identity question -- so the model fell back to the only self-
+// referential guidance it had (the AI-honesty rule) for both.
+
+const TEST_PERSONA: ModeratorPersona = {
+  ...DEFAULT_MODERATOR_PERSONA,
+  description: "laid-back, friendly, concise, slightly witty",
+};
+
+const KWAN_PERSONA: ModeratorPersona = {
+  ...DEFAULT_MODERATOR_PERSONA,
+  description: "formal, calm, thoughtful",
+};
+
+test("REQUIRED: a configured persona description is surfaced verbatim as the authoritative persona answer", () => {
+  const line = personaIdentityLine(baseInput({ persona: TEST_PERSONA }));
+  assert.match(line, /laid-back, friendly, concise, slightly witty/);
+  assert.match(line, /authoritative answer/i);
+});
+
+test("REQUIRED: prompt explicitly instructs answering persona questions from the configured persona, not as an AI-identity question", () => {
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: TEST_PERSONA }));
+  assert.match(prompt, /laid-back, friendly, concise, slightly witty/);
+  assert.match(prompt, /different question from asking whether you're AI/i);
+  assert.match(prompt, /do not reinterpret a persona question as an AI-identity question/i);
+});
+
+test("REQUIRED: prompt forbids denying/flattening a configured persona", () => {
+  const prompt = buildSystemPrompt(baseInput({ persona: TEST_PERSONA }));
+  assert.match(prompt, /never say things like "just an ai", "no special persona", "just a regular mod"/i);
+});
+
+test("REQUIRED: AI-identity rule requires re-anchoring to name + persona, not replacing it", () => {
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: TEST_PERSONA }));
+  assert.match(prompt, /re-anchor to your name and configured persona/i);
+  assert.match(prompt, /never let it replace or erase your persona identity/i);
+});
+
+test("REQUIRED: persona is the PRIMARY identity, AI-ness explicitly secondary", () => {
+  const prompt = buildSystemPrompt(baseInput({ persona: TEST_PERSONA }));
+  assert.match(prompt, /your persona is your PRIMARY identity; AI-ness is secondary/i);
+});
+
+test("REQUIRED: separate moderators -- Test only receives Test's persona, Kwan only receives Kwan's, no cross-contamination", () => {
+  const testPrompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: TEST_PERSONA }));
+  const kwanPrompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona: KWAN_PERSONA }));
+  assert.match(testPrompt, /laid-back, friendly, concise, slightly witty/);
+  assert.doesNotMatch(testPrompt, /formal, calm, thoughtful/);
+  assert.match(kwanPrompt, /formal, calm, thoughtful/);
+  assert.doesNotMatch(kwanPrompt, /laid-back, friendly, concise, slightly witty/);
+});
+
+test("REQUIRED: missing/unconfigured persona -- does not fabricate one, answers neutrally from name/role instead", () => {
+  const line = personaIdentityLine(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  assert.match(line, /No specific persona description has been configured/i);
+  assert.match(line, /rather than inventing detailed personality traits/i);
+  assert.doesNotMatch(line, /laid-back|formal, calm, thoughtful/);
+});
+
+test("REQUIRED: missing persona is grounded in the prompt too (not silently dropped)", () => {
+  const prompt = buildSystemPrompt(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  assert.match(prompt, /No specific persona description has been configured/i);
+});
+
+/* ------------------------------------------------------ persona presets ---- */
+// Requirements from the preset-picker feature: a moderator created with a
+// preset receives that preset's persona in generation, two moderators with
+// different presets stay isolated, and an existing moderator with no preset
+// (persona.presetId === null) keeps working exactly as before.
+
+test("REQUIRED: a moderator with a preset applied receives that preset's persona in generation (description + style + behavior notes)", () => {
+  const preset = resolvePersonaPreset("technical_expert")!;
+  const persona = personaFromPreset(preset);
+  const prompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona }));
+  assert.match(prompt, /precise, analytical, and detail-oriented/i); // description
+  assert.match(prompt, /be precise and analytical/i); // customInstructions
+  assert.match(prompt, /avoid slang — keep language plain and standard/i); // slang: 5 -> style mechanics
+});
+
+test("REQUIRED: two-moderator isolation with presets -- Kwan (Calm Professional) and Test (Chill & Casual) never receive each other's persona as authoritative style", () => {
+  const kwanPersona = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+  const testPersona = personaFromPreset(resolvePersonaPreset("chill_casual")!);
+
+  const kwanPrompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona: kwanPersona }));
+  const testPrompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: testPersona }));
+
+  assert.match(kwanPrompt, /composed, clear, and respectful/i);
+  assert.doesNotMatch(kwanPrompt, /relaxed and informal/i);
+  assert.match(testPrompt, /relaxed and informal/i);
+  assert.doesNotMatch(testPrompt, /composed, clear, and respectful/i);
+
+  // Style mechanics also stay isolated: Calm Professional is high-formality
+  // (capitalized), Chill & Casual is low-formality (lowercase).
+  assert.match(kwanPrompt, /always capitalize the start/i);
+  assert.doesNotMatch(kwanPrompt, /always write in lowercase/i);
+  assert.match(testPrompt, /always write in lowercase/i);
+  assert.doesNotMatch(testPrompt, /always capitalize the start/i);
+});
+
+test("REQUIRED: shared conversation transcript never overrides the selected moderator's own preset persona (Kwan speaking after a transcript full of Test's casual messages still uses Kwan's formal preset)", () => {
+  const kwanPersona = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+  const context: ChatterContextMessage[] = [
+    { senderType: "INNVIL_MODERATOR", senderName: "Test", text: "yeah lol nah that's fine", deploymentId: "dep-test" },
+    { senderType: "INNVIL_MODERATOR", senderName: "Test", text: "np, all good haha", deploymentId: "dep-test" },
+  ];
+  const prompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: kwanPersona, recentContext: context }));
+  assert.match(prompt, /always capitalize the start/i); // Kwan's own preset, not Test's casual style
+  assert.doesNotMatch(prompt, /always write in lowercase/i);
+});
+
+test("REQUIRED: an existing moderator with no preset (presetId null) keeps working exactly as before", () => {
+  assert.equal(DEFAULT_MODERATOR_PERSONA.presetId, null);
+  const prompt = buildSystemPrompt(baseInput({ persona: DEFAULT_MODERATOR_PERSONA }));
+  // Falls back to the same neutral "nothing configured" persona line as
+  // before presets existed -- unaffected by the new preset catalog.
+  assert.match(prompt, /No specific persona description has been configured/i);
+});
+
+/* ------------------------------------------------- task-based model routing ---- */
+// resolveChatterRoute() is the ONLY place that decides provider/model for
+// chatter generation. It must key strictly on action.type (never text), never
+// let CASUAL_CHAT silently escalate to Sonnet on DeepSeek failure, and never
+// change what persona/prompt content gets sent (see the provider-independence
+// test below).
+
+const { resolveChatterRoute } = __testables;
+
+function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) prev[k] = process.env[k];
+  try {
+    for (const [k, v] of Object.entries(vars)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fn();
+  } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+test("REQUIRED: ANSWER routes to Sonnet 5 at effort medium, never DeepSeek -- even when DeepSeek is configured", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("ANSWER");
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "claude-sonnet-5");
+      assert.equal(route.effort, "medium");
+      assert.equal(route.providerOverride, undefined);
+      assert.equal(route.automation, "NATURAL_CHATTER_ANSWER");
+    }
+  });
+});
+
+test("REQUIRED: CASUAL_CHAT routes to DeepSeek v4 Flash in non-thinking mode, never Sonnet", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "deepseek-v4-flash");
+      assert.notEqual(route.model, "claude-sonnet-5");
+      assert.equal(route.disableThinking, true);
+      assert.equal(route.automation, "NATURAL_CHATTER_CASUAL");
+      assert.ok(route.providerOverride);
+      assert.equal(route.providerOverride?.provider, "openai");
+      assert.equal(route.providerOverride?.apiKey, "sk-deepseek-test");
+      assert.equal(route.providerOverride?.baseUrl, "https://api.deepseek.com");
+    }
+  });
+});
+
+test("REQUIRED: CASUAL_CHAT never silently falls back to Sonnet when DeepSeek is unconfigured", () => {
+  withEnv({ DEEPSEEK_API_KEY: undefined }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, false);
+    if (!route.ok) {
+      assert.match(route.error, /DeepSeek/i);
+      assert.doesNotMatch(route.error, /sonnet/i);
+    }
+  });
+});
+
+test("REQUIRED: DeepSeek model/base-url are centrally configurable -- switching Flash to Pro is a config change, not a code change", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: "deepseek-v4-pro", DEEPSEEK_BASE_URL: "https://custom.example.com" }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "deepseek-v4-pro");
+      assert.equal(route.providerOverride?.baseUrl, "https://custom.example.com");
+    }
+  });
+});
+
+test("REQUIRED: CASUAL_CHAT gets a low output-token cap; ANSWER keeps its generous cap", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const casual = resolveChatterRoute("CASUAL_CHAT");
+    const answer = resolveChatterRoute("ANSWER");
+    assert.equal(casual.ok, true);
+    assert.equal(answer.ok, true);
+    if (casual.ok && answer.ok) {
+      assert.ok(casual.maxTokens < answer.maxTokens);
+      assert.ok(casual.maxTokens <= 200);
+    }
+  });
+});
+
+test("REQUIRED: routing keys strictly on action.type, not message content -- resolveChatterRoute takes no text/message argument at all", () => {
+  // Structural proof: the function signature is (action, aiRouting?) => ChatterRoute --
+  // aiRouting is account-level BYO routing metadata (Phase 2, 2026-08-24), never derived
+  // from message text/content. If this ever grows a THIRD parameter for message text,
+  // this call site breaks loudly.
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT");
+    assert.equal(route.ok, true);
+  });
+});
+
+test("REQUIRED: persona/prompt construction is provider-independent -- identical output regardless of DeepSeek configuration", () => {
+  const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "laid-back, dry humor, terse" };
+  const input = baseInput({ moderatorName: "Kwan", persona, action: "CASUAL_CHAT" });
+  const withoutDeepseek = buildSystemPrompt(input);
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: "deepseek-v4-pro" }, () => {
+    const withDeepseek = buildSystemPrompt(input);
+    assert.equal(withDeepseek, withoutDeepseek);
+    assert.match(withDeepseek, /laid-back, dry humor, terse/);
+  });
+});
+
+/* ---------------------------------------- BYO Enterprise routing (Phase 2, 2026-08-24) ---- */
+// aiRouting?.required is checked FIRST, before any action-based branching --
+// when true, BOTH ANSWER and CASUAL_CHAT route through the account's own
+// stored credential, and getInnvilModelConfig()/deepseekChatterProvider()
+// must never be reached. A missing credential or missing model fails
+// explicitly (ok:false), never falling back to Innvil's own routes.
+
+const BYO_CRED = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" };
+
+test("REQUIRED: BYO required+usable routes ANSWER through the stored credential, never Sonnet's own getInnvilModelConfig", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("ANSWER", { required: true, credential: BYO_CRED });
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.model, "claude-sonnet-5");
+      assert.equal(route.automation, "NATURAL_CHATTER_ANSWER_BYO");
+      assert.ok(route.providerOverride, "must use the account's own credential, never Innvil's default resolution");
+      assert.equal(route.providerOverride?.apiKey, "sk-real-byo-key");
+      assert.equal(route.providerOverride?.provider, "anthropic");
+    }
+  });
+});
+
+test("REQUIRED: BYO required+usable routes CASUAL_CHAT through the stored credential, never DeepSeek", () => {
+  withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const route = resolveChatterRoute("CASUAL_CHAT", { required: true, credential: BYO_CRED });
+    assert.equal(route.ok, true);
+    if (route.ok) {
+      assert.equal(route.automation, "NATURAL_CHATTER_CASUAL_BYO");
+      assert.equal(route.providerOverride?.apiKey, "sk-real-byo-key");
+      assert.notEqual(route.providerOverride?.apiKey, "sk-deepseek-test");
+    }
+  });
+});
+
+test("REQUIRED: an openai-compatible BYO credential's own base URL/apiKey are used verbatim", () => {
+  const route = resolveChatterRoute("ANSWER", {
+    required: true,
+    credential: { provider: "openai", apiKey: "sk-oa-real", baseUrl: "https://my-own-proxy.example.com/v1", model: "gpt-5" },
+  });
+  assert.equal(route.ok, true);
+  if (route.ok) {
+    assert.equal(route.model, "gpt-5");
+    assert.equal(route.providerOverride?.provider, "openai");
+    assert.equal(route.providerOverride?.baseUrl, "https://my-own-proxy.example.com/v1");
+  }
+});
+
+test("an openai-compatible BYO credential with no stored baseUrl falls back to the real OpenAI-compatible default, never Innvil's own AI_BASE_URL", () => {
+  withEnv({ AI_BASE_URL: "https://innvils-own-gateway.example.com" }, () => {
+    const route = resolveChatterRoute("ANSWER", { required: true, credential: { provider: "openai", apiKey: "sk-oa-real", baseUrl: null, model: "gpt-5" } });
+    assert.equal(route.ok, true);
+    if (route.ok) assert.equal(route.providerOverride?.baseUrl, "https://api.openai.com/v1");
+  });
+});
+
+test("REQUIRED: BYO required but no credential stored fails explicitly -- never falls through to Sonnet/DeepSeek", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const answer = resolveChatterRoute("ANSWER", { required: true, credential: null });
+    const casual = resolveChatterRoute("CASUAL_CHAT", { required: true, credential: null });
+    assert.equal(answer.ok, false);
+    assert.equal(casual.ok, false);
+    if (!answer.ok) assert.doesNotMatch(answer.error, /sonnet|deepseek/i);
+    if (!casual.ok) assert.doesNotMatch(casual.error, /sonnet|deepseek/i);
+  });
+});
+
+test("REQUIRED: BYO required with a credential that has no configured model fails explicitly -- never guesses a model id", () => {
+  const route = resolveChatterRoute("ANSWER", { required: true, credential: { provider: "anthropic", apiKey: "sk-real", baseUrl: null, model: null } });
+  assert.equal(route.ok, false);
+  if (!route.ok) assert.match(route.error, /model/i);
+});
+
+test("a normal (non-BYO) account's routing is byte-identical to before BYO existed -- aiRouting undefined or required:false changes nothing", () => {
+  withEnv({ AI_MODEL: undefined, DEEPSEEK_API_KEY: "sk-deepseek-test" }, () => {
+    const withoutRouting = resolveChatterRoute("ANSWER");
+    const withManagedRouting = resolveChatterRoute("ANSWER", { required: false, credential: null });
+    assert.deepEqual(withoutRouting, withManagedRouting);
+    assert.equal(withoutRouting.ok, true);
+    if (withoutRouting.ok) assert.equal(withoutRouting.automation, "NATURAL_CHATTER_ANSWER");
+  });
+});
+
+/* ------------------------------------------------- emoji dead-zone fix ---- */
+// REQUIRED (live bug): the default persona (emojiFrequency=30) and most
+// presets (5-50) previously fell in a silent gap (the old rule only fired
+// below 20 or above 60), so the model got NO emoji instruction at all and
+// defaulted to using none. personaStyle must now give every emojiFrequency
+// value SOME explicit instruction, with no dead zone.
+
+test("REQUIRED: personaStyle gives an explicit emoji instruction at every emojiFrequency value, no silent gap", () => {
+  for (const freq of [0, 5, 14, 15, 30, 39, 40, 50, 64, 65, 80, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: freq }).join(" ");
+    assert.match(style, /emoji/i, `emojiFrequency=${freq} produced no emoji instruction at all`);
+  }
+});
+
+test("REQUIRED: the DEFAULT persona (emojiFrequency 30) gets a real emoji instruction, not silence (the exact live bug)", () => {
+  const style = personaStyle(DEFAULT_MODERATOR_PERSONA).join(" ");
+  assert.match(style, /emoji are rare for you/i);
+});
+
+test("emoji instruction escalates from avoid -> rare -> moderate -> welcome across the range", () => {
+  const at = (freq: number) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: freq }).join(" ");
+  assert.match(at(5), /avoid emoji almost entirely/i);
+  assert.match(at(30), /rare for you/i);
+  assert.match(at(50), /fine in moderation/i);
+  assert.match(at(80), /natural part of how you write/i);
+});
+
+test("REQUIRED: shortAckText scales probability continuously with emojiFrequency (default persona is no longer excluded)", () => {
+  const persona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 30 };
+  // Deterministic random stub: always "wins" the roll (returns 0).
+  const alwaysRolls = () => 0;
+  assert.match(shortAckText(persona, alwaysRolls), /😄/);
+});
+
+test("shortAckText never appends emoji when emojiFrequency is near zero, even on a winning roll", () => {
+  const persona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 0 };
+  const alwaysRolls = () => 0;
+  assert.doesNotMatch(shortAckText(persona, alwaysRolls), /😄/);
+});
+
+test("shortAckText's emoji chance grows with emojiFrequency (higher dial -> higher hit rate at a fixed roll)", () => {
+  // Roll exactly at the boundary a low-emoji persona would just barely miss --
+  // a higher emojiFrequency should still clear it.
+  const roll = () => 0.14; // 14% roll
+  const low = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 20 };   // chance = 10% -> misses
+  const high = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 80 };  // chance = 40% -> hits
+  assert.doesNotMatch(shortAckText(low, roll), /😄/);
+  assert.match(shortAckText(high, roll), /😄/);
+});
+
+/* ------------------------------------------- other persona-dial dead zones ---- */
+// REQUIRED (live bug): "Witty Mod" preset (formality=30, slang=35,
+// chattiness=40, teasing=55) landed in the OLD binary threshold's gap for
+// EVERY one of these dials at once (none were >70/<30, >60/<20, etc.), so
+// the model got ZERO style instruction for any of them and defaulted to a
+// neutral/professional-reading voice despite the preset. Same class of bug
+// as the emoji dead zone above, now closed for every dial with a gap.
+
+test("REQUIRED: personaStyle gives an explicit formality instruction at every value, no silent gap", () => {
+  for (const formality of [0, 15, 29, 30, 50, 69, 70, 71, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formality }).join(" ");
+    assert.match(style, /capital|lowercase|punctuation/i, `formality=${formality} produced no formality instruction`);
+  }
+});
+
+test("REQUIRED: personaStyle gives an explicit slang instruction at every value, no silent gap", () => {
+  for (const slang of [0, 19, 20, 40, 60, 61, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, slang }).join(" ");
+    assert.match(style, /slang/i, `slang=${slang} produced no slang instruction`);
+  }
+});
+
+test("REQUIRED: personaStyle gives an explicit chattiness instruction at every value, no silent gap", () => {
+  for (const chattiness of [0, 29, 30, 50, 70, 71, 100]) {
+    const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, chattiness }).join(" ");
+    assert.match(style, /brief|talkative|conversational/i, `chattiness=${chattiness} produced no chattiness instruction`);
+  }
+});
+
+test("REQUIRED (exact live bug): the Witty Mod preset's dials (formality=30, slang=35, chattiness=40, teasing=55) each produce a real style instruction, not silence", () => {
+  const witty = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  assert.equal(witty.formality, 30);
+  assert.equal(witty.slang, 35);
+  assert.equal(witty.chattiness, 40);
+  assert.equal(witty.teasing, 55);
+  const style = personaStyle(witty).join(" ");
+  assert.match(style, /capital|lowercase|punctuation/i);
+  assert.match(style, /slang/i);
+  assert.match(style, /brief|talkative|conversational/i);
+  // humor=80 clears the existing >60 threshold already -- confirms the wit
+  // signal genuinely reaches the model, not just that nothing crashed.
+  assert.match(style, /light humor is welcome/i);
+});
+
+test("REQUIRED (exact live bug, follow-up): Witty Mod resolves to the LOWERCASE contract via its explicit formal:false, not a numeric threshold -- live repro was Kwan still capitalizing sentence starts", () => {
+  const witty = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  assert.equal(witty.formal, false); // the actual source of truth, not formality=30
+  const style = personaStyle(witty).join(" ");
+  assert.match(style, /always write in lowercase/i);
+  assert.doesNotMatch(style, /semi-formal/i);
+  assert.doesNotMatch(style, /always capitalize the start/i);
+});
+
+/* --------------------------------------- formal: binary, never a probability band ---- */
+// REQUIRED: architecture correction -- formality/capitalization for a
+// PRESET persona is decided by the explicit `formal` boolean, never
+// re-derived from the numeric `formality` dial. These tests prove the
+// boolean is authoritative even when it CONTRADICTS what the numeric dial
+// would otherwise imply -- the strongest possible guard against silently
+// regressing back to threshold logic.
+
+test("REQUIRED: persona.formal is authoritative even when it contradicts the numeric formality dial", () => {
+  // formality=90 would normally mean strict caps -- formal:false must still win.
+  const contradictoryCasual = { ...DEFAULT_MODERATOR_PERSONA, formal: false as boolean | null, formality: 90 };
+  assert.match(personaStyle(contradictoryCasual).join(" "), /always write in lowercase/i);
+
+  // formality=5 would normally mean lowercase -- formal:true must still win.
+  const contradictoryFormal = { ...DEFAULT_MODERATOR_PERSONA, formal: true as boolean | null, formality: 5 };
+  assert.match(personaStyle(contradictoryFormal).join(" "), /always capitalize the start/i);
+});
+
+test("REQUIRED: formal=true/false never produces the neutral semi-formal instruction -- that only exists as a numeric-fallback band for formal=null", () => {
+  const formalYes = { ...DEFAULT_MODERATOR_PERSONA, formal: true as boolean | null, formality: 50 };
+  const formalNo = { ...DEFAULT_MODERATOR_PERSONA, formal: false as boolean | null, formality: 50 };
+  assert.doesNotMatch(personaStyle(formalYes).join(" "), /semi-formal/i);
+  assert.doesNotMatch(personaStyle(formalNo).join(" "), /semi-formal/i);
+});
+
+test("REQUIRED: no probability/tendency language leaks into the binary contract -- exact deterministic phrasing only", () => {
+  const style = personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formal: false }).join(" ");
+  for (const word of ["skew", "usually", "may capitalize", "lowercase-leaning", "sometimes"]) {
+    assert.doesNotMatch(style, new RegExp(word, "i"), `found probability language "${word}"`);
+  }
+});
+
+test("REQUIRED: formal=null (no explicit decision -- custom/legacy persona) falls back to the numeric dial, preserving prior custom-persona behavior", () => {
+  const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formal: null, ...over }).join(" ");
+  assert.match(at({ formality: 90 }), /always capitalize the start/i);
+  assert.match(at({ formality: 50 }), /semi-formal/i);
+  assert.match(at({ formality: 10 }), /always write in lowercase/i);
+});
+
+test("formality/slang/chattiness instructions escalate across the range, not just a binary (formal=null numeric-fallback path)", () => {
+  const at = (over: Partial<ModeratorPersona>) => personaStyle({ ...DEFAULT_MODERATOR_PERSONA, formal: null, ...over }).join(" ");
+  assert.match(at({ formality: 90 }), /always capitalize the start/i);
+  assert.match(at({ formality: 50 }), /semi-formal/i);
+  assert.match(at({ formality: 10 }), /always write in lowercase/i);
+  assert.match(at({ slang: 90 }), /slang and internet-speak are welcome/i);
+  assert.match(at({ slang: 40 }), /casual wording is fine where it naturally fits/i);
+  assert.match(at({ slang: 5 }), /avoid slang/i);
+});
+
+/* -------------------------------------- persona hierarchy: identity > dials ---- */
+// REQUIRED: description + customInstructions are the AUTHORITATIVE identity
+// source; numeric dials only refine mechanics/intensity. Two presets with
+// moderate dial values (Kwan's chattiness=40 lands in the middle band, Test's
+// humor=20 sits right at the edge of the dead zone) must still produce
+// materially different persona IDENTITY -- proving moderate dials never
+// collapse two different personas into one generic/default voice.
+
+test("REQUIRED (persona hierarchy): two moderate-dial presets (Witty Mod / Calm Professional) still produce materially different persona identity, and dials refine rather than replace it", () => {
+  const kwan = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  const test1 = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+
+  const kwanPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: kwan, action: "ANSWER" }));
+  const testPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-test", moderatorName: "Test", persona: test1, action: "ANSWER" }));
+
+  // Identity (tier 1: description) is present verbatim and distinct per moderator.
+  assert.match(kwanPrompt, /playful and clever, with dry humor/i);
+  assert.match(testPrompt, /composed, clear, and respectful/i);
+  assert.doesNotMatch(kwanPrompt, /composed, clear, and respectful/i);
+  assert.doesNotMatch(testPrompt, /playful and clever, with dry humor/i);
+
+  // customInstructions (tier 2) also present and distinct, as authoritative
+  // behavioral guidance -- not buried inside the dial-mechanics bullet list.
+  assert.match(kwanPrompt, /be playful and quick-witted/i);
+  assert.match(testPrompt, /speak like a composed, professional community moderator/i);
+
+  // The hierarchy itself is stated explicitly, not just implied by ordering.
+  assert.match(kwanPrompt, /secondary style\/intensity notes/i);
+  assert.match(kwanPrompt, /the persona wins/i);
+
+  // Dials REFINE (both still get concrete mechanics), they do not REPLACE
+  // identity -- neither prompt reads as empty/generic just because some of
+  // its dials land in the moderate range.
+  assert.match(kwanPrompt, /light humor is welcome/i); // Kwan humor=80, clears the high band
+  assert.match(testPrompt, /avoid slang — keep language plain and standard/i); // Test slang=5, clears the low band
+});
+
+test("REQUIRED: two-moderator persona isolation holds for the DeepSeek-routed CASUAL_CHAT action too", () => {
+  const kwanPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-kwan", moderatorName: "Kwan", persona: FORMAL_MODERATOR_A, action: "CASUAL_CHAT" }));
+  const testPrompt = buildSystemPrompt(baseInput({ selfDeploymentId: "dep-test", moderatorName: "Test", persona: CASUAL_MODERATOR_B, action: "CASUAL_CHAT" }));
+  assert.doesNotMatch(kwanPrompt, /Slang and internet-speak are welcome/i);
+  assert.match(testPrompt, /Slang and internet-speak are welcome/i);
+  assert.match(kwanPrompt, /You are Kwan/);
+  assert.match(testPrompt, /You are Test/);
+});
+
+/* ================================== ambient-greeting model fallback ==========
+   REQUIRED (live bug): "waddup guys" (no "?", no directed name) was silenced
+   -- isConversationalOpener has no orthography-independent signal for a
+   phonetic slang greeting. classifyAmbientGreeting is the narrow, opt-in
+   model fallback for exactly that residual case -- verified here against the
+   ACTUAL outgoing request (via a fetch spy, not just the parsed result), and
+   proven to never touch Sonnet and never escalate on failure. ================ */
+
+function withFetchSpy<T>(responseBody: unknown, fn: (calls: Array<{ url: string; body: unknown }>) => Promise<T> | T): Promise<T> {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  return Promise.resolve(fn(calls)).finally(() => {
+    globalThis.fetch = originalFetch;
+  });
+}
+
+function withEnvAsync<T>(vars: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T> {
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) prev[k] = process.env[k];
+  for (const [k, v] of Object.entries(vars)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  return Promise.resolve(fn()).finally(() => {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+}
+
+test("REQUIRED: classifyAmbientGreeting routes to DeepSeek Flash (never Sonnet), sends a tiny classification request", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "GREETING" } }] }, async (calls) => {
+      const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /deepseek/i);
+      const body = calls[0].body as { model?: string; max_tokens?: number; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.thinking?.type, "disabled");
+      assert.ok((body.max_tokens ?? 1024) <= 10, "classification output should be tiny, not a full reply");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isGreeting, true);
+    });
+  });
+});
+
+test('REQUIRED: "OTHER" response classifies as not-a-greeting', async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "OTHER" } }] }, async () => {
+      const result = await classifyAmbientGreeting("the price changed");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isGreeting, false);
+    });
+  });
+});
+
+test("REQUIRED: unconfigured DeepSeek fails explicitly -- no network call attempted, never falls back to Sonnet", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(result.ok, false);
+      assert.equal(calls.length, 0, "must not attempt any network call when DeepSeek is unconfigured");
+    });
+  });
+});
+
+test("a failed DeepSeek call surfaces as ok:false rather than throwing or escalating", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
+    try {
+      const result = await classifyAmbientGreeting("waddup guys");
+      assert.equal(result.ok, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+/* ================================ language-agnostic pitch classification =====
+   REQUIRED (live bug): looksLikeUnsolicitedPitch (link-moderation.ts) is a
+   pure, ENGLISH-ONLY regex heuristic -- a real unsolicited-promotion pitch
+   written in Russian/Chinese/any other language structurally can never match
+   it. classifyPitchLikelihood is the language-agnostic backstop, mirroring
+   classifyAmbientGreeting's exact shape (DeepSeek Flash, tiny classification
+   call, never Sonnet, never escalates on failure). ================ */
+
+test("REQUIRED: classifyPitchLikelihood routes to DeepSeek Flash (never Sonnet), sends a tiny classification request", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "PITCH" } }] }, async (calls) => {
+      const result = await classifyPitchLikelihood("Пролайкай профиль магазина с одеждой и я закину от себя 800 р");
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /deepseek/i);
+      const body = calls[0].body as { model?: string; max_tokens?: number; thinking?: { type: string } };
+      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.thinking?.type, "disabled");
+      assert.ok((body.max_tokens ?? 1024) <= 10, "classification output should be tiny, not a full reply");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isPitch, true);
+    });
+  });
+});
+
+test('REQUIRED: "OTHER" response classifies as not-a-pitch, for ordinary conversation in any language', async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy({ choices: [{ message: { content: "OTHER" } }] }, async () => {
+      const result = await classifyPitchLikelihood("Спасибо за проект, очень нравится");
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.isPitch, false);
+    });
+  });
+});
+
+test("REQUIRED: unconfigured DeepSeek fails explicitly -- no network call attempted, never falls back to Sonnet", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+    await withFetchSpy({}, async (calls) => {
+      const result = await classifyPitchLikelihood("some long enough message that would otherwise qualify");
+      assert.equal(result.ok, false);
+      assert.equal(calls.length, 0, "must not attempt any network call when DeepSeek is unconfigured");
+    });
+  });
+});
+
+test("a failed DeepSeek call surfaces as ok:false rather than throwing or escalating", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("server error", { status: 500 })) as typeof fetch;
+    try {
+      const result = await classifyPitchLikelihood("some long enough message that would otherwise qualify");
+      assert.equal(result.ok, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+/* ============================== human group-chat behavior contract ==========
+   Virtual Moderators are participants, not assistants. Live bug: casual
+   meta-questions ("why are the two of you not answering one after the
+   other?") produced assistant-style over-explanation of internal mechanics
+   ("no secret turn system, we just reply when we see it" / "no coordination
+   going on"). These assert the actual prompt strings the model receives --
+   deterministic prompt assembly, not live model output (see file header). ==== */
+
+test("REQUIRED: the no-hidden-mechanics rule is present for CASUAL_CHAT", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  assert.match(prompt, /internal mechanics/i);
+  assert.match(prompt, /routing/i);
+  assert.match(prompt, /turn-taking/i);
+});
+
+test("REQUIRED: the no-hidden-mechanics rule is ALSO present for ANSWER -- casual meta-questions phrased as a literal question route to ANSWER, not just CASUAL_CHAT", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  assert.match(prompt, /internal mechanics/i);
+  assert.match(prompt, /the system picked me/i);
+});
+
+test('REQUIRED: the prompt explicitly bans the exact over-explaining phrasing pattern from the live bug ("there\'s no turn system", "we don\'t coordinate")', () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  assert.match(prompt, /there's no turn system/i);
+  assert.match(prompt, /we don't coordinate/i);
+});
+
+test("REQUIRED: the minimum-sufficient-response rule (shortest natural reply, don't restate the message) is present for CASUAL_CHAT and ANSWER", () => {
+  const casual = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT" }));
+  const answer = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  for (const prompt of [casual, answer]) {
+    assert.match(prompt, /shortest natural reply/i);
+    assert.match(prompt, /don't restate or summarize the human's message/i);
+  }
+});
+
+/* ------------------------------------------ requiresIndividualContribution ---- */
+// Distinguishes an inherently PER-PERSON request ("tell me about yourself")
+// from a shared/collective one ("why are you two replying like that?") a
+// single sufficient answer typically already satisfies.
+
+test('REQUIRED: "can you both tell me about yourself?" (the live repro) requires individual contribution', () => {
+  assert.equal(requiresIndividualContribution("can you both tell me about yourself?"), true);
+});
+
+test('REQUIRED: "tell me about yourselves" requires individual contribution', () => {
+  assert.equal(requiresIndividualContribution("tell me about yourselves"), true);
+});
+
+test('REQUIRED: "introduce yourself" requires individual contribution', () => {
+  assert.equal(requiresIndividualContribution("introduce yourself"), true);
+});
+
+test('REQUIRED: "why are you two replying like that?" is a shared/collective question, not individual', () => {
+  assert.equal(requiresIndividualContribution("why are you two replying like that?"), false);
+});
+
+test('REQUIRED: "why are the two of you not answering one after the other?" (the live repro) is a shared/collective question', () => {
+  assert.equal(requiresIndividualContribution("why are the two of you not answering one after the other? like you are taking turns?"), false);
+});
+
+test('REQUIRED: "is the room quiet today?" is a shared/collective question', () => {
+  assert.equal(requiresIndividualContribution("is the room quiet today?"), false);
+});
+
+/* ------------------------------------------------ obligationContextLines ---- */
+// Grounds a secondary responder's "did someone already cover this?" in what
+// was actually said -- never invented -- and gives different instructions
+// depending on whether the request was individual or shared.
+
+test("obligationContextLines is null when there are no prior responses (primary responder, or any ordinary single-responder message)", () => {
+  assert.equal(obligationContextLines(baseInput({})), null);
+});
+
+test("REQUIRED: shared/collective obligation -- instructs the model that a sufficient prior reply may already cover it, offers NO_REPLY, and forbids repeating the explanation", () => {
+  const line = obligationContextLines(
+    baseInput({
+      priorResponsesToThisMessage: [{ moderatorName: "Kwan", text: "just timing lol" }],
+      individualContributionExpected: false,
+    })
+  );
+  assert.ok(line);
+  assert.match(line!, /Kwan/);
+  assert.match(line!, /just timing lol/);
+  assert.match(line!, /do not need to answer again/i);
+  assert.match(line!, /do not repeat or restate/i);
+  assert.match(line!, /NO_REPLY/);
+});
+
+test("REQUIRED: individual obligation -- instructs the model it must still give its OWN answer, not just repeat or describe the other moderator", () => {
+  const line = obligationContextLines(
+    baseInput({
+      priorResponsesToThisMessage: [{ moderatorName: "Test", text: "i'm test, meme-friendly but i get stuff done" }],
+      individualContributionExpected: true,
+    })
+  );
+  assert.ok(line);
+  assert.match(line!, /Test/);
+  assert.match(line!, /each of you individually/i);
+  assert.match(line!, /still give your own genuine answer/i);
+  assert.doesNotMatch(line!, /NO_REPLY/);
+});
+
+test("obligationContextLines is wired into the actual CASUAL_CHAT and ANSWER prompts when present", () => {
+  const input = baseInput({
+    action: "CASUAL_CHAT",
+    priorResponsesToThisMessage: [{ moderatorName: "Kwan", text: "just timing lol" }],
+    individualContributionExpected: false,
+  });
+  const casualPrompt = buildSystemPrompt(input);
+  assert.match(casualPrompt, /just timing lol/);
+  const answerPrompt = buildSystemPrompt({ ...input, action: "ANSWER" });
+  assert.match(answerPrompt, /just timing lol/);
+});
+
+test("REQUIRED: persona distinction survives the obligation context -- two different presets given the SAME prior-response context still each carry their own persona text, not each other's", () => {
+  const kwan = personaFromPreset(resolvePersonaPreset("witty_mod")!);
+  const test_ = personaFromPreset(resolvePersonaPreset("calm_professional")!);
+  const priorResponsesToThisMessage = [{ moderatorName: "Kwan", text: "just timing lol" }];
+
+  const kwanPrompt = buildSystemPrompt(baseInput({ moderatorName: "Kwan", persona: kwan, priorResponsesToThisMessage, individualContributionExpected: false }));
+  const calmPrompt = buildSystemPrompt(baseInput({ moderatorName: "Test", persona: test_, priorResponsesToThisMessage, individualContributionExpected: false }));
+
+  assert.match(kwanPrompt, new RegExp(kwan.description.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  assert.match(calmPrompt, new RegExp(test_.description.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+  assert.notEqual(kwan.description, test_.description);
+});
+
+/* ==================================== persona-aware reaction selection ====
+   "The coordinator decides whether a reaction is warranted. The persona
+   layer decides how that reaction is expressed." -- these test the SECOND
+   half: given the coordinator's neutral content-based emoji suggestion,
+   personaReactionEmoji picks how ONE specific moderator expresses it. */
+
+const seq = (values: number[]) => {
+  let i = 0;
+  return () => values[i++ % values.length];
+};
+
+test("REQUIRED: a persona that strongly avoids emoji (emojiFrequency < 15) still reacts -- Telegram reactions ARE emoji -- but gets the plainest option for the category, not an exuberant one", () => {
+  const lowEmoji: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 5 };
+  assert.equal(personaReactionEmoji("😂", lowEmoji), "😄");
+  assert.equal(personaReactionEmoji("🙏", lowEmoji), "🙏");
+  assert.equal(personaReactionEmoji("👍", lowEmoji), "👍");
+  assert.equal(personaReactionEmoji("😄", lowEmoji), "🙂");
+});
+
+test("REQUIRED: emoji use is never forced beyond the plain option for a low-emoji persona, regardless of humor/teasing", () => {
+  const lowEmojiHighHumor: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 5, humor: 90, teasing: 90 };
+  assert.equal(personaReactionEmoji("😂", lowEmojiHighHumor), "😄");
+});
+
+test("a high-humor/teasing persona gets a more exuberant laugh pool than a low-humor one", () => {
+  const witty: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 80, teasing: 80 };
+  const reserved: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 10, teasing: 10 };
+  const wittyEmoji = personaReactionEmoji("😂", witty, seq([0]));
+  const reservedEmoji = personaReactionEmoji("😂", reserved, seq([0]));
+  assert.equal(wittyEmoji, "🤣");
+  assert.equal(reservedEmoji, "😂");
+});
+
+test("a formal persona gets a restrained positive/agreement reaction, a casual one a more expressive pool", () => {
+  const formal: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, formality: 90 };
+  const casual: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, formality: 10 };
+  assert.equal(personaReactionEmoji("😄", formal, seq([0])), "🙂");
+  assert.equal(personaReactionEmoji("😄", casual, seq([0])), "😄");
+  assert.equal(personaReactionEmoji("👍", formal, seq([0])), "👍");
+});
+
+test("randomness (when used) only chooses AMONG equally-valid expressions of the SAME category -- never decides whether to react (that's already decided by the time this function runs)", () => {
+  const witty: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 80 };
+  // Fractional random() outputs (in [0,1)), one per pool slot -- 0, 1/3, 2/3
+  // select pool indices 0, 1, 2 respectively out of the 3-item laugh pool.
+  const results = [0, 1 / 3, 2 / 3].map((r) => personaReactionEmoji("😂", witty, () => r));
+  // Every result is still a laugh-category emoji -- variety in EXPRESSION, never a "no reaction" outcome.
+  for (const r of results) assert.ok(["🤣", "😂", "😆"].includes(r));
+  assert.deepEqual(results, ["🤣", "😂", "😆"]);
+});
+
+test("thanks stays a single, near-universal reaction across personas (🙏)", () => {
+  const witty: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, humor: 90 };
+  const formal: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60, formality: 90 };
+  assert.equal(personaReactionEmoji("🙏", witty), "🙏");
+  assert.equal(personaReactionEmoji("🙏", formal), "🙏");
+});
+
+test("personaReactionEmoji is pure/deterministic given a fixed random source -- same input, same output, no flakiness in tests", () => {
+  const persona: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, emojiFrequency: 60 };
+  const a = personaReactionEmoji("😂", persona, () => 0);
+  const b = personaReactionEmoji("😂", persona, () => 0);
+  assert.equal(a, b);
+});
+
+/* ============================================ collab-contact routing (Phase 4.M (F)) ==
+   Conversational routing only, never an authorization grant (spec §36) --
+   grounded ONLY in the community's own configured contact, never invented. */
+
+test("collabContactLine is null when no contact is configured", () => {
+  assert.equal(collabContactLine(baseInput({})), null);
+});
+
+test("REQUIRED: collabContactLine mentions the EXACT configured contact when set", () => {
+  const line = collabContactLine(baseInput({ collabContact: "@project_admin" }));
+  assert.ok(line);
+  assert.match(line!, /@project_admin/);
+});
+
+test("REQUIRED: never implies the contact has special authority beyond routing", () => {
+  const line = collabContactLine(baseInput({ collabContact: "@project_admin" }));
+  assert.match(line!, /no special authority|never imply this contact has any special authority/i);
+});
+
+test("REQUIRED: no configured contact -- SHARED_RULES bans inventing a username", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", collabContact: null }));
+  assert.match(prompt, /never invent a username/i);
+  assert.doesNotMatch(prompt, /@project_admin/);
+});
+
+test("collabContactLine is wired into both the ANSWER and CASUAL_CHAT prompts when set", () => {
+  const input = baseInput({ collabContact: "@project_admin" });
+  assert.match(buildSystemPrompt({ ...input, action: "CASUAL_CHAT" }), /@project_admin/);
+  assert.match(buildSystemPrompt({ ...input, action: "ANSWER" }), /@project_admin/);
+});
+
+/* ==================================== Phase 4.N: project knowledge grounding ====
+   Only the ALREADY-RETRIEVED, relevance-ranked subset is ever visible to the
+   model (retrieval itself happens in community-runtime.ts, not here) -- this
+   layer just verifies the grounded content reaches the prompt, the
+   never-fabricate-beyond-it instruction is present, and it's scoped to
+   ANSWER only (never CASUAL_CHAT, per spec: substantive Q&A uses ANSWER). */
+
+test("projectKnowledgeContextLines is null when nothing was retrieved", () => {
+  assert.equal(projectKnowledgeContextLines(baseInput({})), null);
+  assert.equal(projectKnowledgeContextLines(baseInput({ projectKnowledge: [] })), null);
+});
+
+test("REQUIRED: projectKnowledgeContextLines surfaces the exact retrieved title/content, verbatim", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "PROJECT", title: "Supported chains", content: "Ethereum and Polygon." }] }));
+  assert.ok(line);
+  assert.match(line!, /Supported chains/);
+  assert.match(line!, /Ethereum and Polygon\./);
+});
+
+test("REQUIRED: instructs the moderator this is the ONLY source of factual project claims -- never invent beyond it", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "PROJECT", title: "X", content: "Y" }] }));
+  assert.match(line!, /ONLY source of factual claims/i);
+  assert.match(line!, /don't have that information|never state a fact beyond/i);
+});
+
+test("REQUIRED: projectKnowledge is wired into the ANSWER prompt", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [{ scope: "PROJECT", title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  assert.match(prompt, /Roadmap/);
+  assert.match(prompt, /Q3 launch of feature X\./);
+});
+
+test("REQUIRED: projectKnowledge is NOT wired into CASUAL_CHAT -- casual chatter never cites facts", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: [{ scope: "PROJECT", title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  assert.doesNotMatch(prompt, /Q3 launch of feature X\./);
+});
+
+// Live-bug regression: a question with ZERO matching Project Knowledge
+// (projectKnowledgeContextLines -> null) used to leave the ANSWER prompt
+// with no signal at all that no project-specific facts were available --
+// the model then invented a plausible-sounding but entirely fabricated
+// answer (e.g. "monitoring hub of what?" -> a confident, made-up
+// explanation of a feature that was never in any retrieved knowledge).
+test("REQUIRED: when nothing is retrieved, the ANSWER prompt explicitly states no project-specific knowledge is available -- never a silent omission", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined }));
+  assert.match(prompt, /No Project Knowledge was found/i);
+  assert.match(prompt, /zero project-specific facts/i);
+  assert.match(prompt, /do not invent|do not.*guess|never.*invent/i);
+});
+
+test("REQUIRED: the no-knowledge fallback also fires for an explicitly empty projectKnowledge array", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [] }));
+  assert.match(prompt, /No Project Knowledge was found/i);
+});
+
+test("the no-knowledge fallback line is REPLACED (not both present) once real knowledge IS retrieved", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [{ scope: "PROJECT", title: "Roadmap", content: "Q3 launch of feature X." }] }));
+  assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+  assert.match(prompt, /Q3 launch of feature X\./);
+});
+
+test("the no-knowledge fallback is CASUAL_CHAT-exempt, same as the real knowledge block -- casual chatter never gets grounding instructions at all", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: undefined }));
+  assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+});
+
+/* ========== Web3/crypto commercial-intent contact routing -- generation-side proof ====
+   The ROUTING decision (does this message's intent map to the Partnerships/
+   Collaboration contact at all?) is made entirely in project-profile.ts's
+   resolveContactIntent, before this file is ever reached -- see project-
+   profile.test.ts and community-runtime.test.ts for that half. What's
+   verified here is generation-side only: once a PRESET entry for
+   "Partnerships / Collaboration" IS retrieved and handed to the model, (a)
+   it must be used EXACTLY as configured, never altered/omitted, (b)
+   different personas must express it in their own natural voice while
+   stating the identical contact (REQUIRED test 13), and (c) when no such
+   contact exists, the model must never invent one (REQUIRED test 12 -- this
+   codebase's existing SHARED_RULES line already names partnerships/
+   collaborations/AMAs/sponsorships explicitly). */
+
+const PARTNERSHIP_PRESET: KnowledgeContextEntry = { scope: "PRESET", title: "Partnerships / Collaboration", content: "@litho_bd", authoritative: true };
+
+test("REQUIRED test 13: a retrieved Partnerships PRESET is rendered as authoritative and must be used exactly as given", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: [PARTNERSHIP_PRESET] }));
+  assert.match(prompt, /Configured contact \(authoritative/i);
+  assert.match(prompt, /Partnerships \/ Collaboration/);
+  assert.match(prompt, /@litho_bd/);
+  assert.match(prompt, /must be used exactly as given/i);
+});
+
+test("REQUIRED test 13: two differently-configured personas both state the SAME authoritative contact -- persona controls wording, never the contact itself", () => {
+  const formalPrompt = buildSystemPrompt(baseInput({ moderatorName: "Alex", persona: FORMAL_MODERATOR_A, action: "ANSWER", projectKnowledge: [PARTNERSHIP_PRESET] }));
+  const casualPrompt = buildSystemPrompt(baseInput({ moderatorName: "Bella", persona: CASUAL_MODERATOR_B, action: "ANSWER", projectKnowledge: [PARTNERSHIP_PRESET] }));
+  // Both prompts carry the exact same authoritative contact fact...
+  assert.match(formalPrompt, /@litho_bd/);
+  assert.match(casualPrompt, /@litho_bd/);
+  // ...while each persona's OWN distinct style mechanics are present and
+  // genuinely differ between the two -- content is grounded, style is not.
+  assert.notEqual(formalPrompt, casualPrompt);
+});
+
+test("REQUIRED test 12 (generation-side): SHARED_RULES already explicitly bans inventing a contact for partnerships/collaborations/AMAs/sponsorships specifically when none is configured", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined, collabContact: null }));
+  assert.match(prompt, /partnerships\/collaborations\/AMAs\/sponsorships/i);
+  assert.match(prompt, /never invent a username/i);
+  assert.doesNotMatch(prompt, /@litho_bd/);
+});
+
+test("informational Web3 questions with no project-specific facts are still explicitly permitted to be answered generally/socially -- the existing fallback line already grants this, so a purely definitional question ('what is an IDO?') is never blocked just because nothing project-specific was retrieved", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined }));
+  assert.match(prompt, /you may still speak generally\/socially if the question doesn't actually require project-specific facts/i);
+});
+
+test("multiple retrieved entries all appear in the prompt, each on its own line", () => {
+  const prompt = buildSystemPrompt(
+    baseInput({
+      action: "ANSWER",
+      projectKnowledge: [
+        { scope: "PROJECT", title: "Chains", content: "Ethereum, Polygon." },
+        { scope: "COMMUNITY", title: "Support", content: "support@example.com" },
+      ],
+    })
+  );
+  assert.match(prompt, /Chains/);
+  assert.match(prompt, /Ethereum, Polygon\./);
+  assert.match(prompt, /Support/);
+  assert.match(prompt, /support@example\.com/);
+});
+
+test("a title-less entry still renders its content without a dangling label", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "ORGANIZATION", title: "", content: "Support hours are 9am-5pm UTC." }] }));
+  assert.match(line!, /Support hours are 9am-5pm UTC\./);
+});
+
+/* ---------------------------------------- scope labeling (architecture correction) ----
+   "Do not label organization-wide knowledge as Project Knowledge" -- each
+   entry must be labeled by its OWN scope, never a single generic header. */
+
+test("REQUIRED: COMMUNITY, PROJECT, and ORGANIZATION entries are each labeled by their own scope, never conflated", () => {
+  const line = projectKnowledgeContextLines(
+    baseInput({
+      projectKnowledge: [
+        { scope: "COMMUNITY", title: "AMA", content: "Fridays 3pm UTC" },
+        { scope: "PROJECT", title: "Chains", content: "Ethereum, Polygon" },
+        { scope: "ORGANIZATION", title: "Legal", content: "KaJ Labs Inc." },
+      ],
+    })
+  );
+  assert.match(line!, /Community-specific context/i);
+  assert.match(line!, /Project knowledge/i);
+  assert.match(line!, /Organization knowledge.*shared across every project/i);
+});
+
+test("an organization-wide entry is never labeled as project knowledge", () => {
+  const line = projectKnowledgeContextLines(baseInput({ projectKnowledge: [{ scope: "ORGANIZATION", title: "Legal", content: "KaJ Labs Inc." }] }));
+  assert.doesNotMatch(line!, /\[Project knowledge/);
+  assert.match(line!, /\[Organization knowledge/);
+});
+
+/* ==================================== Shared Escalation Group (Phase 1) ====
+   Confidence-gated escalation: when Project Knowledge has NOTHING relevant to
+   a question, and the project has a real escalation group configured, the
+   model may respond with the ESCALATE_REQUIRED sentinel instead of guessing.
+   Without a configured group, behavior stays byte-identical to before this
+   feature (the plain "no information" line only). An honest "not yet
+   announced/decided" answer (real retrieved knowledge) must NEVER escalate --
+   that's a genuine answer, not a knowledge gap. */
+
+test("knowledgeOrEscalationLine: with no escalation group configured, behavior is byte-identical to the plain no-knowledge line -- never mentions ESCALATE_REQUIRED", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: false }));
+  assert.doesNotMatch(line, /ESCALATE_REQUIRED/);
+  assert.match(line, /No Project Knowledge was found/i);
+  assert.match(line, /zero project-specific facts/i);
+});
+
+test("knowledgeOrEscalationLine: escalationConfigured undefined behaves the same as false (never escalates by accident)", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: undefined }));
+  assert.doesNotMatch(line, /ESCALATE_REQUIRED/);
+});
+
+test("REQUIRED: with a real escalation group configured AND zero relevant knowledge, the ESCALATE_REQUIRED sentinel is offered", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: true }));
+  assert.match(line, /ESCALATE_REQUIRED/);
+  assert.match(line, /never guess|never improvise/i);
+});
+
+test("REQUIRED: real retrieved knowledge always wins over escalation, even when a group IS configured -- an honest 'not yet announced' answer must never escalate", () => {
+  const line = knowledgeOrEscalationLine(
+    baseInput({ escalationConfigured: true, projectKnowledge: [{ scope: "PROJECT", title: "Launch date", content: "Not yet announced or decided." }] })
+  );
+  assert.doesNotMatch(line, /ESCALATE_REQUIRED/);
+  assert.match(line, /Not yet announced or decided\./);
+});
+
+test("REQUIRED: escalationConfigured is wired into the ANSWER prompt's closing decision line", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined, escalationConfigured: true }));
+  assert.match(prompt, /ESCALATE_REQUIRED/);
+  assert.match(prompt, /No Project Knowledge was found/i);
+});
+
+test("without escalationConfigured, the ANSWER prompt's closing decision line never mentions ESCALATE_REQUIRED", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER", projectKnowledge: undefined, escalationConfigured: false }));
+  assert.doesNotMatch(prompt, /ESCALATE_REQUIRED/);
+});
+
+test("REQUIRED: escalationConfigured never leaks into CASUAL_CHAT -- only ANSWER may ever escalate", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "CASUAL_CHAT", projectKnowledge: undefined, escalationConfigured: true }));
+  assert.doesNotMatch(prompt, /ESCALATE_REQUIRED/);
+});
+
+// NOTE: the closing decision line (buildSystemPrompt's last ANSWER line) is a
+// PROJECT-level standing instruction -- it mentions ESCALATE_REQUIRED as a
+// general fallback option whenever escalationConfigured is true, regardless
+// of whether THIS specific question happened to find matching knowledge.
+// What must actually change per-question is the knowledge block itself
+// (knowledgeOrEscalationLine, already directly tested above): real retrieved
+// knowledge replaces the "no knowledge / you may escalate" language entirely,
+// so the model is told to use the given facts rather than being pointed at
+// escalation for a question that's already answerable.
+test("escalationConfigured with real knowledge present: the knowledge block itself never says knowledge is missing -- the real facts replace it entirely", () => {
+  const prompt = buildSystemPrompt(
+    baseInput({ action: "ANSWER", escalationConfigured: true, projectKnowledge: [{ scope: "PROJECT", title: "Chains", content: "Ethereum and Polygon." }] })
+  );
+  assert.doesNotMatch(prompt, /No Project Knowledge was found/i);
+  assert.match(prompt, /Ethereum and Polygon\./);
+});
+
+/* ============================== community-message knowledge grounding ========== */
+
+test("communityKnowledgeContextLines is null when nothing was retrieved", () => {
+  assert.equal(communityKnowledgeContextLines(baseInput({})), null);
+  assert.equal(communityKnowledgeContextLines(baseInput({ communityKnowledge: null })), null);
+});
+
+test("REQUIRED: facts render with pinned/announcement markers and instruct newer-wins on conflict", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({
+      communityKnowledge: {
+        facts: [{ text: "presale is now live", isPinned: false, isAnnouncement: true, createdAt: "2026-09-01T00:00:00.000Z" }],
+        pinnedReference: null, whitepaperLink: null, otherResources: [],
+      },
+    })
+  );
+  assert.match(line ?? "", /presale is now live/);
+  assert.match(line ?? "", /prefer NEWER admin\/mod information/i);
+});
+
+test("REQUIRED (SS2): a pinned reference instructs answer-first-then-reference, never 'just check the pinned post'", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [], pinnedReference: { text: "presale stage details", link: "https://t.me/proj/5" }, whitepaperLink: null, otherResources: [] } })
+  );
+  assert.match(line ?? "", /answer directly first/i);
+  assert.match(line ?? "", /https:\/\/t\.me\/proj\/5/);
+  assert.match(line ?? "", /never JUST say "check the pinned post"/i);
+});
+
+test("REQUIRED (SS3/SS9): a confirmed whitepaper link is stated with an explicit never-derive-a-different-one instruction", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [], pinnedReference: null, whitepaperLink: "https://docs.example.com/paper", otherResources: [] } })
+  );
+  assert.match(line ?? "", /https:\/\/docs\.example\.com\/paper/);
+  assert.match(line ?? "", /never derive\/guess a different whitepaper URL/i);
+});
+
+test("REQUIRED (SS9): with no whitepaper, the prompt explicitly tells the model NOT to mention one at all -- never a placeholder", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [{ text: "presale is live", isPinned: false, isAnnouncement: false, createdAt: "2026-09-01T00:00:00.000Z" }], pinnedReference: null, whitepaperLink: null, otherResources: [] } })
+  );
+  assert.doesNotMatch(line ?? "", /whitepaper/i);
+});
+
+test("REQUIRED (SS4): other resources come with an explicit never-dump-every-link instruction", () => {
+  const line = communityKnowledgeContextLines(
+    baseInput({ communityKnowledge: { facts: [], pinnedReference: null, whitepaperLink: null, otherResources: [{ kind: "ROADMAP", url: "https://a.com/roadmap" }] } })
+  );
+  assert.match(line ?? "", /ROADMAP: https:\/\/a\.com\/roadmap/);
+  assert.match(line ?? "", /never dump every link/i);
+});
+
+/* --------------------------------------------------------- silence/command/fallback (15C) ---- */
+
+test("REQUIRED: with escalation configured, escalation is offered and mention-admin is NOT (escalation wins precedence)", () => {
+  const instr = answerFallbackInstruction(baseInput({ escalationConfigured: true, fallbackAdminMention: "@CommunityAdmin" }));
+  assert.match(instr, /ESCALATE_REQUIRED/);
+  assert.doesNotMatch(instr, /MENTION_ADMIN_REQUIRED/);
+});
+
+test("REQUIRED (15C): with no escalation but a configured fallback admin, mention-admin is offered instead", () => {
+  const instr = answerFallbackInstruction(baseInput({ escalationConfigured: false, fallbackAdminMention: "@CommunityAdmin" }));
+  assert.match(instr, /MENTION_ADMIN_REQUIRED/);
+  assert.doesNotMatch(instr, /ESCALATE_REQUIRED/);
+});
+
+test("REQUIRED (15C): with neither escalation nor a fallback admin, plain silence is offered and explicitly stated as correct", () => {
+  const instr = answerFallbackInstruction(baseInput({ escalationConfigured: false, fallbackAdminMention: null }));
+  assert.match(instr, /NO_REPLY/);
+  assert.match(instr, /completely correct to simply say nothing/i);
+});
+
+test("REQUIRED: every fallback branch explicitly bans the forbidden filler phrasing", () => {
+  for (const over of [{ escalationConfigured: true }, { fallbackAdminMention: "@Admin" }, {}]) {
+    const instr = answerFallbackInstruction(baseInput(over));
+    assert.match(instr, /I don.t know/);
+    assert.match(instr, /I couldn.t find that/);
+  }
+});
+
+test("REQUIRED: knowledgeOrEscalationLine offers the mention-admin sentinel when nothing is known but a fallback admin is configured", () => {
+  const line = knowledgeOrEscalationLine(baseInput({ projectKnowledge: undefined, escalationConfigured: false, fallbackAdminMention: "@CommunityAdmin" }));
+  assert.match(line, /MENTION_ADMIN_REQUIRED/);
+});
+
+/* ------------------------------------------------- persona-consistency / no-system-terminology (NOTE) ---- */
+
+test("REQUIRED: prompt states content=grounded/style=persona and bans exposing internal retrieval terminology", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  assert.match(prompt, /CONTENT is grounded and accurate/i);
+  assert.match(prompt, /STYLE is persona-based and natural/i);
+  assert.match(prompt, /retrieved context/i);
+  assert.match(prompt, /confidence/i);
+  assert.match(prompt, /classifier/i);
+});
+
+test("REQUIRED: prompt bans 'couldn't find/verify' style phrasing for missing information", () => {
+  const prompt = buildSystemPrompt(baseInput({ action: "ANSWER" }));
+  assert.match(prompt, /I couldn.t find that/i);
+});
+
+/* -------------------------------------------------- generateChatterReply sentinel round trip ---- */
+
+const BYO_CRED_FOR_GENERATION = { provider: "anthropic" as const, apiKey: "sk-real-byo-key", baseUrl: null, model: "claude-sonnet-5" };
+
+function withAnthropicFetchMock<T>(replyText: string, fn: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ content: [{ type: "text", text: replyText }], usage: { input_tokens: 10, output_tokens: 4 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  return fn().finally(() => {
+    globalThis.fetch = originalFetch;
+  });
+}
+
+test("REQUIRED (15C, end-to-end): the model emitting MENTION_ADMIN_REQUIRED resolves to a real mentionAdmin outcome", async () => {
+  await withAnthropicFetchMock("MENTION_ADMIN_REQUIRED", async () => {
+    const result = await generateChatterReply(
+      baseInput({ action: "ANSWER", fallbackAdminMention: "@CommunityAdmin", aiRouting: { required: true, credential: BYO_CRED_FOR_GENERATION } })
+    );
+    assert.equal(result.ok, true);
+    if (result.ok) assert.ok("mentionAdmin" in result && result.mentionAdmin === true);
+  });
+});
+
+test("a plain NO_REPLY response still resolves to noReply, unaffected by the new sentinel", async () => {
+  await withAnthropicFetchMock("NO_REPLY", async () => {
+    const result = await generateChatterReply(baseInput({ action: "ANSWER", aiRouting: { required: true, credential: BYO_CRED_FOR_GENERATION } }));
+    assert.equal(result.ok, true);
+    if (result.ok) assert.ok("noReply" in result && result.noReply === true);
+  });
+});
+
+test("a real answer still passes through as a normal reply, unaffected by the new sentinel", async () => {
+  await withAnthropicFetchMock("CA: 0x123456789", async () => {
+    const result = await generateChatterReply(baseInput({ action: "ANSWER", aiRouting: { required: true, credential: BYO_CRED_FOR_GENERATION } }));
+    assert.equal(result.ok, true);
+    if (result.ok) assert.ok("reply" in result && result.reply === "CA: 0x123456789");
+  });
+});
+
+/* --------------------------------------------------------------- personaVoiceBlock ---- */
+// Small reusable adapter (2026-09-04) letting moderation-warning generation
+// (link-classify.ts's generatePersonaSolicitationWarning) reuse the EXACT
+// SAME persona-realization machinery as ordinary conversational replies --
+// never a second, separate "moderation persona" system. These prove the
+// adapter's output matches what buildSystemPrompt itself would produce for
+// the same persona, and that two differently-configured personas produce
+// genuinely different voice blocks.
+
+test("REQUIRED: personaVoiceBlock includes the same identity line buildSystemPrompt uses for this persona", () => {
+  const block = personaVoiceBlock(FORMAL_MODERATOR_A);
+  assert.ok(block.some((line) => line === personaIdentityLine(baseInput({ persona: FORMAL_MODERATOR_A }))));
+});
+
+test("REQUIRED: personaVoiceBlock includes customInstructions when configured, omits it when blank -- matching personaCustomInstructionsLine exactly", () => {
+  const withInstructions: ModeratorPersona = { ...FORMAL_MODERATOR_A, customInstructions: "Always sign off with 'Regards, Management.'" };
+  const block = personaVoiceBlock(withInstructions);
+  assert.ok(block.includes(personaCustomInstructionsLine(withInstructions) as string));
+
+  const withoutInstructions: ModeratorPersona = { ...FORMAL_MODERATOR_A, customInstructions: "" };
+  const blockWithout = personaVoiceBlock(withoutInstructions);
+  assert.equal(personaCustomInstructionsLine(withoutInstructions), null);
+  assert.ok(!blockWithout.some((line) => line.includes("customInstructions")));
+});
+
+test("REQUIRED: personaVoiceBlock includes the exact same style-mechanics text personaStyle produces for this persona", () => {
+  const block = personaVoiceBlock(CASUAL_MODERATOR_B);
+  assert.ok(block.includes(personaStyle(CASUAL_MODERATOR_B).join(" ")));
+});
+
+test("REQUIRED: two different personas realize the SAME moderation facts differently -- personaVoiceBlock output genuinely differs, not just the description sentence", () => {
+  const formalBlock = personaVoiceBlock(FORMAL_MODERATOR_A).join("\n");
+  const casualBlock = personaVoiceBlock(CASUAL_MODERATOR_B).join("\n");
+  assert.notEqual(formalBlock, casualBlock);
+  // The difference is attributable to real style mechanics (capitalization/
+  // slang), not just an incidental string mismatch.
+  assert.match(formalBlock, /always capitalize the start/i);
+  assert.match(formalBlock, /avoid slang/i);
+  assert.match(casualBlock, /lowercase/i);
+  assert.match(casualBlock, /slang and internet-speak are welcome/i);
+});
+
+test("a persona with no description/customInstructions still returns a sensible, non-fabricating block -- never crashes, never invents traits", () => {
+  const bare: ModeratorPersona = { ...DEFAULT_MODERATOR_PERSONA, description: "", customInstructions: "" };
+  const block = personaVoiceBlock(bare);
+  assert.ok(block.length > 0);
+  assert.match(block.join(" "), /no specific persona description has been configured/i);
+});

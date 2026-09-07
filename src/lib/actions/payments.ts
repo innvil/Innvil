@@ -3,14 +3,26 @@
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
-import { round4 } from "@/src/lib/money";
+import { round4, CURRENCIES } from "@/src/lib/money";
+import { panelStorefrontPath } from "@/src/lib/config";
 import {
   getAdapter,
   getGatewayContext,
   GATEWAY_CATALOG,
+  catalogEntry,
   type CatalogEntry,
   type GatewayField,
+  type PaymentCategory,
 } from "@/src/lib/payments";
+
+/** Read a panel's operating currency from its settings (default USD). */
+function readPanelCurrency(settings: unknown): string {
+  if (settings && typeof settings === "object") {
+    const c = (settings as Record<string, unknown>).currency;
+    if (typeof c === "string" && c) return c.toUpperCase();
+  }
+  return "USD";
+}
 
 /* =========================================================
    §7 PAYMENTS — multi-gateway (bring-your-own, per panel).
@@ -46,30 +58,184 @@ export interface PaymentsMeta {
   catalog: CatalogEntry[];
   fields: Record<string, GatewayField[]>; // per available gateway id
   connected: ConnectedGateway[];
+  currency: string; // the panel's operating currency
+  currencies: { code: string; label: string }[]; // options for the selector
 }
 
-/** Everything the owner Payments tab needs: the full catalog, connect fields, and
-    which gateways this panel has connected. */
+const DEFAULT_GATEWAY_MIN_TOPUP = 1;
+
+interface TopupDiscountRule {
+  minAmount: number;
+  discountPct: number;
+}
+
+function normalizeDiscountPct(raw: unknown): number | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return round4(n);
+}
+
+function normalizeAmount(raw: unknown): number | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return round4(n);
+}
+
+function normalizeRules(rules: TopupDiscountRule[]): TopupDiscountRule[] {
+  const out = rules
+    .filter((r) => Number.isFinite(r.minAmount) && r.minAmount >= 0 && Number.isFinite(r.discountPct) && r.discountPct >= 0 && r.discountPct <= 100)
+    .map((r) => ({ minAmount: round4(r.minAmount), discountPct: round4(r.discountPct) }))
+    .sort((a, b) => a.minAmount - b.minAmount);
+
+  const dedup: TopupDiscountRule[] = [];
+  for (const r of out) {
+    const prev = dedup[dedup.length - 1];
+    if (prev && prev.minAmount === r.minAmount) {
+      dedup[dedup.length - 1] = r;
+      continue;
+    }
+    dedup.push(r);
+  }
+  return dedup;
+}
+
+function tryParseDiscountRules(raw: unknown): { rules: TopupDiscountRule[]; valid: boolean } {
+  if (raw == null) return { rules: [], valid: true };
+  const str = typeof raw === "string" ? raw.trim() : "";
+  if (!str) return { rules: [], valid: true };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(str);
+  } catch {
+    return { rules: [], valid: false };
+  }
+  if (!Array.isArray(parsed)) return { rules: [], valid: false };
+
+  const rules: TopupDiscountRule[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") return { rules: [], valid: false };
+    const obj = item as Record<string, unknown>;
+    const minAmount = normalizeAmount(obj.minAmount);
+    const discountPct = normalizeDiscountPct(obj.discountPct);
+    if (minAmount == null || discountPct == null) return { rules: [], valid: false };
+    rules.push({ minAmount, discountPct });
+  }
+  return { rules: normalizeRules(rules), valid: true };
+}
+
+function pickDiscountPct(amount: number, rules: TopupDiscountRule[]): number | null {
+  if (!Number.isFinite(amount) || amount <= 0 || rules.length === 0) return null;
+  let picked: number | null = null;
+  for (const r of rules) {
+    if (amount >= r.minAmount) picked = r.discountPct;
+    else break;
+  }
+  return picked;
+}
+
+async function getGlobalDiscountRules(category: PaymentCategory): Promise<TopupDiscountRule[]> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("platform_topup_discount_defaults")
+    .select("discount_pct, discount_rules")
+    .eq("category", category)
+    .maybeSingle();
+
+  const parsed = tryParseDiscountRules(data?.discount_rules ? JSON.stringify(data.discount_rules) : "");
+  if (parsed.valid && parsed.rules.length > 0) return parsed.rules;
+
+  const legacy = normalizeDiscountPct(data?.discount_pct);
+  return legacy == null ? [] : [{ minAmount: 0, discountPct: legacy }];
+}
+
+export async function resolveGatewayDiscountPct(
+  gateway: string,
+  gwConfig: Record<string, unknown> | null,
+  amount: number
+): Promise<number | null> {
+  const parsedRules = tryParseDiscountRules(gwConfig?.discountRules);
+  if (parsedRules.valid && parsedRules.rules.length > 0) {
+    const byRules = pickDiscountPct(amount, parsedRules.rules);
+    if (byRules != null) return byRules;
+  }
+
+  const panelOverride = normalizeDiscountPct(gwConfig?.discountPct);
+  if (panelOverride != null) return panelOverride;
+
+  const cat = catalogEntry(gateway)?.category;
+  if (!cat) return null;
+  const globalRules = await getGlobalDiscountRules(cat);
+  return pickDiscountPct(amount, globalRules);
+}
+
+function normalizeMinTopup(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_GATEWAY_MIN_TOPUP;
+  return round4(n);
+}
+
+/** Everything the owner Payments tab needs: the full catalog, connect fields,
+    which gateways this panel has connected, and its currency. */
 export async function getPaymentsMeta(panelId: string): Promise<PaymentsMeta> {
   const fields: Record<string, GatewayField[]> = {};
-  for (const c of GATEWAY_CATALOG) if (c.available) fields[c.id] = getAdapter(c.id)?.fields ?? [];
+  for (const c of GATEWAY_CATALOG) {
+    if (!c.available) continue;
+    fields[c.id] = [
+      ...(getAdapter(c.id)?.fields ?? []),
+      {
+        key: "minTopup",
+        label: "Minimum top-up",
+        secret: false,
+        placeholder: "1.00",
+        help: "Customer deposits via this method must be at least this amount.",
+        optional: true,
+      },
+    ];
+  }
+  const currencies = CURRENCIES.map((c) => ({ code: c.code, label: `${c.code} — ${c.label}` }));
 
   const { user, admin } = await getAuthedAdmin();
   let connected: ConnectedGateway[] = [];
+  let currency = "USD";
   if (user && (await ownsPanel(user.id, panelId))) {
-    const { data } = await admin
-      .from("panel_payment_gateways")
-      .select("gateway, status, config, merchant_id")
-      .eq("panel_id", panelId);
+    const [{ data }, { data: panel }] = await Promise.all([
+      admin.from("panel_payment_gateways").select("gateway, status, config, merchant_id").eq("panel_id", panelId),
+      admin.from("panels").select("settings").eq("id", panelId).maybeSingle(),
+    ]);
+    currency = readPanelCurrency(panel?.settings);
     connected = (data ?? []).map((r) => {
       const config: Record<string, string> = { ...((r.config as Record<string, string>) ?? {}) };
+      if (!config.minTopup) config.minTopup = String(DEFAULT_GATEWAY_MIN_TOPUP);
       if (r.gateway === "cryptomus" && r.merchant_id && !config.merchantId) {
         config.merchantId = r.merchant_id as string;
       }
       return { gateway: r.gateway as string, status: r.status as string, config };
     });
   }
-  return { catalog: GATEWAY_CATALOG, fields, connected };
+  return { catalog: GATEWAY_CATALOG, fields, connected, currency, currencies };
+}
+
+/** Set the panel's operating currency (owner). Stored in panels.settings.currency. */
+export async function setPanelCurrency(panelId: string, code: string): Promise<Result> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!(await ownsPanel(user.id, panelId))) return { ok: false, error: "Not authorized for this panel" };
+  const cc = (code || "").toUpperCase();
+  if (!CURRENCIES.some((c) => c.code === cc)) return { ok: false, error: "Unsupported currency." };
+
+  const { data: panel } = await admin.from("panels").select("settings").eq("id", panelId).maybeSingle();
+  const settings: Record<string, unknown> =
+    panel?.settings && typeof panel.settings === "object" ? { ...(panel.settings as Record<string, unknown>) } : {};
+  settings.currency = cc;
+  const { error } = await admin.from("panels").update({ settings }).eq("id", panelId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 /** Connect (or update) a gateway. Blank secret fields keep the existing value. */
@@ -99,12 +265,48 @@ export async function connectGateway(
     if (!f.secret && !f.optional && !config[f.key]) return { ok: false, error: `Enter ${f.label}.` };
   }
 
+  const rawMinTopup = (values.minTopup ?? "").trim();
+  if (rawMinTopup) {
+    const parsed = Number(rawMinTopup);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return { ok: false, error: "Minimum top-up must be a number greater than 0." };
+    }
+    config.minTopup = String(round4(parsed));
+  }
+
+  const rawDiscountPct = (values.discountPct ?? "").trim();
+  const parsedRules = tryParseDiscountRules(values.discountRules);
+  if (!parsedRules.valid) {
+    return { ok: false, error: "Discount rules are invalid." };
+  }
+  if (parsedRules.rules.length > 0) {
+    config.discountRules = JSON.stringify(parsedRules.rules);
+    const zeroRule = parsedRules.rules.find((r) => r.minAmount === 0);
+    if (zeroRule) config.discountPct = String(zeroRule.discountPct);
+    else delete config.discountPct;
+  } else if (rawDiscountPct) {
+    const parsed = normalizeDiscountPct(rawDiscountPct);
+    if (parsed == null) {
+      return { ok: false, error: "Top-up discount must be between 0 and 100." };
+    }
+    config.discountPct = String(parsed);
+    delete config.discountRules;
+  } else {
+    delete config.discountPct;
+    delete config.discountRules;
+  }
+
   const { data: existing } = await admin
     .from("panel_payment_gateways")
-    .select("id")
+    .select("id, config")
     .eq("panel_id", panelId)
     .eq("gateway", gateway)
     .maybeSingle();
+
+  if (!config.minTopup) {
+    const prevCfg = (existing?.config as Record<string, unknown> | null) ?? null;
+    config.minTopup = String(normalizeMinTopup(prevCfg?.minTopup));
+  }
 
   // Merge secrets so an unchanged (blank) secret field keeps its stored value.
   let secrets = { ...providedSecrets };
@@ -172,7 +374,7 @@ export async function createDeposit(
   const admin = createAdminClient();
   const { data: panel } = await admin
     .from("panels")
-    .select("id, status, subdomain")
+    .select("id, status, subdomain, custom_domain, settings")
     .eq("id", panelId)
     .maybeSingle();
   if (!panel) return { ok: false, error: "Panel not found." };
@@ -190,28 +392,31 @@ export async function createDeposit(
 
   const amt = round4(Number(amount));
   if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter a valid amount." };
-  if (amt < 1) return { ok: false, error: "Minimum deposit is 1.00." };
 
-  // Pick the gateway: the one requested, else the panel's first active one.
-  let gw = gateway;
-  if (!gw) {
-    const { data } = await admin
-      .from("panel_payment_gateways")
-      .select("gateway")
-      .eq("panel_id", panelId)
-      .eq("status", "active")
-      .order("created_at", { ascending: true })
-      .limit(1);
-    gw = (data?.[0]?.gateway as string) ?? undefined;
-  }
-  if (!gw) return { ok: false, error: "This panel hasn't enabled deposits yet." };
+  const gw = (gateway ?? "").trim();
+  if (!gw) return { ok: false, error: "Choose a payment method." };
+
+  const { data: gwRow } = await admin
+    .from("panel_payment_gateways")
+    .select("config")
+    .eq("panel_id", panelId)
+    .eq("gateway", gw)
+    .eq("status", "active")
+    .maybeSingle();
+  const gwConfig = (gwRow?.config as Record<string, unknown> | null) ?? null;
+  const gatewayMinTopup = normalizeMinTopup(gwConfig?.minTopup);
+  const discountPct = await resolveGatewayDiscountPct(gw, gwConfig, amt);
 
   const adapter = getAdapter(gw);
   if (!adapter) return { ok: false, error: "That payment method isn't available." };
+  if (amt < gatewayMinTopup) {
+    return { ok: false, error: `Minimum top-up for ${adapter.label} is ${gatewayMinTopup.toFixed(2)}.` };
+  }
   const ctx = await getGatewayContext(panelId, gw);
   if (!ctx) return { ok: false, error: "This payment method isn't fully configured." };
 
-  const currency = ctx.config.currency || "USD";
+  const currency = readPanelCurrency(panel.settings);
+  const bonusAmount = discountPct != null ? round4((amt * discountPct) / 100) : 0;
   const { data: pay, error } = await admin
     .from("payments")
     .insert({
@@ -219,6 +424,7 @@ export async function createDeposit(
       customer_id: acct.id,
       method: adapter.label,
       amount: amt,
+      bonus_amount: bonusAmount,
       currency,
       status: "pending",
       gateway: gw,
@@ -234,7 +440,7 @@ export async function createDeposit(
       currency,
       orderId: pay.id as string,
       callbackUrl: `${appUrl}/api/webhooks/${gw}`,
-      returnUrl: `${appUrl}/p/${panel.subdomain}`,
+      returnUrl: panelStorefrontPath(panel.subdomain as string, (panel.custom_domain as string | null) ?? null),
       config: ctx.config,
       secrets: ctx.secrets,
       customerEmail: user.email ?? null,
@@ -256,6 +462,17 @@ export interface DepositVM {
   createdAt: string;
 }
 
+export interface CustomerWalletSnapshot {
+  balance: number;
+  deposits: DepositVM[];
+}
+
+export interface OwnerDepositVM extends DepositVM {
+  customerId: string;
+  customerUsername: string | null;
+  customerEmail: string | null;
+}
+
 export async function listDeposits(panelId: string): Promise<DepositVM[]> {
   const supa = await createStorefrontClient();
   const {
@@ -274,17 +491,333 @@ export async function listDeposits(panelId: string): Promise<DepositVM[]> {
 
   const { data } = await admin
     .from("payments")
-    .select("id, amount, currency, status, method, created_at")
+    .select("id, amount, bonus_amount, currency, status, method, created_at")
     .eq("customer_id", acct.id)
+    .is("superadmin_hidden_at", null)
     .order("created_at", { ascending: false })
     .limit(50);
 
   return (data ?? []).map((p) => ({
     id: p.id as string,
-    amount: Number(p.amount),
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
     currency: p.currency as string,
     status: p.status as string,
     method: p.method as string,
     createdAt: p.created_at as string,
   }));
+}
+
+/** Lightweight signed-in wallet snapshot so the storefront can refresh after payment confirmation. */
+export async function getCustomerWalletSnapshot(panelId: string): Promise<CustomerWalletSnapshot | null> {
+  const supa = await createStorefrontClient();
+  const {
+    data: { user },
+  } = await supa.auth.getUser();
+  if (!user) return null;
+
+  const admin = createAdminClient();
+  const { data: acct } = await admin
+    .from("customer_accounts")
+    .select("id, balance")
+    .eq("panel_id", panelId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!acct) return null;
+
+  const deposits = await listDeposits(panelId);
+  return {
+    balance: Number(acct.balance),
+    deposits,
+  };
+}
+
+async function customerAccountForOwner(userId: string, customerAccountId: string) {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("customer_accounts")
+    .select("id, panel_id, user_id")
+    .eq("id", customerAccountId)
+    .maybeSingle();
+  if (!data) return null;
+  if (!(await ownsPanel(userId, data.panel_id as string))) return null;
+  return {
+    id: data.id as string,
+    panelId: data.panel_id as string,
+    userId: data.user_id as string,
+  };
+}
+
+/** Owner-side deposit history for one customer account. */
+export async function listCustomerDeposits(customerAccountId: string): Promise<OwnerDepositVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+
+  const acct = await customerAccountForOwner(user.id, customerAccountId);
+  if (!acct) return [];
+
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("display_name")
+    .eq("id", acct.userId)
+    .maybeSingle();
+
+  let email: string | null = null;
+  try {
+    const { data } = await admin.auth.admin.getUserById(acct.userId);
+    email = data.user?.email ?? null;
+  } catch {
+    // best-effort
+  }
+
+  const { data } = await admin
+    .from("payments")
+    .select("id, customer_id, amount, bonus_amount, currency, status, method, created_at")
+    .eq("customer_id", customerAccountId)
+    .is("superadmin_hidden_at", null)
+    .order("created_at", { ascending: false })
+    .limit(25);
+
+  return (data ?? []).map((p) => ({
+    id: p.id as string,
+    customerId: p.customer_id as string,
+    customerUsername: (profile?.display_name as string | null) ?? null,
+    customerEmail: email,
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
+    currency: p.currency as string,
+    status: p.status as string,
+    method: p.method as string,
+    createdAt: p.created_at as string,
+  }));
+}
+
+/** Owner-side panel-wide deposit history for the Payments tab / billing records. */
+export async function listPanelDeposits(panelId: string): Promise<OwnerDepositVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  if (!(await ownsPanel(user.id, panelId))) return [];
+
+  const { data } = await admin
+    .from("payments")
+    .select("id, customer_id, amount, bonus_amount, currency, status, method, created_at")
+    .eq("panel_id", panelId)
+    .is("superadmin_hidden_at", null)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (!data?.length) return [];
+
+  const { data: accts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id")
+    .eq("panel_id", panelId)
+    .in("id", (data ?? []).map((p) => p.customer_id as string));
+  const userIdByCustomerId = new Map((accts ?? []).map((a) => [a.id as string, a.user_id as string]));
+
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", [...new Set(Array.from(userIdByCustomerId.values()))]);
+  const usernameByUserId = new Map((profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null]));
+
+  const emails = new Map<string, string | null>();
+  for (const uid of new Set(Array.from(userIdByCustomerId.values()))) {
+    try {
+      const { data: authData } = await admin.auth.admin.getUserById(uid);
+      emails.set(uid, authData.user?.email ?? null);
+    } catch {
+      emails.set(uid, null);
+    }
+  }
+
+  return data.map((p) => ({
+    id: p.id as string,
+    customerId: p.customer_id as string,
+    customerUsername: usernameByUserId.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
+    customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
+    currency: p.currency as string,
+    status: p.status as string,
+    method: p.method as string,
+    createdAt: p.created_at as string,
+  }));
+}
+
+export interface OwnerAllDepositVM extends OwnerDepositVM {
+  panelName: string;
+}
+
+/** Recent customer top-ups across ALL of the owner's panels (for Earnings & receipts). */
+export async function listAllOwnerDeposits(limit = 100): Promise<OwnerAllDepositVM[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const { data: panels } = await admin.from("panels").select("id, name").eq("owner_id", user.id);
+  const list = (panels as Array<{ id: string; name: string }> | null) ?? [];
+  if (!list.length) return [];
+  const nameById = new Map(list.map((p) => [p.id, p.name]));
+
+  const { data } = await admin
+    .from("payments")
+    .select("id, panel_id, customer_id, amount, bonus_amount, currency, status, method, created_at")
+    .in("panel_id", list.map((p) => p.id))
+    .is("superadmin_hidden_at", null)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (!data?.length) return [];
+
+  const { data: accts } = await admin
+    .from("customer_accounts")
+    .select("id, user_id")
+    .in("id", data.map((p) => p.customer_id as string));
+  const userIdByCustomerId = new Map((accts ?? []).map((a) => [a.id as string, a.user_id as string]));
+
+  const { data: profiles } = await admin
+    .from("profiles")
+    .select("id, display_name")
+    .in("id", [...new Set(Array.from(userIdByCustomerId.values()))]);
+  const usernameByUserId = new Map((profiles ?? []).map((p) => [p.id as string, (p.display_name as string | null) ?? null]));
+
+  const emails = new Map<string, string | null>();
+  for (const uid of new Set(Array.from(userIdByCustomerId.values()))) {
+    try {
+      const { data: authData } = await admin.auth.admin.getUserById(uid);
+      emails.set(uid, authData.user?.email ?? null);
+    } catch {
+      emails.set(uid, null);
+    }
+  }
+
+  return data.map((p) => ({
+    id: p.id as string,
+    panelName: nameById.get(p.panel_id as string) ?? "Panel",
+    customerId: p.customer_id as string,
+    customerUsername: usernameByUserId.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
+    customerEmail: emails.get(userIdByCustomerId.get(p.customer_id as string) ?? "") ?? null,
+    amount: Number(p.amount) + Number((p as { bonus_amount?: number }).bonus_amount ?? 0),
+    currency: p.currency as string,
+    status: p.status as string,
+    method: p.method as string,
+    createdAt: p.created_at as string,
+  }));
+}
+
+/** Owner-committed top-up: records a completed payment and credits the wallet as a real deposit. */
+export async function commitCustomerTopup(
+  customerAccountId: string,
+  amount: number,
+  reason: string
+): Promise<Result<{ balance: number }>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const acct = await customerAccountForOwner(user.id, customerAccountId);
+  if (!acct) return { ok: false, error: "Customer not found" };
+
+  const amt = round4(Number(amount));
+  if (!Number.isFinite(amt) || amt <= 0) return { ok: false, error: "Enter an amount greater than 0." };
+
+  const { data: panel } = await admin
+    .from("panels")
+    .select("settings")
+    .eq("id", acct.panelId)
+    .maybeSingle();
+  const currency = readPanelCurrency(panel?.settings);
+
+  const { data: payment, error: payErr } = await admin
+    .from("payments")
+    .insert({
+      panel_id: acct.panelId,
+      customer_id: acct.id,
+      method: "Manual top-up",
+      amount: amt,
+      currency,
+      status: "pending",
+      gateway: "manual",
+      approved_by: user.id,
+    })
+    .select("id")
+    .single();
+  if (payErr || !payment) return { ok: false, error: payErr?.message ?? "Could not record the top-up." };
+
+  const { data: tx, error } = await admin.rpc("apply_balance_change", {
+    p_customer: acct.id,
+    p_amount: amt,
+    p_type: "deposit",
+    p_reason: reason.trim() || `Manual top-up ${payment.id}`,
+    p_admin: user.id,
+  });
+  if (error) {
+    await admin.from("payments").update({ status: "rejected" }).eq("id", payment.id);
+    return { ok: false, error: error.message };
+  }
+
+  await admin.from("payments").update({ status: "completed" }).eq("id", payment.id);
+  return { ok: true, data: { balance: Number((tx as { balance_after: number }).balance_after) } };
+}
+
+/** Owner-side fallback: manually commit a pending/approved payment and credit the wallet. */
+export async function commitPendingPayment(
+  paymentId: string
+): Promise<Result<{ balance: number }>> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: payment } = await admin
+    .from("payments")
+    .select("id, panel_id, customer_id, amount, status, method")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (!payment) return { ok: false, error: "Payment not found." };
+  if (!(await ownsPanel(user.id, payment.panel_id as string))) return { ok: false, error: "Not authorized for this panel" };
+  if (payment.status === "completed") return { ok: false, error: "This payment is already completed." };
+  if (payment.status !== "pending" && payment.status !== "approved") {
+    return { ok: false, error: "Only pending payments can be committed." };
+  }
+
+  const { data: claimed } = await admin
+    .from("payments")
+    .update({ status: "completed", approved_by: user.id })
+    .eq("id", paymentId)
+    .in("status", ["pending", "approved"])
+    .select("customer_id, amount, bonus_amount, method")
+    .maybeSingle();
+  if (!claimed) return { ok: false, error: "Could not claim this payment for completion." };
+
+  const { data: tx, error } = await admin.rpc("apply_balance_change", {
+    p_customer: claimed.customer_id,
+    p_amount: Number(claimed.amount) + Number(claimed.bonus_amount ?? 0),
+    p_type: "deposit",
+    p_reason: `${claimed.method} manual commit ${paymentId}`,
+    p_admin: user.id,
+  });
+  if (error) {
+    await admin.from("payments").update({ status: payment.status }).eq("id", paymentId);
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true, data: { balance: Number((tx as { balance_after: number }).balance_after) } };
+}
+
+/** Owner-side safeguard: cancel a pending/approved payment without crediting the wallet. */
+export async function cancelPendingPayment(paymentId: string): Promise<Result> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in" };
+
+  const { data: payment } = await admin
+    .from("payments")
+    .select("id, panel_id, status")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (!payment) return { ok: false, error: "Payment not found." };
+  if (!(await ownsPanel(user.id, payment.panel_id as string))) return { ok: false, error: "Not authorized for this panel" };
+  if (payment.status === "completed") return { ok: false, error: "Completed payments cannot be canceled." };
+  if (payment.status !== "pending" && payment.status !== "approved") {
+    return { ok: false, error: "Only pending payments can be canceled." };
+  }
+
+  const { error } = await admin
+    .from("payments")
+    .update({ status: "rejected", approved_by: user.id })
+    .eq("id", paymentId)
+    .in("status", ["pending", "approved"]);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }

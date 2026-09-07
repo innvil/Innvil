@@ -1,4 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#C9A574"/>
-  <text x="16" y="22" font-family="Georgia, serif" font-size="16" font-weight="bold" fill="#0A0B0F" text-anchor="middle">L</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="14" fill="#C9A574"/>
+  <path
+    fill="#0E1522"
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M10 13H42L44 17L60 21L44 25L40 31V39L54 45V51H10V45L24 39V31L10 25V13Z"
+  />
 </svg>

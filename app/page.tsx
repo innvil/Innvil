@@ -1,41 +1,82 @@
-"use client";
+import type { Metadata } from "next";
+import { getUser } from "@/src/lib/auth";
+import { PublicLanding } from "@/src/components/panels/PublicLanding";
+import { getPublicTopupTiers } from "@/src/lib/actions/platform-payments";
+import { LandingJsonLd } from "./JsonLd";
+import HomeClient from "./HomeClient";
+import { isWatchHost } from "@/src/lib/watch-host";
+import { watchPageMetadata } from "@/src/lib/watch-metadata";
+import { WatchLanding } from "@/src/components/watch/WatchLanding";
+import { OverviewClient } from "@/src/components/watch/OverviewClient";
 
-import { useEffect, useState } from "react";
-import { createClient } from "@/src/lib/supabase/client";
-import { PublicLanding, AuthScreen, VeyraApp } from "@/src/components/panels";
-import PreviewSwitcher from "./PreviewSwitcher";
+// Homepage-only canonical + OG url (kept off the layout so storefronts don't inherit it).
+// Host-aware: watch.innvil.cloud gets its own product metadata, never the
+// inherited SMM-panel/Forge title+description.
+export async function generateMetadata(): Promise<Metadata> {
+  if (await isWatchHost()) {
+    // watchPageMetadata("/") already sets a real, absolute canonical/og:url
+    // for the actual Watch domain -- do NOT override it with a relative
+    // "/" here (that was the exact bug: a relative path resolves against
+    // metadataBase, which points at the MAIN Innvil site, not Watch).
+    return {
+      ...watchPageMetadata("/"),
+      robots: { index: true, follow: true },
+      icons: { icon: "/watch/app-tile.svg" },
+    };
+  }
+  return {
+    alternates: { canonical: "/" },
+    openGraph: { url: "/" },
+  };
+}
 
 /* =========================================================
-   ROOT — real, auth-driven.
-   Signed out → public site / login. Signed in → dashboard.
-   Dev world-switcher is available at "/?preview=1".
+   ROOT — SEO-friendly.
+   Signed-out visitors get the marketing landing SERVER-RENDERED (crawlable).
+   Signed-in users and the dev preview switcher render client-side via HomeClient.
+   Auth lives at real routes (/login, /signup), so the landing needs no client
+   state to work.
    ========================================================= */
 
-type View = "loading" | "public" | "auth" | "app" | "preview";
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
 
-export default function Home() {
-  const [view, setView] = useState<View>("loading");
+  // Innvil Watch's own standalone product domain — a distinct customer-facing
+  // experience, never the SMM-panel/Forge landing, but the SAME app/backend
+  // (host is presentation-only; Watch access is always resolved server-side).
+  if (await isWatchHost()) {
+    // Cache-first navigation: only a CHEAP auth check runs here (no DB
+    // queries beyond validating the session) so this route itself responds
+    // fast -- the real account data (Projects/Watchers/Communities/capacity/
+    // etc., previously fetched here via getWatchAccessState() on every
+    // single visit) is now fetched CLIENT-SIDE by OverviewClient via SWR,
+    // which renders from its cache instantly on every visit after the first
+    // and revalidates in the background. AUTHENTICATION != ENTITLEMENT --
+    // any signed-in visitor gets the real dashboard shell (empty/onboarding
+    // states for a fresh, not-yet-entitled account -- OverviewClient/
+    // WatchDashboard already render those correctly), never the marketing
+    // landing just because they haven't started a trial/subscribed yet.
+    const user = await getUser();
+    if (user) return <OverviewClient />;
+    return <WatchLanding authenticated={false} />;
+  }
 
-  useEffect(() => {
-    // Dev escape hatch: the old world-switcher harness.
-    if (new URLSearchParams(window.location.search).get("preview") === "1") {
-      setView("preview");
-      return;
-    }
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => setView(data.user ? "app" : "public"));
-  }, []);
+  // Dev world-switcher harness.
+  if (sp?.preview === "1") return <HomeClient mode="preview" />;
 
-  // Bridge the existing components' setWorld(...) calls to real views.
-  const setWorld = (w: string) => {
-    if (w === "public") setView("public");
-    else if (w === "auth") setView("auth");
-    else setView("app"); // "home"/"panels"/… → the real owner dashboard
-  };
+  const user = await getUser();
+  if (user) return <HomeClient mode="app" />;
 
-  if (view === "preview") return <PreviewSwitcher />;
-  if (view === "loading") return <div className="fp-root min-h-screen fp-grid-bg" />;
-  if (view === "public") return <PublicLanding setWorld={setWorld} />;
-  if (view === "auth") return <AuthScreen setWorld={setWorld} />;
-  return <VeyraApp setWorld={setWorld} initialSection="home" />;
+  // Public marketing page — server-rendered for search engines & first paint.
+  const topupTiers = await getPublicTopupTiers();
+  return (
+    <>
+      <LandingJsonLd />
+      <PublicLanding topupTiers={topupTiers} />
+    </>
+  );
 }

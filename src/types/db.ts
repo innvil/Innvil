@@ -5,7 +5,8 @@
    once the project is provisioned.
    ========================================================= */
 
-import { PanelStatus } from "@/src/data/constants";
+import type { PanelStatus } from "@/src/data/constants";
+export type { PanelStatus };
 
 export type UserRole = "super_admin" | "panel_owner" | "staff" | "customer";
 export type ProviderStatus = "active" | "paused";
@@ -19,7 +20,8 @@ export type OrderStatus =
   | "completed"
   | "canceled"
   | "failed"
-  | "refunded";
+  | "refunded"
+  | "duplicate";
 export type CustomerStatus = "active" | "banned" | "restricted";
 export type PaymentStatus = "pending" | "approved" | "rejected" | "completed";
 export type TicketStatus = "open" | "answered" | "closed";
@@ -29,6 +31,9 @@ export interface ProfileRow {
   id: string;
   role: UserRole;
   display_name: string | null;
+  /** Kept in sync with auth.users.email via migration 0090's triggers --
+   *  never write this directly; it exists for admin browsing/lookup only. */
+  email: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -117,6 +122,7 @@ export interface OrderRow {
   panel_id: string;
   customer_id: string;
   service_id: string | null;
+  service_category_id: string | null;
   provider_id: string | null;
   link: string;
   quantity: number;
@@ -160,11 +166,15 @@ export interface PaymentRow {
   customer_id: string;
   method: string;
   amount: number;
+  bonus_amount: number;
   currency: string;
   status: PaymentStatus;
   gateway: string | null;
   gateway_ref: string | null;
   approved_by: string | null;
+  superadmin_hidden_at: string | null;
+  superadmin_hidden_by: string | null;
+  superadmin_hidden_reason: string | null;
   created_at: string;
   updated_at: string;
 }

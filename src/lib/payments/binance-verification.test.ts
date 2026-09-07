@@ -1,0 +1,433 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  validateTx,
+  matchesTransactionId,
+  normalizeEnteredTransactionId,
+  findMatchingTx,
+  creditMatch,
+  type PendingIntent,
+  type BinanceTx,
+} from "./binance-match";
+import { getBinanceDepositBreakdown, addDecimalExact } from "./binance-amounts";
+import { getPayTransactions, BinanceApiError } from "./binance";
+import { collectTransactionsForWindow } from "./binance-sync";
+
+function makeIntent(overrides: Partial<PendingIntent> = {}): PendingIntent {
+  return {
+    id: "pay_1",
+    customer_id: "cust_1",
+    amount: "100.0000",
+    binance_payable: "100.1234",
+    created_at: "2026-08-06T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeTx(overrides: Partial<BinanceTx> = {}): BinanceTx {
+  return {
+    transaction_id: "M_P_71505104267788288",
+    order_id: "446982297682452480",
+    order_type: "C2C",
+    transaction_time: "2026-08-06T10:06:00.000Z",
+    amount: "100.1234",
+    currency: "USDT",
+    receiver_binance_id: "12345678",
+    ...overrides,
+  };
+}
+
+test("valid incoming C2C payment passes validation", () => {
+  const intent = makeIntent();
+  const tx = makeTx();
+  const fail = validateTx(tx, intent, {
+    expectedUid: "12345678",
+    requirePayableMatch: true,
+    windowStartMs: Date.parse("2026-08-06T09:55:00.000Z"),
+    windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
+  });
+  assert.equal(fail, null);
+});
+
+test("outgoing negative C2C transaction is rejected", () => {
+  const fail = validateTx(
+    makeTx({ amount: "-100.1234" }),
+    makeIntent(),
+    {
+      expectedUid: "12345678",
+      requirePayableMatch: true,
+      windowStartMs: Date.parse("2026-08-06T09:55:00.000Z"),
+      windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
+    }
+  );
+  assert.equal(fail?.code, "AMOUNT_MISMATCH");
+});
+
+test("wrong order id is not treated as a match", () => {
+  assert.equal(matchesTransactionId("M_P_71505104267788288", "M_P_71505104267788288"), true);
+  assert.equal(matchesTransactionId("M_P_71505104267788289", "M_P_71505104267788288"), false);
+});
+
+test("internal transaction ids keep M_P_ prefix and case", () => {
+  const normalized = normalizeEnteredTransactionId("  M_P_71505104267788288  ");
+  assert.equal(normalized, "M_P_71505104267788288");
+});
+
+test("wrong amount returns AMOUNT_MISMATCH", () => {
+  const fail = validateTx(
+    makeTx({ amount: "100.1235" }),
+    makeIntent({ binance_payable: "100.1234" }),
+    {
+      expectedUid: "12345678",
+      requirePayableMatch: true,
+      windowStartMs: Date.parse("2026-08-06T09:55:00.000Z"),
+      windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
+    }
+  );
+  assert.equal(fail?.code, "AMOUNT_MISMATCH");
+});
+
+test("wrong currency returns CURRENCY_MISMATCH", () => {
+  const fail = validateTx(
+    makeTx({ currency: "BTC" }),
+    makeIntent(),
+    {
+      expectedUid: "12345678",
+      requirePayableMatch: true,
+      windowStartMs: Date.parse("2026-08-06T09:55:00.000Z"),
+      windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
+    }
+  );
+  assert.equal(fail?.code, "CURRENCY_MISMATCH");
+});
+
+test("wrong receiver returns WRONG_RECEIVER", () => {
+  const fail = validateTx(
+    makeTx({ receiver_binance_id: "99999999" }),
+    makeIntent(),
+    {
+      expectedUid: "12345678",
+      requirePayableMatch: true,
+      windowStartMs: Date.parse("2026-08-06T09:55:00.000Z"),
+      windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
+    }
+  );
+  assert.equal(fail?.code, "WRONG_RECEIVER");
+});
+
+test("transaction outside time window returns TRANSACTION_OUTSIDE_WINDOW", () => {
+  const fail = validateTx(
+    makeTx({ transaction_time: "2026-08-06T11:00:00.000Z" }),
+    makeIntent(),
+    {
+      expectedUid: "12345678",
+      requirePayableMatch: true,
+      windowStartMs: Date.parse("2026-08-06T09:55:00.000Z"),
+      windowEndMs: Date.parse("2026-08-06T10:15:00.000Z"),
+    }
+  );
+  assert.equal(fail?.code, "TRANSACTION_OUTSIDE_WINDOW");
+});
+
+test("findMatchingTx returns the stored row by Order ID", async () => {
+  let selectedOrderId = "";
+  const query = {
+    eq: (_column: string, value: string) => {
+      selectedOrderId = value;
+      return query;
+    },
+    order: () => ({ limit: () => ({ data: [makeTx()], error: null }) }),
+    maybeSingle: async () => ({ data: makeTx(), error: null }),
+  };
+  const fakeAdmin = {
+    from: () => ({ select: () => query }),
+  } as any;
+  const out = await findMatchingTx(fakeAdmin, "panel_1", "446982297682452480");
+  assert.equal(selectedOrderId, "446982297682452480");
+  assert.equal(out?.order_id, "446982297682452480");
+});
+
+test("creditMatch submits both order_id and transaction_id to the claim RPC", async () => {
+  let rpcArgs: Record<string, unknown> | null = null;
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      rpcArgs = args;
+      return { data: "OK", error: null };
+    },
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, true);
+  assert.equal(rpcArgs?.["p_order_id"], "446982297682452480");
+  assert.equal(rpcArgs?.["p_tx_id"], "M_P_71505104267788288");
+  assert.equal(rpcArgs?.["p_credit_amount"], "100.1234");
+  assert.equal(rpcArgs?.["p_bonus_amount"], "0");
+});
+
+test("creditMatch applies tier bonus on top of exact received amount", async () => {
+  let rpcArgs: Record<string, unknown> | null = null;
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      rpcArgs = args;
+      return { data: "OK", error: null };
+    },
+  } as any;
+
+  const out = await creditMatch(
+    fakeAdmin,
+    makeIntent({ amount: "100.0000", binance_payable: "100.0000" }),
+    makeTx({ amount: "100.0000" }),
+    { discountPct: "0" },
+    { discountPct: 1 }
+  );
+
+  assert.equal(out.ok, true);
+  assert.equal(rpcArgs?.["p_bonus_amount"], "1");
+  assert.equal(rpcArgs?.["p_credit_amount"], "101");
+  if (out.ok) {
+    assert.equal(out.received, 100);
+    assert.equal(out.credited, 101);
+  }
+});
+
+test("exact increment arithmetic: requested 10.000 + increment 0.001 = total 10.001", () => {
+  const breakdown = getBinanceDepositBreakdown("10.000", "10.001", 4);
+  assert.equal(breakdown.base, "10");
+  assert.equal(breakdown.increment, "0.001");
+  assert.equal(breakdown.totalToSend, "10.001");
+  assert.equal(breakdown.walletCredit, "10.001");
+  assert.equal(addDecimalExact("10.000", "0.001", 4), "10.001");
+});
+
+test("successful payment credits the full exact Binance amount with no silent discard", async () => {
+  let rpcArgs: Record<string, unknown> | null = null;
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      rpcArgs = args;
+      return { data: "OK", error: null };
+    },
+  } as any;
+
+  const out = await creditMatch(
+    fakeAdmin,
+    makeIntent({ amount: "10.0000", binance_payable: "10.0010" }),
+    makeTx({ amount: "10.0010" }),
+    null
+  );
+
+  assert.equal(out.ok, true);
+  if (out.ok) {
+    assert.equal(out.credited, 10.001);
+    assert.equal(out.received, 10.001);
+  }
+  assert.equal(rpcArgs?.["p_credit_amount"], "10.001");
+  assert.notEqual(rpcArgs?.["p_credit_amount"], "10");
+});
+
+test("duplicate order id is rejected by the claim core", async () => {
+  const fakeAdmin = {
+    rpc: async () => ({ data: "ORDER_ID_ALREADY_USED", error: null }),
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) assert.equal(out.code, "ORDER_ID_ALREADY_USED");
+});
+
+test("missing claim RPC signature maps to DATABASE_WRITE_FAILURE", async () => {
+  const fakeAdmin = {
+    rpc: async () => ({ data: null, error: { code: "PGRST202", message: "function not found" } }),
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) {
+    assert.equal(out.code, "DATABASE_WRITE_FAILURE");
+    assert.notEqual(out.code, "BINANCE_API_FAILURE");
+  }
+});
+
+test("creditMatch falls back to legacy claim RPC signature", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const fakeAdmin = {
+    rpc: async (_fn: string, args: Record<string, unknown>) => {
+      calls.push(args);
+      if (calls.length === 1) {
+        return { data: null, error: { code: "PGRST202", message: "new signature missing" } };
+      }
+      return { data: "OK", error: null };
+    },
+  } as any;
+
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, true);
+  assert.equal(calls.length, 2);
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[0] ?? {}, "p_order_id"), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[1] ?? {}, "p_order_id"), false);
+});
+
+test("legacy transaction-used maps to already credited when payment is completed", async () => {
+  let rpcCalls = 0;
+  const statusQuery = {
+    maybeSingle: async () => ({ data: { status: "completed" }, error: null }),
+  };
+  const probeQuery = {
+    neq: () => ({
+      limit: () => ({
+        maybeSingle: async () => ({ data: null, error: null }),
+      }),
+    }),
+  };
+  const fakeAdmin = {
+    rpc: async () => {
+      rpcCalls += 1;
+      if (rpcCalls === 1) {
+        return { data: null, error: { code: "PGRST202", message: "new signature missing" } };
+      }
+      return { data: "TRANSACTION_ALREADY_USED", error: null };
+    },
+    from: () => ({
+      select: () => ({
+        eq: (column: string) => {
+          if (column === "id") return statusQuery;
+          return probeQuery;
+        },
+      }),
+    }),
+  } as any;
+
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) assert.equal(out.code, "PAYMENT_ALREADY_CREDITED");
+});
+
+test("credit runtime errors map to PAYMENT_CREDIT_FAILURE", async () => {
+  const fakeAdmin = {
+    rpc: async () => ({ data: null, error: { code: "57014", message: "statement timeout" } }),
+  } as any;
+  const out = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(out.ok, false);
+  if (!out.ok) {
+    assert.equal(out.code, "PAYMENT_CREDIT_FAILURE");
+    assert.notEqual(out.code, "BINANCE_API_FAILURE");
+  }
+});
+
+test("exact Order ID credits once and repeat returns PAYMENT_ALREADY_CREDITED", async () => {
+  let calls = 0;
+  const fakeAdmin = {
+    rpc: async () => {
+      calls += 1;
+      if (calls === 1) return { data: "OK", error: null };
+      return { data: "PAYMENT_ALREADY_CREDITED", error: null };
+    },
+  } as any;
+
+  const first = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(first.ok, true);
+
+  const second = await creditMatch(fakeAdmin, makeIntent(), makeTx(), { discountPct: "0" });
+  assert.equal(second.ok, false);
+  if (!second.ok) assert.equal(second.code, "PAYMENT_ALREADY_CREDITED");
+});
+
+test("malformed Binance response is rejected", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: "000000", message: "success", data: {} }), { status: 200 });
+  await assert.rejects(
+    () => getPayTransactions({ apiKey: "abc123", apiSecret: "def456" }, { startTime: 1, endTime: 2, limit: 10 }),
+    (err: unknown) => err instanceof BinanceApiError && err.kind === "parse"
+  );
+  globalThis.fetch = originalFetch;
+});
+
+test("Binance authentication failure is classified", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: -2015, message: "Invalid API-key, IP, or permissions for action." }), { status: 401 });
+  await assert.rejects(
+    () => getPayTransactions({ apiKey: "abc123", apiSecret: "def456" }, { startTime: 1, endTime: 2, limit: 10 }),
+    (err: unknown) => err instanceof BinanceApiError && err.kind === "auth"
+  );
+  globalThis.fetch = originalFetch;
+});
+
+test("Binance API failure is classified", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ code: "-1003", message: "Too many requests" }), { status: 429 });
+  await assert.rejects(
+    () => getPayTransactions({ apiKey: "abc123", apiSecret: "def456" }, { startTime: 1, endTime: 2, limit: 10 }),
+    (err: unknown) => err instanceof BinanceApiError && err.kind === "api"
+  );
+  globalThis.fetch = originalFetch;
+});
+
+test("pagination stops when transaction is found", async () => {
+  let calls = 0;
+  const bigPage = Array.from({ length: 100 }, (_, i) => ({
+    transactionId: `TX_${i}`,
+    orderType: "C2C",
+    transactionTime: 400 - i,
+    amount: "1",
+    currency: "USDT",
+  }));
+  const fetchPage = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return bigPage as any;
+    }
+    return [
+      { transactionId: "M_P_71505104267788288", orderType: "C2C", transactionTime: 150, amount: "1", currency: "USDT" },
+      ...bigPage.slice(0, 99),
+    ] as any;
+  };
+
+  const out = await collectTransactionsForWindow(fetchPage, {
+    startTime: 100,
+    endTime: 400,
+    maxPages: 5,
+    stopWhenTransactionId: "M_P_71505104267788288",
+  });
+  assert.equal(out.foundTarget, true);
+  assert.equal(out.pages, 2);
+});
+
+test("pagination stops once it moves before allowed startTime", async () => {
+  let calls = 0;
+  const fetchPage = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return [
+        { transactionId: "A", orderType: "C2C", transactionTime: 150, amount: "1", currency: "USDT" },
+        { transactionId: "B", orderType: "C2C", transactionTime: 90, amount: "1", currency: "USDT" },
+      ] as any;
+    }
+    return [] as any;
+  };
+
+  const out = await collectTransactionsForWindow(fetchPage, {
+    startTime: 100,
+    endTime: 400,
+    maxPages: 5,
+  });
+  assert.equal(out.pages, 1);
+});
+
+test("pagination stops on repeated page boundary safeguard", async () => {
+  let calls = 0;
+  const page = Array.from({ length: 100 }, (_, i) => ({
+    transactionId: `R_${i}`,
+    orderType: "C2C",
+    transactionTime: 300 - i,
+    amount: "1",
+    currency: "USDT",
+  })) as any;
+
+  const out = await collectTransactionsForWindow(async () => {
+    calls += 1;
+    return page;
+  }, {
+    startTime: 100,
+    endTime: 400,
+    maxPages: 5,
+  });
+
+  assert.equal(out.pages, 2);
+  assert.ok(calls >= 2);
+});

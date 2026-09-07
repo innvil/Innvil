@@ -32,8 +32,8 @@ export const razorpayAdapter: GatewayAdapter = {
   async createCheckout(ctx) {
     const auth = Buffer.from(`${ctx.config.keyId}:${ctx.secrets.keySecret}`).toString("base64");
     const body = {
-      amount: Math.round(ctx.amount * 100), // paise
-      currency: "INR",
+      amount: Math.round(ctx.amount * 100), // subunits (paise for INR)
+      currency: ctx.currency, // panel currency — Razorpay India settles INR
       accept_partial: false,
       reference_id: ctx.orderId,
       description: "Wallet deposit",

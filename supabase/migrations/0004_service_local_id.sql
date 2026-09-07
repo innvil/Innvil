@@ -1,5 +1,5 @@
 -- =============================================================================
--- Veyra — per-panel local service IDs
+-- Innvil — per-panel local service IDs
 -- Each panel numbers its own services 1, 2, 3… (the ID the panel's customers and
 -- customer-facing API see) — separate from the provider's service ID, which we
 -- keep for internal order routing (services.provider_service_id).

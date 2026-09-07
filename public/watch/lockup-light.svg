@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 220">
+  
+  
+  <g transform="translate(26,14) scale(0.79)">
+    <g>
+    <path d="M66,208 L174,208 L174,172 L144,172 L144,100 L162,100 L162,78 L130,78 L120,92 L110,78 L78,78 L78,100 L96,100 L96,172 L66,172 Z" fill="#141B23"/>
+    <rect x="78" y="98" width="84" height="4" fill="#C9A24B"/>
+    <path d="M120,56 L133,78 L120,86 L107,78 Z" fill="#2FD9C4"/>
+  </g>
+  </g>
+  <text x="230" y="122" font-family="Poppins" font-weight="600" font-size="60"
+        letter-spacing="-0.5" fill="#141B23">Innvil Watch</text>
+  <text x="232" y="156" font-family="Poppins" font-weight="500" font-size="19"
+        letter-spacing="3" fill="#8B98A3">BY INNVIL</text>
+</svg>

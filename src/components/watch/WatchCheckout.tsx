@@ -1,0 +1,316 @@
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { ExternalLink, Loader2, CheckCircle2, XCircle, Coins } from "lucide-react";
+import { listAvailableDirectWatchGateways, createDirectWatchCheckout } from "@/src/lib/products/watch-checkout";
+import { createWatchBinanceDeposit, claimWatchBinancePayment, type WatchBinanceDepositInfo } from "@/src/lib/products/watch-binance";
+import { watchPlanOptions, watchTierFromDisplayName, type WatchPlanDisplayName } from "@/src/lib/products/watch-plans";
+import {
+  creditPriceUsd, creditSavingsUsd, annualCreditPriceUsd, annualSavingsUsd, annualEquivalentMonthlyUsd,
+  annualDirectPriceUsd, annualCreditExtraSavingsUsd,
+} from "@/src/lib/products/innvil-credit-pricing";
+import { getInnvilCreditBalanceAction, purchaseWatchWithCreditAction } from "@/src/lib/actions/innvil-credit";
+import type { WatchBillingInterval } from "@/src/lib/products/watch-billing-period";
+import { AddCreditCard } from "./AddCreditCard";
+
+const GATEWAY_LABELS: Record<string, string> = {
+  cryptomus: "Cryptomus",
+  nowpayments: "NOWPayments",
+  binance_pay: "Binance Pay",
+};
+
+type Plan = Exclude<WatchPlanDisplayName, "Enterprise">;
+
+/**
+ * Direct Watch checkout — wired to the REAL backend actions, no fabricated
+ * states. Only ever displays gateways `listAvailableDirectWatchGateways`
+ * actually reports as configured; never invents a "success" from client
+ * state alone (Cryptomus/NOWPayments activate only once their webhook
+ * confirms server-side; Binance Pay activates only once
+ * `claimWatchBinancePayment` gets a real match back).
+ */
+export function WatchCheckout({ plan, onClose, billingInterval = "monthly" }: { plan: Plan; onClose: () => void; billingInterval?: WatchBillingInterval }) {
+  const isAnnual = billingInterval === "annual";
+  const [gateways, setGateways] = useState<string[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
+  const [binanceDeposit, setBinanceDeposit] = useState<WatchBinanceDepositInfo | null>(null);
+  const [txInput, setTxInput] = useState("");
+  const [claimStatus, setClaimStatus] = useState<"idle" | "checking" | "confirmed" | "failed">("idle");
+  const [claimError, setClaimError] = useState<string | null>(null);
+
+  // Payment-method choice: direct crypto (existing flow, gated below the
+  // `method === "crypto"` branch) vs. Innvil Credit (a real, atomic,
+  // account-owned prepaid balance -- never a mixed/partial payment; see
+  // innvil-credit.ts). Regular price never changes; both the direct-crypto
+  // AND the Innvil Credit prices are payment-METHOD benefits computed on
+  // top of it. Annual now has TWO real offers (2026-08-25) -- 5% off via
+  // any direct payment option (crypto), 10% off via Innvil Credit -- so it
+  // always starts at the same "choose" screen as monthly, never skips
+  // straight to credit.
+  const [method, setMethod] = useState<"choose" | "crypto" | "credit">("choose");
+  const [creditBalanceCents, setCreditBalanceCents] = useState<number | null>(null);
+  const [creditBusy, setCreditBusy] = useState(false);
+  const [creditError, setCreditError] = useState<string | null>(null);
+  const [creditConfirmed, setCreditConfirmed] = useState<{ paidThrough: string | null; scheduled?: boolean; effectiveAt?: string | null } | null>(null);
+  const [addCreditOpen, setAddCreditOpen] = useState(false);
+
+  const tier = watchTierFromDisplayName(plan);
+  const option = watchPlanOptions().find((o) => o.tier === tier);
+  const regularPrice = option?.price ?? 0;
+  // The DIRECT (crypto) price for this interval -- monthly's own regular
+  // price, or annual's own 5%-off price. Never the same number as
+  // `creditPrice` below once annual is selected.
+  const directPrice = isAnnual ? annualDirectPriceUsd(regularPrice) : regularPrice;
+  const creditPrice = isAnnual ? annualCreditPriceUsd(regularPrice) : creditPriceUsd(regularPrice, tier);
+  const savings = isAnnual ? annualSavingsUsd(regularPrice) : creditSavingsUsd(regularPrice, tier);
+  // How much MORE Credit saves vs. the direct-crypto annual price -- the
+  // "upgrade your savings" delta shown as a callout on the crypto option.
+  const creditExtraSavings = isAnnual ? annualCreditExtraSavingsUsd(regularPrice) : savings;
+  const equivalentMonthly = isAnnual ? annualEquivalentMonthlyUsd(regularPrice) : null;
+  const hasEnoughCredit = creditBalanceCents != null && creditBalanceCents >= Math.round(creditPrice * 100);
+
+  useEffect(() => {
+    listAvailableDirectWatchGateways().then(setGateways).catch(() => setGateways([]));
+    getInnvilCreditBalanceAction().then((b) => setCreditBalanceCents(b.balanceCents)).catch(() => setCreditBalanceCents(0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const payWithCredit = async () => {
+    setCreditBusy(true);
+    setCreditError(null);
+    const res = await purchaseWatchWithCreditAction(plan, billingInterval);
+    setCreditBusy(false);
+    if (!res.ok) { setCreditError(res.error); return; }
+    setCreditBalanceCents(res.balanceCents);
+    setCreditConfirmed({ paidThrough: res.paidThrough, scheduled: res.scheduled, effectiveAt: res.effectiveAt });
+  };
+
+  const startHostedCheckout = async (gateway: "cryptomus" | "nowpayments") => {
+    setBusy(true);
+    setError(null);
+    const res = await createDirectWatchCheckout(plan, gateway, billingInterval);
+    setBusy(false);
+    if (!res.ok) { setError(res.error); return; }
+    setRedirecting(true);
+    window.location.href = res.data.url;
+  };
+
+  const startBinanceDeposit = async () => {
+    setBusy(true);
+    setError(null);
+    const res = await createWatchBinanceDeposit(plan, billingInterval);
+    setBusy(false);
+    if (!res.ok) { setError(res.error); return; }
+    setBinanceDeposit(res.data);
+  };
+
+  const claimBinance = async () => {
+    if (!binanceDeposit) return;
+    setClaimStatus("checking");
+    setClaimError(null);
+    const res = await claimWatchBinancePayment(binanceDeposit.depositId, txInput);
+    if (!res.ok) { setClaimStatus("failed"); setClaimError(res.error); return; }
+    setClaimStatus("confirmed");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+      <div className="w-surface border w-line rounded-2xl p-6 max-w-md w-full">
+        <div className="flex items-center justify-between mb-4">
+          <p className="w-display text-lg">{isAnnual ? `${plan} — Annual` : `Subscribe to ${plan}`}</p>
+          <button onClick={onClose} className="text-sm w-text-dim hover:w-text">Close</button>
+        </div>
+
+        {method === "choose" && (
+          <div className="space-y-2">
+            {isAnnual && (
+              <p className="text-xs w-text-faint mb-1">
+                Pay one year upfront, either way — both annual options below charge the full amount now, not in installments.
+              </p>
+            )}
+            <p className="text-xs w-text-faint mb-2">Payment method</p>
+            <button
+              onClick={() => setMethod("crypto")}
+              className="w-full text-left w-surface-raised border w-line-soft rounded-lg px-4 py-3 hover:w-teal-border"
+            >
+              <p className="text-sm w-text">Pay directly with crypto{isAnnual && " — annual"}</p>
+              <p className="w-display text-base w-teal mt-0.5">
+                ${directPrice.toFixed(2)}{isAnnual && <span className="text-xs w-text-faint font-normal">/year</span>}
+                {isAnnual && <span className="w-pill w-green-soft-bg w-green text-[10px] ml-1.5 align-middle">Save 5%</span>}
+              </p>
+              {isAnnual && (
+                <p className="text-[11px] w-teal mt-0.5">Want to save even more? Pay with Innvil Credit instead — save 10% (${creditExtraSavings.toFixed(2)} more).</p>
+              )}
+            </button>
+            <button
+              onClick={() => setMethod("credit")}
+              className="w-full text-left w-surface-raised border w-teal-border rounded-lg px-4 py-3 hover:opacity-90"
+            >
+              <p className="text-sm w-text flex items-center gap-1.5"><Coins size={14} className="w-teal" /> Pay with Innvil Credit{isAnnual && " — annual"}</p>
+              <p className="w-display text-base w-teal mt-0.5">
+                ${creditPrice.toFixed(2)}{isAnnual && <span className="text-xs w-text-faint font-normal">/year</span>}
+                {savings > 0 && <span className="text-xs w-text-faint font-normal ml-1.5">Save ${savings.toFixed(2)}</span>}
+              </p>
+              <p className="text-[11px] w-text-faint mt-0.5">
+                Available credit: {creditBalanceCents == null ? "…" : `$${(creditBalanceCents / 100).toFixed(2)}`}
+              </p>
+            </button>
+          </div>
+        )}
+
+        {method === "credit" && !creditConfirmed && (
+          <div className="space-y-3">
+            {isAnnual && (
+              <p className="text-xs w-text-faint">
+                Pay one year upfront with Innvil Credit and save 10% — the best available rate, bigger than the 5% direct-payment annual discount.
+              </p>
+            )}
+            <div className="w-surface-raised border w-line-soft rounded-lg p-3 text-sm">
+              <p className="w-text">{isAnnual ? "Annual price" : "Credit price"}: <strong>${creditPrice.toFixed(2)}</strong>{isAnnual && <span className="text-xs w-text-faint font-normal"> /year</span>}</p>
+              {isAnnual && equivalentMonthly != null && <p className="text-xs w-text-faint mt-1">Equivalent to ${equivalentMonthly.toFixed(2)}/month, paid upfront — you're charged the full annual amount now, not in installments.</p>}
+              {savings > 0 && <p className="text-xs w-teal mt-1">Save ${savings.toFixed(2)}{isAnnual ? "/year vs. paying monthly" : ""}</p>}
+              <p className="text-xs w-text-faint mt-1">Available Innvil Credit: {creditBalanceCents == null ? "…" : `$${(creditBalanceCents / 100).toFixed(2)}`}</p>
+            </div>
+            {creditBalanceCents != null && !hasEnoughCredit && (
+              <div className="flex items-center justify-between gap-2 text-xs w-amber">
+                <span>Not enough Innvil Credit. Need ${(Math.round(creditPrice * 100) / 100 - creditBalanceCents / 100).toFixed(2)} more.</span>
+                <button type="button" onClick={() => setAddCreditOpen(true)} className="w-teal hover:underline shrink-0">Add credit</button>
+              </div>
+            )}
+            {creditError && <p className="text-xs text-red-400">{creditError}</p>}
+            <div className="flex gap-2">
+              <button onClick={() => setMethod("choose")} disabled={creditBusy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
+                Back
+              </button>
+              <button
+                onClick={payWithCredit}
+                disabled={creditBusy || !hasEnoughCredit}
+                className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60"
+              >
+                {creditBusy ? "Paying…" : isAnnual ? "Pay annual with Innvil Credit" : "Pay with Innvil Credit"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {creditConfirmed && (
+          <div className="text-center py-4 space-y-2">
+            <CheckCircle2 size={32} className="mx-auto w-green" />
+            {creditConfirmed.scheduled ? (
+              <p className="text-sm w-text">
+                Downgrade to {plan} scheduled{creditConfirmed.effectiveAt ? <> — takes effect at your next renewal on {new Date(creditConfirmed.effectiveAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</> : ""}. Your current plan stays active until then, and nothing was charged.
+              </p>
+            ) : (
+              <p className="text-sm w-text">Payment confirmed — your Watch subscription is now active.</p>
+            )}
+            <button onClick={() => window.location.reload()} className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg mt-2">
+              Continue to dashboard
+            </button>
+          </div>
+        )}
+
+        {method === "crypto" && gateways === null && (
+          <p className="text-sm w-text-dim flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Loading payment options…</p>
+        )}
+
+        {method === "crypto" && gateways !== null && gateways.length === 0 && (
+          <p className="text-sm text-red-400">Payments are temporarily unavailable. Please try again shortly or contact support.</p>
+        )}
+
+        {method === "crypto" && gateways !== null && gateways.length > 0 && !selected && (
+          <div className="space-y-2">
+            <button onClick={() => setMethod("choose")} className="text-xs w-text-faint hover:w-text mb-1">← Back</button>
+            <p className="text-xs w-text-faint mb-2">
+              Choose a gateway — ${directPrice.toFixed(2)}{isAnnual ? "/year" : "/mo"}
+            </p>
+            {gateways.map((g) => (
+              <button
+                key={g}
+                onClick={() => setSelected(g)}
+                className="w-full text-left text-sm w-surface-raised border w-line-soft rounded-lg px-4 py-3 hover:w-teal-border"
+              >
+                {GATEWAY_LABELS[g] ?? g}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {selected && (selected === "cryptomus" || selected === "nowpayments") && (
+          <div className="space-y-3">
+            <p className="text-sm w-text-dim">You&apos;ll be redirected to {GATEWAY_LABELS[selected]} to complete payment securely.</p>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            <div className="flex gap-2">
+              <button onClick={() => setSelected(null)} disabled={busy || redirecting} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
+                Back
+              </button>
+              <button
+                onClick={() => startHostedCheckout(selected as "cryptomus" | "nowpayments")}
+                disabled={busy || redirecting}
+                className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {redirecting ? <>Redirecting… <ExternalLink size={14} /></> : busy ? "Starting…" : "Continue"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {selected === "binance_pay" && !binanceDeposit && (
+          <div className="space-y-3">
+            <p className="text-sm w-text-dim">Pay Innvil directly via Binance Pay, then confirm with your transaction id.</p>
+            {error && <p className="text-xs text-red-400">{error}</p>}
+            <div className="flex gap-2">
+              <button onClick={() => setSelected(null)} disabled={busy} className="text-xs px-3 py-2 rounded-lg border w-line-soft w-surface-raised w-text-dim disabled:opacity-60">
+                Back
+              </button>
+              <button onClick={startBinanceDeposit} disabled={busy} className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+                {busy ? "Preparing…" : "Get payment details"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {binanceDeposit && claimStatus !== "confirmed" && (
+          <div className="space-y-3">
+            <div className="w-surface-raised border w-line-soft rounded-lg p-3 text-sm">
+              <p>Send <strong>{binanceDeposit.amount.toFixed(2)} USDT</strong> to Binance Pay ID:</p>
+              <p className="w-mono w-teal text-base mt-1">{binanceDeposit.payId}</p>
+              {binanceDeposit.qrImage && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={binanceDeposit.qrImage} alt="Binance Pay QR code" className="mt-3 w-32 h-32 rounded-lg" />
+              )}
+            </div>
+            <p className="text-xs w-text-faint">USDT only. After paying, enter the transaction/order id from your Binance app to confirm.</p>
+            <input
+              value={txInput}
+              onChange={(e) => setTxInput(e.target.value)}
+              placeholder="Transaction / order id"
+              className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border"
+            />
+            {claimStatus === "failed" && claimError && <p className="text-xs text-red-400 flex items-center gap-1.5"><XCircle size={14} /> {claimError}</p>}
+            <button
+              onClick={claimBinance}
+              disabled={claimStatus === "checking" || !txInput.trim()}
+              className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg w-full disabled:opacity-60"
+            >
+              {claimStatus === "checking" ? "Verifying…" : "I've paid — verify"}
+            </button>
+          </div>
+        )}
+
+        {claimStatus === "confirmed" && (
+          <div className="text-center py-4 space-y-2">
+            <CheckCircle2 size={32} className="mx-auto w-green" />
+            <p className="text-sm w-text">Payment confirmed — your Watch subscription is now active.</p>
+            <button onClick={() => window.location.reload()} className="w-btn-primary text-sm font-semibold px-4 py-2 rounded-lg mt-2">
+              Continue to dashboard
+            </button>
+          </div>
+        )}
+      </div>
+      {addCreditOpen && <AddCreditCard onClose={() => setAddCreditOpen(false)} />}
+    </div>
+  );
+}

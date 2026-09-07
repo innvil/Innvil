@@ -1,194 +1,89 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   Wifi, ShieldCheck, Users, CreditCard, MessageSquare, Palette, Settings, Bell,
-  Search, ArrowUpRight, ArrowRight, TrendingUp, Lock, CheckCircle2, Sparkles, Gauge,
-  LayoutGrid, ChevronRight, Circle, Bot, Wallet, Clock, HelpCircle, ArrowLeft, X,
+  Search, ArrowUpRight, ArrowRight, TrendingUp, Lock, CheckCircle2, Gauge,
+  LayoutGrid, ChevronRight, Circle, Bot, Wallet, Clock, HelpCircle, ArrowLeft, X, Menu,
   Plus, History, Rocket, LogIn, Globe, Image as ImageIcon, Type, Sliders, Tag,
   Percent, Megaphone, FileText, Phone, Mail, ShoppingCart, ListOrdered, KeyRound,
   Copy, ExternalLink, ChevronDown, Activity, UserCircle2, Gift, RefreshCw,
-  AlertTriangle, Wrench, Eye, EyeOff,
+  AlertTriangle, Wrench, Eye, EyeOff, Trash2, LifeBuoy, PiggyBank, Newspaper, Boxes,
 } from "lucide-react";
 import {
-  Card, StatCard, FloorLedger, RevenueChart, OrdersTable, StatusBadge,
+  Card, StatCard, RevenueChart, StatusBadge,
   StatusDropdown, Toggle, Pill,
 } from "@/src/components/ui";
+import { InnvilBrandMark } from "@/src/components/ui/BrandMark";
 import {
-  panels, ledgerlineBalance, customers, tickets, topUpMethods, themes,
+  customers, themes,
   allPanelsAdmin, PanelStatus, auditLogs,
 } from "@/src/data/constants";
 import { PanelAdmin } from "./admin";
+import { OwnerAssistantChat } from "./admin/OwnerAssistantChat";
+import { AccountSettings } from "./AccountSettings";
+import { OwnerOrders, OwnerCustomers, OwnerProviderBalances, OwnerBilling, OwnerTopUps, OwnerContactSupport, OwnerPanelSupport } from "./OwnerSections";
+import { ReceiptCard } from "./ReceiptCard";
 import { signInAction, signUpAction, signOutAction } from "@/src/lib/actions/auth";
-import { listPanels, createPanel, updatePanelStatus } from "@/src/lib/actions/panels";
+import { getOwnerBillingSummary, listAllOwnerOrders, type OwnerBillingSummary, type OwnerOrderVM } from "@/src/lib/actions/admin-orders";
+import { listPanels, createPanel, updatePanelStatus, deletePanel } from "@/src/lib/actions/panels";
+import { PLATFORM_FOCUS_OPTIONS, type PlatformFocus } from "@/src/lib/platform-focus";
+import { amSuperAdmin } from "@/src/lib/actions/superadmin";
+import { BlogReview } from "@/src/components/superadmin/BlogReview";
+import { PRReview } from "@/src/components/superadmin/PRReview";
+import { DesignPricingAdmin } from "@/src/components/superadmin/DesignPricingAdmin";
+import { ProductsAdmin } from "@/src/components/superadmin/ProductsAdmin";
+import { WatchDevOpsAdmin } from "@/src/components/superadmin/WatchDevOpsAdmin";
+import { BotManagerCampaignsAdmin } from "@/src/components/superadmin/BotManagerCampaignsAdmin";
+import { TelegramLeadsAdmin } from "@/src/components/superadmin/TelegramLeadsAdmin";
+import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
+import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
+import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
 
+const OWNER_APP_CACHE_PREFIX = "innvil-owner-app";
+const ownerAppMemory = new Map<string, unknown>();
+
+function getOwnerAppCacheKey(section: string) {
+  return `${OWNER_APP_CACHE_PREFIX}:${section}`;
+}
+
+function readOwnerAppCache<T>(section: string): T | null {
+  const key = getOwnerAppCacheKey(section);
+  if (ownerAppMemory.has(key)) return ownerAppMemory.get(key) as T;
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as T;
+    ownerAppMemory.set(key, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeOwnerAppCache<T>(section: string, value: T) {
+  const key = getOwnerAppCacheKey(section);
+  ownerAppMemory.set(key, value);
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore storage failures
+  }
+}
+
 /* =========================================================
-   A. LEDGERLINE PUBLIC LANDING PAGE
+  A. INNVIL PUBLIC LANDING PAGE → moved to ./PublicLanding.tsx
+  (its own client module so the SSR marketing page ships a slim bundle without
+  the owner-app / InnvilApp code — better Core Web Vitals). Import it from
+  "@/src/components/panels/PublicLanding", not from this barrel.
    ========================================================= */
 
-function TopNav({ world, setWorld }: { world: string; setWorld: (w: string) => void }) {
-  return (
-    <header className="sticky top-0 z-40 backdrop-blur-md bg-[#0A0B0F]/80 border-b fp-line-soft">
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-md fp-gold-bg flex items-center justify-center">
-            <Gauge size={15} color="#0A0B0F" />
-          </div>
-          <span className="fp-display text-lg tracking-wide">Veyra</span>
-        </div>
-        <nav className="hidden md:flex items-center gap-8 text-sm fp-text-dim">
-          <a href="#how" className="hover:fp-text">How it works</a>
-          <a href="#features" className="hover:fp-text">Features</a>
-          <a href="#floor" className="hover:fp-text">Price floor</a>
-          <a href="#pricing" className="hover:fp-text">Pricing</a>
-        </nav>
-        <div className="flex items-center gap-3">
-          <button onClick={() => setWorld("auth")} className="text-sm fp-text-dim">Log in</button>
-          <button onClick={() => setWorld("auth")} className="fp-btn-primary text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5">
-            Create your panel <ArrowRight size={14} />
-          </button>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-export function PublicLanding({ setWorld }: { setWorld: (w: string) => void }) {
-  return (
-    <div>
-      <TopNav world="public" setWorld={setWorld} />
-      <section className="relative fp-noise fp-grid-bg overflow-hidden">
-        <div className="max-w-6xl mx-auto px-6 pt-20 pb-24 grid md:grid-cols-2 gap-14 items-center">
-          <div>
-            <Pill tone="violet" icon={Sparkles}>0% monthly rent · 5% commission only</Pill>
-            <p className="fp-text-faint text-xs fp-mono mt-3">We build the panel maker. You bring your own provider.</p>
-            <h1 className="fp-display text-5xl md:text-6xl leading-[1.05] mt-6">
-              Launch your own<br />
-              <span className="fp-grad-text">white-label SMM panel.</span>
-            </h1>
-            <p className="fp-text-dim text-base mt-6 max-w-md leading-relaxed">
-              Veyra is a no-code panel maker. Create as many independent SMM panels as you
-              want, each with its own subdomain, storefront, customer dashboard, and wallet —
-              yours to brand, price, and grow.
-            </p>
-            <div className="flex items-center gap-4 mt-8">
-              <button onClick={() => setWorld("auth")} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg flex items-center gap-2">
-                Create your panel <ArrowRight size={16} />
-              </button>
-              <a href="#how" className="fp-text-dim text-sm flex items-center gap-1 hover:fp-text">
-                See how it works <ChevronRight size={14} />
-              </a>
-            </div>
-            <div className="flex items-center gap-6 mt-10 fp-text-faint text-xs fp-mono">
-              <span>Keep 95% of every order</span>
-              <Circle size={3} fill="currentColor" />
-              <span>Subdomain live in minutes</span>
-            </div>
-          </div>
-          <FloorLedger />
-        </div>
-      </section>
-
-      <section id="how" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
-        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">How it works</p>
-        <h2 className="fp-display text-3xl mb-12">One account. Any number of panels.</h2>
-        <div className="grid md:grid-cols-4 gap-6">
-          {[
-            { n: "01", t: "Create a panel", d: "Name it, pick a subdomain, choose a theme. Live in minutes.", icon: Rocket },
-            { n: "02", t: "Connect your provider", d: "Bring your own SMM provider via API. We never sell you services.", icon: Wifi },
-            { n: "03", t: "Brand & price it", d: "Custom domain, your colors, your markup above the provider floor.", icon: Palette },
-            { n: "04", t: "Go live", d: "Customers see your panel, not ours. You keep 95% of every order.", icon: TrendingUp },
-          ].map((s) => (
-            <div key={s.n} className="fp-panel border fp-line rounded-2xl p-6">
-              <div className="flex items-center justify-between mb-6">
-                <span className="fp-mono text-xs fp-text-faint">{s.n}</span>
-                <s.icon size={18} className="fp-gold" />
-              </div>
-              <h3 className="fp-display text-lg mb-2">{s.t}</h3>
-              <p className="fp-text-dim text-sm leading-relaxed">{s.d}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section id="features" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
-        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Provider automation</p>
-        <h2 className="fp-display text-3xl mb-4">Import a thousand services in one click.</h2>
-        <p className="fp-text-dim text-sm leading-relaxed max-w-2xl mb-12">
-          Connect your SMM provider and Veyra pulls the entire catalog, prices it with your
-          markup, and organizes it for you — the busywork that eats a launch, done in seconds.
-        </p>
-        <div className="grid md:grid-cols-3 gap-6">
-          {[
-            { icon: Wifi, t: "One-click catalog import", d: "Pull your provider's full service list over their API — select all, or cherry-pick." },
-            { icon: Tag, t: "Auto-categorization", d: "Services are sorted into platform categories and sub-categories (Instagram → Followers, Views…) automatically." },
-            { icon: Percent, t: "Markup your way", d: "Percentage, multiplier, or fixed markup above the provider floor — set once, edit any service anytime." },
-            { icon: RefreshCw, t: "One-click sync", d: "Refresh prices, min/max limits, and availability from your provider whenever they change." },
-            { icon: Sliders, t: "Full catalog control", d: "Rename, describe, re-price, enable or disable any service — a clean tree, not a spreadsheet." },
-            { icon: ShieldCheck, t: "Keys never exposed", d: "Provider API keys are encrypted and only ever used server-side. They never touch the browser." },
-          ].map((f) => (
-            <div key={f.t} className="fp-panel border fp-line rounded-2xl p-6">
-              <span className="w-10 h-10 rounded-xl fp-gold-soft-bg fp-gold flex items-center justify-center mb-4">
-                <f.icon size={18} />
-              </span>
-              <h3 className="fp-display text-lg mb-2">{f.t}</h3>
-              <p className="fp-text-dim text-sm leading-relaxed">{f.d}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section id="floor" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
-        <div className="grid md:grid-cols-2 gap-14 items-center">
-          <div>
-            <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">The price floor</p>
-            <h2 className="fp-display text-3xl mb-5">A floor, not a ceiling.</h2>
-            <p className="fp-text-dim text-sm leading-relaxed mb-5">
-              Every service on your panel inherits a minimum price equal to what your connected
-              provider charges you. You price as high above it as the market allows — never below.
-            </p>
-            <p className="fp-text-dim text-sm leading-relaxed">
-              Veyra doesn&apos;t sell SMM services or act as your provider — we build and host
-              the panel. The floor simply travels with whatever price your own provider gives you.
-            </p>
-          </div>
-          <FloorLedger compact />
-        </div>
-      </section>
-
-      <section id="pricing" className="max-w-6xl mx-auto px-6 py-20 border-t fp-line-soft">
-        <p className="fp-mono text-xs fp-text-faint uppercase tracking-[0.14em] mb-3">Pricing</p>
-        <h2 className="fp-display text-3xl mb-10">One number. That&apos;s the whole model.</h2>
-        <div className="fp-panel border fp-gold-border rounded-2xl p-10 max-w-xl">
-          <p className="fp-display text-6xl fp-gold">5%</p>
-          <p className="fp-text-dim text-sm mt-2">commission on completed orders — nothing else, ever.</p>
-          <ul className="mt-6 space-y-2 text-sm">
-            {["No monthly rent", "No setup fee", "Unlimited panels per account", "Subdomain included, custom domain optional"].map((t) => (
-              <li key={t} className="flex gap-2">
-                <CheckCircle2 size={16} className="fp-safe shrink-0 mt-0.5" /> {t}
-              </li>
-            ))}
-          </ul>
-          <button onClick={() => setWorld("auth")} className="fp-btn-primary font-semibold px-6 py-3 rounded-lg mt-8 flex items-center gap-2">
-            Create your panel <ArrowRight size={16} />
-          </button>
-        </div>
-      </section>
-
-      <footer className="border-t fp-line-soft">
-        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-wrap items-center justify-between gap-4 fp-text-faint text-xs">
-          <span>© 2026 Veyra — the SMM panel maker.</span>
-          <div className="flex items-center gap-5">
-            <a href="/terms" className="hover:fp-text">Terms</a>
-            <a href="/privacy" className="hover:fp-text">Privacy</a>
-            <span className="fp-mono fp-text-faint">5% commission · no rent</span>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
-}
+/* (PublicLanding + TopNav now live in ./PublicLanding.tsx.) */
 
 /* =========================================================
    B. AUTH
@@ -241,10 +136,10 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
     <div className="fp-root min-h-screen fp-noise fp-grid-bg flex items-center justify-center px-4">
       <div className="fp-panel border fp-line rounded-2xl w-full max-w-sm p-7">
         <div className="flex items-center gap-2.5 mb-8 justify-center">
-          <div className="w-7 h-7 rounded-md fp-gold-bg flex items-center justify-center">
-            <Gauge size={15} color="#0A0B0F" />
+          <div className="w-10 h-10 rounded-[9px] bg-[#C9A574] flex items-center justify-center">
+            <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
           </div>
-          <span className="fp-display text-lg">Veyra</span>
+          <span className="fp-display text-lg">Innvil</span>
         </div>
         <div className="flex fp-panel-raised rounded-lg p-1 mb-6">
           <button
@@ -260,33 +155,34 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
             Sign up
           </button>
         </div>
-        <label className="fp-text-dim text-xs fp-mono uppercase">Email</label>
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          type="email"
-          name="ll-owner-email"
-          autoComplete="off"
-          data-lpignore="true"
-          data-1p-ignore
-          data-form-type="other"
-          placeholder="you@example.com"
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
-        />
-        <label className="fp-text-dim text-xs fp-mono uppercase">Password</label>
-        <input
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          type="password"
-          name="ll-owner-password"
-          autoComplete="new-password"
-          data-lpignore="true"
-          data-1p-ignore
-          data-form-type="other"
-          placeholder="••••••••"
-          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
-        />
+        <form
+          autoComplete="section-innvil-owner on"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit();
+          }}
+        >
+          <label className="fp-text-dim text-xs fp-mono uppercase">{mode === "login" ? "Email or username" : "Email"}</label>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            type={mode === "login" ? "text" : "email"}
+            name="email"
+            autoComplete="section-innvil-owner username"
+            placeholder={mode === "login" ? "you@example.com or username" : "you@example.com"}
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
+          />
+          <label className="fp-text-dim text-xs fp-mono uppercase">Password</label>
+          <input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            type="password"
+            name="password"
+            autoComplete={mode === "login" ? "section-innvil-owner current-password" : "section-innvil-owner new-password"}
+            placeholder="••••••••"
+            className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:fp-gold-border"
+          />
         {error && (
           <p className="text-xs text-red-400 mb-3 flex items-center gap-1.5">
             <AlertTriangle size={12} /> {error}
@@ -298,6 +194,7 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
           </p>
         )}
         <button
+          type="submit"
           onClick={submit}
           disabled={busy}
           className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -305,8 +202,9 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
           <LogIn size={15} />
           {busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
         </button>
+        </form>
         <p className="fp-text-faint text-xs text-center mt-5">
-          {mode === "login" ? "New to Veyra?" : "Already have an account?"}{" "}
+          {mode === "login" ? "New to Innvil?" : "Already have an account?"}{" "}
           <button onClick={() => switchMode(mode === "login" ? "signup" : "login")} className="fp-gold">
             {mode === "login" ? "Sign up" : "Log in"}
           </button>
@@ -317,26 +215,47 @@ export function AuthScreen({ setWorld }: { setWorld: (w: string) => void }) {
 }
 
 /* =========================================================
-   C. LEDGERLINE APP SHELL (dashboard)
+  C. INNVIL APP SHELL (dashboard)
    ========================================================= */
 
-function AppSidebar({ section, setSection }: { section: string; setSection: (s: string) => void }) {
-  const items = [
-    { k: "home", label: "Dashboard home", icon: LayoutGrid },
-    { k: "panels", label: "My Panels", icon: Gauge },
-    { k: "billing", label: "Billing", icon: Wallet },
-    { k: "orders", label: "Orders (all panels)", icon: ListOrdered },
-    { k: "customers", label: "Customers (all panels)", icon: Users },
-    { k: "support", label: "Support inbox", icon: MessageSquare },
+const APP_NAV = [
+  { k: "home", label: "Dashboard home", icon: LayoutGrid },
+  { k: "panels", label: "My Panels", icon: Gauge },
+  { k: "billing", label: "Billing", icon: Wallet },
+  { k: "earnings", label: "Earnings & receipts", icon: TrendingUp },
+  { k: "orders", label: "Orders (all panels)", icon: ListOrdered },
+  { k: "customers", label: "Customers (all panels)", icon: Users },
+  { k: "provider-balances", label: "Provider balances", icon: PiggyBank },
+  { k: "support", label: "Support inbox", icon: MessageSquare },
+];
+
+// The last nav item is role-dependent: the super admin (Innvil owner) MANAGES the
+// panel owners' support messages ("Panel Support"); every other owner contacts support.
+function navItemsFor(isSuper: boolean) {
+  return [
+    ...APP_NAV,
+    // Super-admin-only: review + approve AI blog drafts, right in the owner app.
+    ...(isSuper ? [{ k: "blog", label: "Blog", icon: Newspaper }] : []),
+    ...(isSuper ? [{ k: "pr-generator", label: "PR Generator", icon: Megaphone }] : []),
+    ...(isSuper ? [{ k: "design-pricing", label: "Design pricing", icon: Tag }] : []),
+    ...(isSuper ? [{ k: "products", label: "Products", icon: Boxes }] : []),
+    ...(isSuper ? [{ k: "watch-devops", label: "Watch devops", icon: Wrench }] : []),
+    ...(isSuper ? [{ k: "bot-manager-campaigns", label: "Bot manager campaigns", icon: Bot }] : []),
+    ...(isSuper ? [{ k: "telegram-leads", label: "Telegram Leads", icon: Users }] : []),
+    { k: "contact", label: isSuper ? "Panel Support" : "Contact support", icon: LifeBuoy },
   ];
+}
+
+function AppSidebar({ section, setSection, isSuper }: { section: string; setSection: (s: string) => void; isSuper?: boolean }) {
+  const items = navItemsFor(!!isSuper);
 
   return (
     <aside className="w-60 shrink-0 fp-void-2 border-r fp-line-soft min-h-screen p-5 hidden md:flex flex-col">
       <div className="flex items-center gap-2.5 mb-10 px-1">
-        <div className="w-7 h-7 rounded-md fp-gold-bg flex items-center justify-center">
-          <Gauge size={15} color="#0A0B0F" />
+        <div className="w-10 h-10 rounded-[9px] bg-[#C9A574] flex items-center justify-center">
+          <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
         </div>
-        <span className="fp-display text-lg">Veyra</span>
+        <span className="fp-display text-lg">Innvil</span>
       </div>
       <nav className="space-y-1 flex-1">
         {items.map((it) => (
@@ -350,74 +269,259 @@ function AppSidebar({ section, setSection }: { section: string; setSection: (s: 
           </div>
         ))}
       </nav>
-      <div className="border-t fp-line-soft pt-4 mt-4">
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm fp-text-dim">
-          <Settings size={16} /> Account settings
+      {isSuper && (
+        <div className="border-t fp-line-soft pt-4 mt-4">
+          <Link href="/superadmin" className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm fp-gold hover:fp-gold-soft-bg">
+            <ShieldCheck size={16} /> Super admin
+          </Link>
         </div>
-      </div>
+      )}
     </aside>
   );
 }
 
-function AppTopbar({ setWorld }: { setWorld: (w: string) => void }) {
+function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog }: { setWorld: (w: string) => void; onOpenAccount: () => void; onOpenNav: () => void; isSuper?: boolean; onOpenBlog?: () => void }) {
+  const [bellOpen, setBellOpen] = useState(false);
+  const [draftNotices, setDraftNotices] = useState<BlogDraftNotice[]>([]);
+
+  useEffect(() => {
+    if (!isSuper) return;
+    let alive = true;
+    listBlogDraftNotices().then((n) => { if (alive) setDraftNotices(n); }).catch(() => {});
+    return () => { alive = false; };
+  }, [isSuper]);
+
+  const relTime = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  };
+  const [ownerBalance, setOwnerBalance] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.sessionStorage.getItem("innvil-owner:billing") ?? window.localStorage.getItem("innvil-owner:billing");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { innvilBalance?: number; commissionToday?: number };
+      if (typeof parsed.innvilBalance === "number") return parsed.innvilBalance;
+      return typeof parsed.commissionToday === "number" ? parsed.commissionToday : null;
+    } catch {
+      return null;
+    }
+  });
+  const [syncingBalance, setSyncingBalance] = useState(ownerBalance !== null);
+
+  useEffect(() => {
+    let alive = true;
+    setSyncingBalance(ownerBalance !== null);
+    getOwnerBillingSummary().then((summary) => {
+      if (!alive) return;
+      setOwnerBalance(summary.innvilBalance);
+      setSyncingBalance(false);
+    }).catch(() => {
+      if (!alive) return;
+      setSyncingBalance(false);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const fmtBalance = (n: number) =>
+    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+
   return (
-    <div className="flex items-center justify-between px-8 py-5 border-b fp-line-soft">
-      <div className="relative w-72">
-        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
-        <input
-          placeholder="Search panels, orders, customers…"
-          className="w-full fp-panel border fp-line-soft rounded-lg pl-9 pr-3 py-2 text-sm fp-text placeholder:fp-text-faint outline-none focus:fp-gold-border"
-        />
+    <div className="flex items-center justify-between gap-2 px-4 sm:px-8 py-4 sm:py-5 border-b fp-line-soft">
+      <div className="flex items-center gap-2 min-w-0">
+        <button onClick={onOpenNav} aria-label="Open menu" className="md:hidden p-1.5 rounded-lg fp-text-dim hover:fp-text shrink-0">
+          <Menu size={20} />
+        </button>
+        <div className="relative hidden sm:block sm:w-72 min-w-0">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
+          <input
+            placeholder="Search panels, orders, customers…"
+            className="w-full fp-panel border fp-line-soft rounded-lg pl-9 pr-3 py-2 text-sm fp-text placeholder:fp-text-faint outline-none focus:fp-gold-border"
+          />
+        </div>
       </div>
-      <div className="flex items-center gap-5">
-        <Bell size={17} className="fp-text-dim" />
+      <div className="flex items-center gap-2.5 sm:gap-5 min-w-0">
+        <div className="fp-panel-raised border fp-line-soft rounded-lg px-2.5 sm:px-3 py-1.5 flex items-center gap-2 shrink-0">
+          <Wallet size={13} className="fp-gold" />
+          <div>
+            <p className="text-[10px] fp-text-faint fp-mono uppercase leading-none">Balance</p>
+            <p className="text-xs fp-mono leading-tight">{ownerBalance == null ? "—" : fmtBalance(ownerBalance)}</p>
+          </div>
+          {syncingBalance && <RefreshCw size={11} className="fp-text-faint animate-spin" />}
+        </div>
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setBellOpen((o) => !o)}
+            aria-label="Notifications"
+            className={`relative p-1 rounded-lg ${bellOpen ? "fp-gold" : "fp-text-dim hover:fp-text"}`}
+          >
+            <Bell size={17} />
+            {draftNotices.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full fp-gold-bg text-[#0A0B0F] text-[9px] font-bold flex items-center justify-center">
+                {draftNotices.length}
+              </span>
+            )}
+          </button>
+          {bellOpen && (
+            <>
+              <button aria-hidden onClick={() => setBellOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+              <div className="absolute right-0 top-full mt-2 w-72 fp-panel border fp-line rounded-xl shadow-2xl z-50 p-4">
+                <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Notifications</p>
+                {draftNotices.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <p className="fp-text-dim text-xs mb-1">{draftNotices.length} blog {draftNotices.length === 1 ? "draft" : "drafts"} to review</p>
+                    {draftNotices.map((n) => (
+                      <button
+                        key={n.id}
+                        onClick={() => { setBellOpen(false); onOpenBlog?.(); }}
+                        className="w-full text-left fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 hover:fp-gold-border"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Newspaper size={13} className="fp-gold shrink-0" />
+                          <span className="text-xs truncate flex-1">{n.title}</span>
+                        </span>
+                        <span className="fp-text-faint text-[10px] fp-mono">{relTime(n.createdAt)} · tap to review</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <CheckCircle2 size={20} className="fp-safe mx-auto mb-2" />
+                    <p className="fp-text-dim text-sm">You&apos;re all caught up.</p>
+                    <p className="fp-text-faint text-xs mt-1">Order and deposit alerts will appear here.</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          onClick={onOpenAccount}
+          className="fp-text-faint text-xs hidden md:flex items-center gap-1.5 hover:fp-text shrink-0"
+        >
+          <Settings size={14} /> Account settings
+        </button>
         <button
           onClick={async () => {
+            // Sign out first so the server re-render (setWorld → router.refresh) sees no session.
             await signOutAction();
             setWorld("public");
           }}
-          className="fp-text-faint text-xs"
+          className="fp-text-faint text-xs shrink-0"
         >
           Log out
         </button>
-        <div className="w-8 h-8 rounded-full fp-violet-bg flex items-center justify-center fp-mono text-xs font-semibold">KG</div>
+        <button
+          onClick={onOpenAccount}
+          aria-label="Account settings"
+          className="w-8 h-8 rounded-full fp-violet-bg flex items-center justify-center fp-mono text-xs font-semibold hover:opacity-80 shrink-0"
+        >
+          <UserCircle2 size={18} className="text-[#0A0B0F]" />
+        </button>
       </div>
     </div>
   );
 }
 
 /* --- Dashboard home --- */
-function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
+const DASH_STATUS_TONE: Record<string, string> = {
+  completed: "fp-safe", processing: "fp-gold", in_progress: "fp-gold", partial: "fp-gold",
+  pending: "fp-text-dim", refunded: "text-red-400", canceled: "text-red-400", failed: "text-red-400",
+  duplicate: "fp-violet",
+};
+
+function DashboardHome({ panels, loading, syncing, goPanels, goCreate, goOrders, openPanel }: {
   panels: Panel[];
   loading: boolean;
+  syncing: boolean;
   goPanels: () => void;
   goCreate: () => void;
+  goOrders: () => void;
   openPanel: (p: Panel) => void;
 }) {
+  const [summary, setSummary] = useState<OwnerBillingSummary | null>(() => readOwnerAppCache<OwnerBillingSummary>("dashboard-summary"));
+  const [recent, setRecent] = useState<OwnerOrderVM[] | null>(() => readOwnerAppCache<OwnerOrderVM[]>("dashboard-recent"));
+
+  useEffect(() => {
+    let alive = true;
+    getOwnerBillingSummary().then((s) => { if (!alive) return; setSummary(s); writeOwnerAppCache("dashboard-summary", s); }).catch(() => {});
+    listAllOwnerOrders(8).then((r) => { if (!alive) return; setRecent(r); writeOwnerAppCache("dashboard-recent", r); }).catch(() => { if (alive) setRecent([]); });
+    return () => { alive = false; };
+  }, []);
+
+  const usd = (n?: number) => `$${(Number.isFinite(n) ? (n as number) : 0).toFixed(2)}`;
+  const liveCount = panels.filter((p) => p.status === "live").length;
+  const revByPanel = new Map((summary?.perPanel ?? []).map((p) => [p.panelId, p.revenueToday]));
+
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-8 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="fp-display text-2xl">Welcome back</h1>
         <button onClick={goCreate} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
           <Plus size={15} /> Create panel
         </button>
       </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Panels created" value={loading ? "—" : String(panels.length)} />
-        <StatCard label="Orders today (all panels)" value="$0.00" tone="gold" />
-        <StatCard label="Veyra balance" value="$0.00" />
-        <StatCard label="Commission due in 24h" value="$0.00" />
+        <StatCard label="Panels" value={loading ? "—" : `${liveCount}/${panels.length}`} delta={loading ? undefined : `${liveCount} live`} />
+        <StatCard label="Revenue today" value={summary ? usd(summary.revenueToday) : "—"} tone="gold" />
+        <StatCard label="Orders today" value={summary ? String(summary.ordersToday) : "—"} />
+        <StatCard label="Innvil balance" value={summary ? usd(summary.innvilBalance) : "—"} />
       </div>
+
       <div className="grid md:grid-cols-3 gap-6">
-        <div className="md:col-span-2"><RevenueChart title="All panels combined" /></div>
-        <Card title="Recent activity" icon={Activity}>
-          <p className="fp-text-dim text-sm">Activity will appear here as your panels take orders.</p>
+        <div className="md:col-span-2">
+          <Card
+            title="Recent orders"
+            icon={ListOrdered}
+            right={<button onClick={goOrders} className="text-xs fp-gold flex items-center gap-1">View all <ChevronRight size={12} /></button>}
+          >
+            {recent === null ? (
+              <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
+            ) : recent.length === 0 ? (
+              <p className="fp-text-faint text-sm py-6 text-center">No orders yet — they&apos;ll show here as your panels sell.</p>
+            ) : (
+              <div className="divide-y fp-line-soft">
+                {recent.slice(0, 6).map((o) => (
+                  <div key={o.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">{o.serviceName}</p>
+                      <p className="fp-text-faint text-xs fp-mono truncate">{o.panelName} · {o.customerEmail ?? o.customerUsername ?? "customer"}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="fp-mono text-sm">{usd(o.charge)}</p>
+                      <p className={`text-xs ${DASH_STATUS_TONE[o.status] ?? "fp-text-faint"}`}>{o.status}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+        <Card title="Today" icon={Activity}>
+          <div className="space-y-3 text-sm">
+            <div className="flex justify-between"><span className="fp-text-dim">Profit today</span><span className="fp-mono">{summary ? usd(summary.profitToday) : "—"}</span></div>
+            <div className="flex justify-between"><span className="fp-text-dim">Commission charged</span><span className="fp-mono fp-gold">{summary ? usd(summary.commissionCharged) : "—"}</span></div>
+            <div className="flex justify-between"><span className="fp-text-dim">Orders today</span><span className="fp-mono">{summary ? summary.ordersToday : "—"}</span></div>
+            <div className="flex justify-between"><span className="fp-text-dim">Live panels</span><span className="fp-mono">{liveCount}</span></div>
+          </div>
         </Card>
       </div>
+
       <Card
         title="Your panels"
         icon={Gauge}
-        right={<button onClick={goPanels} className="text-xs fp-gold flex items-center gap-1">View all <ChevronRight size={12} /></button>}
+        right={(
+          <div className="flex items-center gap-3">
+            {syncing && <span className="text-xs fp-text-faint flex items-center gap-1">Syncing…</span>}
+            <button onClick={goPanels} className="text-xs fp-gold flex items-center gap-1">View all <ChevronRight size={12} /></button>
+          </div>
+        )}
       >
         {loading ? (
           <p className="fp-text-faint text-sm py-6 text-center">Loading panels…</p>
@@ -440,8 +544,8 @@ function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
                   <p className="text-sm font-medium">{p.name}</p>
                   <StatusBadge status={p.status} />
                 </div>
-                <p className="fp-text-faint text-xs fp-mono">{p.domain || `${p.subdomain}.ledgerline.app`}</p>
-                <p className="fp-mono text-sm mt-3">${p.ordersToday.toFixed(2)} today</p>
+                <p className="fp-text-faint text-xs fp-mono">{panelDisplayDomain(p.subdomain, p.domain)}</p>
+                <p className="fp-mono text-sm mt-3">{usd(revByPanel.get(p.id))} <span className="fp-text-faint text-xs">today</span></p>
               </button>
             ))}
           </div>
@@ -452,13 +556,44 @@ function DashboardHome({ panels, loading, goPanels, goCreate, openPanel }: {
 }
 
 /* --- My Panels --- */
-function MyPanels({ panels, loading, goCreate, openPanel }: {
+// Owners set draft / live / maintenance. `inactive` (automatic, out of credit) and
+// `suspended` (support-only) are shown but locked. Live is always clickable — with no
+// Innvil balance the server runs it in preview (Inactive) until funds are added.
+const OWNER_SETTABLE: PanelStatus[] = ["draft", "live", "maintenance"];
+const LOCKED_STATUS_NOTE = {
+  inactive: "Applied automatically when a panel runs out of Innvil credit.",
+  suspended: "Set by Innvil support only.",
+} as const;
+
+function MyPanels({ panels, loading, syncing, goCreate, openPanel, onChanged }: {
   panels: Panel[];
   loading: boolean;
+  syncing: boolean;
   goCreate: () => void;
   openPanel: (p: Panel) => void;
+  onChanged: () => void | Promise<void>;
 }) {
+  const [summary, setSummary] = useState<OwnerBillingSummary | null>(() =>
+    readOwnerAppCache<OwnerBillingSummary>("dashboard-summary")
+  );
   const [panelStatuses, setPanelStatuses] = useState<Record<string, PanelStatus>>({});
+  const [statusError, setStatusError] = useState<Record<string, string>>({});
+  const [statusNote, setStatusNote] = useState<Record<string, string>>({});
+  const [confirmDelete, setConfirmDelete] = useState<Panel | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getOwnerBillingSummary()
+      .then((s) => {
+        if (!alive) return;
+        setSummary(s);
+        writeOwnerAppCache("dashboard-summary", s);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     setPanelStatuses(
@@ -466,22 +601,35 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
     );
   }, [panels]);
 
+  const revByPanel = new Map((summary?.perPanel ?? []).map((row) => [row.panelId, row.revenueToday]));
+  const usd = (n?: number) => `$${(Number.isFinite(n) ? (n as number) : 0).toFixed(2)}`;
+
   const handleStatusChange = async (panelId: string, newStatus: PanelStatus) => {
     const prevStatus = panelStatuses[panelId];
+    setStatusError((prev) => ({ ...prev, [panelId]: "" }));
+    setStatusNote((prev) => ({ ...prev, [panelId]: "" }));
     setPanelStatuses((prev) => ({ ...prev, [panelId]: newStatus })); // optimistic
     const res = await updatePanelStatus(panelId, newStatus);
     if (!res.ok) {
       setPanelStatuses((prev) => ({ ...prev, [panelId]: prevStatus })); // rollback
+      setStatusError((prev) => ({ ...prev, [panelId]: res.error }));
+      return;
     }
+    // The server may downgrade Live → Inactive (preview) when there's no balance.
+    setPanelStatuses((prev) => ({ ...prev, [panelId]: res.status }));
+    if (res.note) setStatusNote((prev) => ({ ...prev, [panelId]: res.note as string }));
   };
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 sm:p-8 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="fp-display text-2xl">My Panels</h1>
-        <button onClick={goCreate} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
-          <Plus size={15} /> Create panel
-        </button>
+        <div className="flex items-center gap-3">
+          {syncing && <span className="text-xs fp-text-faint">Syncing…</span>}
+          <button onClick={goCreate} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
+            <Plus size={15} /> Create panel
+          </button>
+        </div>
       </div>
       {loading && <p className="fp-text-faint text-sm">Loading panels…</p>}
       <div className="grid md:grid-cols-3 gap-5">
@@ -492,14 +640,26 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
               <StatusDropdown
                 currentStatus={panelStatuses[p.id] ?? p.status}
                 onChange={(newStatus) => handleStatusChange(p.id, newStatus)}
+                settable={OWNER_SETTABLE}
+                lockedNote={LOCKED_STATUS_NOTE}
               />
             </div>
+            {statusError[p.id] && (
+              <p className="text-xs text-red-400 flex items-start gap-1 mb-2">
+                <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {statusError[p.id]}
+              </p>
+            )}
+            {statusNote[p.id] && !statusError[p.id] && (
+              <p className="text-xs fp-gold flex items-start gap-1 mb-2">
+                <Clock size={11} className="mt-0.5 shrink-0" /> {statusNote[p.id]}
+              </p>
+            )}
             <p className="fp-text-faint text-xs fp-mono flex items-center gap-1">
-              <Globe size={11} /> {p.domain || `${p.subdomain}.ledgerline.app`}
+              <Globe size={11} /> {panelDisplayDomain(p.subdomain, p.domain)}
             </p>
             <p className="fp-text-dim text-xs mt-1">Theme: {p.theme}</p>
             <p className="fp-mono text-lg mt-4">
-              ${p.ordersToday.toFixed(2)} <span className="fp-text-faint text-xs">today</span>
+              {usd(revByPanel.get(p.id) ?? p.ordersToday)} <span className="fp-text-faint text-xs">today</span>
             </p>
 
             {(panelStatuses[p.id] ?? p.status) === "inactive" && (
@@ -531,8 +691,21 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
               >
                 Manage
               </button>
-              <button className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim flex items-center gap-1">
+              <a
+                href={panelStorefrontPath(p.subdomain, p.domain)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="fp-panel-raised border fp-line-soft text-xs px-3 py-2 rounded-lg fp-text-dim flex items-center gap-1 hover:fp-gold-border"
+              >
                 <ExternalLink size={12} /> Visit
+              </a>
+              <button
+                onClick={() => setConfirmDelete({ ...p, status: panelStatuses[p.id] ?? p.status })}
+                aria-label="Delete panel"
+                title="Delete panel"
+                className="fp-panel-raised border border-red-500/25 text-xs px-2.5 py-2 rounded-lg text-red-400/80 hover:text-red-400 hover:border-red-500/50 flex items-center"
+              >
+                <Trash2 size={13} />
               </button>
             </div>
           </div>
@@ -545,18 +718,92 @@ function MyPanels({ panels, loading, goCreate, openPanel }: {
           <span className="text-sm">Create a new panel</span>
         </button>
       </div>
+
+      {confirmDelete && (
+        <DeletePanelModal
+          panel={confirmDelete}
+          onClose={() => setConfirmDelete(null)}
+          onDeleted={async () => { setConfirmDelete(null); await onChanged(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* --- Delete Panel (with caution) --- */
+function DeletePanelModal({ panel, onClose, onDeleted }: {
+  panel: Panel;
+  onClose: () => void;
+  onDeleted: () => void | Promise<void>;
+}) {
+  const [confirmText, setConfirmText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const armed = confirmText.trim().toLowerCase() === panel.subdomain.toLowerCase();
+
+  const remove = async () => {
+    if (!armed || busy) return;
+    setBusy(true);
+    setError(null);
+    const res = await deletePanel(panel.id, confirmText);
+    if (!res.ok) { setError(res.error); setBusy(false); return; }
+    await onDeleted();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center px-4">
+      <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/70" />
+      <div className="relative fp-panel border border-red-500/30 rounded-2xl w-full max-w-md p-6">
+        <div className="flex items-center gap-2.5 mb-4">
+          <span className="w-9 h-9 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center"><Trash2 size={16} /></span>
+          <p className="fp-display text-lg">Delete this panel?</p>
+        </div>
+        <p className="fp-text-dim text-sm leading-relaxed mb-3">
+          <span className="fp-text">{panel.name}</span> and <span className="fp-text">everything under it</span> —
+          customers, orders, services, providers, wallet balances, tickets and deposits — will be
+          permanently removed. <span className="text-red-400">This cannot be undone.</span>
+        </p>
+        <label className="fp-text-dim text-xs fp-mono uppercase">
+          Type <span className="fp-gold">{panel.subdomain}</span> to confirm
+        </label>
+        <input
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && remove()}
+          autoFocus
+          placeholder={panel.subdomain}
+          className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm mt-2 mb-4 outline-none focus:border-red-500/50 fp-mono"
+        />
+        {error && (
+          <p className="text-xs text-red-400 flex items-center gap-1.5 mb-3"><AlertTriangle size={12} /> {error}</p>
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={remove}
+            disabled={!armed || busy}
+            className="flex-1 bg-red-500/90 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+          >
+            <Trash2 size={14} /> {busy ? "Deleting…" : "Delete permanently"}
+          </button>
+          <button onClick={onClose} disabled={busy} className="fp-panel-raised border fp-line-soft px-4 py-2.5 rounded-lg text-sm fp-text-dim">
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 /* --- Create Panel Wizard --- */
 function CreatePanelWizard({ onCreate }: {
-  onCreate: (input: { name: string; subdomain: string; theme: string }) => Promise<{ ok: boolean; error?: string }>;
+  onCreate: (input: { name: string; subdomain: string; theme: string; connectProvider: boolean; platformFocus: PlatformFocus | null }) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [subdomain, setSubdomain] = useState("");
   const [theme, setTheme] = useState(themes[0].name);
+  const [connectProvider, setConnectProvider] = useState(true);
+  const [platformFocus, setPlatformFocus] = useState<PlatformFocus | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const steps = ["Basics", "Theme", "Provider", "Launch"];
@@ -565,16 +812,22 @@ function CreatePanelWizard({ onCreate }: {
     if (busy) return;
     setError(null);
     setBusy(true);
-    const res = await onCreate({ name, subdomain, theme });
-    if (!res.ok) {
-      setError(res.error || "Could not create the panel.");
+    try {
+      const res = await onCreate({ name, subdomain, theme, connectProvider, platformFocus: platformFocus || null });
+      if (!res.ok) {
+        setError(res.error || "Could not create the panel.");
+        setBusy(false);
+      }
+      // On success the parent navigates away; leave busy=true to avoid a flash.
+    } catch (e) {
+      // A server error would otherwise leave the button stuck on "Launching…".
+      setError(e instanceof Error ? e.message : "Could not create the panel. Please try again.");
       setBusy(false);
     }
-    // On success the parent navigates away; leave busy=true to avoid a flash.
   };
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
+    <div className="p-4 sm:p-8 max-w-2xl mx-auto">
       <h1 className="fp-display text-2xl mb-2">Create a new panel</h1>
       <p className="fp-text-dim text-sm mb-8">
         A real, independent SMM panel — its own storefront, dashboard, and wallet.
@@ -612,11 +865,33 @@ function CreatePanelWizard({ onCreate }: {
                 placeholder="novaboost"
                 className="flex-1 fp-panel-raised border fp-line-soft rounded-lg px-3 py-2.5 text-sm outline-none focus:fp-gold-border"
               />
-              <span className="fp-text-faint text-sm fp-mono">.ledgerline.app</span>
+              <span className="fp-text-faint text-sm fp-mono">.{PANEL_ROOT_DOMAIN}</span>
             </div>
             <p className="fp-text-faint text-xs mt-2">
               You can connect a custom domain later from the panel&apos;s Domain settings.
             </p>
+
+            <label className="fp-text-dim text-xs fp-mono uppercase block mt-6">Platform focus</label>
+            <p className="fp-text-faint text-xs mt-1 mb-2">Build a single-platform panel — its storefront + landing are themed for that platform and show only its services. Leave on “All platforms” for a general panel. Changeable later.</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setPlatformFocus("")}
+                className={`text-sm px-3 py-2 rounded-lg border ${platformFocus === "" ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim hover:fp-text"}`}
+              >
+                All platforms
+              </button>
+              {PLATFORM_FOCUS_OPTIONS.map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setPlatformFocus(o.key)}
+                  className={`text-sm px-3 py-2 rounded-lg border ${platformFocus === o.key ? "fp-gold-border fp-gold-soft-bg fp-gold" : "fp-line-soft fp-panel-raised fp-text-dim hover:fp-text"}`}
+                >
+                  {o.label} only
+                </button>
+              ))}
+            </div>
           </>
         )}
         {step === 1 && (
@@ -645,16 +920,26 @@ function CreatePanelWizard({ onCreate }: {
           <>
             <p className="fp-text-dim text-sm mb-5">
               Connect the SMM provider you already use — or skip and do it anytime from Panel Admin.
+              You enter your provider&apos;s API URL and key on the next screen (Providers &amp; API).
             </p>
-            <div className="fp-panel-raised border fp-line-soft rounded-xl p-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setConnectProvider((v) => !v)}
+              className={`w-full fp-panel-raised border rounded-xl p-4 flex items-center justify-between text-left transition-colors ${connectProvider ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft"}`}
+            >
               <div className="flex items-center gap-3">
                 <Wifi size={16} className="fp-gold" />
-                <span className="text-sm">Connect provider now</span>
+                <div>
+                  <p className="text-sm">Take me to provider setup after launch</p>
+                  <p className="fp-text-faint text-xs mt-0.5">Opens the panel straight on the Providers &amp; API tab.</p>
+                </div>
               </div>
-              <ChevronRight size={14} className="fp-text-faint" />
-            </div>
+              <span className={`w-5 h-5 rounded-full border flex items-center justify-center ${connectProvider ? "fp-gold-border fp-gold" : "fp-line-soft"}`}>
+                {connectProvider && <CheckCircle2 size={13} />}
+              </span>
+            </button>
             <p className="fp-text-faint text-xs mt-3">
-              Nothing is connected automatically — you choose your own provider.
+              Nothing is connected automatically — you always choose and enter your own provider.
             </p>
           </>
         )}
@@ -668,7 +953,7 @@ function CreatePanelWizard({ onCreate }: {
               </div>
               <div className="flex justify-between">
                 <span className="fp-text-faint">Subdomain</span>
-                <span className="fp-mono">{subdomain || "your-panel"}.ledgerline.app</span>
+                <span className="fp-mono">{subdomain || "your-panel"}.{PANEL_ROOT_DOMAIN}</span>
               </div>
               <div className="flex justify-between">
                 <span className="fp-text-faint">Theme</span>
@@ -715,68 +1000,101 @@ function CreatePanelWizard({ onCreate }: {
 
 /* --- Panel Admin lives in ./admin (PanelAdmin, AdminTabs, CustomerDrawer) --- */
 
-/* --- Billing --- */
-function Billing({ onAddFunds }: { onAddFunds: () => void }) {
-  return (
-    <div className="p-8 space-y-6 max-w-3xl">
-      <h1 className="fp-display text-2xl">Billing</h1>
-      <Card tone="gold">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2">
-            <Wallet size={16} className="fp-gold" />
-            <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide">Veyra balance</p>
-          </div>
-          <span className="fp-text-faint text-xs fp-mono">Funds commission across ALL your panels</span>
-        </div>
-        <p className="fp-display text-4xl fp-gold">${ledgerlineBalance.balance.toFixed(2)}</p>
-        <div className="grid grid-cols-2 gap-4 mt-6">
-          <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
-            <p className="fp-text-faint text-xs fp-mono uppercase">Orders today (all panels)</p>
-            <p className="fp-display text-xl mt-1">${ledgerlineBalance.ordersToday.toFixed(2)}</p>
-          </div>
-          <div className="fp-panel-raised rounded-xl p-4 border fp-line-soft">
-            <p className="fp-text-faint text-xs fp-mono uppercase">Commission pending</p>
-            <p className="fp-display text-xl mt-1 fp-violet">${ledgerlineBalance.commissionPending.toFixed(2)}</p>
-            <p className="fp-text-faint text-[11px] mt-0.5 flex items-center gap-1">
-              <Clock size={11} /> {ledgerlineBalance.feePct}% · settles in {ledgerlineBalance.chargesIn}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 mt-6">
-          <button onClick={onAddFunds} className="fp-btn-primary font-semibold px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm">
-            <Plus size={15} /> Add funds
-          </button>
-          <button className="fp-panel-raised border fp-line-soft px-4 py-2.5 rounded-lg flex items-center gap-1.5 text-sm fp-text-dim">
-            <History size={15} /> History
-          </button>
-          <a href="#" className="text-xs fp-violet flex items-center gap-1 ml-auto">
-            <HelpCircle size={13} /> How commission works?
-          </a>
-        </div>
-        <p className="fp-text-faint text-[11px] mt-4 leading-relaxed">
-          Every 24 hours we deduct 5% of that day&apos;s panel-price orders, across every panel you own,
-          from this balance. If it hits $0, your panels are <span className="fp-text">not</span> suspended —
-          they stay fully online and browsable, customers can still log in, view orders, tickets, and balances.
-          Only new order placement pauses (Inactive Mode) until you top up. Your provider is billed by you
-          directly — we never touch that relationship.
-        </p>
-      </Card>
-      <Card title="Commission by panel today" icon={ListOrdered}>
-        {panels.map((p) => (
-          <div key={p.id} className="flex items-center justify-between border-b fp-line-soft last:border-0 py-3">
-            <span className="text-sm">{p.name}</span>
-            <span className="fp-mono text-sm">${(p.ordersToday * 0.05).toFixed(2)}</span>
-          </div>
-        ))}
-      </Card>
-    </div>
-  );
-}
+/* --- Billing lives in ./OwnerSections (OwnerBilling — real cross-panel figures) --- */
 
-function AddFundsModal({ onClose }: { onClose: () => void }) {
+function AddFundsModal({
+  onClose,
+  initialPolicy,
+  initialInnvilBalance,
+  panels,
+  initialPanelId,
+}: {
+  onClose: () => void;
+  initialPolicy: OwnerTopupPolicy | null;
+  initialInnvilBalance: number | null;
+  panels: Panel[];
+  /** Preselect a panel (e.g. when opened from that panel's admin header). */
+  initialPanelId?: string;
+}) {
+  const pickDiscountRule = (value: number, rules: Array<{ minAmount: number; discountPct: number }>) => {
+    if (!Number.isFinite(value) || value <= 0 || rules.length === 0) return null;
+    let picked: { minAmount: number; discountPct: number } | null = null;
+    for (const r of rules) {
+      if (value >= r.minAmount) picked = r;
+      else break;
+    }
+    return picked;
+  };
+
   const [step, setStep] = useState("amount");
   const [amount, setAmount] = useState("50");
-  const [method, setMethod] = useState("Cryptomus");
+  const [method, setMethod] = useState("");
+  const [panelId, setPanelId] = useState<string>(initialPanelId || panels[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  const [policy, setPolicy] = useState<OwnerTopupPolicy | null>(initialPolicy);
+  const [innvilBalance, setInnvilBalance] = useState<number | null>(initialInnvilBalance);
+  const [error, setError] = useState<string | null>(null);
+
+  const goToCheckout = async () => {
+    if (!panelId) { setError("Create a panel first, then top up its Innvil balance."); return; }
+    if (!method) { setError("Choose a payment method."); return; }
+    setBusy(true); setError(null);
+    const res = await createPlatformDeposit(panelId, Number(amount), method);
+    if (!res.ok) { setError(res.error); setBusy(false); return; }
+    window.location.href = res.url; // gateway checkout — keep busy through redirect
+  };
+
+  useEffect(() => {
+    if (policy) {
+      if (!method) setMethod(policy.methods[0]?.id ?? "");
+      return;
+    }
+    let alive = true;
+    setBusy(true);
+    Promise.all([getOwnerTopupPolicy(), getOwnerBillingSummary()]).then(([nextPolicy, summary]) => {
+      if (!alive) return;
+      setPolicy(nextPolicy);
+      setMethod(nextPolicy.methods[0]?.id ?? "");
+      setInnvilBalance(summary.innvilBalance);
+      setBusy(false);
+    }).catch(() => {
+      if (!alive) return;
+      setBusy(false);
+      setError("Could not load payment methods right now.");
+    });
+    return () => { alive = false; };
+  }, [policy, method]);
+
+  const methodMeta = policy?.methods.find((m) => m.id === method) ?? null;
+  const normalizedAmount = Number(amount);
+  const firstTopup = (innvilBalance ?? 0) <= 0;
+  const minTopup = firstTopup ? (policy?.firstTopupMin ?? 10) : (policy?.minTopup ?? 5);
+  const methodRules = [...(methodMeta?.discountRules ?? [])].sort((a, b) => a.minAmount - b.minAmount);
+  const appliedRule = pickDiscountRule(normalizedAmount, methodRules);
+  const bonusAmount = appliedRule ? Math.round((normalizedAmount * (appliedRule.discountPct / 100)) * 10000) / 10000 : 0;
+  const creditedAmount = Number.isFinite(normalizedAmount) ? Math.round((normalizedAmount + bonusAmount) * 10000) / 10000 : 0;
+
+  const continueToMethod = () => {
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      setError("Enter a valid amount.");
+      return;
+    }
+    if (normalizedAmount < minTopup) {
+      setError(`Minimum top-up is $${minTopup.toFixed(2)}${firstTopup ? " for your first top-up" : ""}.`);
+      return;
+    }
+    setError(null);
+    setStep("method");
+  };
+
+  const continueToConfirm = () => {
+    if (!method) {
+      setError("Choose a payment method.");
+      return;
+    }
+    setError(null);
+    setStep("confirm");
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
@@ -787,30 +1105,67 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
         {step === "amount" && (
           <>
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Add funds</p>
-            <h3 className="fp-display text-xl mb-6">Top up your Veyra balance</h3>
+            <h3 className="fp-display text-xl mb-6">Top up your Innvil balance</h3>
+            {panels.length > 1 ? (
+              <div className="mb-5">
+                <label className="fp-text-dim text-xs fp-mono uppercase">Fund which panel</label>
+                <select value={panelId} onChange={(e) => setPanelId(e.target.value)} className="w-full fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-sm mt-1.5 outline-none focus:fp-gold-border">
+                  {panels.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+            ) : panels.length === 1 ? (
+              <p className="fp-text-faint text-xs mb-4">Funding <span className="fp-text">{panels[0].name}</span>&apos;s Innvil balance.</p>
+            ) : (
+              <p className="text-xs text-red-400 mb-4">Create a panel first, then top up its Innvil balance.</p>
+            )}
             <label className="fp-text-dim text-xs fp-mono uppercase">Amount (USD)</label>
             <div className="flex items-center gap-2 mt-2 mb-5">
               <span className="fp-display text-2xl fp-gold">$</span>
               <input
                 value={amount}
-                onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                onChange={(e) => { setAmount(e.target.value.replace(/[^0-9.]/g, "")); setError(null); }}
                 className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 text-xl fp-display flex-1 outline-none focus:fp-gold-border"
               />
             </div>
+            <p className="fp-text-faint text-xs mb-3">
+              Minimum top-up: <span className="fp-text">${minTopup.toFixed(2)}</span>
+              {firstTopup ? " (first top-up)" : ""}
+            </p>
+            {methodMeta && methodRules.length > 0 && (
+              <details className="fp-panel-raised border fp-line-soft rounded-lg p-3 mb-4">
+                <summary className="cursor-pointer fp-text-dim text-xs">
+                  Promo tiers
+                </summary>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {methodRules.map((r) => (
+                    <div key={`${r.minAmount}-${r.discountPct}`} className="text-xs fp-text-faint border fp-line-soft rounded-md px-2 py-1.5">
+                      Top-up ≥ <span className="fp-text">${r.minAmount.toFixed(2)}</span> → <span className="fp-safe">+{r.discountPct}%</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            {appliedRule && Number.isFinite(normalizedAmount) && normalizedAmount > 0 && (
+              <p className="fp-safe text-xs mb-4">
+                You pay ${normalizedAmount.toFixed(2)} + bonus ${bonusAmount.toFixed(2)} = ${creditedAmount.toFixed(2)} credited
+              </p>
+            )}
             <div className="flex gap-2 mb-6">
               {[25, 50, 100, 250].map((v) => (
                 <button
                   key={v}
-                  onClick={() => setAmount(String(v))}
+                  onClick={() => { setAmount(String(v)); setError(null); }}
                   className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-1.5 text-xs fp-mono fp-text-dim hover:fp-gold-border"
                 >
                   ${v}
                 </button>
               ))}
             </div>
+            {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
             <button
-              onClick={() => setStep("method")}
-              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm"
+              onClick={continueToMethod}
+              disabled={busy || !policy}
+              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
               Continue
             </button>
@@ -824,49 +1179,70 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Pay ${amount || "0"} via</p>
             <h3 className="fp-display text-xl mb-6">Choose a top-up method</h3>
             <div className="space-y-2 mb-6">
-              {topUpMethods.map((m) => (
+              {(policy?.methods ?? []).map((m) => (
                 <button
-                  key={m.name}
-                  disabled={m.status === "soon"}
-                  onClick={() => setMethod(m.name)}
+                  key={m.id}
+                  onClick={() => { setMethod(m.id); setError(null); }}
                   className={`w-full text-left flex items-center justify-between rounded-xl border px-4 py-3 ${
-                    m.status === "soon"
-                      ? "fp-line-soft opacity-40 cursor-not-allowed"
-                      : method === m.name
-                        ? "fp-gold-border fp-gold-soft-bg"
-                        : "fp-line-soft fp-panel-raised"
+                    method === m.id ? "fp-gold-border fp-gold-soft-bg" : "fp-line-soft fp-panel-raised"
                   }`}
                 >
                   <div>
-                    <p className="text-sm font-medium">{m.name}</p>
-                    <p className="fp-text-faint text-xs mt-0.5">{m.sub}</p>
+                    <p className="text-sm font-medium">{m.label}</p>
+                    <p className="fp-text-faint text-xs mt-0.5">{m.note}</p>
+                    {m.discountRules.length > 0 && (
+                      <p className="fp-safe text-[11px] mt-1">{m.discountRules.length} promo tier{m.discountRules.length === 1 ? "" : "s"} available</p>
+                    )}
                   </div>
-                  {m.status === "active" && method === m.name && <CheckCircle2 size={16} className="fp-gold" />}
+                  {method === m.id && <CheckCircle2 size={16} className="fp-gold" />}
                 </button>
               ))}
             </div>
+            {(!policy || policy.methods.length === 0) && (
+              <p className="text-sm text-red-400 mb-4">No payment method is active right now. Ask super admin to connect one.</p>
+            )}
+            {error && <p className="text-sm text-red-400 mb-4">{error}</p>}
             <button
-              onClick={() => setStep("confirm")}
-              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm"
+              onClick={continueToConfirm}
+              disabled={!method}
+              className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Continue with {method}
+              Continue with {methodMeta?.label ?? "method"}
             </button>
           </>
         )}
         {step === "confirm" && (
           <>
             <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-1">Almost there</p>
-            <h3 className="fp-display text-xl mb-4">You&apos;ll be redirected to {method}</h3>
+            <h3 className="fp-display text-xl mb-4">You&apos;ll be redirected to {methodMeta?.label ?? "your method"}</h3>
             <p className="fp-text-dim text-sm leading-relaxed mb-6">
-              Complete your ${amount || "0"} payment on {method}&apos;s secure checkout.
+              Complete your ${amount || "0"} payment on {methodMeta?.label ?? "the selected method"}&apos;s secure checkout.
               Your balance updates automatically — no card or wallet details ever touch our servers.
             </p>
             <div className="fp-panel-raised border fp-line-soft rounded-xl p-4 flex items-center justify-between mb-6">
               <span className="fp-text-dim text-sm">Amount</span>
               <span className="fp-display text-lg fp-gold">${amount || "0"}</span>
             </div>
-            <button onClick={onClose} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm">
-              Go to {method}
+            {appliedRule && (
+              <div className="fp-panel-raised border fp-line-soft rounded-xl p-4 mb-6 space-y-1">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="fp-text-dim">Applied tier</span>
+                  <span className="fp-safe">Top-up ≥ ${appliedRule.minAmount.toFixed(2)} · +{appliedRule.discountPct}%</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="fp-text-dim">Bonus</span>
+                  <span className="fp-safe">+${bonusAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="fp-text-dim">Total credited</span>
+                  <span className="fp-gold">${creditedAmount.toFixed(2)}</span>
+                </div>
+              </div>
+            )}
+            {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
+            <button onClick={goToCheckout} disabled={busy} className="fp-btn-primary font-semibold w-full py-2.5 rounded-lg text-sm disabled:opacity-60 flex items-center justify-center gap-2">
+              {busy && <span className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+              {busy ? "Redirecting…" : `Go to ${methodMeta?.label ?? "checkout"}`}
             </button>
           </>
         )}
@@ -875,95 +1251,271 @@ function AddFundsModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/* --- Veyra App Shell wrapper --- */
-export function VeyraApp({ setWorld, initialSection }: {
+/* --- Innvil App Shell wrapper --- */
+export function InnvilApp({ setWorld, initialSection }: {
   setWorld: (w: string) => void;
   initialSection?: string;
 }) {
-  const [section, setSection] = useState(initialSection || "home");
+  const cachedNav = readOwnerAppCache<{ section: string; activePanelId?: string | null; panelTab?: string }>("nav");
+  const cachedPanels = readOwnerAppCache<Panel[]>("panels") ?? [];
+  const [section, setSection] = useState(cachedNav?.section || initialSection || "home");
   const [activePanel, setActivePanel] = useState<Panel | null>(null);
+  const [panelInitialTab, setPanelInitialTab] = useState<string | undefined>(cachedNav?.panelTab);
   const [showAddFunds, setShowAddFunds] = useState(false);
-  const [panelList, setPanelList] = useState<Panel[]>([]);
-  const [loadingPanels, setLoadingPanels] = useState(true);
+  // Which panel the Add Funds modal should preselect (set when opened from a panel).
+  const [addFundsPanelId, setAddFundsPanelId] = useState<string | undefined>(undefined);
+  const [ownerTopupPolicy, setOwnerTopupPolicy] = useState<OwnerTopupPolicy | null>(
+    readOwnerAppCache<OwnerTopupPolicy>("owner-topup-policy")
+  );
+  const [ownerInnvilBalance, setOwnerInnvilBalance] = useState<number | null>(
+    readOwnerAppCache<number>("owner-topup-balance")
+  );
+  const [panelList, setPanelList] = useState<Panel[]>(cachedPanels);
+  const [loadingPanels, setLoadingPanels] = useState(cachedPanels.length === 0);
+  const [syncingPanels, setSyncingPanels] = useState(cachedPanels.length > 0);
+  // Cache the super-admin flag so the Blog nav/section + bell notices paint instantly
+  // on reload (like the rest of the app), then re-verify in the background.
+  const [isSuper, setIsSuper] = useState<boolean>(() => readOwnerAppCache<boolean>("is-super") ?? false);
+  const [mobileNav, setMobileNav] = useState(false);
+  const [focusOwnerCustomerId, setFocusOwnerCustomerId] = useState<string | null>(null);
+  const didRestorePanelRef = useRef(false);
+
+  useEffect(() => { amSuperAdmin().then((v) => { setIsSuper(v); writeOwnerAppCache("is-super", v); }); }, []);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([getOwnerTopupPolicy(), getOwnerBillingSummary()]).then(([nextPolicy, summary]) => {
+      if (!alive) return;
+      setOwnerTopupPolicy(nextPolicy);
+      setOwnerInnvilBalance(summary.innvilBalance);
+      writeOwnerAppCache("owner-topup-policy", nextPolicy);
+      writeOwnerAppCache("owner-topup-balance", summary.innvilBalance);
+    }).catch(() => {
+      // ignore prefetch errors; modal can still fetch as fallback
+    });
+    return () => { alive = false; };
+  }, []);
 
   const refreshPanels = useCallback(async () => {
-    setLoadingPanels(true);
-    setPanelList(await listPanels());
+    setLoadingPanels(panelList.length === 0);
+    setSyncingPanels(panelList.length > 0);
+    const next = await listPanels();
+    setPanelList(next);
+    writeOwnerAppCache("panels", next);
     setLoadingPanels(false);
+    setSyncingPanels(false);
   }, []);
 
   useEffect(() => {
     refreshPanels();
   }, [refreshPanels]);
 
-  const openPanel = (p: Panel) => { setActivePanel(p); setSection("panelAdmin"); };
+  useEffect(() => {
+    if (didRestorePanelRef.current) return;
+    const nav = readOwnerAppCache<{ section: string; activePanelId?: string | null; panelTab?: string }>("nav");
+    if (!nav || nav.section !== "panelAdmin" || !nav.activePanelId) {
+      didRestorePanelRef.current = true;
+      return;
+    }
+    const found = panelList.find((p) => p.id === nav.activePanelId);
+    if (!found) return;
+    setActivePanel(found);
+    setPanelInitialTab(nav.panelTab);
+    setSection("panelAdmin");
+    didRestorePanelRef.current = true;
+  }, [panelList]);
+
+  useEffect(() => {
+    writeOwnerAppCache("nav", {
+      section,
+      activePanelId: section === "panelAdmin" ? (activePanel?.id ?? null) : null,
+      panelTab: section === "panelAdmin" ? panelInitialTab : undefined,
+    });
+  }, [section, activePanel?.id, panelInitialTab]);
+
+  const openPanel = (p: Panel, tab?: string) => { setActivePanel(p); setPanelInitialTab(tab); setSection("panelAdmin"); };
   const goCreate = () => setSection("create");
   const goPanels = () => setSection("panels");
 
-  const handleCreate = async (input: { name: string; subdomain: string; theme: string }) => {
-    const res = await createPanel(input);
+  const handleCreate = async (input: { name: string; subdomain: string; theme: string; connectProvider: boolean; platformFocus: PlatformFocus | null }) => {
+    const res = await createPanel({ name: input.name, subdomain: input.subdomain, theme: input.theme, platformFocus: input.platformFocus });
     if (!res.ok) return { ok: false, error: res.error };
     await refreshPanels();
-    openPanel(res.panel); // land the owner straight in the new panel's admin
+    // Land the owner straight in the new panel — on Providers if they opted to set one up.
+    openPanel(res.panel, input.connectProvider ? "providers" : undefined);
     return { ok: true };
   };
 
+  const navSection = section === "panelAdmin" || section === "create" ? "panels" : section;
+
   return (
     <div className="fp-root min-h-screen flex">
-      <AppSidebar section={section === "panelAdmin" || section === "create" ? "panels" : section} setSection={setSection} />
+      <AppSidebar section={navSection} setSection={setSection} isSuper={isSuper} />
+
+      {/* Mobile nav drawer */}
+      {mobileNav && (
+        <div className="fixed inset-0 z-[70] md:hidden">
+          <button aria-label="Close menu" onClick={() => setMobileNav(false)} className="absolute inset-0 bg-black/60" />
+          <aside className="absolute left-0 top-0 bottom-0 w-64 max-w-[80vw] fp-void-2 border-r fp-line-soft p-5 flex flex-col overflow-y-auto">
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-[9px] bg-[#C9A574] flex items-center justify-center">
+                  <InnvilBrandMark className="w-[109%] h-[107%] -translate-x-[1px] text-[#0E1522]" />
+                </div>
+                <span className="fp-display text-lg">Innvil</span>
+              </div>
+              <button onClick={() => setMobileNav(false)} className="fp-text-dim hover:fp-text p-1"><X size={18} /></button>
+            </div>
+            <nav className="space-y-1 flex-1">
+              {navItemsFor(isSuper).map((it) => (
+                <button
+                  key={it.k}
+                  onClick={() => { setSection(it.k); setMobileNav(false); }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left ${navSection === it.k ? "fp-gold-soft-bg fp-gold" : "fp-text-dim hover:fp-text"}`}
+                >
+                  <it.icon size={16} /> {it.label}
+                </button>
+              ))}
+            </nav>
+            {isSuper && (
+              <Link href="/superadmin" onClick={() => setMobileNav(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm fp-gold border-t fp-line-soft mt-2 pt-4">
+                <ShieldCheck size={16} /> Super admin
+              </Link>
+            )}
+          </aside>
+        </div>
+      )}
+
       <div className="flex-1 min-w-0">
-        <AppTopbar setWorld={setWorld} />
-        {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} goPanels={goPanels} goCreate={goCreate} openPanel={openPanel} />}
-        {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} goCreate={goCreate} openPanel={openPanel} />}
+        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} isSuper={isSuper} onOpenBlog={() => setSection("blog")} />
+        {section === "account" && <AccountSettings />}
+        {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} goOrders={() => setSection("orders")} openPanel={openPanel} />}
+        {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} onChanged={refreshPanels} />}
         {section === "create" && <CreatePanelWizard onCreate={handleCreate} />}
-        {section === "panelAdmin" && activePanel && <PanelAdmin panel={activePanel} setWorld={setWorld} />}
-        {section === "billing" && <Billing onAddFunds={() => setShowAddFunds(true)} />}
-        {section === "orders" && <div className="p-8"><OrdersTable /></div>}
-        {section === "customers" && (
-          <div className="p-8">
-            <Card title="All customers" icon={Users}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="fp-text-faint text-xs fp-mono uppercase text-left border-b fp-line-soft">
-                    <th className="py-2 font-normal">Customer</th>
-                    <th className="py-2 font-normal">Panel</th>
-                    <th className="py-2 font-normal">Orders</th>
-                    <th className="py-2 font-normal">Spent</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {customers.map((c) => (
-                    <tr key={c.handle} className="border-b fp-line-soft last:border-0">
-                      <td className="py-3">{c.handle}</td>
-                      <td className="py-3 fp-text-dim">{c.panel}</td>
-                      <td className="py-3 fp-mono">{c.orders}</td>
-                      <td className="py-3 fp-mono">{c.spent}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {section === "panelAdmin" && activePanel && (
+          <PanelAdmin
+            panel={activePanel}
+            setWorld={setWorld}
+            initialTab={panelInitialTab}
+            onTabChange={setPanelInitialTab}
+            onAddFunds={() => { setAddFundsPanelId(activePanel.id); setShowAddFunds(true); }}
+          />
+        )}
+        {section === "billing" && <OwnerBilling onAddFunds={() => setShowAddFunds(true)} />}
+        {section === "earnings" && (
+          <div className="p-4 sm:p-8 space-y-6 max-w-3xl">
+            <div>
+              <h1 className="fp-display text-2xl">Earnings &amp; receipts</h1>
+              <p className="fp-text-dim text-sm mt-1">Your customers&apos; top-ups, total orders deduction, and your profit — pick any period and download a receipt.</p>
+            </div>
+            <ReceiptCard />
+            <OwnerTopUps />
+          </div>
+        )}
+        {section === "orders" && (
+          <OwnerOrders
+            onManageCustomer={(customerAccountId) => {
+              setFocusOwnerCustomerId(customerAccountId);
+              setSection("customers");
+            }}
+          />
+        )}
+        {section === "customers" && <OwnerCustomers focusCustomerId={focusOwnerCustomerId} />}
+        {section === "provider-balances" && <OwnerProviderBalances />}
+        {section === "support" && (
+          <div className="p-4 sm:p-8">
+            <Card title="Support inbox — all panels" icon={MessageSquare} right={<span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Coming soon</span>}>
+              <p className="fp-text-dim text-sm leading-relaxed">
+                A unified ticket inbox across all your panels — view, reply, close, reopen, with optional
+                auto-reply — is coming soon. Need help from Innvil?{" "}
+                <button onClick={() => setSection("contact")} className="fp-gold">Contact support</button>.
+              </p>
             </Card>
           </div>
         )}
-        {section === "support" && (
-          <div className="p-8">
-            <Card title="Support inbox — all panels" icon={MessageSquare} right={<Pill tone="violet" icon={Bot}>Auto-reply on</Pill>}>
-              <div className="space-y-3">
-                {tickets.map((t) => (
-                  <div key={t.subj} className="flex items-center justify-between border-b fp-line-soft last:border-0 pb-3 last:pb-0">
-                    <div>
-                      <p className="text-sm">{t.subj}</p>
-                      <p className="fp-text-faint text-xs fp-mono mt-0.5">{t.from} · {t.time} ago</p>
-                    </div>
-                    <Pill tone={t.tag === "Auto-replied" ? "safe" : "gold"}>{t.tag}</Pill>
-                  </div>
-                ))}
+        {section === "contact" && (isSuper ? <OwnerPanelSupport /> : <OwnerContactSupport />)}
+        {section === "blog" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h1 className="fp-display text-2xl">Blog</h1>
+                <p className="fp-text-dim text-sm mt-1">Review, edit, and publish AI-written blog drafts. Nothing goes live until you publish it.</p>
               </div>
-            </Card>
+              <span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Superadmin</span>
+            </div>
+            <BlogReview />
+          </div>
+        )}
+        {section === "pr-generator" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h1 className="fp-display text-2xl">PR Generator</h1>
+                <p className="fp-text-dim text-sm mt-1">Create, review, and track external publication PR workflows with compliance visibility.</p>
+              </div>
+              <span className="text-xs fp-gold-soft-bg fp-gold px-2.5 py-1 rounded-full">Superadmin</span>
+            </div>
+            <PRReview />
+          </div>
+        )}
+        {section === "design-pricing" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Design pricing</h1>
+              <p className="fp-text-dim text-sm mt-1">Set each design&apos;s one-time price and first-purchase promotions.</p>
+            </div>
+            <DesignPricingAdmin />
+          </div>
+        )}
+        {section === "products" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Products</h1>
+              <p className="fp-text-dim text-sm mt-1">Manage Innvil&apos;s official product catalog (Forge, Watch, Herald, and future products).</p>
+            </div>
+            <ProductsAdmin />
+          </div>
+        )}
+        {section === "watch-devops" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Watch devops</h1>
+              <p className="fp-text-dim text-sm mt-1">Manually grant a Watch subscription tier to an account for live QA (Preview only).</p>
+            </div>
+            <WatchDevOpsAdmin />
+          </div>
+        )}
+        {section === "bot-manager-campaigns" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Bot manager campaigns</h1>
+              <p className="fp-text-dim text-sm mt-1">innvil_bot_manager&apos;s proactive marketing sends — approved-campaign-only.</p>
+            </div>
+            <BotManagerCampaignsAdmin />
+          </div>
+        )}
+        {section === "telegram-leads" && isSuper && (
+          <div className="p-4 sm:p-8 space-y-6">
+            <div>
+              <h1 className="fp-display text-2xl">Telegram Leads</h1>
+              <p className="fp-text-dim text-sm mt-1">Research real, publicly-listed Telegram communities for manual outreach — no automated messaging.</p>
+            </div>
+            <TelegramLeadsAdmin />
           </div>
         )}
       </div>
-      {showAddFunds && <AddFundsModal onClose={() => setShowAddFunds(false)} />}
+      {showAddFunds && (
+        <AddFundsModal
+          onClose={() => { setShowAddFunds(false); setAddFundsPanelId(undefined); }}
+          initialPolicy={ownerTopupPolicy}
+          initialInnvilBalance={ownerInnvilBalance}
+          panels={panelList}
+          initialPanelId={addFundsPanelId}
+        />
+      )}
+
+      {/* Global owner AI assistant — floating, on every section of the owner app. */}
+      <OwnerAssistantChat />
     </div>
   );
 }
@@ -987,7 +1539,7 @@ export function SuperAdmin() {
   const tabs = [
     { k: "analytics", label: "Analytics", icon: Activity },
     { k: "platform", label: "Platform pages", icon: FileText },
-    { k: "branding", label: "Veyra branding", icon: Palette },
+    { k: "branding", label: "Innvil branding", icon: Palette },
     { k: "panels", label: "Panel management", icon: LayoutGrid },
     { k: "users", label: "User management", icon: Users },
     { k: "payments", label: "Payments & commission", icon: CreditCard },
@@ -1022,11 +1574,11 @@ export function SuperAdmin() {
 
       <div className="flex-1">
         <div className="flex items-center justify-between px-8 py-5 border-b fp-line-soft">
-          <p className="fp-display text-xl">Veyra · Super Admin</p>
+          <p className="fp-display text-xl">Innvil · Super Admin</p>
           <Pill tone="violet" icon={Lock}>Restricted access</Pill>
         </div>
 
-        <div className="p-8 space-y-6">
+        <div className="p-4 sm:p-8 space-y-6">
           {tab === "analytics" && (
             <>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -1053,9 +1605,9 @@ export function SuperAdmin() {
           )}
 
           {tab === "branding" && (
-            <Card title="Veyra platform branding" icon={Palette}>
+            <Card title="Innvil platform branding" icon={Palette}>
               <p className="fp-text-dim text-sm mb-4">
-                Logo, color palette, typography, and transactional email/notification templates for the Veyra
+                Logo, color palette, typography, and transactional email/notification templates for the Innvil
                 brand itself — separate from any individual panel&apos;s branding.
               </p>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -1070,7 +1622,7 @@ export function SuperAdmin() {
           )}
 
           {tab === "panels" && (
-            <Card title="Every panel on Veyra" icon={LayoutGrid}>
+            <Card title="Every panel on Innvil" icon={LayoutGrid}>
               <div className="mb-4 p-3 rounded-lg bg-[rgba(139,127,255,0.08)] border border-[rgba(139,127,255,0.2)]">
                 <p className="text-xs fp-violet">
                   <Lock size={11} className="inline mr-1" />
@@ -1137,9 +1689,9 @@ export function SuperAdmin() {
 
           {tab === "payments" && (
             <div className="space-y-6">
-              <Card title="Veyra top-up gateways" icon={CreditCard}>
+              <Card title="Innvil top-up gateways" icon={CreditCard}>
                 <p className="fp-text-dim text-sm mb-4">
-                  These are the ONLY gateways panel owners use to top up their Veyra balance.
+                  These are the ONLY gateways panel owners use to top up their Innvil balance.
                   Distinct from the gateways panel owners configure for their own customers.
                 </p>
                 <div className="grid sm:grid-cols-3 gap-3">

@@ -1,0 +1,1 @@
+export const PAYMENT_ARCHIVE_CONFIRM_COPY = "This hides completed or rejected payment records from visible history only. Financial, Binance, ledger, reconciliation, and audit records remain unchanged.";
