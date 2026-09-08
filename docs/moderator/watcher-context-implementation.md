@@ -91,6 +91,13 @@ Each completed fix gets its own commit after relevant tests pass.
 
 ## Deployment/verification still required
 
+Combined-path follow-up: admin-ignore now runs before conversation tasks.
+Telegram role lookup failure remains UNKNOWN rather than treating the sender
+as a regular member; ordinary penalties pause, confirmed safety protection
+remains. Verified roles are reused within the event. Six runtime fixtures
+exercise real classification/policy/action orchestration. Full suite: 2,437
+passed; TypeScript passed. All Telegram/AI effects in these tests are mocked.
+
 - Apply migration 0129 before enabling the new runtime. Existing legacy
   pinned-resource rows are not silently promoted to confirmed memory:
   resend/repin official announcements to re-extract them with provenance.

@@ -2327,15 +2327,20 @@ async function getBotTokenForDeployment(admin: SupabaseClient, deploymentId: str
  *  lookup error, since the exemption is a convenience, not a safety-
  *  relevant default. */
 async function isSenderAdminOrTrusted(token: string, chatId: string, platformUserId: string): Promise<boolean> {
+  return await resolveSenderRole(token, chatId, platformUserId) === "admin";
+}
+
+export async function resolveSenderRole(token: string, chatId: string, platformUserId: string): Promise<"admin" | "member" | "unknown"> {
   // A synthesized "the channel itself posted this" identity is never a
   // real Telegram user id -- getChatMember would just fail for it (and
   // fail-closed to `false`, incorrectly treating a channel's own broadcast
   // as an untrusted stranger). Only a channel admin can post to a channel
   // at all, so this is trusted by construction, no live lookup needed.
-  if (isSyntheticChannelSender(platformUserId)) return true;
+  if (isSyntheticChannelSender(platformUserId)) return "admin";
   const res = await telegramApiCall<{ status: string }>(token, "getChatMember", { chat_id: chatId, user_id: platformUserId });
-  if (!res.ok) return false;
-  return res.result.status === "administrator" || res.result.status === "creator";
+  if (!res.ok) return "unknown";
+  if (res.result.status === "administrator" || res.result.status === "creator") return "admin";
+  return ["member", "restricted", "left", "kicked"].includes(res.result.status) ? "member" : "unknown";
 }
 
 /** Checked BEFORE ordinary task/chatter routing (spec §18) for every human
@@ -2440,7 +2445,8 @@ export async function runLinkModeration(
   const isCoordinatedSearchSpam = isBackToBackSpamPattern(precedingRoomMessage, now);
 
   const token = await getBotTokenForDeployment(admin, enforcer.deploymentId);
-  const isAdminOrTrusted = token ? await isSenderAdminOrTrusted(token, chatId, senderPlatformId) : false;
+  const senderRole = event.sender.verifiedRole ?? (token ? await resolveSenderRole(token, chatId, senderPlatformId) : "unknown");
+  const isAdminOrTrusted = senderRole === "admin";
 
   // Gap 3 deterministic backstop: was THIS message directly solicited by a
   // real, recent admin/mod request ("send me your project link")? Only
@@ -2485,7 +2491,7 @@ export async function runLinkModeration(
     project: projectProfile,
     resources: resources.filter(r => r.isAdminAuthor && r.url).map(r => ({ url: r.url!, kind: r.kind, text: r.text })),
     topic: { name: currentTopic ? topicDisplayName(currentTopic) : null, solicitationAllowed: solicitationAllowedHere },
-    senderRole: isAdminOrTrusted ? "admin" : token ? "member" : "unknown",
+    senderRole,
     links: linkEvidence,
   });
 
@@ -2493,6 +2499,7 @@ export async function runLinkModeration(
     category: classification.category,
     confidence: classification.confidence,
     isAdminOrTrusted,
+    senderRoleUnknown: senderRole === "unknown",
     floodRepeat,
     priorWarningCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now),
     priorScamStrikeCount,
@@ -3402,7 +3409,7 @@ async function runMediaModeration(
   return { handled: true };
 }
 
-async function handleHumanMessage(
+export async function handleHumanMessage(
   admin: SupabaseClient,
   panelId: string | null,
   community: { id: string; collab_contact?: string | null; project_id?: string | null; allow_solicitation?: boolean | null; acknowledge_admin_mod?: boolean | null; pending_reply_delay_seconds?: number | null },
@@ -3493,6 +3500,50 @@ async function handleHumanMessage(
   // on Natural Chatter actually being entitled/enabled.
   if (!chatterActive) return;
 
+  // Resolved ONCE per message -- a single Telegram getChatMember round trip
+  // covers every admin-related decision below: (a) full conversational-
+  // engagement suppression toward an admin/mod SENDER (rule 2/3), (b)
+  // cancelling any still-pending scheduled reply for this topic the moment
+  // an admin/mod message arrives (rule 8), and (c) whether an admin/mod is
+  // the most recent OTHER speaker in THIS topic (feeds the coordinator's
+  // own admin-deference check). Always computed when a deployment exists,
+  // regardless of the acknowledge_admin_mod toggle -- (b) must fire
+  // independent of that toggle (an admin taking over cancels a pending
+  // reply either way; the toggle only governs whether the WATCHER itself
+  // may converse with the admin, a separate question).
+  const engagementCheckToken = deployments.length ? await getBotTokenForDeployment(admin, deployments[0].deploymentId) : null;
+  const engagementSenderRole = event.sender.verifiedRole ?? (engagementCheckToken
+    ? await resolveSenderRole(engagementCheckToken, chatId, event.sender.platformUserId) : "unknown");
+  const senderIsAdminOrTrusted = engagementSenderRole === "admin";
+
+  // Rule 2/3: when acknowledge_admin_mod is OFF (default), the Watcher must
+  // not voluntarily engage a real Telegram admin/mod CONVERSATIONALLY AT
+  // ALL -- no reaction, no short acknowledgement, no substantive reply, no
+  // jumping in "to help" alongside them, not even when the admin/mod
+  // directly @mentions the Watcher. Moderation/safety processing already
+  // ran above and is completely independent of this flag. Same "off unless
+  // explicitly turned on" discipline as bot-to-bot acknowledgement
+  // (BOT_ACKNOWLEDGEMENT_ENABLED) and the fellow-bot case classifySender
+  // already handles separately.
+  const suppressAcknowledgementForSender = community.acknowledge_admin_mod !== true && engagementSenderRole !== "member";
+
+  // Rule 8: the instant an admin/mod's own message lands in a topic, any
+  // Watcher reply that this SPECIFIC message actually takes over is
+  // cancelled synchronously -- never waiting for the next cron tick, and
+  // never a blanket "cancel every pending reply in this topic" (gap 2,
+  // 2026-09-02 correction) -- see cancelPendingRepliesForTopic's own doc
+  // comment for the exact conversation-ownership signals used.
+  if (senderIsAdminOrTrusted) {
+    await cancelPendingRepliesForTopic(admin, community.id, event.messageThreadId, {
+      replyToPlatformMessageId: event.replyToMessageId, createdAt: event.timestamp,
+    });
+  }
+
+  if (suppressAcknowledgementForSender) {
+    await logActivity(admin, panelId, community.id, null, "human_message", "SILENCE", "engagement_suppressed_for_sender");
+    return;
+  }
+
   // Checked BEFORE any ordinary chatter routing -- an active/newly-created
   // conversational task fully owns this message (see routeConversationTask's
   // doc comment for why "task-local state wins" means suppressing ordinary
@@ -3561,45 +3612,6 @@ async function handleHumanMessage(
     recentlyParticipated: deploymentRecentlyParticipated(recentContext, d.deploymentId, now),
     pacing: pacings[i],
   }));
-
-  // Resolved ONCE per message -- a single Telegram getChatMember round trip
-  // covers every admin-related decision below: (a) full conversational-
-  // engagement suppression toward an admin/mod SENDER (rule 2/3), (b)
-  // cancelling any still-pending scheduled reply for this topic the moment
-  // an admin/mod message arrives (rule 8), and (c) whether an admin/mod is
-  // the most recent OTHER speaker in THIS topic (feeds the coordinator's
-  // own admin-deference check). Always computed when a deployment exists,
-  // regardless of the acknowledge_admin_mod toggle -- (b) must fire
-  // independent of that toggle (an admin taking over cancels a pending
-  // reply either way; the toggle only governs whether the WATCHER itself
-  // may converse with the admin, a separate question).
-  const engagementCheckToken = deployments.length ? await getBotTokenForDeployment(admin, deployments[0].deploymentId) : null;
-  const senderIsAdminOrTrusted = engagementCheckToken
-    ? await isSenderAdminOrTrusted(engagementCheckToken, chatId, event.sender.platformUserId)
-    : false;
-
-  // Rule 2/3: when acknowledge_admin_mod is OFF (default), the Watcher must
-  // not voluntarily engage a real Telegram admin/mod CONVERSATIONALLY AT
-  // ALL -- no reaction, no short acknowledgement, no substantive reply, no
-  // jumping in "to help" alongside them, not even when the admin/mod
-  // directly @mentions the Watcher. Moderation/safety processing already
-  // ran above and is completely independent of this flag. Same "off unless
-  // explicitly turned on" discipline as bot-to-bot acknowledgement
-  // (BOT_ACKNOWLEDGEMENT_ENABLED) and the fellow-bot case classifySender
-  // already handles separately.
-  const suppressAcknowledgementForSender = community.acknowledge_admin_mod !== true && senderIsAdminOrTrusted;
-
-  // Rule 8: the instant an admin/mod's own message lands in a topic, any
-  // Watcher reply that this SPECIFIC message actually takes over is
-  // cancelled synchronously -- never waiting for the next cron tick, and
-  // never a blanket "cancel every pending reply in this topic" (gap 2,
-  // 2026-09-02 correction) -- see cancelPendingRepliesForTopic's own doc
-  // comment for the exact conversation-ownership signals used.
-  if (senderIsAdminOrTrusted) {
-    await cancelPendingRepliesForTopic(admin, community.id, event.messageThreadId, {
-      replyToPlatformMessageId: event.replyToMessageId, createdAt: event.timestamp,
-    });
-  }
 
   // Whether a real Telegram admin/mod is the most recent OTHER speaker in
   // THIS SAME topic/thread -- a human staff member is clearly present and
@@ -4169,7 +4181,8 @@ async function captureIncomingOfficialMemory(
 ): Promise<void> {
   if (sender.senderType !== "HUMAN") return;
   const { data } = await admin.rpc("get_telegram_bot_key", { p_row: integration.id, p_secret: providerKeySecret() });
-  if (!data || !await isSenderAdminOrTrusted(String(data), String(message.chat.id), sender.platformUserId)) return;
+  sender.verifiedRole = data ? await resolveSenderRole(String(data), String(message.chat.id), sender.platformUserId) : "unknown";
+  if (sender.verifiedRole !== "admin") return;
   const target = message.pinned_message ?? message;
   const text = target.text ?? target.caption ?? "";
   // Still record empty EDITS so removing all text/links invalidates memory.

@@ -718,6 +718,7 @@ export function decideLinkEnforcement(input: {
   category: LinkCategory;
   confidence: ClassificationConfidence;
   isAdminOrTrusted: boolean;
+  senderRoleUnknown?: boolean;
   floodRepeat: boolean;
   priorWarningCount: number;
   /** Already expiry-resolved via effectiveScamStrikeCount — this function
@@ -781,6 +782,7 @@ export function decideLinkEnforcement(input: {
   if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) {
     return { kind: "ALLOW" };
   }
+  if (input.senderRoleUnknown && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
 
   if (
     input.category === "SAFE_RELEVANT_LINK" ||

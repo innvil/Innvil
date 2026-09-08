@@ -20,6 +20,8 @@ export type SenderType = "HUMAN" | "INNVIL_MODERATOR" | "EXTERNAL_BOT";
 export type EventOrigin = "HUMAN" | "PROACTIVE" | "BOT_ACK" | "COMMUNITY_HANDOFF" | "INNVIL_MARKETING";
 
 export interface CommunitySender {
+  /** Resolved from Telegram for this event, never inferred from message text. */
+  verifiedRole?: "admin" | "member" | "unknown";
   platformUserId: string;
   isBot: boolean;
   senderType: SenderType;
