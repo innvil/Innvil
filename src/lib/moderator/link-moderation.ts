@@ -753,6 +753,11 @@ export function decideLinkEnforcement(input: {
    *  narrow recent window a real request stays "live" in. */
   adminSolicitedExemption: boolean;
 }): ModerationEnforcement {
+  // A guess must not fall through into an unrelated promotion penalty (in
+  // particular, a medium-confidence scam used to become a promo warning).
+  // History cannot turn uncertain classification into a confirmed violation.
+  if (input.confidence !== "high") return { kind: "ALLOW" };
+
   if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_KICK", reason: "explicit_content", purge: true };
 
   // Scam/phishing gets a GRADUATED response, never an instant permanent
@@ -769,6 +774,14 @@ export function decideLinkEnforcement(input: {
     return { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing", purge: true };
   }
 
+  // Role exemptions precede ordinary content categories, including a
+  // mistaken competing-project/search-spam label on an admin announcement.
+  // Confirmed safety violations above and actual flood signals remain exempt
+  // from this exemption. This does not authorize replying to admin chatter.
+  if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) {
+    return { kind: "ALLOW" };
+  }
+
   if (
     input.category === "SAFE_RELEVANT_LINK" ||
     input.category === "APPROVED_PARTNER_LINK" ||
@@ -783,19 +796,8 @@ export function decideLinkEnforcement(input: {
   // requires stronger confidence/history than "we're not sure."
   if (input.category === "UNKNOWN_OR_AMBIGUOUS") return { kind: "ALLOW" };
 
-  // COMPETING_PROJECT_PROMOTION -- a "global no-go" per explicit product
-  // decision, checked and returned BEFORE every exemption below (community
-  // Allow-Solicitation toggle, the admin-solicited backstop, and the
-  // admin/trusted-role exemption all only ever check `=== "UNSOLICITED_
-  // PROMOTION"`, but this early return makes the exclusion unconditional
-  // and unmissable regardless of how those checks evolve later). Promoting
-  // a rival project/token is never allowed in ANY form here, for anyone --
-  // reuses the SAME warning-count ladder as ordinary UNSOLICITED_PROMOTION
-  // (a deliberate simplification, not a separate persisted counter) but
-  // with its OWN distinct reason codes, so the caller (community-runtime.ts)
-  // can tell the two apart and NEVER redirect this warning to the
-  // configured Promotion channel/topic -- that destination exists to
-  // promote THIS community's own project, never a competitor's.
+  // Regular-member promotion of an unrelated competing project retains its
+  // own reason/ladder. Admin and confidence gates have already run.
   if (input.category === "COMPETING_PROJECT_PROMOTION") {
     const isFlood = input.floodRepeat;
     const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SOLICITATION_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
@@ -808,16 +810,7 @@ export function decideLinkEnforcement(input: {
     };
   }
 
-  // SEARCH_SPAM (2026-09-03 live feedback: an off-topic "search X" spam
-  // instruction, flagged even from a single sender, with NO link/promotion
-  // involved) -- same never-exempt treatment as COMPETING_PROJECT_PROMOTION
-  // above and for the same reason: this isn't ordinary self-promotion a
-  // community-wide Allow-Solicitation toggle or a trusted role should ever
-  // excuse, it's an abuse/spam signal. Reuses the SAME warning-count ladder
-  // (deliberate simplification, matching COMPETING_PROJECT_PROMOTION's own
-  // precedent) with its own distinct reason codes so the caller can render
-  // a genuinely different ("stop spamming", never a Promotion redirect)
-  // warning and label it correctly in the Watcher Ops audit trail.
+  // Confirmed off-topic search spam uses the ordinary warning ladder.
   if (input.category === "SEARCH_SPAM") {
     const isFlood = input.floodRepeat;
     const nextCount = isFlood ? Math.max(input.priorWarningCount + 1, SOLICITATION_WARNING_LIMIT + 1) : input.priorWarningCount + 1;
@@ -846,18 +839,6 @@ export function decideLinkEnforcement(input: {
   // never-exempt-a-flood-burst carve-out as every other exemption above.
   if (input.category === "UNSOLICITED_PROMOTION" && input.adminSolicitedExemption && !input.floodRepeat) return { kind: "ALLOW" };
 
-  // Admins/trusted roles may legitimately post partner/AMA/campaign links
-  // (spec §43) — exempted from ORDINARY ad enforcement only, checked after
-  // the severe branches above (never exempt from those). A flood burst is
-  // still folded into the unified spam progression below, never exempted
-  // for a trusted role either — an obvious automated burst is a safety
-  // signal, not ordinary self-promotion. COMPETING_PROJECT_PROMOTION and
-  // SEARCH_SPAM both already returned unconditionally above and structurally
-  // can never reach this line -- confirmed by TypeScript's own control-flow
-  // narrowing (the category type here is provably already down to
-  // UNSOLICITED_PROMOTION | LINK_SPAM_OR_FLOOD | PHISHING_OR_SCAM |
-  // EXPLICIT_CONTENT), not just by convention.
-  if (input.isAdminOrTrusted && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
 
   // NEGATIVE_STATEMENT -- reached here ONLY for an ordinary, non-admin/
   // trusted sender (the check above already exempted an admin/trusted

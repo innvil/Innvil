@@ -293,6 +293,15 @@ function decide(over: Partial<Parameters<typeof decideLinkEnforcement>[0]>) {
   });
 }
 
+test("uncertain categories never delete or accumulate penalties, even with old strikes", () => {
+  const categories = ["UNSOLICITED_PROMOTION", "COMPETING_PROJECT_PROMOTION", "SEARCH_SPAM", "NEGATIVE_STATEMENT", "PHISHING_OR_SCAM", "EXPLICIT_CONTENT", "LINK_SPAM_OR_FLOOD"] as const;
+  for (const category of categories) {
+    for (const confidence of ["low", "medium"] as const) {
+      assert.deepEqual(decide({ category, confidence, priorWarningCount: 20, priorScamStrikeCount: 3, priorNegativeStatementCount: 4 }), { kind: "ALLOW" }, `${category}/${confidence}`);
+    }
+  }
+});
+
 test("REQUIRED (§54.1, revised 2026-09-02): unsolicited promotion, no legitimate context -> DELETE_WARN, warning #1, NO mute -- first warning is real leeway", () => {
   const result = decide({ category: "UNSOLICITED_PROMOTION" });
   assert.deepEqual(result, { kind: "DELETE_WARN", warningNumber: 1, reason: "unsolicited_promotion", muteMinutes: undefined });
@@ -370,11 +379,11 @@ test("REQUIRED: never exempted by the admin-solicited backstop -- unlike ordinar
   assert.notEqual(result.kind, "ALLOW");
 });
 
-test("REQUIRED: never exempted for an admin/trusted role -- unlike ordinary UNSOLICITED_PROMOTION, which IS exempt for admins", () => {
+test("admin project/partner announcements are exempt even when labelled competing promotion", () => {
   const nonAdmin = decide({ category: "COMPETING_PROJECT_PROMOTION", isAdminOrTrusted: false });
   const admin = decide({ category: "COMPETING_PROJECT_PROMOTION", isAdminOrTrusted: true });
-  assert.deepEqual(admin, nonAdmin);
-  assert.notEqual(admin.kind, "ALLOW");
+  assert.notEqual(nonAdmin.kind, "ALLOW");
+  assert.deepEqual(admin, { kind: "ALLOW" });
 });
 
 test("REQUIRED: escalates to DELETE_KICK + purge after the same SOLICITATION_WARNING_LIMIT as ordinary promotion, with its OWN distinct reason", () => {
@@ -424,11 +433,11 @@ test("REQUIRED: never exempted by the admin-solicited backstop", () => {
   assert.notEqual(result.kind, "ALLOW");
 });
 
-test("REQUIRED: never exempted for an admin/trusted role", () => {
+test("admin search instructions are exempt from ordinary content moderation", () => {
   const nonAdmin = decide({ category: "SEARCH_SPAM", isAdminOrTrusted: false });
   const admin = decide({ category: "SEARCH_SPAM", isAdminOrTrusted: true });
-  assert.deepEqual(admin, nonAdmin);
-  assert.notEqual(admin.kind, "ALLOW");
+  assert.notEqual(nonAdmin.kind, "ALLOW");
+  assert.deepEqual(admin, { kind: "ALLOW" });
 });
 
 test("REQUIRED: escalates to DELETE_KICK + purge after the same SOLICITATION_WARNING_LIMIT, with its OWN distinct reason", () => {
