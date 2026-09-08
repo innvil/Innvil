@@ -1,4 +1,5 @@
 import "server-only";
+import { conversationSilenceReason } from "./conversation-intent";
 import { inspectMessageLinks } from "./link-inspection";
 import { extractMessageLinks, type TelegramTextEntity } from "./link-context";
 
@@ -3520,9 +3521,10 @@ async function handleHumanMessage(
   // "wasLastSpeaker" check. All three additionally require priorMessage to be
   // RECENT (see isRecentMessage) -- who spoke last is meaningless on its own
   // after the room has gone quiet for a while; see RECENT_EXCHANGE_WINDOW_MS.
-  const recentContext = await loadRecentContext(admin, community.id, 10);
+  const recentContext = (await loadRecentContext(admin, community.id, 25)).filter(m => m.messageThreadId === event.messageThreadId);
   timer.mark("context_history_loading", { recentContextCount: recentContext.length });
-  const priorMessage = recentContext.length >= 2 ? recentContext[recentContext.length - 2] : null;
+  const priorMessages = recentContext.filter(m => m.platformMessageId !== event.messageId);
+  const priorMessage = priorMessages.at(-1) ?? null;
   const now = new Date();
   const priorMessageIsRecent = isRecentMessage(priorMessage?.createdAt, now);
   const recentlyAnsweredByModerator = priorMessage?.senderType === "INNVIL_MODERATOR" && priorMessageIsRecent;
@@ -3634,6 +3636,8 @@ async function handleHumanMessage(
   let action = selectChatterAction({
     text: event.text, candidates, now: new Date(), recentlyAnsweredByModerator, recentlyRespondedByHuman,
     suppressAcknowledgementForSender, recentlyRespondedByAdminOrMod, openerAddressedToOtherParticipant,
+    replyToOtherParticipant: !!event.replyToMessageId && !repliedToDeploymentId,
+    otherParticipantNames: recentHumanNames,
   });
   timer.mark("coordinator_action_selected", { actionType: action.type });
 
@@ -4525,6 +4529,28 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
   );
   const token = await getBotTokenForDeployment(admin, deployment.deploymentId);
   let adminRespondedSinceScheduling = false;
+  const { data: originalMessage } = await admin.from("community_messages")
+    .select("text, reply_to_platform_message_id").eq("community_id", row.community_id)
+    .eq("platform_message_id", row.trigger_platform_message_id).maybeSingle();
+  // Missing/edited triggers cannot authorize a stale queued response.
+  if (!originalMessage || originalMessage.text !== row.message_text) {
+    await finishPendingReply(admin, row.id, "cancelled", "trigger_changed_or_unavailable");
+    return;
+  }
+  const replyTarget = originalMessage.reply_to_platform_message_id
+    ? await resolveRepliedToDeployment(admin, row.community_id, originalMessage.reply_to_platform_message_id) : null;
+  const directed = resolveDirectedModerator(row.message_text, deployments.map(d => ({ deploymentId: d.deploymentId, name: d.moderatorName, botUsername: d.botUsername })));
+  const silenceReason = conversationSilenceReason({ text: row.message_text,
+    explicitlyDirected: !!replyTarget || !!directed,
+    replyToOtherParticipant: !!originalMessage.reply_to_platform_message_id && !replyTarget,
+    otherParticipantNames: recentContext.filter(m => m.senderType === "HUMAN" && m.senderPlatformId !== row.sender_platform_id).map(m => m.senderName ?? ""),
+  });
+  const suppressAdmin = community.acknowledge_admin_mod !== true && token
+    && await isSenderAdminOrTrusted(token, row.chat_id, row.sender_platform_id);
+  if (silenceReason || suppressAdmin) {
+    await finishPendingReply(admin, row.id, "cancelled", silenceReason ?? "engagement_suppressed_for_sender");
+    return;
+  }
   for (const candidate of laterOtherHumans) {
     const hasInterveningMessage = recentContext.some(
       (m) =>

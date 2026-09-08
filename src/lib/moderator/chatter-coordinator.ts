@@ -1,3 +1,5 @@
+import { conversationSilenceReason } from "./conversation-intent";
+
 /* =========================================================
    Reactive Natural Chatter — contextual SOCIAL ACTION SELECTION (pure, no
    AI, no I/O).
@@ -800,6 +802,8 @@ export interface ChatterCandidate {
 }
 
 export interface ChatterActionInput {
+  replyToOtherParticipant?: boolean;
+  otherParticipantNames?: string[];
   text: string;
   candidates: ChatterCandidate[];
   now: Date;
@@ -950,6 +954,12 @@ export function selectChatterAction(input: ChatterActionInput): ChatterAction {
   if (input.suppressAcknowledgementForSender) {
     return { type: "SILENCE", reasons: ["engagement_suppressed_for_sender"] };
   }
+
+  const audienceReason = conversationSilenceReason({
+    text: trimmed, explicitlyDirected: input.candidates.some(c => c.isDirectedAtBot),
+    replyToOtherParticipant: input.replyToOtherParticipant, otherParticipantNames: input.otherParticipantNames,
+  });
+  if (audienceReason) return { type: "SILENCE", reasons: [audienceReason] };
 
   // A request to evaluate/critique visual media ("what do you think of this
   // gif?") is unanswerable honestly -- checked before any other

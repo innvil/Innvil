@@ -66,3 +66,9 @@ Each completed fix gets its own commit after relevant tests pass.
   destinations remain unknown. Six reader tests (including local HTTP body
   timeout), 146 runtime tests and TypeScript passed. X may withhold previews;
   the watcher must not pretend it read those posts.
+- Fix 3: audience/wish gates precede chatter selection and run again for
+  deferred replies; edited/missing logged triggers cancel stale replies.
+  Chatter continuity is topic-scoped. Admin engagement setting copy now
+  matches its actual all-conversation suppression. 418 targeted tests and
+  TypeScript passed. This does not claim multilingual intent perfection;
+  real-model evaluation and live Telegram testing are still required.
