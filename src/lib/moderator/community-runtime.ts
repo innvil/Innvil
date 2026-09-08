@@ -1,8 +1,10 @@
 import "server-only";
+import type { CommunitySender } from "./event-types";
+import { captureOfficialMemory, loadOfficialMemory, retryOfficialMemory } from "./official-memory-runtime";
 import { warningAudience } from "./warning-presentation";
 import { conversationSilenceReason } from "./conversation-intent";
 import { inspectMessageLinks } from "./link-inspection";
-import { extractMessageLinks, type TelegramTextEntity } from "./link-context";
+import { extractMessageLinks, httpMessageLinks, type TelegramTextEntity } from "./link-context";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
@@ -48,7 +50,7 @@ import {
   type CommunityTopicRow, type CommunityTopicPolicy,
 } from "./community-topics";
 import {
-  classifyResourceKind, buildCommunityKnowledgeGrounding, type CommunityKnowledgeItem, type CommunityKnowledgeGrounding,
+  classifyResourceKind, buildCommunityKnowledgeGrounding, pickPinnedReference, type CommunityKnowledgeItem, type CommunityKnowledgeGrounding,
 } from "./community-message-knowledge";
 import {
   decideMediaEnforcement, computeSamplePositions, classifySampledFrames,
@@ -230,6 +232,9 @@ export type TelegramMessage = {
   caption?: string;
   entities?: TelegramTextEntity[];
   caption_entities?: TelegramTextEntity[];
+  date?: number;
+  edit_date?: number;
+  sender_chat?: TelegramChat;
   reply_to_message?: { message_id: number };
   /** Telegram Forum (topic-enabled supergroup) support -- identifies which
    *  topic/sub-channel this message was posted in (e.g. a "General" vs
@@ -613,24 +618,7 @@ async function cancelPendingRepliesForTopic(
  *  "retrieval, not full-history prompt-stuffing" discipline as
  *  knowledge.ts's owner-authored Project Knowledge. */
 async function loadCommunityKnowledgeItems(admin: SupabaseClient, communityId: string): Promise<CommunityKnowledgeItem[]> {
-  const { data } = await admin
-    .from("watch_community_resources")
-    .select("id, message_thread_id, platform_message_id, is_admin_author, is_pinned, is_announcement_topic, kind, url, text, created_at")
-    .eq("community_id", communityId)
-    .order("created_at", { ascending: false })
-    .limit(200);
-  return (data ?? []).map((r: Record<string, unknown>) => ({
-    id: r.id as string,
-    messageThreadId: (r.message_thread_id as number | null) ?? null,
-    platformMessageId: r.platform_message_id as string,
-    isAdminAuthor: r.is_admin_author === true,
-    isPinned: r.is_pinned === true,
-    isAnnouncementTopic: r.is_announcement_topic === true,
-    kind: r.kind as CommunityKnowledgeItem["kind"],
-    url: (r.url as string | null) ?? null,
-    text: r.text as string,
-    createdAt: r.created_at as string,
-  }));
+  return loadOfficialMemory(admin, communityId);
 }
 
 /** DB-facing half of community-message-knowledge's pure
@@ -654,11 +642,10 @@ async function loadCommunityKnowledgeGrounding(
   // direct unpin event to react to instead). Best-effort -- a failed sync
   // (missing token, transient Telegram error) never blocks generation, it
   // just means this one call falls back to whatever was last indexed.
-  if (token) await syncCurrentPinnedMessage(admin, token, communityId, chatId);
   const items = await loadCommunityKnowledgeItems(admin, communityId);
   if (!items.length) return null;
-  const pinned = items.find((i) => i.isAdminAuthor && i.isPinned);
-  const pinnedLink = pinned && pinned.messageThreadId != null ? buildTopicLink(chatUsername, chatId, pinned.messageThreadId) : null;
+  const pinned = pickPinnedReference(query, items);
+  const pinnedLink = pinned?.sourceUrl ?? null;
   return buildCommunityKnowledgeGrounding(query, items, new Date(), pinnedLink);
 }
 
@@ -4171,6 +4158,42 @@ export async function respondAsDeployment(params: {
 
 /* ------------------------------------------------------------- entry point ---- */
 
+/** Knowledge capture is deliberately independent of the admin-engagement
+ * toggle and chatter quotas. Roles are verified against Telegram, never a
+ * display name, message claim or forwarded-channel identity. */
+async function captureIncomingOfficialMemory(
+  admin: SupabaseClient,
+  integration: { id: string; panel_id: string | null; virtual_moderator_id: string },
+  community: { id: string; project_id?: string | null },
+  message: TelegramMessage, sender: CommunitySender, settings: unknown
+): Promise<void> {
+  if (sender.senderType !== "HUMAN") return;
+  const { data } = await admin.rpc("get_telegram_bot_key", { p_row: integration.id, p_secret: providerKeySecret() });
+  if (!data || !await isSenderAdminOrTrusted(String(data), String(message.chat.id), sender.platformUserId)) return;
+  const target = message.pinned_message ?? message;
+  const text = target.text ?? target.caption ?? "";
+  // Still record empty EDITS so removing all text/links invalidates memory.
+  if (!text.trim() && !target.edit_date) return;
+  const accountId = integration.panel_id ? null : await resolveWatcherAccountId(admin, integration.virtual_moderator_id);
+  const entitlement = moderatorEntitlementSource(settings);
+  const routing = await resolveAccountAiRouting(admin, accountId, entitlement === "enterprise", community.id, null, "reactive", entitlement === "byo20");
+  const [project, topics] = await Promise.all([
+    community.project_id ? loadProjectProfileRow(admin, community.project_id) : Promise.resolve(null),
+    loadCommunityTopics(admin, community.id),
+  ]);
+  await captureOfficialMemory(admin, {
+    communityId: community.id, platformMessageId: String(target.message_id), senderId: String(target.from?.id ?? sender.platformUserId), verifiedById: sender.platformUserId,
+    revision: target.edit_date ?? target.date ?? 0,
+    messageThreadId: target.message_thread_id ?? null,
+    sourceUrl: buildTopicLink(message.chat.username ?? null, String(message.chat.id), target.message_id),
+    text, urls: httpMessageLinks(extractMessageLinks(text, target.entities ?? target.caption_entities)),
+    isPinned: !!message.pinned_message,
+    isAnnouncement: findCommunityTopic(topics, target.message_thread_id ?? null)?.policy === "announcement",
+    verifiedAdmin: true,
+  }, project, routing);
+  await retryOfficialMemory(admin, community.id, project, routing);
+}
+
 /** Entry point called by the per-bot webhook handler (telegram.ts). */
 export async function handleCommunityUpdate(integrationId: string, update: TelegramUpdate): Promise<void> {
   const timer = createRequestTimer(integrationId);
@@ -4195,7 +4218,8 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // (Telegram represents an anonymous GROUP admin as a real, if synthetic,
   // `from` user -- "GroupAnonymousBot" -- never an absent `from`).
   const isAnonymousChannelPost = !message.from && (!!update.channel_post || !!update.edited_channel_post);
-  if (!message.from && !isAnonymousChannelPost) { timer.mark("no_message_or_sender"); return; }
+  const isAnonymousGroupAdmin = message.chat.type === "supergroup" && message.sender_chat?.id === message.chat.id;
+  if (!message.from && !isAnonymousChannelPost && !isAnonymousGroupAdmin) { timer.mark("no_message_or_sender"); return; }
 
   const integration = await resolveIntegration(admin, integrationId);
   if (!integration) { timer.mark("no_integration"); return; }
@@ -4245,7 +4269,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // correct; scam/phishing/explicit-content enforcement is never role-
   // exempt regardless (decideLinkEnforcement), so a compromised channel
   // posting malicious links is still caught.
-  const sender = isAnonymousChannelPost
+  const sender = isAnonymousChannelPost || isAnonymousGroupAdmin
     ? {
         platformUserId: `${SYNTHETIC_CHANNEL_SENDER_PREFIX}${message.chat.id}`,
         isBot: false as const,
@@ -4291,7 +4315,19 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // the pipeline" from "it entered and then something went wrong downstream."
   const { claimed } = await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
   timer.mark(claimed ? "claim_won" : "claim_lost_duplicate", { messageId: event.messageId });
+  const isEditedMessage = !!update.edited_message || !!update.edited_channel_post;
+  if (isEditedMessage) {
+    await admin.from("community_messages").update({ text: event.text })
+      .eq("community_id", community.id).eq("platform_message_id", event.messageId);
+    // Edit processing captures memory and invalidates queued replies; it
+    // does not create duplicate chatter/penalties for an existing message.
+    await captureIncomingOfficialMemory(admin, integration, community, message, sender, settings);
+    await admin.from("watch_pending_replies").update({ status: "cancelled", cancel_reason: "trigger_edited" })
+      .eq("community_id", community.id).eq("trigger_platform_message_id", event.messageId).eq("status", "pending");
+    return;
+  }
   if (!claimed) return;
+  await captureIncomingOfficialMemory(admin, integration, community, message, sender, settings);
 
   // Telegram Forum topic auto-discovery + pinned-message tracking --
   // unconditional (any sender type), best-effort, never blocks message
@@ -4363,7 +4399,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     // it already ran unconditionally). This is the ONLY effect
     // isAnonymousChannelPost has on chatterActive; entitlement/rollout-flag
     // gating is otherwise unchanged.
-    const chatterActive = virtualModNaturalChatterActive(settings) && !isAnonymousChannelPost;
+    const chatterActive = virtualModNaturalChatterActive(settings) && !isAnonymousChannelPost && !isAnonymousGroupAdmin;
     timer.mark("natural_chatter_entitlement_gate", { active: chatterActive, isAnonymousChannelPost });
     // Phase 4.M (B): the 20/day reactive quota is trial-only (spec §2) --
     // paid tiers are unaffected and this patch does not change their
@@ -4619,6 +4655,9 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
   // to a real inbound message -- same "reactive" kind as the original
   // webhook-time resolution, never the proactive/scheduled-presence kind.
   const aiRouting = await resolveAccountAiRouting(admin, accountId, entitlementSource === "enterprise", row.community_id, deployment.deploymentId, "reactive", entitlementSource === "byo20");
+  if (row.action_kind === "ANSWER" && community.project_id) {
+    await retryOfficialMemory(admin, row.community_id, await loadProjectProfileRow(admin, community.project_id), aiRouting);
+  }
 
   const projectKnowledge = row.action_kind === "ANSWER" ? await loadRelevantKnowledge(admin, row.panel_id, row.community_id, row.message_text) : undefined;
   const communityKnowledge = row.action_kind === "ANSWER"

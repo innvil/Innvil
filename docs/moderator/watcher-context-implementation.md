@@ -79,3 +79,31 @@ Each completed fix gets its own commit after relevant tests pass.
   Ordinary warning send/log retains the source topic. 247 targeted tests
   and TypeScript passed. Broader moderation-report/concurrency auditing
   and empirical persona quality remain separate verification work.
+- Fix 5: new source-revision memory captures verified admin announcements
+  independently of admin engagement, including anonymous group admins and
+  observed pins. Endorsement/purpose extraction validates exact URLs and
+  verbatim evidence. Failed/edited/withdrawn/conflicting sources cannot
+  revive older buying destinations. Recall spans topics; buying intent
+  retrieves TRADING rather than CHART/PRESALE. Answer-output guards reject
+  altered or ungrounded URLs. Exact source links/timestamps are retained.
+  327 targeted tests and TypeScript passed locally. Migration 0129 is
+  prepared but NOT applied/tested against a PostgreSQL instance.
+
+## Deployment/verification still required
+
+- Apply migration 0129 before enabling the new runtime. Existing legacy
+  pinned-resource rows are not silently promoted to confirmed memory:
+  resend/repin official announcements to re-extract them with provenance.
+- No arbitrary Telegram history backfill or general deletion notifications
+  exist in this integration. Edit updates invalidate captured sources and
+  pending replies; this stage does not add automatic edit re-moderation.
+- Failed extractions retry (at most two per pass, after a minute) on later
+  admin capture or an eligible question's recall, with fresh AI routing.
+  No new scheduler or production automation has been created.
+- Capture/retrieval currently pages revision metadata per community; a
+  long-history load test is required before claiming high-volume scaling.
+- A past pin is retained as provenance, not presented as proof it is still
+  pinned. Same-second conflicting edits remain unavailable until an
+  unambiguous newer source is observed.
+- Live model accuracy, provider costs/latency, Telegram rights/topic setup,
+  and production behavior have not been measured by mocked local tests.

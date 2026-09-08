@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractMessageLinks, exactResourceKey, serializeLinkProjectContext } from "./link-context";
+import { extractMessageLinks, httpMessageLinks, exactResourceKey, serializeLinkProjectContext } from "./link-context";
 
 test("hidden caption/text links survive extraction and UTF-16 offsets", () => {
   assert.deepEqual(extractMessageLinks("🔥 buy here", [{ type: "text_link", offset: 3, length: 8, url: "https://raydium.io/swap/?outputMint=BYTE" }]), ["https://raydium.io/swap/?outputMint=BYTE"]);
@@ -8,6 +8,7 @@ test("hidden caption/text links survive extraction and UTF-16 offsets", () => {
 });
 
 test("resource identity preserves trade parameters and does not trust a shared host", () => {
+  assert.deepEqual(httpMessageLinks(["bytehumor.com/docs", "@ByteHumor", "https://raydium.io/swap/?outputMint=BYTE"]), ["https://bytehumor.com/docs", "https://raydium.io/swap/?outputMint=BYTE"]);
   assert.notEqual(exactResourceKey("https://raydium.io/swap/?outputMint=BYTE"), exactResourceKey("https://raydium.io/swap/?outputMint=FAKE"));
   assert.notEqual(exactResourceKey("https://x.com/official/status/1"), exactResourceKey("https://x.com/scammer/status/1"));
   assert.equal(exactResourceKey("https://official:password@evil.test"), null);

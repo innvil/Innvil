@@ -23,11 +23,11 @@
 
 export type CommunityResourceKind =
   | "WEBSITE" | "WHITEPAPER" | "DOCUMENTATION" | "ROADMAP" | "FAQ" | "ANNOUNCEMENT"
-  | "PRESALE" | "TOKEN_INFORMATION" | "SOCIAL" | "PARTNERSHIP_CONTACT" | "PROJECT_STATUS" | "OTHER";
+  | "PRESALE" | "TRADING" | "CHART" | "LISTING" | "TOKEN_INFORMATION" | "SOCIAL" | "PARTNERSHIP_CONTACT" | "PROJECT_STATUS" | "OTHER";
 
 export const COMMUNITY_RESOURCE_KINDS: CommunityResourceKind[] = [
   "WEBSITE", "WHITEPAPER", "DOCUMENTATION", "ROADMAP", "FAQ", "ANNOUNCEMENT",
-  "PRESALE", "TOKEN_INFORMATION", "SOCIAL", "PARTNERSHIP_CONTACT", "PROJECT_STATUS", "OTHER",
+  "PRESALE", "TRADING", "CHART", "LISTING", "TOKEN_INFORMATION", "SOCIAL", "PARTNERSHIP_CONTACT", "PROJECT_STATUS", "OTHER",
 ];
 
 export interface CommunityKnowledgeItem {
@@ -44,6 +44,7 @@ export interface CommunityKnowledgeItem {
    *  url is null, as the actual answerable fact. */
   text: string;
   createdAt: string; // ISO
+  sourceUrl?: string | null;
 }
 
 /* --------------------------------------------------------- classification ---- */
@@ -122,7 +123,9 @@ function tokenize(text: string): Set<string> {
 /** Relevance score against the user's question — same lightweight keyword-
  *  overlap approach as knowledge.ts's scoreKnowledgeRelevance, applied to a
  *  message's own text rather than a title+content pair. */
-export function scoreCommunityItemRelevance(query: string, item: Pick<CommunityKnowledgeItem, "text">): number {
+export function scoreCommunityItemRelevance(query: string, item: Pick<CommunityKnowledgeItem, "text"> & Partial<Pick<CommunityKnowledgeItem, "kind">>): number {
+  if (item.kind === "TRADING" && /\b(?:buy|buying|purchase|swap|trade|trading)\b/i.test(query)) return 5;
+  if (item.kind === "CHART" && /\b(?:chart|price|market cap)\b/i.test(query)) return 5;
   const queryTokens = tokenize(query);
   if (queryTokens.size === 0) return 0;
   const itemTokens = tokenize(item.text);
@@ -220,7 +223,7 @@ export function otherOfficialResources(items: CommunityKnowledgeItem[]): Array<{
  *  one, and the model is never told anything was "missing" (spec: silence
  *  on absence, never "I couldn't find..."). */
 export interface CommunityKnowledgeGrounding {
-  facts: Array<{ text: string; isPinned: boolean; isAnnouncement: boolean; createdAt: string }>;
+  facts: Array<{ text: string; isPinned: boolean; isAnnouncement: boolean; createdAt: string; sourceUrl?: string | null }>;
   pinnedReference: { text: string; link: string | null } | null;
   /** The ONE confirmed whitepaper URL, or null -- never a derived/guessed one. */
   whitepaperLink: string | null;
@@ -257,7 +260,7 @@ export function buildCommunityKnowledgeGrounding(
   const otherResources = otherOfficialResources(items);
   if (!facts.length && !pinned && !whitepaperLink && !otherResources.length) return null;
   return {
-    facts: facts.map((i) => ({ text: i.text, isPinned: i.isPinned, isAnnouncement: i.isAnnouncementTopic, createdAt: i.createdAt })),
+    facts: facts.map((i) => ({ text: i.text, isPinned: i.isPinned, isAnnouncement: i.isAnnouncementTopic, createdAt: i.createdAt, sourceUrl: i.sourceUrl })),
     pinnedReference: pinned ? { text: pinned.text, link: pinnedLink } : null,
     whitepaperLink,
     otherResources,

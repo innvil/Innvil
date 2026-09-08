@@ -50,3 +50,9 @@ export function extractMessageLinks(text: string, entities: TelegramTextEntity[]
   }
   return [...new Set(links)];
 }
+
+/** Bare observed domains get only a deterministic HTTPS scheme; no path,
+ * pool, token or other destination component is ever invented. */
+export function httpMessageLinks(links: string[]): string[] {
+  return [...new Set(links.filter(l => !l.startsWith("@")).map(l => exactResourceKey(/^https?:\/\//i.test(l) ? l : `https://${l}`)).filter((l): l is string => l !== null))];
+}

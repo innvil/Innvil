@@ -49,6 +49,23 @@ function baseInput(over: Partial<GenerateChatterReplyInput> = {}): GenerateChatt
   };
 }
 
+test("actual answer generation rejects a wrong trading URL and accepts the exact confirmed link", async () => {
+  const url = "https://raydium.io/swap/?outputMint=BYTE";
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    for (const output of [`buy here: ${url}`, "buy here: https://raydium.io/swap/?outputMint=FAKE", "buy here: https://dexscreener.com/solana/byte"]) {
+      await withFetchSpy({ content: [{ type: "text", text: output }] }, async () => {
+        const result = await generateChatterReply(baseInput({ action: "ANSWER", triggerMessage: { senderName: "Ram", text: "How do I buy?" },
+          communityKnowledge: { facts: [], pinnedReference: null, whitepaperLink: null, otherResources: [{ kind: "TRADING", url }, { kind: "CHART", url: "https://dexscreener.com/solana/byte" }] } }));
+        assert.ok(result.ok);
+        if (result.ok) {
+          if (output.includes("outputMint=BYTE")) assert.ok("reply" in result && result.reply === output);
+          else assert.ok("noReply" in result && result.noReply);
+        }
+      });
+    }
+  });
+});
+
 /* ------------------------------------------------------- persona isolation ---- */
 
 test("REQUIRED: the selected moderator's OWN persona is present and authoritative in its prompt", () => {

@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { extractReadableText, isPrivateOrReservedIpv4, validateIngestUrl } from "./knowledge-ingestion";
-import type { LinkEvidence } from "./link-context";
+import { httpMessageLinks, type LinkEvidence } from "./link-context";
 
 const MAX_BYTES = 256 * 1024;
 const TIMEOUT_MS = 4500;
@@ -119,7 +119,7 @@ export async function inspectProjectLink(raw: string, io: InspectionTransport = 
 const cache = new Map<string, { expires: number; value: Promise<LinkEvidence> }>();
 let active = 0;
 export async function inspectMessageLinks(urls: string[]): Promise<LinkEvidence[]> {
-  return Promise.all([...new Set(urls)].filter(u => /^https?:\/\//i.test(u)).slice(0, 3).map(url => {
+  return Promise.all(httpMessageLinks(urls).slice(0, 3).map(url => {
     const cached = cache.get(url);
     if (cached && cached.expires > Date.now()) return cached.value;
     if (active >= 6) return Promise.resolve<LinkEvidence>({ url, status: "unavailable" });
