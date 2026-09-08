@@ -59,3 +59,10 @@ Each completed fix gets its own commit after relevant tests pass.
   third-party project coverage and marketing discussion. Local classifier,
   link-context and runtime suites plus TypeScript passed. This is context
   plumbing, not proof of real-model accuracy or remote preview support.
+- Fix 2b: added a public-page reader with checked-IP connection pinning,
+  per-redirect checks, whole-request deadline, streaming byte cap, bounded
+  concurrency and short cache. Up to three URLs per message; no recursive
+  crawling, login or wallet access. IPv6-only, blocked/login-only and unreadable
+  destinations remain unknown. Six reader tests (including local HTTP body
+  timeout), 146 runtime tests and TypeScript passed. X may withhold previews;
+  the watcher must not pretend it read those posts.

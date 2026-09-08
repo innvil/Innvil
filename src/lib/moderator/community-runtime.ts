@@ -1,4 +1,5 @@
 import "server-only";
+import { inspectMessageLinks } from "./link-inspection";
 import { extractMessageLinks, type TelegramTextEntity } from "./link-context";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -2485,16 +2486,17 @@ export async function runLinkModeration(
   const promotionTopic = findPromotionTopic(topics);
   const solicitationAllowedHere = community.allow_solicitation === true || topicAllowsSolicitation(currentTopic?.policy);
 
-  const [projectProfile, resources] = await Promise.all([
+  const [projectProfile, resources, linkEvidence] = await Promise.all([
     community.project_id ? loadProjectProfileRow(admin, community.project_id) : Promise.resolve(null),
     loadCommunityKnowledgeItems(admin, community.id),
+    inspectMessageLinks(links),
   ]);
   const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting, {
     project: projectProfile,
     resources: resources.filter(r => r.isAdminAuthor && r.url).map(r => ({ url: r.url!, kind: r.kind, text: r.text })),
     topic: { name: currentTopic ? topicDisplayName(currentTopic) : null, solicitationAllowed: solicitationAllowedHere },
     senderRole: isAdminOrTrusted ? "admin" : token ? "member" : "unknown",
-    links: links.filter(url => /^https?:\/\//i.test(url)).map(url => ({ url, status: "unavailable" as const })),
+    links: linkEvidence,
   });
 
   const enforcement = decideLinkEnforcement({
