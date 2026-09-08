@@ -54,6 +54,8 @@ export type LinkCategory =
    *  an abuse signal, not ordinary self-promotion, same category of
    *  never-exempt as COMPETING_PROJECT_PROMOTION above. */
   | "SEARCH_SPAM"
+  /** Runtime-observed repetition, never assigned from a single DM request. */
+  | "REPEATED_DM_SPAM"
   /** An unfounded, mocking, or dismissive assertion that the project is a
    *  scam/rug/fraud/dead/worthless -- with NO genuine question and NO
    *  specific evidence behind it (e.g. "Scam Project 😂😂", "Definitely
@@ -625,6 +627,8 @@ export type ModerationEnforcement =
         | "repeated_competing_project_promotion"
         | "search_spam"
         | "repeated_search_spam"
+        | "dm_spam"
+        | "repeated_dm_spam"
         | "explicit_content_borderline"
         | "scam_or_phishing"
         | "negative_statement"
@@ -646,7 +650,7 @@ export type ModerationEnforcement =
    *  categories that reach this kind today (repeated spam, repeated scam,
    *  explicit content), since a kick without cleanup leaves the offending
    *  history sitting in the room. */
-  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_search_spam" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
+  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_search_spam" | "repeated_dm_spam" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
   /** Reserved for a possible future manual admin action — the automatic
    *  policy below (as of 2026-08-27) no longer PRODUCES this kind for any
    *  category; every automatic escalation that used to end in a permanent
@@ -783,6 +787,12 @@ export function decideLinkEnforcement(input: {
     return { kind: "ALLOW" };
   }
   if (input.senderRoleUnknown && input.category !== "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
+  if (input.category === "LINK_SPAM_OR_FLOOD" && !input.floodRepeat) return { kind: "ALLOW" };
+  if (input.category === "REPEATED_DM_SPAM") {
+    const next = input.priorWarningCount + 1;
+    if (next > SOLICITATION_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_dm_spam", purge: true };
+    return { kind: "DELETE_WARN", warningNumber: next, reason: next === 1 ? "dm_spam" : "repeated_dm_spam", muteMinutes: SOLICITATION_MUTE_MINUTES_BY_WARNING[next] };
+  }
 
   if (
     input.category === "SAFE_RELEVANT_LINK" ||

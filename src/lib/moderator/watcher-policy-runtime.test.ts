@@ -11,7 +11,7 @@ function event(text = pitch): CommunityEvent {
     timestamp: new Date().toISOString(), text, replyToMessageId: null, messageThreadId: 31, origin: "HUMAN", interactionDepth: 0, causationMessageId: null };
 }
 
-function database(topicPolicy = "normal", priorWarnings = 0) {
+function database(topicPolicy = "normal", priorWarnings = 0, context: Record<string, unknown>[] = []) {
   const writes: Array<{ table: string; value: Record<string, unknown> }> = [];
   const touched: string[] = [];
   const db = {
@@ -20,7 +20,8 @@ function database(topicPolicy = "normal", priorWarnings = 0) {
       const rows = table === "moderator_deployments" ? [{ id: "dep", moderator_id: "mod", created_at: deployment.createdAt, virtual_moderators: { name: "Patricia", persona: DEFAULT_MODERATOR_PERSONA } }]
         : table === "telegram_bot_integrations" ? [{ id: "integration", virtual_moderator_id: "mod", username: "watcher_bot" }]
         : table === "watch_community_topics" ? [{ message_thread_id: 31, topic_name: "Promotion", custom_name: null, policy: topicPolicy }]
-        : table === "moderator_link_warning_state" && priorWarnings ? [{ warning_count: priorWarnings, warning_at: new Date().toISOString() }] : [];
+        : table === "moderator_link_warning_state" && priorWarnings ? [{ warning_count: priorWarnings, warning_at: new Date().toISOString() }]
+        : table === "community_messages" ? context : [];
       const query = {
         select() { return query; }, eq() { return query; }, in() { return query; }, is() { return query; }, not() { return query; }, order() { return query; }, limit() { return query; }, range() { return query; },
         maybeSingle: async () => ({ data: rows[0] ?? null, error: null }),
@@ -36,7 +37,7 @@ function database(topicPolicy = "normal", priorWarnings = 0) {
   return { db, writes, touched };
 }
 
-async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
+async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; context?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
   const previousFetch = globalThis.fetch;
   const env = { PROVIDER_KEY_SECRET: process.env.PROVIDER_KEY_SECRET, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY };
   process.env.PROVIDER_KEY_SECRET = "test-secret";
@@ -55,7 +56,7 @@ async function runFixture(opts: { policy?: string; role?: string; category?: str
       : { content: [{ type: "text", text: `CATEGORY: ${opts.category ?? "UNSOLICITED_PROMOTION"}\nCONFIDENCE: high` }] };
     return new Response(JSON.stringify(payload), { status: 200 });
   };
-  try { await fn({ calls, fixture: database(opts.policy, opts.priorWarnings) }); }
+  try { await fn({ calls, fixture: database(opts.policy, opts.priorWarnings, opts.context) }); }
   finally {
     globalThis.fetch = previousFetch;
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -117,4 +118,21 @@ test("admin-ignore exits before the separate conversation task router", async ()
     assert.equal(calls.some(c => c.method === "sendMessage"), false);
     assert.ok(fixture.writes.some(w => w.value.reason === "engagement_suppressed_for_sender" || JSON.stringify(w.value).includes("engagement_suppressed_for_sender")));
   });
+});
+
+test("repeated DM nudges get a contextual spam warning, not an identity correction; a single nudge is left alone", async () => {
+  const text = "Rhyleky check dm";
+  const context = [40, 41].map(id => ({ platform_message_id: String(id), text, message_thread_id: 31, sender_type: "HUMAN", sender_platform_id: "7", sender_display_name: "Member", created_at: new Date(Date.now() - 20_000).toISOString() }));
+  for (const previous of [[], context]) {
+    await runFixture({ context: previous }, async ({ calls, fixture }) => {
+      await runLinkModeration(fixture.db as never, null, { id: "community" }, "-100123", event(text), [deployment], new Date());
+      const warning = calls.find(c => c.method === "sendMessage");
+      if (!previous.length) assert.equal(warning, undefined);
+      else {
+        assert.ok(warning);
+        assert.match(String(warning.body.text), /DM nudges/);
+        assert.doesNotMatch(String(warning.body.text), /not Rhyleky|not the dev|\[user\]/i);
+      }
+    });
+  }
 });

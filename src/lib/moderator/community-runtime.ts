@@ -1,4 +1,5 @@
 import "server-only";
+import { isDmNudge, isRepeatedDmNudge, isRapidMessageFlood } from "./message-repetition";
 import type { CommunitySender } from "./event-types";
 import { captureOfficialMemory, loadOfficialMemory, retryOfficialMemory } from "./official-memory-runtime";
 import { warningAudience } from "./warning-presentation";
@@ -33,7 +34,7 @@ import {
   type ConversationTask, type TaskModeratorIdentity,
 } from "./task-state";
 import {
-  extractLinks, linkHash, recordLinkObservation, isFloodRepeat, decideLinkEnforcement, EMPTY_WARNING_STATE,
+  extractLinks, linkHash, recordLinkObservation, decideLinkEnforcement, EMPTY_WARNING_STATE,
   COLLAB_ROUTABLE_CATEGORIES, SPAM_WARNING_LIMIT, SOLICITATION_WARNING_LIMIT, type LinkWarningState,
   effectiveScamStrikeCount, effectiveNegativeStatementCount, effectiveMediaWarningCount, renderHumanModerationMention,
   filterOutOwnBotMentions, looksLikeUnsolicitedPitch, looksLikeSearchInstructionSpam, looksLikeNegativeStatement, isBackToBackSpamPattern,
@@ -2380,6 +2381,9 @@ export async function runLinkModeration(
   // -- this narrowly exempts the self-mention, never the whole message.
   const moderationCandidates = links.length ? filterOutOwnBotMentions(links, deployments.map((d) => d.botUsername)) : [];
   const hasRealLinkCandidate = moderationCandidates.length > 0;
+  const dmContext = isDmNudge(event.text) ? (await loadRecentContext(admin, community.id, 25))
+    .filter(m => m.messageThreadId === event.messageThreadId && m.platformMessageId !== event.messageId) : null;
+  const repeatedDm = !!dmContext && isRepeatedDmNudge(event.text, event.sender.platformUserId, dmContext, now, !!event.replyToMessageId);
   // Live-caught gap: a promotional pitch with NO link/handle at all ("DM me,
   // I can promote your project...") never matched any of the above, so it
   // silently bypassed moderation entirely and fell through to ordinary
@@ -2391,7 +2395,7 @@ export async function runLinkModeration(
   // "search X" instruction has no link/handle/contact-ask at all either, so
   // it needs the same link-less gate to even reach classification.
   let isTextModerationCandidate =
-    !hasRealLinkCandidate && (looksLikeUnsolicitedPitch(event.text) || looksLikeSearchInstructionSpam(event.text) || looksLikeNegativeStatement(event.text));
+    !hasRealLinkCandidate && (repeatedDm || looksLikeUnsolicitedPitch(event.text) || looksLikeSearchInstructionSpam(event.text) || looksLikeNegativeStatement(event.text));
   // Language-agnostic backstop, only reached when the free regex already
   // said no -- a real pitch in Russian/Chinese/any other language has no
   // English vocabulary for the regex to match, no matter how that list
@@ -2415,20 +2419,13 @@ export async function runLinkModeration(
   const senderPlatformId = event.sender.platformUserId;
 
   const priorState = await loadLinkWarningState(admin, community.id, senderPlatformId);
-  // Flood-repeat tracking is inherently about the SAME link being reposted
-  // rapidly -- a link-less text pitch has nothing to hash/repost-track, so
-  // it's left out of the flood-window observation entirely (repeat text
-  // pitches still escalate normally via the ordinary warningCount-based
-  // 3-strike progression in decideLinkEnforcement, unrelated to flood
-  // detection).
+  // Retain link observations for strike history, but prove rapid flooding
+  // from timestamped, same-sender, same-topic full-message copies below.
   const observedState = hasRealLinkCandidate ? recordLinkObservation(priorState, linkHash(moderationCandidates[0]), now) : priorState;
-  // Never derived from stale prior-link flood state for a text-only pitch --
-  // isFloodRepeat would otherwise read leftover flood-window data from an
-  // EARLIER, unrelated real link this same sender once posted.
-  const floodRepeat = hasRealLinkCandidate ? isFloodRepeat(observedState) : false;
-
-  const linkModerationContext = (await loadRecentContext(admin, community.id, 25))
+  // A repeated URL over minutes or in distinct replies is not flood proof.
+  const linkModerationContext = (dmContext ?? await loadRecentContext(admin, community.id, 25))
     .filter(m => m.messageThreadId === event.messageThreadId && m.platformMessageId !== event.messageId).slice(-12);
+  const floodRepeat = isRapidMessageFlood(event.text, senderPlatformId, linkModerationContext, now, !!event.replyToMessageId);
   const recentContextSummary = linkModerationContext.map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
 
   // SEARCH_SPAM's own "coordinated vs. isolated" signal (2026-09-03 live
@@ -2487,13 +2484,16 @@ export async function runLinkModeration(
     loadCommunityKnowledgeItems(admin, community.id),
     inspectMessageLinks(links),
   ]);
-  const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting, {
+  let classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting, {
     project: projectProfile,
     resources: resources.filter(r => r.isAdminAuthor && r.url).map(r => ({ url: r.url!, kind: r.kind, text: r.text })),
     topic: { name: currentTopic ? topicDisplayName(currentTopic) : null, solicitationAllowed: solicitationAllowedHere },
     senderRole,
     links: linkEvidence,
   });
+  if (repeatedDm && !["PHISHING_OR_SCAM", "EXPLICIT_CONTENT"].includes(classification.category)) {
+    classification = { category: "REPEATED_DM_SPAM", confidence: "high" };
+  }
 
   const enforcement = decideLinkEnforcement({
     category: classification.category,
@@ -2704,7 +2704,7 @@ export async function runLinkModeration(
           ? "explicit_link"
           : enforcement.reason === "repeated_competing_project_promotion"
             ? "competing_project"
-            : enforcement.reason === "repeated_search_spam"
+            : enforcement.reason === "repeated_search_spam" || enforcement.reason === "repeated_dm_spam"
               ? "off_topic_spam"
               : "spam";
       await sendModerationReport({
@@ -2720,6 +2720,8 @@ export async function runLinkModeration(
               ? "User posted a confirmed high-confidence explicit/malicious link."
               : violationCategory === "competing_project"
                 ? "Repeated rallying to promote a different, unrelated project or token after prior warnings."
+                : enforcement.reason === "repeated_dm_spam"
+                  ? "Repeated unsolicited check-DM nudges after prior warnings."
                 : violationCategory === "off_topic_spam"
                   ? "Repeated off-topic spam instruction (unrelated to this project) after prior warnings."
                   : "Repeated spam after prior warnings and temporary restrictions.",
@@ -2791,6 +2793,7 @@ export async function runLinkModeration(
   // as spam -- never a project pitch, so it never has a Promotion/contact
   // redirect either, same treatment as isCompetingProjectEnforcement.
   const isSearchSpamEnforcement = enforcement.reason === "search_spam" || enforcement.reason === "repeated_search_spam";
+  const isDmSpamEnforcement = enforcement.reason === "dm_spam" || enforcement.reason === "repeated_dm_spam";
   const promotionContact = isPromotionEnforcement && community.project_id
     ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.partnerships ?? null
     : null;
@@ -2834,7 +2837,7 @@ export async function runLinkModeration(
   // generatePersonaSolicitationWarning's own isCompetingProjectPromotion
   // handling, which never surfaces a redirect for this reason either way.
   const knownPromotionTopicName = promotionTopic && hasKnownTopicName(promotionTopic) ? topicDisplayName(promotionTopic) : null;
-  const redirectName = (isCompetingProjectEnforcement || isSearchSpamEnforcement) ? null : knownPromotionTopicName || community.promotion_channel_name || null;
+  const redirectName = (isCompetingProjectEnforcement || isSearchSpamEnforcement || isDmSpamEnforcement) ? null : knownPromotionTopicName || community.promotion_channel_name || null;
   // "isolated" | "coordinated" | undefined -- see isBackToBackSpamPattern's
   // own doc comment (link-moderation.ts). Only ever set for SEARCH_SPAM;
   // undefined for every other category, matching generatePersonaSolicitation
@@ -2936,6 +2939,7 @@ export async function runLinkModeration(
             promotionTopicLink: null,
             contactHandle: promotionContact,
             isCompetingProjectPromotion: isCompetingProjectEnforcement,
+            isDmSpam: isDmSpamEnforcement,
             searchSpamPattern,
             warningNumber: enforcement.warningNumber,
           },
@@ -2995,7 +2999,7 @@ export async function runLinkModeration(
       ? "scam_link"
       : isCompetingProjectEnforcement
         ? "competing_project"
-        : isSearchSpamEnforcement
+        : isSearchSpamEnforcement || isDmSpamEnforcement
           ? "off_topic_spam"
           : isNegativeStatementWarn
             ? "negative_statement"
@@ -3016,6 +3020,7 @@ export async function runLinkModeration(
             ? (enforcement.warningNumber === 1
                 ? "First confirmed rally/request to promote a different, unrelated project or token."
                 : "Repeated rallying to promote a different, unrelated project or token after a prior warning.")
+            : isDmSpamEnforcement ? "Repeated unsolicited check-DM nudges."
             : isSearchSpamEnforcement
               ? (enforcement.warningNumber === 1
                   ? `First confirmed off-topic spam instruction, unrelated to this project${searchSpamPattern === "coordinated" ? " (part of a coordinated multi-account pattern)" : ""}.`

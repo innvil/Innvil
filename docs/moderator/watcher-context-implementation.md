@@ -88,6 +88,15 @@ Each completed fix gets its own commit after relevant tests pass.
   altered or ungrounded URLs. Exact source links/timestamps are retained.
   327 targeted tests and TypeScript passed locally. Migration 0129 is
   prepared but NOT applied/tested against a PostgreSQL instance.
+- Repetition follow-up: third identical, non-reply check-DM nudge from the
+  same sender within five minutes enters the ordinary warning ladder;
+  isolated nudges stay silent. Wording addresses repetition, never pretends
+  to be the named recipient, and does not redirect to Promotion. Flood
+  evidence now requires four identical non-reply messages within 30 seconds,
+  not repeated links across minutes or a classifier label alone. Existing
+  safe-relevant/approved-link exemptions remain. Full suite: 2,440 passed;
+  TypeScript passed. These bounded English-pattern checks do not claim
+  comprehensive multilingual or paraphrased-spam detection.
 
 ## Deployment/verification still required
 

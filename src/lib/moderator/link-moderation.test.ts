@@ -340,7 +340,7 @@ test("REQUIRED: solicitationAllowed=true never exempts explicit content", () => 
 });
 
 test("solicitationAllowed=true never exempts a DIFFERENT category's own violation (LINK_SPAM_OR_FLOOD)", () => {
-  const result = decide({ category: "LINK_SPAM_OR_FLOOD", solicitationAllowed: true });
+  const result = decide({ category: "LINK_SPAM_OR_FLOOD", solicitationAllowed: true, floodRepeat: true });
   assert.notEqual(result.kind, "ALLOW");
 });
 
@@ -539,7 +539,8 @@ test("LOW-confidence explicit/phishing does NOT auto-remove -- confidence gates 
 });
 
 test("REQUIRED (§54.6): flagged as flood/spam -> DELETE_KICK + purge directly, not a warning grace period, never a permanent ban", () => {
-  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD" }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
+  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD", floodRepeat: true }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
+  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD", floodRepeat: false }), { kind: "ALLOW" });
 });
 
 test("REQUIRED: a floodRepeat signal escalates straight to DELETE_KICK even if classified as ordinary unsolicited promotion", () => {
@@ -625,7 +626,7 @@ test("admin/trusted exemption does NOT apply to severe content -- safety is neve
 });
 
 test("admin/trusted exemption does NOT apply to an obvious flood/spam signal either", () => {
-  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD", isAdminOrTrusted: true }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
+  assert.deepEqual(decide({ category: "LINK_SPAM_OR_FLOOD", isAdminOrTrusted: true, floodRepeat: true }), { kind: "DELETE_KICK", reason: "repeated_unsolicited_promotion", purge: true });
 });
 
 test("a SAFE_RELEVANT_LINK is always ALLOW regardless of history", () => {

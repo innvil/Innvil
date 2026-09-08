@@ -253,6 +253,7 @@ export async function generateModerationWarning(
 }
 
 export interface SolicitationWarningFacts {
+  isDmSpam?: boolean;
   audience?: "individual" | "room";
   messageText?: string;
   priorPublicWarning?: boolean;
@@ -426,6 +427,7 @@ export async function generatePersonaSolicitationWarning(
     if (facts.audience === "room") return "guys, enough with the repeated spam, please.";
     if (facts.messageText != null) {
       const mute = facts.muteMinutes ? ` Take ${facts.muteMinutes} minutes off.` : "";
+      if (facts.isDmSpam) return `you keep sending DM nudges—what are you trying to share?${mute}`;
       if (facts.isCompetingProjectPromotion) return `let's keep this about our project.${mute}`;
       if (facts.searchSpamPattern) return `please stop spamming that here.${mute}`;
       return `${facts.promotionTopicName ? `keep the pitches in ${facts.promotionTopicName}, please.` : "please stop dropping sales pitches here."}${mute}`;
@@ -443,7 +445,8 @@ export async function generatePersonaSolicitationWarning(
     return `No promos in ${facts.currentTopicName}, please.${where}${mutePart} Repeated offenses escalate to a kick or ban.`;
   };
 
-  const violationDescription = facts.isCompetingProjectPromotion
+  const violationDescription = facts.isDmSpam ? "repeatedly posting the same unsolicited check-DM nudge"
+    : facts.isCompetingProjectPromotion
     ? "rallying members to promote a different, unrelated project/token (not this community's own)"
     : facts.searchSpamPattern
       ? "posting off-topic spam (an instruction to search/look something up that has nothing to do with this project)"
@@ -463,7 +466,8 @@ export async function generatePersonaSolicitationWarning(
   // redundant or robotic. The authorized-fact validator downstream still
   // bounds what may be CLAIMED; it never forces a true fact into the text.
   const authorizedFacts: string[] = [
-    facts.searchSpamPattern
+    facts.isDmSpam ? "The sender repeatedly posted the same check-DM nudge. You are intervening about repetition, not answering that private request."
+    : facts.searchSpamPattern
       ? `The message you removed was off-topic spam -- an instruction to go search/look something up, unrelated to this project.`
       : `The message you removed was unsolicited promotion.`,
     `It was posted in "${facts.currentTopicName}" -- if you name the place at all, that's its real name.`,
@@ -488,7 +492,7 @@ export async function generatePersonaSolicitationWarning(
     authorizedFacts.push(`This was promoting a DIFFERENT project/token, not this community's own -- that's never allowed here in any form. HARD RULE: do NOT suggest anywhere else to post it, and do NOT mention any Promotion channel/topic/contact.`);
   } else if (facts.searchSpamPattern === "coordinated") {
     authorizedFacts.push(`Several different accounts have posted this same off-topic spam back to back. HARD RULE: address the room generally -- do NOT name, mention, or single out this one person.`);
-  } else if (facts.searchSpamPattern === "isolated") {
+  } else if (facts.searchSpamPattern === "isolated" || facts.isDmSpam) {
     authorizedFacts.push(`There's no "right place" to redirect this to -- it isn't a project pitch, it's just spam. Don't offer an alternative destination.`);
   } else if (facts.promotionTopicName) {
     authorizedFacts.push(
