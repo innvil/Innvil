@@ -179,6 +179,23 @@ test("a failed/errored call degrades to UNKNOWN_OR_AMBIGUOUS/low rather than thr
   });
 });
 
+test("actual classifier request includes project identity, topic policy and hidden link evidence", async () => {
+  await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
+    await withFetchSpy(anthropicTextResponse("CATEGORY: SAFE_RELEVANT_LINK\nCONFIDENCE: high"), async (calls) => {
+      await classifyLinkIntent("buy here", "Ram: how do I buy?", undefined, {
+        project: { name: "Byte Humor", overview: "Our token is BYTE." },
+        resources: [{ url: "https://raydium.io/swap/?outputMint=BYTE", kind: "TRADING", text: "Our listing" }],
+        senderRole: "member", topic: { name: "Promotion", solicitationAllowed: true },
+        links: [{ url: "https://x.com/HotCommunities/status/123", status: "unavailable" }],
+      });
+      const prompt = JSON.stringify(calls[0].body);
+      for (const expected of ["Byte Humor", "outputMint=BYTE", "HotCommunities/status/123", "solicitationAllowed", "unavailable", "how do I buy"]) assert.ok(prompt.includes(expected), expected);
+      assert.match(systemOf(calls[0].body), /Relevant third-party coverage/);
+      assert.match(systemOf(calls[0].body), /not a sales pitch merely because those words occur/);
+    });
+  });
+});
+
 test("recent conversation context is included in the request for grounding", async () => {
   await withEnvAsync({ ANTHROPIC_API_KEY: "sk-ant-test" }, async () => {
     await withFetchSpy(anthropicTextResponse("CATEGORY: SAFE_RELEVANT_LINK\nCONFIDENCE: high"), async (calls) => {

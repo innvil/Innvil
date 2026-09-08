@@ -53,3 +53,9 @@ Each completed fix gets its own commit after relevant tests pass.
   Promotion-topic/service-pitch exemption retained. 199 policy/topic tests,
   146 runtime tests and `tsc --noEmit` passed locally. Topic discovery and
   classification evidence are addressed separately below, not claimed fixed.
+- Fix 2a: classifier now receives project identity, stored resource evidence,
+  Promotion policy and topic-scoped context; adapter includes hidden hyperlink
+  destinations. Explicit relevance/authority/missing-evidence rules cover
+  third-party project coverage and marketing discussion. Local classifier,
+  link-context and runtime suites plus TypeScript passed. This is context
+  plumbing, not proof of real-model accuracy or remote preview support.

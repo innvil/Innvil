@@ -1,4 +1,5 @@
 import "server-only";
+import { extractMessageLinks, type TelegramTextEntity } from "./link-context";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient, providerKeySecret } from "@/src/lib/supabase/admin";
@@ -224,6 +225,8 @@ export type TelegramMessage = {
   from?: TelegramUser;
   text?: string;
   caption?: string;
+  entities?: TelegramTextEntity[];
+  caption_entities?: TelegramTextEntity[];
   reply_to_message?: { message_id: number };
   /** Telegram Forum (topic-enabled supergroup) support -- identifies which
    *  topic/sub-channel this message was posted in (e.g. a "General" vs
@@ -2368,7 +2371,7 @@ export async function runLinkModeration(
 ): Promise<{ handled: boolean; collabRoutable: boolean }> {
   if (!deployments.length) return { handled: false, collabRoutable: false };
 
-  const links = extractLinks(event.text);
+  const links = event.links ?? extractLinks(event.text);
   // A bare mention of one of THIS community's own deployed Watcher bot
   // usernames is addressing, not a link/promotion candidate -- excluded
   // BEFORE anything else runs, using the SAME trusted runtime bot identity
@@ -2428,9 +2431,9 @@ export async function runLinkModeration(
   // EARLIER, unrelated real link this same sender once posted.
   const floodRepeat = hasRealLinkCandidate ? isFloodRepeat(observedState) : false;
 
-  const linkModerationContext = await loadRecentContext(admin, community.id, 8);
+  const linkModerationContext = (await loadRecentContext(admin, community.id, 25))
+    .filter(m => m.messageThreadId === event.messageThreadId && m.platformMessageId !== event.messageId).slice(-12);
   const recentContextSummary = linkModerationContext.map((m) => `${m.senderName ?? "Someone"}: ${m.text}`).join("\n");
-  const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting);
 
   // SEARCH_SPAM's own "coordinated vs. isolated" signal (2026-09-03 live
   // feedback) -- the current message has already been recorded into
@@ -2481,6 +2484,18 @@ export async function runLinkModeration(
   const currentTopic = findCommunityTopic(topics, event.messageThreadId);
   const promotionTopic = findPromotionTopic(topics);
   const solicitationAllowedHere = community.allow_solicitation === true || topicAllowsSolicitation(currentTopic?.policy);
+
+  const [projectProfile, resources] = await Promise.all([
+    community.project_id ? loadProjectProfileRow(admin, community.project_id) : Promise.resolve(null),
+    loadCommunityKnowledgeItems(admin, community.id),
+  ]);
+  const classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting, {
+    project: projectProfile,
+    resources: resources.filter(r => r.isAdminAuthor && r.url).map(r => ({ url: r.url!, kind: r.kind, text: r.text })),
+    topic: { name: currentTopic ? topicDisplayName(currentTopic) : null, solicitationAllowed: solicitationAllowedHere },
+    senderRole: isAdminOrTrusted ? "admin" : token ? "member" : "unknown",
+    links: links.filter(url => /^https?:\/\//i.test(url)).map(url => ({ url, status: "unavailable" as const })),
+  });
 
   const enforcement = decideLinkEnforcement({
     category: classification.category,
@@ -4237,6 +4252,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     sender,
     timestamp: new Date().toISOString(),
     text: message.text ?? message.caption ?? "",
+    links: extractMessageLinks(message.text ?? message.caption ?? "", message.entities ?? message.caption_entities),
     replyToMessageId: message.reply_to_message ? String(message.reply_to_message.message_id) : null,
     messageThreadId: message.message_thread_id ?? null,
     origin,

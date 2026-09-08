@@ -51,6 +51,8 @@ export interface CommunityEvent {
   sender: CommunitySender;
   timestamp: string;
   text: string;
+  /** Includes hidden hyperlink destinations from the platform adapter. */
+  links?: string[];
   replyToMessageId: string | null;
   /** Telegram Forum topic id this message was posted in (see
    *  TelegramMessage.message_thread_id) -- null for an ordinary chat or the
