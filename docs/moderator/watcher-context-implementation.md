@@ -72,3 +72,10 @@ Each completed fix gets its own commit after relevant tests pass.
   matches its actual all-conversation suppression. 418 targeted tests and
   TypeScript passed. This does not claim multilingual intent perfection;
   real-model evaluation and live Telegram testing are still required.
+- Fix 4: warning generation receives actual content, recent wording and
+  explicit audience; placeholder/identity/history guards and short failure
+  fallbacks added. Multi-sender identical spam can address the room without
+  a mention. Mute attempted before warning; failed deletion stops penalties.
+  Ordinary warning send/log retains the source topic. 247 targeted tests
+  and TypeScript passed. Broader moderation-report/concurrency auditing
+  and empirical persona quality remain separate verification work.

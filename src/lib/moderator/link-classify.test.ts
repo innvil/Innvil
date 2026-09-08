@@ -358,6 +358,29 @@ const noMuteFacts: SolicitationWarningFacts = {
   currentTopicName: "General", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: null, warningNumber: 1,
 };
 
+test("room warning rejects leaked placeholders and mentions and falls back to a short unaddressed reminder", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    for (const response of ["@SofiaAds2, [user], really?", "I'm not Rhyleky", "we've been over this"]) {
+      await withFetchSpy(deepseekTextResponse(response), async () => {
+        const text = await generatePersonaSolicitationWarning("Patricia", persona, { ...noMuteFacts, audience: "room", messageText: "DM me to grow your market cap", priorPublicWarning: false });
+        assert.equal(text, "guys, enough with the repeated spam, please.");
+      });
+    }
+  });
+});
+
+test("first warning request carries actual content and recent wording, not only a category", async () => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
+    await withFetchSpy(deepseekTextResponse("keep the pitches in Promotion, please."), async calls => {
+      await generatePersonaSolicitationWarning("Patricia", persona, { ...noMuteFacts, messageText: "Hello dev, DM me to grow", priorPublicWarning: false }, undefined, ["Earlier wording to avoid"]);
+      const prompt = systemOf(calls[0].body);
+      assert.match(prompt, /Hello dev, DM me to grow/);
+      assert.match(prompt, /Earlier wording to avoid/);
+      assert.match(prompt, /No prior public warning is confirmed/);
+    });
+  });
+});
+
 test("REQUIRED (2026-09-06, explicit product decision): persona solicitation warning routes to DeepSeek, never Sonnet 5", async () => {
   await withEnvAsync({ DEEPSEEK_API_KEY: "sk-deepseek-test" }, async () => {
     await withFetchSpy(deepseekTextResponse("hey, no promos in General please -- pulled that one."), async (calls) => {

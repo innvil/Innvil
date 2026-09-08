@@ -1,4 +1,5 @@
 import "server-only";
+import { warningAudience } from "./warning-presentation";
 import { conversationSilenceReason } from "./conversation-intent";
 import { inspectMessageLinks } from "./link-inspection";
 import { extractMessageLinks, type TelegramTextEntity } from "./link-context";
@@ -1352,6 +1353,7 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
       chat_id: chatId,
       text: action.text,
       reply_to_message_id: action.replyToMessageId ?? undefined,
+      ...(action.kind === "SEND_TEXT" && action.messageThreadId != null ? { message_thread_id: action.messageThreadId } : {}),
       ...(parseMode ? { parse_mode: parseMode } : {}),
     });
     return { sentMessageId: res.ok ? String(res.result.message_id) : null, ok: res.ok, error: res.ok ? undefined : res.error };
@@ -2543,7 +2545,13 @@ export async function runLinkModeration(
   // task-route or chat about its now-gone content.
   if (token) {
     const deleteResult = await executeAction(admin, chatId, { kind: "DELETE_MESSAGE", targetDeploymentId: enforcer.deploymentId, targetMessageId: event.messageId });
-    if (!deleteResult.ok) console.error("[telegram/community] link moderation DELETE_MESSAGE failed", deleteResult.error);
+    if (!deleteResult.ok) {
+      await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", "DELETE_FAILED", enforcement.reason, { error: deleteResult.error });
+      // No successful deletion: do not announce one or advance the penalty.
+      return { handled: true, collabRoutable: false };
+    }
+  } else {
+    return { handled: true, collabRoutable: false };
   }
 
   if (enforcement.kind === "DELETE_BAN") {
@@ -2838,6 +2846,7 @@ export async function runLinkModeration(
   // undefined for every other category, matching generatePersonaSolicitation
   // Warning's own contract.
   const searchSpamPattern = isSearchSpamEnforcement ? (isCoordinatedSearchSpam ? "coordinated" as const : "isolated" as const) : undefined;
+  const audience = searchSpamPattern === "coordinated" ? "room" : warningAudience(event.text, senderPlatformId, priorRoomMessages, now);
   // Solicitation warnings are now PERSONA-VOICED (per explicit live product
   // feedback: "the way it says a warning is too generic... it should be
   // persona based, not a generic bot warning") -- every stated fact (the
@@ -2885,8 +2894,22 @@ export async function runLinkModeration(
   // identical to something this Watcher just said -- nothing new to
   // communicate. Enforcement/state-persistence below is UNAFFECTED either
   // way; only the SEND_TEXT/insert block is skipped.
+  // Attempt the restriction before phrasing any claim that it happened.
+  let muteFailed = false;
+  let muteError: string | undefined;
+  if (enforcement.muteMinutes && token) {
+    const muteResult = await executeAction(admin, chatId, {
+      kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "MUTE", muteMinutes: enforcement.muteMinutes,
+    });
+    if (!muteResult.ok) {
+      console.error("[telegram/community] link moderation RESTRICT_USER (mute) failed", muteResult.error);
+      muteFailed = true;
+      muteError = muteResult.error;
+    }
+  }
+
   const warningText: string | null = isScamEnforcement
-    ? await generatePersonaScamWarning(
+    ? muteFailed ? `${mention}, that link looks unsafe—please don't share it here.` : await generatePersonaScamWarning(
         enforcer.moderatorName,
         enforcer.persona,
         mention,
@@ -2899,7 +2922,7 @@ export async function runLinkModeration(
           enforcer.moderatorName,
           enforcer.persona,
           mention,
-          { isEscalatedOffense: false, muteMinutes: enforcement.muteMinutes, banHours: undefined },
+          { isEscalatedOffense: false, muteMinutes: muteFailed ? undefined : enforcement.muteMinutes, banHours: undefined },
           aiRouting,
           recentOwnWarnings
         )
@@ -2909,7 +2932,10 @@ export async function runLinkModeration(
           enforcer.persona,
           {
             currentTopicName: topicDisplayName(currentTopic),
-            muteMinutes: enforcement.muteMinutes,
+            muteMinutes: muteFailed ? undefined : enforcement.muteMinutes,
+            audience,
+            messageText: event.text,
+            priorPublicWarning: audience === "individual" && recentOwnWarnings.some(w => w.includes(mention)),
             promotionTopicName: redirectName,
             // Never speak a raw link in the warning text -- see the doc
             // comment on redirectName above.
@@ -2923,7 +2949,8 @@ export async function runLinkModeration(
           recentOwnWarnings
         );
         if (generatedWarning === null) return null;
-        return searchSpamPattern === "coordinated" ? generatedWarning : `${mention}, ${generatedWarning}`;
+        const safeBody = generatedWarning.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return audience === "room" ? safeBody : `${mention}, ${safeBody}`;
       })();
   // Same live-bug protection as the DELETE_KICK branch above (migration
   // 0126): a rapid burst of messages from the same person could otherwise
@@ -2944,6 +2971,7 @@ export async function runLinkModeration(
       interactionDepth: 0,
       causationMessageId: event.messageId,
       parseMode: "HTML",
+      messageThreadId: event.messageThreadId,
     });
     if (sendResult.sentMessageId) {
       await admin.from("community_messages").insert({
@@ -2963,25 +2991,8 @@ export async function runLinkModeration(
         // is harmless (structurally distinct wording, unlikely to ever
         // register as similar) while keeping the tagging semantically honest.
         origin: "MODERATION_WARNING",
+        message_thread_id: event.messageThreadId,
       });
-    }
-  }
-
-  // The mute itself (a REAL Telegram restriction, separate from the SEND_TEXT
-  // warning above) -- executed whenever this violation includes one,
-  // regardless of category, and NEVER gated by noticeClaimed: the offender
-  // must always actually end up muted regardless of any notice-dedup race,
-  // and a duplicated mute call is silently idempotent/invisible to Telegram.
-  let muteFailed = false;
-  let muteError: string | undefined;
-  if (enforcement.muteMinutes && token) {
-    const muteResult = await executeAction(admin, chatId, {
-      kind: "RESTRICT_USER", targetDeploymentId: enforcer.deploymentId, targetPlatformUserId: senderPlatformId, mode: "MUTE", muteMinutes: enforcement.muteMinutes,
-    });
-    if (!muteResult.ok) {
-      console.error("[telegram/community] link moderation RESTRICT_USER (mute) failed", muteResult.error);
-      muteFailed = true;
-      muteError = muteResult.error;
     }
   }
 

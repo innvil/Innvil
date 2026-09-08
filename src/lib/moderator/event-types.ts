@@ -97,6 +97,7 @@ export type CommunityAction =
        *  strike warnings using a Telegram-native tg://user mention) — every
        *  other caller omits this and gets plain-text sendMessage, unchanged. */
       parseMode?: "HTML";
+      messageThreadId?: number | null;
     }
   /** bot-ack-social-behavior-spec.md — closes a bot-to-bot exchange by
    *  redirecting attention to the human community rather than continuing the
