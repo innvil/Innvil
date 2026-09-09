@@ -115,6 +115,14 @@ Each completed fix gets its own commit after relevant tests pass.
 
 ## Deployment/verification still required
 
+Final local source verification, 2026-09-09, code commit `4a63922`:
+11 separately committed code fixes; 2,444/2,444 tests passed; TypeScript
+passed; `npm run build` completed including static-page generation.
+The initial sandboxed build could not fetch existing Google Fonts; the
+network-approved retry succeeded without font/source changes. No production
+deployment, migration execution, push or live Telegram test was performed.
+Migration 0129 and the controlled acceptance run below remain release gates.
+
 Combined-path follow-up: admin-ignore now runs before conversation tasks.
 Telegram role lookup failure remains UNKNOWN rather than treating the sender
 as a regular member; ordinary penalties pause, confirmed safety protection
