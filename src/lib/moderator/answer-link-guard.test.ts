@@ -17,3 +17,12 @@ test("known host alone and a model-created buying URL are not grounding", () => 
   assert.equal(answerLinksAreGrounded(buy, "How do I buy?"), false);
   assert.equal(answerLinksAreGrounded("Check https://example.com", "Where are docs?", null, ["Docs: https://example.com"]), true);
 });
+
+test("bare destinations cannot bypass exact answer-link grounding", () => {
+  assert.equal(answerLinksAreGrounded("Buy on fake-buy-site.com", "How do I buy?", grounding), false);
+  assert.equal(answerLinksAreGrounded("raydium.io/swap/?outputMint=WRONG", "How do I buy?", grounding), false);
+  assert.equal(answerLinksAreGrounded("raydium.io/swap/?outputMint=BYTE", "How do I buy?", grounding), true);
+  assert.equal(answerLinksAreGrounded("dexscreener.com/solana/byte", "How do I buy?", grounding), false);
+  assert.equal(answerLinksAreGrounded("Docs: example.com/docs", "Where are docs?", null, ["https://example.com/docs"]), true);
+  assert.equal(answerLinksAreGrounded("https://user:secret@example.com/docs", "Where are docs?", null, ["https://example.com/docs"]), false);
+});

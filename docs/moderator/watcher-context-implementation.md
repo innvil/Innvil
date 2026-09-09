@@ -108,6 +108,10 @@ Each completed fix gets its own commit after relevant tests pass.
   Failed warning delivery is visible without misreporting a successful mute
   as failed. Four runtime success/failure combinations, 27 targeted tests
   and TypeScript passed. This does not audit every legacy media/ban path.
+- Output-link follow-up: scheme-less destinations in generated answers use
+  the same exact-resource checks as full URLs. Wrong pool/mint parameters,
+  chart-as-buy substitutions and credential-bearing URLs are rejected.
+  146 targeted generation/guard tests and TypeScript passed.
 
 ## Deployment/verification still required
 
@@ -134,3 +138,36 @@ passed; TypeScript passed. All Telegram/AI effects in these tests are mocked.
   unambiguous newer source is observed.
 - Live model accuracy, provider costs/latency, Telegram rights/topic setup,
   and production behavior have not been measured by mocked local tests.
+
+## Controlled acceptance run before production
+
+Use a separate test community, explicitly assign the Promotion policy to its
+real topic ID, and record message IDs, classification evidence, role results,
+actions, public text and memory provenance. Do not use a live community's
+members as moderation test subjects.
+
+- Admin ordinary links and growth discussion: no deletion/strike, no chatter
+  when admin acknowledgement is off; unpinned endorsed facts still captured.
+- Regular-member own-project X coverage/forwarded links, including incidental
+  publisher branding: allowed when relevant. Unreadable preview: uncertainty,
+  not deletion or a claim to have read it. This does not whitelist x.com.
+- Actual service pitches in Promotion: allowed; normal marketing discussion
+  elsewhere: allowed; genuinely unrelated unsolicited pitches: topic policy.
+- One human-directed DM nudge and passive token wish: silence. Third identical
+  unsolicited nudge within five minutes: contextual spam warning; no identity
+  correction. Verify both individual and multi-sender room-warning audiences.
+- Endorse a live trading URL and a separate chart in one admin announcement;
+  ask how to buy from another topic. Exact trading destination only. Edit or
+  withdraw it and confirm the old destination is no longer recalled. Test an
+  extraction failure, recovery, and conflicting announcements too.
+- Admin questions/scam warnings/member reposts must not become confirmed
+  official resources. A bare unlabeled admin link may remain ambiguous;
+  endorse and label its purpose explicitly to make it usable for buying.
+- Queue a reply, then edit its trigger or have an admin take over that actual
+  conversation. No stale reply. A role-lookup failure must not bypass ignore.
+- Revoke deletion/mute rights in the test group and verify truthful warning
+  and private report outcomes; do not infer successful actions from wording.
+
+Review multiple real-model runs for false deletions, unsolicited chatter,
+wrong URLs, repetition and invented warning history. Local tests cover policy
+and orchestration; they do not establish a real-model accuracy percentage.
