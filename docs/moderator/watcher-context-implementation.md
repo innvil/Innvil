@@ -147,6 +147,23 @@ passed; TypeScript passed. All Telegram/AI effects in these tests are mocked.
 - Live model accuracy, provider costs/latency, Telegram rights/topic setup,
   and production behavior have not been measured by mocked local tests.
 
+## Not implemented yet: official token/contract address mismatch enforcement
+
+Added at the user's request, 2026-09-09. This is a recorded requirement only;
+no address-comparison enforcement has been implemented by this update.
+
+- Extract bare token/contract addresses as well as addresses inside URLs.
+- Compare against verified, current, admin-confirmed official addresses for
+  this project, respecting chain-specific address rules and multiple approved
+  contracts. Arbitrary member-posted addresses are not authoritative.
+- Matching official address: no mismatch penalty (other safety checks remain).
+- Confirmed different address: delete and apply the ordinary warning ladder,
+  including in Promotion topics; retain existing admin exemptions.
+- No verified reference, ambiguous identity/chain or unresolved official
+  address conflict: do not invent a mismatch or impose its penalty.
+- Add explicit extraction, comparison and runtime regressions. The current
+  generic text-promotion classifier does not reliably enforce this rule.
+
 ## Controlled acceptance run before production
 
 Use a separate test community, explicitly assign the Promotion policy to its
