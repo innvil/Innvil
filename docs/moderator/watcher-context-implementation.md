@@ -97,6 +97,11 @@ Each completed fix gets its own commit after relevant tests pass.
   safe-relevant/approved-link exemptions remain. Full suite: 2,440 passed;
   TypeScript passed. These bounded English-pattern checks do not claim
   comprehensive multilingual or paraphrased-spam detection.
+- Audience follow-up: exact watcher-handle matching excludes longer handles,
+  email addresses and URL paths. Queued replies now cancel when admin-ignore
+  is enabled and a fresh role lookup is unavailable (including missing bot
+  credentials), matching immediate conversation handling. 255 targeted
+  tests and TypeScript passed, including actual deferred-reply orchestration.
 
 ## Deployment/verification still required
 

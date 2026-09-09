@@ -565,6 +565,14 @@ test("REQUIRED: every action carries contextual reasons, and none of them is a p
 });
 
 /* ================================================= resolveDirectedModerator ==== */
+
+test("watcher handles require an exact mention, not a longer username or email", () => {
+  const bot = { deploymentId: "dep", name: "Patricia", botUsername: "watcher_bot" };
+  for (const text of ["@watcher_bot_other can you help?", "name@watcher_bot.com", "https://example.test/@watcher_bot"]) {
+    assert.equal(resolveDirectedModerator(text, [bot]), null, text);
+  }
+  assert.deepEqual(resolveDirectedModerator("hey (@WATCHER_BOT), help?", [bot]), { deploymentId: "dep", isTypo: false });
+});
 // Reproduces the exact live bug: "what persona are you kwan?" (no @mention)
 // went unanswered until the human typed "@kwan_mod_bot" explicitly.
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runLinkModeration, handleHumanMessage, createRequestTimer, type ChatterDeployment } from "./community-runtime";
+import { runLinkModeration, handleHumanMessage, processDuePendingReply, createRequestTimer, type ChatterDeployment } from "./community-runtime";
 import type { CommunityEvent } from "./event-types";
 import { DEFAULT_MODERATOR_PERSONA } from "./domain";
 
@@ -21,7 +21,8 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
         : table === "telegram_bot_integrations" ? [{ id: "integration", virtual_moderator_id: "mod", username: "watcher_bot" }]
         : table === "watch_community_topics" ? [{ message_thread_id: 31, topic_name: "Promotion", custom_name: null, policy: topicPolicy }]
         : table === "moderator_link_warning_state" && priorWarnings ? [{ warning_count: priorWarnings, warning_at: new Date().toISOString() }]
-        : table === "community_messages" ? context : [];
+        : table === "community_messages" ? context
+        : table === "communities" ? [{ id: "community", acknowledge_admin_mod: false }] : [];
       const query = {
         select() { return query; }, eq() { return query; }, in() { return query; }, is() { return query; }, not() { return query; }, order() { return query; }, limit() { return query; }, range() { return query; },
         maybeSingle: async () => ({ data: rows[0] ?? null, error: null }),
@@ -133,6 +134,23 @@ test("repeated DM nudges get a contextual spam warning, not an identity correcti
         assert.match(String(warning.body.text), /DM nudges/);
         assert.doesNotMatch(String(warning.body.text), /not Rhyleky|not the dev|\[user\]/i);
       }
+    });
+  }
+});
+
+test("queued replies recheck admin-ignore and cancel on unavailable role or missing token", async () => {
+  const text = "@watcher_bot how do I buy?";
+  for (const role of ["administrator", "unavailable", "missing-token"]) {
+    await runFixture({ role, context: [{ text, platform_message_id: "42", message_thread_id: 31 }] }, async ({ calls, fixture }) => {
+      if (role === "missing-token") fixture.db.rpc = async () => ({ data: null as never, error: null });
+      const now = new Date();
+      await processDuePendingReply(fixture.db as never, {
+        id: "pending", community_id: "community", panel_id: null, deployment_id: "dep", chat_id: "-100123", message_thread_id: 31,
+        trigger_platform_message_id: "42", sender_platform_id: "7", sender_display_name: "Member", sender_username: "member",
+        message_text: text, action_kind: "ANSWER", scheduled_for: now.toISOString(), created_at: new Date(now.getTime() - 60_000).toISOString(),
+      }, now);
+      assert.equal(calls.some(c => c.method === "sendMessage"), false);
+      assert.ok(fixture.writes.some(w => w.table === "watch_pending_replies" && w.value.status === "cancelled" && w.value.cancel_reason === "engagement_suppressed_for_sender"), role);
     });
   }
 });

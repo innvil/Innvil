@@ -4551,7 +4551,7 @@ async function finishPendingReply(admin: SupabaseClient, id: string, status: "ca
  *  the account's CURRENT state, not a stale snapshot) and for safety (a
  *  decrypted BYO credential/aiRouting object is never written to the
  *  watch_pending_replies row in the first place). */
-async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDbRow, now: Date): Promise<void> {
+export async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDbRow, now: Date): Promise<void> {
   if (isPendingReplyStale({ scheduledFor: row.scheduled_for }, now)) {
     await finishPendingReply(admin, row.id, "expired");
     return;
@@ -4610,8 +4610,8 @@ async function processDuePendingReply(admin: SupabaseClient, row: PendingReplyDb
     replyToOtherParticipant: !!originalMessage.reply_to_platform_message_id && !replyTarget,
     otherParticipantNames: recentContext.filter(m => m.senderType === "HUMAN" && m.senderPlatformId !== row.sender_platform_id).map(m => m.senderName ?? ""),
   });
-  const suppressAdmin = community.acknowledge_admin_mod !== true && token
-    && await isSenderAdminOrTrusted(token, row.chat_id, row.sender_platform_id);
+  const suppressAdmin = community.acknowledge_admin_mod !== true
+    && (!token || await resolveSenderRole(token, row.chat_id, row.sender_platform_id) !== "member");
   if (silenceReason || suppressAdmin) {
     await finishPendingReply(admin, row.id, "cancelled", silenceReason ?? "engagement_suppressed_for_sender");
     return;

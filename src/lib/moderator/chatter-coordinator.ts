@@ -525,7 +525,8 @@ export function resolveDirectedModerator(text: string, moderators: ModeratorIden
   const lower = text.toLowerCase();
 
   // @username is unambiguous by construction — Telegram usernames are unique.
-  const usernameHit = moderators.find((m) => m.botUsername && lower.includes(`@${m.botUsername.toLowerCase()}`));
+  const mentionedHandles = new Set(Array.from(lower.matchAll(/(?:^|[\s(,!?])@([a-z0-9_]+)\b/g), m => m[1]));
+  const usernameHit = moderators.find((m) => m.botUsername && mentionedHandles.has(m.botUsername.toLowerCase()));
   if (usernameHit) return { deploymentId: usernameHit.deploymentId, isTypo: false };
 
   const tokens = tokenize(text);
