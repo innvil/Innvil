@@ -22,7 +22,7 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
         : table === "watch_community_topics" ? [{ message_thread_id: 31, topic_name: "Promotion", custom_name: null, policy: topicPolicy }]
         : table === "moderator_link_warning_state" && priorWarnings ? [{ warning_count: priorWarnings, warning_at: new Date().toISOString() }]
         : table === "community_messages" ? context
-        : table === "communities" ? [{ id: "community", acknowledge_admin_mod: false }] : [];
+        : table === "communities" ? [{ id: "community", acknowledge_admin_mod: false, chat_id: "-100999", title: "Test Community" }] : [];
       const query = {
         select() { return query; }, eq() { return query; }, in() { return query; }, is() { return query; }, not() { return query; }, order() { return query; }, limit() { return query; }, range() { return query; },
         maybeSingle: async () => ({ data: rows[0] ?? null, error: null }),
@@ -38,7 +38,7 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
   return { db, writes, touched };
 }
 
-async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; context?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
+async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; failWarning?: boolean; context?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
   const previousFetch = globalThis.fetch;
   const env = { PROVIDER_KEY_SECRET: process.env.PROVIDER_KEY_SECRET, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY };
   process.env.PROVIDER_KEY_SECRET = "test-secret";
@@ -52,7 +52,7 @@ async function runFixture(opts: { policy?: string; role?: string; category?: str
     calls.push({ method, body });
     const payload = String(url).includes("api.telegram.org")
       ? method === "getChatMember" ? opts.role === "unavailable" ? { ok: false, description: "lookup unavailable" } : { ok: true, result: { status: opts.role ?? "member" } }
-        : (method === "deleteMessage" && opts.failDelete) || (method === "restrictChatMember" && opts.failMute) ? { ok: false, description: "permission denied" }
+        : (method === "deleteMessage" && opts.failDelete) || (method === "restrictChatMember" && opts.failMute) || (method === "sendMessage" && body.chat_id === "-100123" && opts.failWarning) ? { ok: false, description: "permission denied" }
         : { ok: true, result: method === "sendMessage" ? { message_id: 88 } : true }
       : { content: [{ type: "text", text: `CATEGORY: ${opts.category ?? "UNSOLICITED_PROMOTION"}\nCONFIDENCE: high` }] };
     return new Response(JSON.stringify(payload), { status: 200 });
@@ -152,5 +152,25 @@ test("queued replies recheck admin-ignore and cancel on unavailable role or miss
       assert.equal(calls.some(c => c.method === "sendMessage"), false);
       assert.ok(fixture.writes.some(w => w.table === "watch_pending_replies" && w.value.status === "cancelled" && w.value.cancel_reason === "engagement_suppressed_for_sender"), role);
     });
+  }
+});
+
+test("private reports distinguish successful mute, failed mute, and failed public warning delivery", async () => {
+  for (const failMute of [false, true]) {
+    for (const failWarning of [false, true]) {
+      await runFixture({ priorWarnings: 1, failMute, failWarning }, async ({ fixture }) => {
+        await runLinkModeration(fixture.db as never, null, { id: "community", project_id: "project" }, "-100123", event(), [deployment], new Date());
+        const report = fixture.writes.find(w => w.table === "watch_moderation_reports")?.value;
+        assert.ok(report);
+        assert.equal((report.action_types as string[]).includes("warning"), !failWarning);
+        assert.equal(report.warning_number, failWarning ? null : 2);
+        assert.equal(report.mute_minutes, failMute ? null : 10);
+        const text = String(report.report_text);
+        if (failMute) { assert.match(text, /Mute attempt failed/); assert.doesNotMatch(text, /User muted for/); }
+        else assert.match(text, /User muted for 10 minutes/);
+        if (failWarning) { assert.match(text, /Public warning delivery failed/); assert.doesNotMatch(text, /Warning 2 of/); }
+        else assert.match(text, /Warning 2 of/);
+      });
+    }
   }
 });

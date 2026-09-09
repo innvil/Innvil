@@ -2959,6 +2959,8 @@ export async function runLinkModeration(
   // comment.
   const noticeClaimed = await claimLinkEnforcementNotice(admin, community.id, senderPlatformId, enforcement.reason, now);
 
+  let publicWarningSent = false;
+  let publicWarningError: string | null = null;
   if (noticeClaimed && warningText !== null && token) {
     const sendResult = await executeAction(admin, chatId, {
       kind: "SEND_TEXT",
@@ -2971,7 +2973,9 @@ export async function runLinkModeration(
       parseMode: "HTML",
       messageThreadId: event.messageThreadId,
     });
-    if (sendResult.sentMessageId) {
+    publicWarningSent = sendResult.ok && !!sendResult.sentMessageId;
+    if (!publicWarningSent) publicWarningError = "Public warning delivery failed.";
+    if (publicWarningSent && sendResult.sentMessageId) {
       await admin.from("community_messages").insert({
         panel_id: panelId,
         community_id: community.id,
@@ -3010,11 +3014,13 @@ export async function runLinkModeration(
       event: {
         userMention: mention,
         violationCategory,
-        warningNumber: enforcement.warningNumber,
-        warningLimit: isScamEnforcement ? 1 : isNegativeStatementWarn ? 2 : SOLICITATION_WARNING_LIMIT,
-        muteMinutes: enforcement.muteMinutes ?? null,
-        actionsTaken: enforcement.muteMinutes ? ["warning", "temporary_mute"] : ["warning"],
-        reasonText: isScamEnforcement
+        warningNumber: publicWarningSent ? enforcement.warningNumber : null,
+        warningLimit: publicWarningSent ? (isScamEnforcement ? 1 : isNegativeStatementWarn ? 2 : SOLICITATION_WARNING_LIMIT) : null,
+        muteMinutes: muteFailed ? null : enforcement.muteMinutes ?? null,
+        // Mute entries include attempted restrictions; the report formatter
+        // explicitly renders their failure. Warning entries mean delivered.
+        actionsTaken: [...(enforcement.muteMinutes ? ["temporary_mute" as const] : []), ...(publicWarningSent ? ["warning" as const] : [])],
+        reasonText: (isScamEnforcement
           ? "First confirmed scam/phishing link from this member."
           : isCompetingProjectEnforcement
             ? (enforcement.warningNumber === 1
@@ -3029,11 +3035,12 @@ export async function runLinkModeration(
                 ? "Second confirmed unfounded negative claim/accusation about the project after a silently-removed first offense."
                 : enforcement.warningNumber === 1
                   ? "First confirmed spam/unsolicited-promotion violation."
-                  : "Repeated spam/unsolicited-promotion after a prior warning.",
+                  : "Repeated spam/unsolicited-promotion after a prior warning.")
+          + (publicWarningSent ? "" : ` Recorded violation ${enforcement.warningNumber}; ${publicWarningError ?? "no public warning was sent."}`),
         previousEnforcementSummary: [],
         purgedCount: null, purgeFailed: false, purgeFailureReason: null,
         telegramActionFailed: muteFailed,
-        telegramFailureReason: muteFailed ? (muteError ?? "The Watcher does not currently have permission to restrict members.") : null,
+        telegramFailureReason: muteFailed ? [muteError ?? "The Watcher does not currently have permission to restrict members.", publicWarningError].filter(Boolean).join(" ") : null,
       },
     });
   }

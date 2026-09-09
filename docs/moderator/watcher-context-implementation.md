@@ -102,6 +102,12 @@ Each completed fix gets its own commit after relevant tests pass.
   is enabled and a fresh role lookup is unavailable (including missing bot
   credentials), matching immediate conversation handling. 255 targeted
   tests and TypeScript passed, including actual deferred-reply orchestration.
+- Report follow-up: warning reports only claim a public warning after
+  confirmed delivery, distinguish internal violation count from delivered
+  warnings, and store no successful mute duration on a failed restriction.
+  Failed warning delivery is visible without misreporting a successful mute
+  as failed. Four runtime success/failure combinations, 27 targeted tests
+  and TypeScript passed. This does not audit every legacy media/ban path.
 
 ## Deployment/verification still required
 
