@@ -20,6 +20,9 @@ watchers (including older panel-owned watchers). There is no fabricated backfill
 of historical signup origin. Accounts with no such evidence cannot be classified
 retroactively. First Watch date and original Innvil signup date are separate.
 
+Access labels and active-subscription counts describe direct Watch entitlements
+and trials, not legacy Forge-panel add-on billing. A legacy panel user's absence
+of a direct subscription is not presented as proof they have no watcher access.
 Summary counts cover all known Watch accounts; filters affect the directory's
 matching count and rows. Refresh is manual. Counts are not Telegram community
 member counts, and this feature does not add notifications.

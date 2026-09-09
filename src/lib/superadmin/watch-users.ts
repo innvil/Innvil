@@ -19,6 +19,6 @@ export function normalizeWatchUsersQuery(input: WatchUsersQuery = {}) {
     recentDays: input.recentDays === 7 || input.recentDays === 30 ? input.recentDays : 0 };
 }
 export function watchUserStatus(user: Pick<WatchUser, "accessStatus" | "manualGrant">): string {
-  if (user.accessStatus === "subscription") return user.manualGrant ? "Active · manual grant" : "Active subscription";
-  return { trial: "Active trial", expired: "Expired", cancelled: "Cancelled", inactive: "Inactive", onboarding: "No active plan" }[user.accessStatus];
+  if (user.accessStatus === "subscription") return user.manualGrant ? "Active · manual grant" : "Active direct subscription";
+  return { trial: "Active trial", expired: "Direct access expired", cancelled: "Direct subscription cancelled", inactive: "Direct subscription inactive", onboarding: "No active direct subscription/trial" }[user.accessStatus];
 }

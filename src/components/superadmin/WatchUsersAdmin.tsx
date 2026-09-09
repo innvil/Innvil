@@ -35,9 +35,9 @@ export function WatchUsersAdmin() {
   const buttonClass = "border fp-line-soft px-3 py-2 rounded-lg text-sm disabled:opacity-40";
   return <Card title="Innvil Watch users" icon={Users}>
     <div className="space-y-5">
-      <p className="text-sm fp-text-dim">Newest Watch accounts first. Existing shared accounts appear when they have recorded Watch activity; new Watch signups are also included before setup. First Watch activity is not necessarily the original account signup date.</p>
+      <p className="text-sm fp-text-dim">Newest Watch accounts first. Existing shared accounts appear when they have recorded Watch activity; new Watch signups are also included before setup. First Watch activity is not necessarily the original account signup date. Access below covers direct Watch subscriptions and trials; legacy Forge-panel add-on access is managed under Forge panels.</p>
       {data && <div className="grid grid-cols-2 lg:grid-cols-5 gap-3" aria-label="All known Watch accounts">
-        {[["Known Watch users", data.summary.total], ["New in 7 days", data.summary.new7Days], ["New in 30 days", data.summary.new30Days], ["Active subscriptions / grants", data.summary.activeSubscriptions], ["Active trials", data.summary.activeTrials]].map(([label, value]) =>
+        {[["Known Watch users", data.summary.total], ["New in 7 days", data.summary.new7Days], ["New in 30 days", data.summary.new30Days], ["Active direct subscriptions / grants", data.summary.activeSubscriptions], ["Active trials", data.summary.activeTrials]].map(([label, value]) =>
           <div key={label} className="rounded-lg border fp-line-soft p-3"><p className="text-xs fp-text-dim">{label}</p><p className="text-2xl fp-gold">{value}</p></div>)}
       </div>}
       <form className="flex flex-wrap gap-2 items-end" onSubmit={e => { e.preventDefault(); setPage(1); setQuery(search.trim()); setRefresh(v => v + 1); }}>

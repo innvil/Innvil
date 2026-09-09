@@ -45,5 +45,5 @@ test("signup product marker only recognizes exact Watch host and does not confer
 test("Watch status distinguishes manual grants and inactive accounts", () => {
   assert.equal(watchUserStatus({ accessStatus: "subscription", manualGrant: true }), "Active · manual grant");
   assert.equal(watchUserStatus({ accessStatus: "trial", manualGrant: false }), "Active trial");
-  assert.equal(watchUserStatus({ accessStatus: "onboarding", manualGrant: false }), "No active plan");
+  assert.equal(watchUserStatus({ accessStatus: "onboarding", manualGrant: false }), "No active direct subscription/trial");
 });
