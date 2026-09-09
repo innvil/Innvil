@@ -8,6 +8,7 @@ import {
   Wrench, Users,
 } from "lucide-react";
 import { WatchDevOpsAdmin } from "./WatchDevOpsAdmin";
+import { WatchUsersAdmin } from "./WatchUsersAdmin";
 import { BotManagerCampaignsAdmin } from "./BotManagerCampaignsAdmin";
 import { TelegramLeadsAdmin } from "./TelegramLeadsAdmin";
 import { Card, StatCard, Pill } from "@/src/components/ui";
@@ -1530,7 +1531,8 @@ function SuperadminConfirmModal({
 /* ---------------- Shell ---------------- */
 const TABS = [
   { k: "overview", label: "Overview", icon: LayoutGrid },
-  { k: "panels", label: "Panels", icon: Wallet },
+  { k: "panels", label: "Forge panels", icon: Wallet },
+  { k: "watch-users", label: "Watch users", icon: Users },
   { k: "products", label: "Products", icon: Boxes },
   { k: "payments", label: "Platform payments", icon: CreditCard },
   { k: "archived-payments", label: "Archived payments", icon: EyeOff },
@@ -1563,7 +1565,7 @@ export function SuperAdminDashboard() {
         </Link>
       </div>
 
-      <div className="px-4 sm:px-8 pt-4 border-b fp-line-soft flex gap-1">
+      <div className="px-4 sm:px-8 pt-4 border-b fp-line-soft flex gap-1 overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.k}
@@ -1579,6 +1581,9 @@ export function SuperAdminDashboard() {
         {tab === "overview" && (
           <>
             <OverviewTab />
+            <Card title="Innvil Watch" icon={Users}>
+              <button onClick={() => setTab("watch-users")} className="fp-gold text-sm">View Watch users, recent signups and account access →</button>
+            </Card>
             <Card title="Platform payments" icon={Lock}>
               <p className="fp-text-dim text-sm">
                 Configure how owners pay Innvil under <button onClick={() => setTab("payments")} className="fp-gold">Platform payments</button>.
@@ -1588,6 +1593,7 @@ export function SuperAdminDashboard() {
           </>
         )}
         {tab === "panels" && <PanelsTab />}
+        {tab === "watch-users" && <WatchUsersAdmin />}
         {tab === "products" && <ProductsAdmin />}
         {tab === "payments" && <PaymentsTab />}
         {tab === "archived-payments" && <ArchivedPaymentsTab />}

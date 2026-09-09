@@ -5,6 +5,7 @@ import { createClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { ensureProfile } from "@/src/lib/auth";
 import { isTrustedWatchHost } from "@/src/lib/config";
+import { signupProductForHost } from "@/src/lib/auth/signup-product";
 import type { UserRole } from "@/src/types/db";
 
 type AuthResult =
@@ -70,10 +71,12 @@ export async function signUpAction(
   opts?: { displayName?: string; role?: UserRole }
 ): Promise<AuthResult> {
   const supabase = await createClient();
+  const h = await headers();
+  const signupProduct = signupProductForHost(h.get("x-forwarded-host") ?? h.get("host") ?? "");
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { display_name: opts?.displayName ?? null } },
+    options: { data: { display_name: opts?.displayName ?? null, signup_product: signupProduct } },
   });
   if (error) return { ok: false, error: error.message };
 

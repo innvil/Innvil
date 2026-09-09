@@ -201,6 +201,18 @@ and [Ethereum accounts](https://ethereum.org/developers/docs/accounts).
 
 ## Controlled acceptance run before production
 
+### Deployment record — 2026-09-09
+
+The user explicitly approved production deployment without a separate test
+community and will observe real usage. Commit
+`76a0168f328d35611d50e7fed15048150c6ee8c1` was pushed to
+`rebrand-innvil-v0.2.0` and deployed from that exact GitHub SHA. Vercel production
+deployment `dpl_9H74LaaKdrpbYXjNN5UfWthZc57Q` reached READY; production target and
+Watch alias were confirmed, and `https://watch.innvil.cloud/login` returned 200.
+The user reports migration 0129 already applied. No live-community test messages
+were sent. The acceptance cases below remain useful future checks, not evidence
+of completed live testing.
+
 Use a separate test community, explicitly assign the Promotion policy to its
 real topic ID, and record message IDs, classification evidence, role results,
 actions, public text and memory provenance. Do not use a live community's
