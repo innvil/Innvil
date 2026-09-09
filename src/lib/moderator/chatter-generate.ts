@@ -764,6 +764,9 @@ function reactionCategoryFromEmoji(emoji: string): ReactionCategory {
  *  a more exuberant one, so the dial still visibly matters without
  *  suppressing participation entirely. */
 export function personaReactionEmoji(baseEmoji: string, persona: ModeratorPersona, random: () => number = Math.random): string {
+  // Content intent outranks persona variation: warmth must not become hype,
+  // and applause/neutral acknowledgement must retain their original meaning.
+  if (["❤️", "👏", "🎉", "👍"].includes(baseEmoji)) return baseEmoji;
   const category = reactionCategoryFromEmoji(baseEmoji);
   const plain: Record<ReactionCategory, string> = { laugh: "😄", thanks: "🙏", positive: "🙂", agreement: "👍" };
   if (persona.emojiFrequency < 15) return plain[category];

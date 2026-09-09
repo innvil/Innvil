@@ -1,4 +1,6 @@
 import "server-only";
+import { ambientReactionCandidate, ambientReactionBudgetMs, AMBIENT_REACTION_EMOJIS, pickAmbientReactor } from "./ambient-reactions";
+import { classifyAmbientReaction } from "./ambient-reaction-classify";
 import { extractTokenCandidates, compareTokenContracts } from "./token-contracts";
 import { isDmNudge, isRepeatedDmNudge, isRapidMessageFlood } from "./message-repetition";
 import type { CommunitySender } from "./event-types";
@@ -1287,7 +1289,7 @@ async function recordBotAck(admin: SupabaseClient, deploymentId: string, now: Da
 
 /* --------------------------------------------------------------- outbound ---- */
 
-async function executeAction(admin: SupabaseClient, chatId: string, action: CommunityAction): Promise<{ sentMessageId: string | null; ok: boolean; error?: string }> {
+async function executeAction(admin: SupabaseClient, chatId: string, action: CommunityAction): Promise<{ sentMessageId: string | null; ok: boolean; error?: string; reactionEmoji?: string }> {
   if (action.kind === "IGNORE") return { sentMessageId: null, ok: true };
 
   const { data: deployment } = await admin
@@ -1319,7 +1321,7 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
       message_id: action.targetMessageId,
       reaction: [{ type: "emoji", emoji: action.emoji }],
     });
-    if (res.ok) return { sentMessageId: null, ok: true };
+    if (res.ok) return { sentMessageId: null, ok: true, reactionEmoji: action.emoji };
     // Defense in depth: the chosen emoji may still not be in THIS chat's
     // (or Telegram's own) allowed-reactions set even after the emoji-pool
     // fix above -- retry once with "👍", a near-universal Telegram reaction,
@@ -1331,7 +1333,7 @@ async function executeAction(admin: SupabaseClient, chatId: string, action: Comm
         message_id: action.targetMessageId,
         reaction: [{ type: "emoji", emoji: "👍" }],
       });
-      return { sentMessageId: null, ok: retry.ok, error: retry.ok ? undefined : retry.error };
+      return { sentMessageId: null, ok: retry.ok, error: retry.ok ? undefined : retry.error, reactionEmoji: retry.ok ? "👍" : undefined };
     }
     return { sentMessageId: null, ok: false, error: res.error };
   }
@@ -3539,9 +3541,9 @@ export async function handleHumanMessage(
     ? await resolveSenderRole(engagementCheckToken, chatId, event.sender.platformUserId) : "unknown");
   const senderIsAdminOrTrusted = engagementSenderRole === "admin";
 
-  // Rule 2/3: when acknowledge_admin_mod is OFF (default), the Watcher must
+  // Text rule: when acknowledge_admin_mod is OFF (default), the Watcher must
   // not voluntarily engage a real Telegram admin/mod CONVERSATIONALLY AT
-  // ALL -- no reaction, no short acknowledgement, no substantive reply, no
+  // ALL -- no short acknowledgement, no substantive reply, no
   // jumping in "to help" alongside them, not even when the admin/mod
   // directly @mentions the Watcher. Moderation/safety processing already
   // ran above and is completely independent of this flag. Same "off unless
@@ -3560,6 +3562,37 @@ export async function handleHumanMessage(
     await cancelPendingRepliesForTopic(admin, community.id, event.messageThreadId, {
       replyToPlatformMessageId: event.replyToMessageId, createdAt: event.timestamp,
     });
+  }
+
+  // Emoji-only participation has its own narrow permission, independent of
+  // prior conversation and admin TEXT acknowledgement. Moderation and trial/
+  // chatter entitlement gates already ran; unknown roles never qualify.
+  const ambient = ambientReactionCandidate(event.text, engagementSenderRole, !!event.replyToMessageId);
+  if (ambient) {
+    const { data: claimed, error: claimError } = await admin.rpc("claim_watch_ambient_reaction", {
+      p_community_id: community.id, p_message_id: event.messageId, p_is_admin: senderIsAdminOrTrusted,
+    });
+    if (claimError || claimed !== true) {
+      await logActivity(admin, panelId, community.id, null, "human_message", "SILENCE", claimError ? "ambient_reaction_claim_unavailable" : "ambient_reaction_paced_or_duplicate");
+      // Congratulations should never turn into a text reply just because a
+      // reaction was paced/unsupported. Admin updates still obey text-ignore.
+      if (!senderIsAdminOrTrusted || ambient.kind === "direct" || suppressAcknowledgementForSender) return;
+    } else {
+      const reactionBudget = ambientReactionBudgetMs(timer.totalMs());
+      const classified = ambient.kind === "direct" ? { ok: true as const, value: ambient.reaction }
+        : reactionBudget < 1000 ? { ok: false as const }
+        : await raceWithTimeout(classifyAmbientReaction(event.text, aiRouting), reactionBudget);
+      const reaction = classified.ok ? classified.value : null;
+      if (reaction) {
+        const reactorId = pickAmbientReactor(event.messageId, deployments.map(d => d.deploymentId));
+        const reactor = deployments.find(d => d.deploymentId === reactorId);
+        if (reactor) await reactAsDeployment(admin, panelId, community.id, chatId, event.messageId, reactor,
+          AMBIENT_REACTION_EMOJIS[reaction], [senderIsAdminOrTrusted ? "admin_update_reaction_only" : "ambient_congratulations_reaction_only"]);
+        return; // no task routing, queued reply, text generation or reactor fan-out
+      }
+      await logActivity(admin, panelId, community.id, null, "human_message", "SILENCE", "ambient_reaction_declined");
+      if (!senderIsAdminOrTrusted) return; // no text substitute for member congratulations
+    }
   }
 
   if (suppressAcknowledgementForSender) {
@@ -3840,7 +3873,7 @@ async function reactAsDeployment(
     await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "REACT_FAILED", reasons.join(","), { reasons, emoji, error: result.error });
     return;
   }
-  await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "REACT", reasons.join(","), { reasons, emoji });
+  await logActivity(admin, panelId, communityId, deployment.deploymentId, "human_message", "REACT", reasons.join(","), { reasons, emoji: result.reactionEmoji ?? emoji, requestedEmoji: emoji, targetMessageId });
 }
 
 /** Generates (if needed), sends, and logs one moderator's response to the

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { setCommunityAcknowledgeAdminMod } from "@/src/lib/actions/watch-dashboard";
 import { SettingsRow, SettingsSwitch } from "./SettingsRow";
 
-/** Controls all conversational engagement toward admins, independently of
+/** Controls text engagement toward admins, independently of emoji reactions,
  * official knowledge ingestion and moderation. */
 export function AcknowledgeAdminModToggle({ communityId, acknowledgeAdminMod }: { communityId: string; acknowledgeAdminMod: boolean }) {
   const [on, setOn] = useState(acknowledgeAdminMod);
@@ -23,14 +23,14 @@ export function AcknowledgeAdminModToggle({ communityId, acknowledgeAdminMod }: 
   return (
     <div className="mt-3">
       <SettingsRow
-        label="Acknowledge admins/mods"
+        label="Reply to admins/mods"
         description={
           on
             ? "Watchers may reply to admins/mods when the conversation calls for it."
-            : "Watchers stay silent toward admins/mods, including questions and direct mentions. Official knowledge capture and safety moderation are separate."
+            : "No text replies to admins/mods, including questions and direct mentions. Relevant announcements and congratulations may still receive emoji reactions. Official knowledge capture and safety moderation are separate."
         }
       >
-        <SettingsSwitch checked={on} onChange={toggle} label="Acknowledge admins/mods" disabled={busy} />
+        <SettingsSwitch checked={on} onChange={toggle} label="Reply to admins/mods" disabled={busy} />
       </SettingsRow>
       {error && <p className="text-[11px] text-red-400 mt-1">{error}</p>}
     </div>

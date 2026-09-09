@@ -39,12 +39,13 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
   return { db, writes, touched };
 }
 
-async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; failWarning?: boolean; context?: Record<string, unknown>[]; memory?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
+async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; failWarning?: boolean; failReaction?: boolean; reactionRaw?: string; context?: Record<string, unknown>[]; memory?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
   const previousFetch = globalThis.fetch;
   const env = { PROVIDER_KEY_SECRET: process.env.PROVIDER_KEY_SECRET, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY };
   process.env.PROVIDER_KEY_SECRET = "test-secret";
   process.env.ANTHROPIC_API_KEY = "test-key";
   delete process.env.DEEPSEEK_API_KEY;
+  if (opts.reactionRaw !== undefined) process.env.DEEPSEEK_API_KEY = "test-deepseek-key";
   const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
   globalThis.fetch = async (url, init) => {
     const body = String(url).includes("api.telegram.org")
@@ -54,7 +55,9 @@ async function runFixture(opts: { policy?: string; role?: string; category?: str
     const payload = String(url).includes("api.telegram.org")
       ? method === "getChatMember" ? opts.role === "unavailable" ? { ok: false, description: "lookup unavailable" } : { ok: true, result: { status: opts.role ?? "member" } }
         : (method === "deleteMessage" && opts.failDelete) || (method === "restrictChatMember" && opts.failMute) || (method === "sendMessage" && body.chat_id === "-100123" && opts.failWarning) ? { ok: false, description: "permission denied" }
+        : method === "setMessageReaction" && opts.failReaction ? { ok: false, description: "Bad Request: REACTION_INVALID" }
         : { ok: true, result: method === "sendMessage" ? { message_id: 88 } : true }
+      : String(url).includes("deepseek") ? { choices: [{ message: { content: String(body.system ?? JSON.stringify(body.messages)).includes("Classify whether an emoji-only") ? opts.reactionRaw : "OTHER" } }] }
       : { content: [{ type: "text", text: `CATEGORY: ${opts.category ?? "UNSOLICITED_PROMOTION"}\nCONFIDENCE: high` }] };
     return new Response(JSON.stringify(payload), { status: 200 });
   };
@@ -119,6 +122,71 @@ test("admin-ignore exits before the separate conversation task router", async ()
     assert.equal(fixture.touched.includes("moderator_conversation_tasks"), false);
     assert.equal(calls.some(c => c.method === "sendMessage"), false);
     assert.ok(fixture.writes.some(w => w.value.reason === "engagement_suppressed_for_sender" || JSON.stringify(w.value).includes("engagement_suppressed_for_sender")));
+  });
+});
+
+test("runtime congratulations react once with no previous exchange, text, queue or task handling", async () => {
+  for (const role of ["member", "administrator"]) await runFixture({ role }, async ({ calls, fixture }) => {
+    const e = event("Congratulations!! 🔥👌");
+    e.replyToMessageId = "41";
+    await handleHumanMessage(fixture.db as never, null, { id: "community", acknowledge_admin_mod: false }, { message_id: 42, chat: { id: -100123, type: "supergroup" }, text: e.text }, e, false, createRequestTimer("reaction-test"), {});
+    const reactions = calls.filter(c => c.method === "setMessageReaction");
+    assert.equal(reactions.length, 1);
+    assert.deepEqual(JSON.parse(String(reactions[0].body.reaction)), [{ type: "emoji", emoji: "👏" }]);
+    assert.equal(calls.some(c => c.method === "sendMessage"), false);
+    assert.equal(fixture.touched.includes("moderator_conversation_tasks"), false);
+    assert.equal(fixture.writes.some(w => w.table === "watch_pending_replies" && w.value.action_kind), false);
+  });
+});
+
+test("admin progress update semantic reaction preserves heart and admin text-ignore", async () => {
+  const text = "We received five error codes during our stress test. Progress is great, we're tired but in good spirits. Good night everyone.";
+  await runFixture({ role: "administrator", reactionRaw: JSON.stringify({ reaction: "support", quote: "we're tired but in good spirits" }) }, async ({ calls, fixture }) => {
+    await handleHumanMessage(fixture.db as never, null, { id: "community", acknowledge_admin_mod: false }, { message_id: 42, chat: { id: -100123, type: "supergroup" }, text }, event(text), false, createRequestTimer("reaction-test"), {});
+    const reactions = calls.filter(c => c.method === "setMessageReaction");
+    assert.equal(reactions.length, 1);
+    assert.deepEqual(JSON.parse(String(reactions[0].body.reaction)), [{ type: "emoji", emoji: "❤️" }]);
+    assert.equal(calls.some(c => c.method === "sendMessage"), false);
+  });
+});
+
+test("declined, invalid or unavailable semantic classification keeps admin updates silent", async () => {
+  const text = "We have an update about project testing and are reviewing the results today.";
+  for (const reactionRaw of [undefined, '{"reaction":"NONE","quote":""}', "invalid", '{"reaction":"celebration","quote":"invented success"}']) {
+    await runFixture({ role: "administrator", reactionRaw }, async ({ calls, fixture }) => {
+      await handleHumanMessage(fixture.db as never, null, { id: "community", acknowledge_admin_mod: false }, { message_id: 42, chat: { id: -100123, type: "supergroup" }, text }, event(text), false, createRequestTimer("reaction-test"), {});
+      assert.equal(calls.some(c => ["setMessageReaction", "sendMessage"].includes(c.method)), false);
+      assert.equal(fixture.touched.includes("moderator_conversation_tasks"), false);
+    });
+  }
+});
+
+test("reaction claims fail closed for cooldown, duplicate delivery or missing migration without sending text instead", async () => {
+  for (const missing of [false, true]) await runFixture({}, async ({ calls, fixture }) => {
+    const rpc = fixture.db.rpc;
+    fixture.db.rpc = async name => name === "claim_watch_ambient_reaction" ? { data: false, error: missing ? { code: "PGRST202" } as never : null } : rpc(name);
+    const text = "Congratulations!";
+    await handleHumanMessage(fixture.db as never, null, { id: "community" }, { message_id: 42, chat: { id: -100123, type: "supergroup" }, text }, event(text), false, createRequestTimer("reaction-test"), {});
+    assert.equal(calls.some(c => ["sendMessage", "setMessageReaction"].includes(c.method)), false);
+  });
+});
+
+test("role failures, deleted spam and disabled chatter cannot reach ambient reactions", async () => {
+  for (const scenario of ["unknown-role", "deleted", "disabled"] as const) await runFixture({ role: scenario === "unknown-role" ? "unavailable" : "member" }, async ({ calls, fixture }) => {
+    const text = scenario === "deleted" ? `Congratulations! ${pitch}` : "Congratulations!";
+    await handleHumanMessage(fixture.db as never, null, { id: "community", acknowledge_admin_mod: false }, { message_id: 42, chat: { id: -100123, type: "supergroup" }, text }, event(text), false, createRequestTimer("reaction-test"), {}, null, null, undefined, null, scenario !== "disabled");
+    assert.equal(calls.some(c => c.method === "setMessageReaction"), false);
+    if (scenario === "deleted") assert.ok(calls.some(c => c.method === "deleteMessage"));
+  });
+});
+
+test("Telegram rejection records reaction failure without claiming success or posting an emoji message", async () => {
+  await runFixture({ failReaction: true }, async ({ calls, fixture }) => {
+    const text = "Congratulations!";
+    await handleHumanMessage(fixture.db as never, null, { id: "community" }, { message_id: 42, chat: { id: -100123, type: "supergroup" }, text }, event(text), false, createRequestTimer("reaction-test"), {});
+    assert.equal(calls.some(c => c.method === "sendMessage"), false);
+    assert.ok(fixture.writes.some(w => w.value.decision === "REACT_FAILED"));
+    assert.equal(fixture.writes.some(w => w.value.decision === "REACT"), false);
   });
 });
 
