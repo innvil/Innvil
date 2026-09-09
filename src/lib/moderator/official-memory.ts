@@ -1,4 +1,5 @@
 import { COMMUNITY_RESOURCE_KINDS, type CommunityResourceKind, type CommunityKnowledgeItem } from "./community-message-knowledge";
+import { validatedContractSet, type TokenContractSet } from "./token-contracts";
 
 export interface OfficialMemoryResource {
   url: string | null;
@@ -6,6 +7,7 @@ export interface OfficialMemoryResource {
   status: "confirmed" | "retracted";
   /** Verbatim source evidence, never a generated factual claim. */
   quote: string;
+  tokenContracts?: TokenContractSet;
 }
 
 export function parseOfficialMemory(raw: string, text: string, urls: string[]): OfficialMemoryResource[] | null {
@@ -20,7 +22,11 @@ export function parseOfficialMemory(raw: string, text: string, urls: string[]): 
         || !text.includes(r.quote) || !(r.url === null || (typeof r.url === "string" && allowed.has(r.url)))) return null;
       // Links for consequential actions need an actual observed destination.
       if (["TRADING", "PRESALE", "CHART", "LISTING"].includes(r.kind) && !r.url) return null;
-      result.push({ url: r.url, kind: r.kind, status: r.status, quote: r.quote });
+      if (r.kind === "TOKEN_CONTRACT") {
+        const tokenContracts = validatedContractSet(r.tokenContracts, r.quote);
+        if (!tokenContracts || result.some(p => p.tokenContracts?.chain === tokenContracts.chain)) return null;
+        result.push({ url: r.url, kind: r.kind, status: r.status, quote: r.quote, tokenContracts });
+      } else result.push({ url: r.url, kind: r.kind, status: r.status, quote: r.quote });
     }
     return result;
   } catch { return null; }
@@ -53,7 +59,7 @@ export function currentOfficialMemoryItems(sources: OfficialMemorySource[]): Com
     // Missing or unresolved replacement invalidates the previous purpose as
     // well as its URL: never resurrect an even older buying destination.
     for (const prior of revisions.flatMap(s => s.resources)) {
-      if (!resources.some(r => r.url === prior.url && r.kind === prior.kind)) resources.push({ ...prior, status: "retracted" });
+      if (!resources.some(r => r.url === prior.url && r.kind === prior.kind && r.tokenContracts?.chain === prior.tokenContracts?.chain)) resources.push({ ...prior, status: "retracted" });
     }
     currentSources.push({ ...latest[0], resources });
   }
@@ -67,7 +73,7 @@ export function currentOfficialMemoryItems(sources: OfficialMemorySource[]): Com
   }
   const byUrl = new Map<string, Array<{ source: OfficialMemorySource; resource: OfficialMemoryResource }>>();
   for (const { source, resource } of allResources) {
-      const key = resource.url ?? `fact:${resource.kind}:${resource.quote}`;
+      const key = resource.kind === "TOKEN_CONTRACT" ? `contracts:${resource.tokenContracts?.chain}` : resource.url ?? `fact:${resource.kind}:${resource.quote}`;
       const existing = byUrl.get(key) ?? [];
       const latest = existing[0]?.source.revision ?? -1;
       if (source.revision > latest) byUrl.set(key, [{ source, resource }]);
@@ -75,21 +81,27 @@ export function currentOfficialMemoryItems(sources: OfficialMemorySource[]): Com
   }
   const candidates = [...byUrl.values()].flatMap(versions => {
     if (versions.some(v => v.resource.status === "retracted")) return [];
+    if (versions[0].resource.kind === "TOKEN_CONTRACT" && new Set(versions.map(v => JSON.stringify(v.resource.tokenContracts))).size !== 1) return [];
     return [versions[0]];
   });
   const singleKinds = new Set<CommunityResourceKind>(["WEBSITE", "WHITEPAPER", "DOCUMENTATION", "ROADMAP", "PRESALE", "TRADING", "TOKEN_INFORMATION", "PROJECT_STATUS"]);
   return candidates.filter(c => {
+    // A newer admin source whose extraction is unresolved might announce a
+    // replacement contract. Pause mismatch authority until it is resolved,
+    // even when that new message has no extracted kind/chain yet.
+    if (c.resource.kind === "TOKEN_CONTRACT" && sources.some(s => (s.status === "failed" || s.status === "pending") && s.revision >= c.source.revision)) return false;
     if (!singleKinds.has(c.resource.kind)) return true;
     const same = allResources.filter(r => r.resource.kind === c.resource.kind);
     const newest = Math.max(...same.map(r => r.source.revision));
     const current = candidates.filter(r => r.resource.kind === c.resource.kind && r.source.revision === newest);
     return c.source.revision === newest && new Set(current.map(r => r.resource.url ?? r.resource.quote)).size === 1;
   }).map(({ source, resource }) => ({
-    id: `${source.platform_message_id}:${resource.kind}:${resource.url ?? "text"}`,
+    id: `${source.platform_message_id}:${resource.kind}:${resource.url ?? "text"}${resource.tokenContracts ? `:${resource.tokenContracts.chain}` : ""}`,
     platformMessageId: source.platform_message_id, messageThreadId: source.message_thread_id,
     // A past pin event is provenance, not proof the post is STILL pinned.
     isAdminAuthor: true, isPinned: false, isAnnouncementTopic: source.is_announcement,
     kind: resource.kind, url: resource.url, text: resource.quote,
     createdAt: new Date(source.revision * 1000).toISOString(), sourceUrl: source.source_url,
+    ...(resource.tokenContracts ? { tokenContracts: resource.tokenContracts } : {}),
   }));
 }

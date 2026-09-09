@@ -147,12 +147,17 @@ passed; TypeScript passed. All Telegram/AI effects in these tests are mocked.
 - Live model accuracy, provider costs/latency, Telegram rights/topic setup,
   and production behavior have not been measured by mocked local tests.
 
-## Not implemented yet: official token/contract address mismatch enforcement
+## Official token/contract address mismatch enforcement
 
-Added at the user's request, 2026-09-09. This is a recorded requirement only;
-no address-comparison enforcement has been implemented by this update.
+Implemented locally after explicit user approval, 2026-09-09. Deployment and
+live verification remain outstanding; this is no longer a code backlog item.
+Verification: 2,457/2,457 tests passed, `tsc --noEmit` passed, and the production
+build completed including static-page generation. No live enforcement was run.
 
-- Extract bare token/contract addresses as well as addresses inside URLs.
+- Extract valid bare token/contract references (including the multiline
+  trade-brag example) and known token-explorer/pump.fun coin URLs, including
+  hidden Telegram links. Wallet labels, transaction routes and pool/chart
+  identifiers are not automatically treated as token contracts.
 - Compare against verified, current, admin-confirmed official addresses for
   this project, respecting chain-specific address rules and multiple approved
   contracts. Arbitrary member-posted addresses are not authoritative.
@@ -161,8 +166,38 @@ no address-comparison enforcement has been implemented by this update.
   including in Promotion topics; retain existing admin exemptions.
 - No verified reference, ambiguous identity/chain or unresolved official
   address conflict: do not invent a mismatch or impose its penalty.
-- Add explicit extraction, comparison and runtime regressions. The current
-  generic text-promotion classifier does not reliably enforce this rule.
+- Typed TOKEN_CONTRACT memory records the chain and complete approved address
+  set with verbatim admin evidence. Sets supersede per chain; same-time
+  conflicts, removed/failed edits and newer unresolved admin captures suspend
+  comparison authority rather than penalize against potentially stale data.
+- A separate deterministic mismatch flag drives the ordinary warning ladder
+  even if the generic classifier says SAFE or is uncertain. Confirmed safety
+  violations retain their own policy; public wording never equates mismatch
+  with scam, reproduces a contract address or redirects to Promotion.
+- Regression tests cover extraction, source validation, multi-chain/multiple
+  contracts, replacements/withdrawals/conflicts, policy and actual runtime
+  delete/warn/no-penalty paths. Telegram and AI calls are mocked.
+
+### Address feature setup and bounds
+
+Migration 0129 is still required; typed resources use its existing JSON column,
+so no additional migration is necessary for this feature. Send a NEW verified
+admin announcement (or edit one with a new revision) explicitly naming the
+network, token/contract purpose and all currently approved addresses on that
+network. An unchanged already-captured post is not re-extracted merely because
+it is repinned. Older generic TOKEN_INFORMATION text is not silently promoted
+to destructive-action authority. Member posts are never the reference source.
+
+Supported networks: Solana, Ethereum, Base, BSC, Polygon, Arbitrum, Optimism,
+Avalanche. EVM references need an explicit network or known token-explorer
+route; an unlabeled hex address is unknown, even with one stored EVM network.
+Unknown chains/routes, arbitrary swap parameters and pool IDs are not guessed
+to be token contracts. Bare Solana-format addresses in token/trading context
+or posted alone are treated as token references; no on-chain mint-account
+lookup is performed. This is a community contract policy, not scam detection.
+
+Address-format references: [Solana account structure](https://solana.com/docs/core/accounts/account-structure)
+and [Ethereum accounts](https://ethereum.org/developers/docs/accounts).
 
 ## Controlled acceptance run before production
 

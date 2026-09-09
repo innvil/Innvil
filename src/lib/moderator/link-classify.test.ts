@@ -11,6 +11,18 @@ import {
   NEGATIVE_STATEMENT_MUTE_MINUTES, NEGATIVE_STATEMENT_BAN_MINUTES,
 } from "./link-moderation";
 
+test("contract mismatch warnings cannot repeat addresses or upgrade a mismatch to a scam accusation", async () => {
+  for (const candidate of ["that is a scam token", "don't post So11111111111111111111111111111111111111112 here"]) {
+    await withFetchSpy({ choices: [{ message: { content: candidate } }] }, async () => {
+      const result = await generatePersonaSolicitationWarning("Patricia", DEFAULT_MODERATOR_PERSONA,
+        { currentTopicName: "Promotion", isTokenContractMismatch: true, messageText: "different token", warningNumber: 1, audience: "individual", muteMinutes: undefined, promotionTopicName: null, promotionTopicLink: null, contactHandle: null },
+        { required: true, credential: { provider: "openai", apiKey: "test", model: "test-model", baseUrl: "https://api.openai.com/v1" } });
+      assert.match(result!, /isn't our official token address/);
+      assert.doesNotMatch(result!, /scam|So111/);
+    });
+  }
+});
+
 /**
  * Phase 4.M (C)-(E): the AI-touching half of link moderation. Both
  * classification and the warning line are genuinely new automations (not

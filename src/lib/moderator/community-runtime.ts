@@ -1,4 +1,5 @@
 import "server-only";
+import { extractTokenCandidates, compareTokenContracts } from "./token-contracts";
 import { isDmNudge, isRepeatedDmNudge, isRapidMessageFlood } from "./message-repetition";
 import type { CommunitySender } from "./event-types";
 import { captureOfficialMemory, loadOfficialMemory, retryOfficialMemory } from "./official-memory-runtime";
@@ -2381,6 +2382,7 @@ export async function runLinkModeration(
   // -- this narrowly exempts the self-mention, never the whole message.
   const moderationCandidates = links.length ? filterOutOwnBotMentions(links, deployments.map((d) => d.botUsername)) : [];
   const hasRealLinkCandidate = moderationCandidates.length > 0;
+  const tokenCandidates = extractTokenCandidates(event.text, links);
   const dmContext = isDmNudge(event.text) ? (await loadRecentContext(admin, community.id, 25))
     .filter(m => m.messageThreadId === event.messageThreadId && m.platformMessageId !== event.messageId) : null;
   const repeatedDm = !!dmContext && isRepeatedDmNudge(event.text, event.sender.platformUserId, dmContext, now, !!event.replyToMessageId);
@@ -2395,7 +2397,7 @@ export async function runLinkModeration(
   // "search X" instruction has no link/handle/contact-ask at all either, so
   // it needs the same link-less gate to even reach classification.
   let isTextModerationCandidate =
-    !hasRealLinkCandidate && (repeatedDm || looksLikeUnsolicitedPitch(event.text) || looksLikeSearchInstructionSpam(event.text) || looksLikeNegativeStatement(event.text));
+    !hasRealLinkCandidate && (tokenCandidates.length > 0 || repeatedDm || looksLikeUnsolicitedPitch(event.text) || looksLikeSearchInstructionSpam(event.text) || looksLikeNegativeStatement(event.text));
   // Language-agnostic backstop, only reached when the free regex already
   // said no -- a real pitch in Russian/Chinese/any other language has no
   // English vocabulary for the regex to match, no matter how that list
@@ -2484,12 +2486,14 @@ export async function runLinkModeration(
     loadCommunityKnowledgeItems(admin, community.id),
     inspectMessageLinks(links),
   ]);
+  const contractComparison = compareTokenContracts(tokenCandidates, resources);
   let classification = await classifyLinkIntent(event.text, recentContextSummary, aiRouting, {
     project: projectProfile,
     resources: resources.filter(r => r.isAdminAuthor && r.url).map(r => ({ url: r.url!, kind: r.kind, text: r.text })),
     topic: { name: currentTopic ? topicDisplayName(currentTopic) : null, solicitationAllowed: solicitationAllowedHere },
     senderRole,
     links: linkEvidence,
+    tokenContractComparison: { status: contractComparison.status },
   });
   if (repeatedDm && !["PHISHING_OR_SCAM", "EXPLICIT_CONTENT"].includes(classification.category)) {
     classification = { category: "REPEATED_DM_SPAM", confidence: "high" };
@@ -2500,6 +2504,7 @@ export async function runLinkModeration(
     confidence: classification.confidence,
     isAdminOrTrusted,
     senderRoleUnknown: senderRole === "unknown",
+    tokenContractMismatch: contractComparison.status === "mismatch",
     floodRepeat,
     priorWarningCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now),
     priorScamStrikeCount,
@@ -2513,6 +2518,7 @@ export async function runLinkModeration(
     floodRepeat,
     isAdminOrTrusted,
     scamStrikeCount: priorScamStrikeCount,
+    contractComparison,
   });
 
   if (enforcement.kind === "ALLOW") {
@@ -2702,7 +2708,7 @@ export async function runLinkModeration(
         ? "scam_link"
         : enforcement.reason === "explicit_content"
           ? "explicit_link"
-          : enforcement.reason === "repeated_competing_project_promotion"
+          : enforcement.reason === "repeated_competing_project_promotion" || enforcement.reason === "repeated_token_contract_mismatch"
             ? "competing_project"
             : enforcement.reason === "repeated_search_spam" || enforcement.reason === "repeated_dm_spam"
               ? "off_topic_spam"
@@ -2718,6 +2724,8 @@ export async function runLinkModeration(
             ? "Repeated confirmed scam/phishing link after a prior warning."
             : violationCategory === "explicit_link"
               ? "User posted a confirmed high-confidence explicit/malicious link."
+              : enforcement.reason === "repeated_token_contract_mismatch"
+                ? "Repeated token contract mismatch against verified official project addresses."
               : violationCategory === "competing_project"
                 ? "Repeated rallying to promote a different, unrelated project or token after prior warnings."
                 : enforcement.reason === "repeated_dm_spam"
@@ -2794,6 +2802,7 @@ export async function runLinkModeration(
   // redirect either, same treatment as isCompetingProjectEnforcement.
   const isSearchSpamEnforcement = enforcement.reason === "search_spam" || enforcement.reason === "repeated_search_spam";
   const isDmSpamEnforcement = enforcement.reason === "dm_spam" || enforcement.reason === "repeated_dm_spam";
+  const isTokenContractMismatch = enforcement.reason === "token_contract_mismatch" || enforcement.reason === "repeated_token_contract_mismatch";
   const promotionContact = isPromotionEnforcement && community.project_id
     ? (await loadProjectProfileRow(admin, community.project_id))?.contacts?.partnerships ?? null
     : null;
@@ -2837,7 +2846,7 @@ export async function runLinkModeration(
   // generatePersonaSolicitationWarning's own isCompetingProjectPromotion
   // handling, which never surfaces a redirect for this reason either way.
   const knownPromotionTopicName = promotionTopic && hasKnownTopicName(promotionTopic) ? topicDisplayName(promotionTopic) : null;
-  const redirectName = (isCompetingProjectEnforcement || isSearchSpamEnforcement || isDmSpamEnforcement) ? null : knownPromotionTopicName || community.promotion_channel_name || null;
+  const redirectName = (isCompetingProjectEnforcement || isSearchSpamEnforcement || isDmSpamEnforcement || isTokenContractMismatch) ? null : knownPromotionTopicName || community.promotion_channel_name || null;
   // "isolated" | "coordinated" | undefined -- see isBackToBackSpamPattern's
   // own doc comment (link-moderation.ts). Only ever set for SEARCH_SPAM;
   // undefined for every other category, matching generatePersonaSolicitation
@@ -2940,6 +2949,7 @@ export async function runLinkModeration(
             contactHandle: promotionContact,
             isCompetingProjectPromotion: isCompetingProjectEnforcement,
             isDmSpam: isDmSpamEnforcement,
+            isTokenContractMismatch,
             searchSpamPattern,
             warningNumber: enforcement.warningNumber,
           },
@@ -3001,7 +3011,7 @@ export async function runLinkModeration(
   if (noticeClaimed && community.project_id) {
     const violationCategory: ModerationViolationCategory = isScamEnforcement
       ? "scam_link"
-      : isCompetingProjectEnforcement
+      : isCompetingProjectEnforcement || isTokenContractMismatch
         ? "competing_project"
         : isSearchSpamEnforcement || isDmSpamEnforcement
           ? "off_topic_spam"
@@ -3022,6 +3032,7 @@ export async function runLinkModeration(
         actionsTaken: [...(enforcement.muteMinutes ? ["temporary_mute" as const] : []), ...(publicWarningSent ? ["warning" as const] : [])],
         reasonText: (isScamEnforcement
           ? "First confirmed scam/phishing link from this member."
+          : isTokenContractMismatch ? "Token contract does not match the verified official project addresses for its chain."
           : isCompetingProjectEnforcement
             ? (enforcement.warningNumber === 1
                 ? "First confirmed rally/request to promote a different, unrelated project or token."

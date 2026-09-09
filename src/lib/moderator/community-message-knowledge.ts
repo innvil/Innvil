@@ -21,13 +21,15 @@
    pinned post or a whitepaper link here NEVER grants early/extra permission
    to respond — it only affects the QUALITY of an already-approved reply. */
 
+import type { TokenContractSet } from "./token-contracts";
+
 export type CommunityResourceKind =
   | "WEBSITE" | "WHITEPAPER" | "DOCUMENTATION" | "ROADMAP" | "FAQ" | "ANNOUNCEMENT"
-  | "PRESALE" | "TRADING" | "CHART" | "LISTING" | "TOKEN_INFORMATION" | "SOCIAL" | "PARTNERSHIP_CONTACT" | "PROJECT_STATUS" | "OTHER";
+  | "PRESALE" | "TRADING" | "CHART" | "LISTING" | "TOKEN_INFORMATION" | "TOKEN_CONTRACT" | "SOCIAL" | "PARTNERSHIP_CONTACT" | "PROJECT_STATUS" | "OTHER";
 
 export const COMMUNITY_RESOURCE_KINDS: CommunityResourceKind[] = [
   "WEBSITE", "WHITEPAPER", "DOCUMENTATION", "ROADMAP", "FAQ", "ANNOUNCEMENT",
-  "PRESALE", "TRADING", "CHART", "LISTING", "TOKEN_INFORMATION", "SOCIAL", "PARTNERSHIP_CONTACT", "PROJECT_STATUS", "OTHER",
+  "PRESALE", "TRADING", "CHART", "LISTING", "TOKEN_INFORMATION", "TOKEN_CONTRACT", "SOCIAL", "PARTNERSHIP_CONTACT", "PROJECT_STATUS", "OTHER",
 ];
 
 export interface CommunityKnowledgeItem {
@@ -45,6 +47,7 @@ export interface CommunityKnowledgeItem {
   text: string;
   createdAt: string; // ISO
   sourceUrl?: string | null;
+  tokenContracts?: TokenContractSet;
 }
 
 /* --------------------------------------------------------- classification ---- */

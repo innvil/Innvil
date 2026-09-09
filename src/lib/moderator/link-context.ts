@@ -13,6 +13,7 @@ export interface LinkProjectContext {
   topic: { name: string | null; solicitationAllowed: boolean };
   senderRole: "admin" | "member" | "unknown";
   links?: LinkEvidence[];
+  tokenContractComparison?: { status: string };
 }
 
 /** Preserve identity-bearing queries and path casing. Never whitelist a host
@@ -32,6 +33,7 @@ export function serializeLinkProjectContext(context?: LinkProjectContext): strin
     project: context.project ? { name: context.project.name, overview: context.project.overview.slice(0, 5000) } : null,
     topic: context.topic,
     senderRole: context.senderRole,
+    tokenContractComparison: context.tokenContractComparison,
     officialResourceEvidence: context.resources.slice(0, 30).map(r => ({ url: r.url, kind: r.kind, text: r.text.slice(0, 600) })),
     untrustedPageEvidence: (context.links ?? []).slice(0, 3).map(r => ({ ...r, text: r.text?.slice(0, 4000) })),
   });

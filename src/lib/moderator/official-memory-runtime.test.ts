@@ -46,3 +46,21 @@ test("real extraction request uses per-link purposes and persists only validated
     assert.deepEqual(writes, [{ status: "ready", resources: [{ url: source.urls[0], kind: "TRADING", status: "confirmed", quote: source.text }] }]);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("verified admin contract capture persists a typed chain-scoped address set", async () => {
+  const mint = "So11111111111111111111111111111111111111112";
+  const text = `Our official Solana token contract is ${mint}`;
+  const resource = { url: null, kind: "TOKEN_CONTRACT", status: "confirmed", quote: text, tokenContracts: { chain: "solana", addresses: [mint] } };
+  const writes: unknown[] = [];
+  const db = { from() { return { insert: async () => ({ error: null }), update: (row: unknown) => ({ match: async () => { writes.push(row); return { error: null }; } }) }; } };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    assert.match(String(init?.body), /COMPLETE endorsed address set/);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([resource]) } }] }), { status: 200 });
+  };
+  try {
+    await captureOfficialMemory(db as never, { ...source, text, urls: [] }, { name: "Byte Humor", overview: "BYTE" },
+      { required: true, credential: { provider: "openai", apiKey: "test", model: "test-model", baseUrl: "https://api.openai.com/v1" } });
+    assert.deepEqual(writes, [{ status: "ready", resources: [resource] }]);
+  } finally { globalThis.fetch = originalFetch; }
+});

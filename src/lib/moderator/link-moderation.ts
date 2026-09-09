@@ -629,6 +629,8 @@ export type ModerationEnforcement =
         | "repeated_search_spam"
         | "dm_spam"
         | "repeated_dm_spam"
+        | "token_contract_mismatch"
+        | "repeated_token_contract_mismatch"
         | "explicit_content_borderline"
         | "scam_or_phishing"
         | "negative_statement"
@@ -650,7 +652,7 @@ export type ModerationEnforcement =
    *  categories that reach this kind today (repeated spam, repeated scam,
    *  explicit content), since a kick without cleanup leaves the offending
    *  history sitting in the room. */
-  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_search_spam" | "repeated_dm_spam" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
+  | { kind: "DELETE_KICK"; reason: "repeated_unsolicited_promotion" | "repeated_competing_project_promotion" | "repeated_search_spam" | "repeated_dm_spam" | "repeated_token_contract_mismatch" | "repeated_scam_or_phishing" | "explicit_content" | "repeated_explicit_content"; purge: boolean }
   /** Reserved for a possible future manual admin action — the automatic
    *  policy below (as of 2026-08-27) no longer PRODUCES this kind for any
    *  category; every automatic escalation that used to end in a permanent
@@ -723,6 +725,8 @@ export function decideLinkEnforcement(input: {
   confidence: ClassificationConfidence;
   isAdminOrTrusted: boolean;
   senderRoleUnknown?: boolean;
+  /** Deterministic comparison against current verified official memory. */
+  tokenContractMismatch?: boolean;
   floodRepeat: boolean;
   priorWarningCount: number;
   /** Already expiry-resolved via effectiveScamStrikeCount — this function
@@ -761,8 +765,6 @@ export function decideLinkEnforcement(input: {
   // A guess must not fall through into an unrelated promotion penalty (in
   // particular, a medium-confidence scam used to become a promo warning).
   // History cannot turn uncertain classification into a confirmed violation.
-  if (input.confidence !== "high") return { kind: "ALLOW" };
-
   if (input.category === "EXPLICIT_CONTENT" && input.confidence === "high") return { kind: "DELETE_KICK", reason: "explicit_content", purge: true };
 
   // Scam/phishing gets a GRADUATED response, never an instant permanent
@@ -778,6 +780,16 @@ export function decideLinkEnforcement(input: {
     if (nextScamCount === 1) return { kind: "DELETE_WARN", warningNumber: nextScamCount, reason: "scam_or_phishing", muteMinutes: SCAM_FIRST_WARNING_MUTE_MINUTES };
     return { kind: "DELETE_KICK", reason: "repeated_scam_or_phishing", purge: true };
   }
+
+  // A proven contract mismatch does not depend on the text classifier's
+  // confidence, nor Promotion/admin-solicitation permission. Unknown roles
+  // and admins stay exempt; this uses the ordinary four-warning ladder.
+  if (input.tokenContractMismatch && !input.isAdminOrTrusted && !input.senderRoleUnknown) {
+    const next = input.priorWarningCount + 1;
+    if (next > SOLICITATION_WARNING_LIMIT) return { kind: "DELETE_KICK", reason: "repeated_token_contract_mismatch", purge: true };
+    return { kind: "DELETE_WARN", warningNumber: next, reason: next === 1 ? "token_contract_mismatch" : "repeated_token_contract_mismatch", muteMinutes: SOLICITATION_MUTE_MINUTES_BY_WARNING[next] };
+  }
+  if (input.confidence !== "high") return { kind: "ALLOW" };
 
   // Role exemptions precede ordinary content categories, including a
   // mistaken competing-project/search-spam label on an admin announcement.

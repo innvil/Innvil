@@ -11,7 +11,7 @@ function event(text = pitch): CommunityEvent {
     timestamp: new Date().toISOString(), text, replyToMessageId: null, messageThreadId: 31, origin: "HUMAN", interactionDepth: 0, causationMessageId: null };
 }
 
-function database(topicPolicy = "normal", priorWarnings = 0, context: Record<string, unknown>[] = []) {
+function database(topicPolicy = "normal", priorWarnings = 0, context: Record<string, unknown>[] = [], memory: Record<string, unknown>[] = []) {
   const writes: Array<{ table: string; value: Record<string, unknown> }> = [];
   const touched: string[] = [];
   const db = {
@@ -22,6 +22,7 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
         : table === "watch_community_topics" ? [{ message_thread_id: 31, topic_name: "Promotion", custom_name: null, policy: topicPolicy }]
         : table === "moderator_link_warning_state" && priorWarnings ? [{ warning_count: priorWarnings, warning_at: new Date().toISOString() }]
         : table === "community_messages" ? context
+        : table === "watch_official_memory_sources" ? memory
         : table === "communities" ? [{ id: "community", acknowledge_admin_mod: false, chat_id: "-100999", title: "Test Community" }] : [];
       const query = {
         select() { return query; }, eq() { return query; }, in() { return query; }, is() { return query; }, not() { return query; }, order() { return query; }, limit() { return query; }, range() { return query; },
@@ -38,7 +39,7 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
   return { db, writes, touched };
 }
 
-async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; failWarning?: boolean; context?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
+async function runFixture(opts: { policy?: string; role?: string; category?: string; priorWarnings?: number; failDelete?: boolean; failMute?: boolean; failWarning?: boolean; context?: Record<string, unknown>[]; memory?: Record<string, unknown>[] }, fn: (result: { calls: Array<{ method: string; body: Record<string, unknown> }>; fixture: ReturnType<typeof database> }) => Promise<void>) {
   const previousFetch = globalThis.fetch;
   const env = { PROVIDER_KEY_SECRET: process.env.PROVIDER_KEY_SECRET, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY };
   process.env.PROVIDER_KEY_SECRET = "test-secret";
@@ -57,7 +58,7 @@ async function runFixture(opts: { policy?: string; role?: string; category?: str
       : { content: [{ type: "text", text: `CATEGORY: ${opts.category ?? "UNSOLICITED_PROMOTION"}\nCONFIDENCE: high` }] };
     return new Response(JSON.stringify(payload), { status: 200 });
   };
-  try { await fn({ calls, fixture: database(opts.policy, opts.priorWarnings, opts.context) }); }
+  try { await fn({ calls, fixture: database(opts.policy, opts.priorWarnings, opts.context, opts.memory) }); }
   finally {
     globalThis.fetch = previousFetch;
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
@@ -173,4 +174,45 @@ test("private reports distinguish successful mute, failed mute, and failed publi
       });
     }
   }
+});
+
+const officialMint = "So11111111111111111111111111111111111111112";
+const differentMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const contractMemory = [{ platform_message_id: "100", revision: 100, message_thread_id: 99, status: "ready", source_url: "https://t.me/example/100", is_pinned: false, is_announcement: true,
+  resources: [{ kind: "TOKEN_CONTRACT", url: null, status: "confirmed", quote: `Our official Solana token contract: ${officialMint}`, tokenContracts: { chain: "solana", addresses: [officialMint] } }] }];
+
+test("actual pipeline deletes a different mint in Promotion despite a SAFE classifier result, with contextual warning and audit evidence", async () => {
+  await runFixture({ policy: "promotion", category: "SAFE_RELEVANT_LINK", memory: contractMemory }, async ({ calls, fixture }) => {
+    const result = await runLinkModeration(fixture.db as never, null, { id: "community", allow_solicitation: true }, "-100123", event(`sold half of\n${differentMint} at a 10x, thanks for the alpha`), [deployment], new Date());
+    assert.equal(result.handled, true);
+    assert.ok(calls.some(c => c.method === "deleteMessage"));
+    const warning = calls.find(c => c.method === "sendMessage");
+    assert.ok(warning);
+    assert.match(String(warning.body.text), /isn't our official token address/);
+    assert.doesNotMatch(String(warning.body.text), /Promotion|scam|\[user\]/i);
+    assert.ok(fixture.writes.some(w => JSON.stringify(w.value).includes("sourceMessageId")));
+  });
+});
+
+test("actual mismatch pipeline preserves matches, missing/failed memory, admins and unverified roles", async () => {
+  const cases = [
+    { text: officialMint, memory: contractMemory, role: "member" },
+    { text: differentMint, memory: [], role: "member" },
+    { text: differentMint, memory: [...contractMemory, { ...contractMemory[0], revision: 200, status: "failed", resources: [] }], role: "member" },
+    { text: differentMint, memory: contractMemory, role: "administrator" },
+    { text: differentMint, memory: contractMemory, role: "unavailable" },
+  ];
+  for (const c of cases) await runFixture({ ...c, category: "UNKNOWN_OR_AMBIGUOUS" }, async ({ calls, fixture }) => {
+    const result = await runLinkModeration(fixture.db as never, null, { id: "community" }, "-100123", event(c.text), [deployment], new Date());
+    assert.equal(result.handled, false);
+    assert.equal(calls.some(c => c.method === "deleteMessage" || c.method === "sendMessage"), false);
+  });
+});
+
+test("failed mismatch deletion does not add a strike or issue a warning", async () => {
+  await runFixture({ failDelete: true, memory: contractMemory }, async ({ calls, fixture }) => {
+    await runLinkModeration(fixture.db as never, null, { id: "community" }, "-100123", event(differentMint), [deployment], new Date());
+    assert.equal(calls.some(c => c.method === "sendMessage" || c.method === "restrictChatMember"), false);
+    assert.equal(fixture.writes.some(w => w.table === "moderator_link_warning_state"), false);
+  });
 });
