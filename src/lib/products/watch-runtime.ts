@@ -829,6 +829,16 @@ export async function setAccountCommunityAcknowledgeAdminMod(admin: SupabaseClie
   return { ok: true, data: null };
 }
 
+export async function setAccountModerationNoticeCooldown(admin: SupabaseClient, accountId: string, communityId: string, minutes: number): Promise<CreateResult<null>> {
+  if (minutes !== 30 && minutes !== 60) return { ok: false, error: "Choose 30 or 60 minutes." };
+  const { data: projects, error: projectsError } = await admin.from("projects").select("id").eq("account_id", accountId);
+  if (projectsError || !projects?.length) return { ok: false, error: "Community not found." };
+  const { data: community, error: communityError } = await admin.from("communities").select("id, project_id").eq("id", communityId).maybeSingle();
+  if (communityError || !community || !projects.some(p => p.id === community.project_id)) return { ok: false, error: "Community not found." };
+  const { error } = await admin.from("communities").update({ moderation_notice_cooldown_minutes: minutes }).eq("id", communityId).eq("project_id", community.project_id);
+  return error ? { ok: false, error: "Could not update warning cooldown." } : { ok: true, data: null };
+}
+
 /** Silence/command/fallback policy (§4) -- lists the Telegram Forum topics
  *  the bot has auto-discovered for this community (watch_community_topics,
  *  populated by community-runtime.ts as messages arrive in each topic) so
@@ -1098,6 +1108,7 @@ export interface AccountCommunitySummary {
    *  substantive ANSWER/CASUAL_CHAT reply. See chatter-coordinator.ts's
    *  selectChatterAction / community-runtime.ts's isSenderAdminOrTrusted. */
   acknowledgeAdminMod: boolean;
+  moderationNoticeCooldownMinutes?: 30 | 60;
   /** createdAt is additive -- purely so Watcher Role Separation (see
    *  src/lib/moderator/watcher-roles.ts) can derive the same stable,
    *  deterministic deployment ORDER for UI display (role label/chatter
@@ -1129,7 +1140,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   // (unavoidable: it's what scopes this whole read to THIS account).
   const { data: communities } = await admin
     .from("communities")
-    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, acknowledge_admin_mod, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
+    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, acknowledge_admin_mod, moderation_notice_cooldown_minutes, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
     .in("project_id", projectIds)
     .order("created_at", { ascending: true });
   // `as unknown as` -- without generated Database types, supabase-js infers
@@ -1144,6 +1155,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     connection_type: "community" | "escalation_group" | null;
     allow_solicitation: boolean | null;
     acknowledge_admin_mod: boolean | null;
+    moderation_notice_cooldown_minutes?: number | null;
     moderator_deployments: Array<{ id: string; moderator_id: string; enabled: boolean; created_at: string; virtual_moderators: { id: string; name: string } | null }> | null;
   }>;
   // Excludes any row deterministically known to be a private Telegram 1:1
@@ -1172,6 +1184,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     connectionType: c.connection_type === "escalation_group" ? "escalation_group" : "community",
     allowSolicitation: c.allow_solicitation === true,
     acknowledgeAdminMod: c.acknowledge_admin_mod === true,
+    moderationNoticeCooldownMinutes: c.moderation_notice_cooldown_minutes === 60 ? 60 as const : 30 as const,
     watchers: (c.moderator_deployments ?? [])
       .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: d.virtual_moderators?.name ?? "Watcher", enabled: d.enabled, createdAt: d.created_at })),
   }));
@@ -1449,6 +1462,10 @@ export interface AccountActivityItem {
 }
 
 const DECISION_DESCRIPTIONS: Record<string, { text: string; kind: AccountActivityItem["kind"] }> = {
+  QUIET_POLICY_WARNING_SENT: { text: "enforced moderation and delivered a public reminder", kind: "moderation" },
+  QUIET_POLICY_SILENT: { text: "handled a policy violation without a public warning", kind: "moderation" },
+  DELETE_SILENT: { text: "quietly deleted a duplicate or burst spam message", kind: "moderation" },
+  QUIET_POLICY_UNAVAILABLE: { text: "deleted a policy violation; escalation needs review", kind: "moderation" },
   DELETE_WARN: { text: "warned a member for a policy violation", kind: "moderation" },
   DELETE_BAN: { text: "removed a member for a policy violation", kind: "moderation" },
   DELETE_KICK: { text: "removed a repeat offender", kind: "moderation" },

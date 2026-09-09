@@ -23,6 +23,17 @@ test("contract mismatch warnings cannot repeat addresses or upgrade a mismatch t
   }
 });
 
+test("quiet final-warning generation rejects vague consequences, insults, placeholders and invented mute history", async () => {
+  for (const candidate of ["last warning", "you are stupid, stop it", "@member, last warning, again and removed", "you were muted before, stop", "[user], please stop"]) {
+    await withFetchSpy({choices:[{message:{content:candidate}}]}, async () => {
+      const result=await generatePersonaSolicitationWarning("Patricia",DEFAULT_MODERATOR_PERSONA,
+        {quietStage:4,quietFamily:"promotion",priorSuccessfulMute:false,currentTopicName:"General",messageText:"a marketing pitch",warningNumber:4,audience:"individual",priorPublicWarning:false,muteMinutes:60,promotionTopicName:"Promotion",promotionTopicLink:null,contactHandle:null},
+        {required:true,credential:{provider:"openai",apiKey:"test",model:"test-model",baseUrl:"https://api.openai.com/v1"}});
+      assert.match(result!,/last warning/i); assert.match(result!,/again.*removed/i); assert.doesNotMatch(result!,/stupid|\[user\]|@member|muted before/i);
+    });
+  }
+});
+
 /**
  * Phase 4.M (C)-(E): the AI-touching half of link moderation. Both
  * classification and the warning line are genuinely new automations (not

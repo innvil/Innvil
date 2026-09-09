@@ -1,4 +1,5 @@
 import "server-only";
+import { invalidQuietWarning, quietWarningFallback, type QuietSpamFamily } from "./quiet-moderation";
 import { unsupportedMismatchWarning } from "./token-contracts";
 import { invalidWarningPresentation } from "./warning-presentation";
 import { serializeLinkProjectContext, type LinkProjectContext } from "./link-context";
@@ -260,6 +261,10 @@ export interface SolicitationWarningFacts {
   audience?: "individual" | "room";
   messageText?: string;
   priorPublicWarning?: boolean;
+  /** Public delivery is chosen before generation by the quiet-moderation ledger. */
+  quietStage?: number;
+  quietFamily?: QuietSpamFamily;
+  priorSuccessfulMute?: boolean;
   /** Display name of the topic the violation happened in (e.g. "General"). */
   currentTopicName: string;
   /** Escalation stage (2026-09-04) -- "warning N of LIMIT" for THIS specific
@@ -427,6 +432,7 @@ export async function generatePersonaSolicitationWarning(
   // -- since a model handed a placeholder string has no way to tell it
   // isn't a real name and will nonsensically quote it as one.
   const deterministicFallback = () => {
+    if (facts.quietStage && facts.quietFamily) return quietWarningFallback(facts.quietStage, facts.quietFamily, facts.promotionTopicName, facts.priorSuccessfulMute === true);
     if (facts.audience === "room") return "guys, enough with the repeated spam, please.";
     if (facts.messageText != null) {
       const mute = facts.muteMinutes ? ` Take ${facts.muteMinutes} minutes off.` : "";
@@ -489,6 +495,12 @@ export async function generatePersonaSolicitationWarning(
     authorizedFacts.push(
       `This is recorded violation time number ${facts.warningNumber}; you do NOT need to state the number, and counting it out loud usually sounds automated. You may sound firmer, not automatically more exasperated. A violation count alone does NOT mean you previously spoke to this person. Do not claim prior public warnings unless they are explicitly confirmed below.`
     );
+  }
+  if (facts.quietStage) {
+    authorizedFacts.push(facts.priorSuccessfulMute ? "A prior temporary mute of this same user is confirmed successful. You may refer to that actual earlier timeout."
+      : "No earlier successful mute is confirmed. Never imply they were previously muted or returned after a timeout.");
+    authorizedFacts.push("Criticize the repeated behavior, never the person's intelligence or worth. No insults such as stupid, idiot, or thick.");
+    if (facts.quietStage >= 4) authorizedFacts.push("This MUST clearly be a LAST/FINAL WARNING: one more violation will get this person removed. Say both the final-warning status and the next-offense removal consequence. Do not claim they are already removed.");
   }
   if (facts.isTokenContractMismatch) {
     authorizedFacts.push("Other token contracts are not allowed in any topic. Do not suggest Promotion, another destination, or a contact.");
@@ -599,6 +611,7 @@ export async function generatePersonaSolicitationWarning(
   // template -- never "fixed up" (that would itself be an untrusted rewrite).
   const authoritativeFacts = { muteMinutes: facts.muteMinutes ?? null };
   const sanitize = (candidate: string) => (warningTextExceedsAuthorizedFacts(candidate, authoritativeFacts)
+    || (facts.quietStage != null && invalidQuietWarning(candidate, facts.quietStage, facts.priorSuccessfulMute === true))
     || (facts.isTokenContractMismatch && unsupportedMismatchWarning(candidate))
     || invalidWarningPresentation(candidate, facts.audience ?? (facts.searchSpamPattern === "coordinated" ? "room" : "individual"), facts.priorPublicWarning)
     ? deterministicFallback() : candidate);
@@ -616,7 +629,7 @@ export async function generatePersonaSolicitationWarning(
   // synonyms", which lexical similarity alone provably missed in the live
   // report. Triggers the SAME single bounded retry, never a second decision.
   const structurallyRepetitive = recentOwnWarnings.length ? isStructurallyRepetitiveWarning(first, recentOwnWarnings) : false;
-  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: !!facts.muteMinutes, similarityToRecent: similarity });
+  const mode = resolveWarningResponseMode({ hasEnforcementConsequence: !!facts.muteMinutes || (facts.quietStage ?? 0) >= 3, similarityToRecent: similarity });
   if (mode === "NO_PUBLIC_REPLY") return null;
   if (mode === "WARNING" && !structurallyRepetitive) return sanitize(first);
   // ENFORCEMENT_NOTICE is the mode whenever a real mute is attached,

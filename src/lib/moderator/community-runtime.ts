@@ -1,4 +1,6 @@
 import "server-only";
+import { quietSpamFamily } from "./quiet-moderation";
+import { runQuietModeration } from "./quiet-moderation-runtime";
 import { ambientReactionCandidate, ambientReactionBudgetMs, AMBIENT_REACTION_EMOJIS, pickAmbientReactor } from "./ambient-reactions";
 import { classifyAmbientReaction } from "./ambient-reaction-classify";
 import { extractTokenCandidates, compareTokenContracts } from "./token-contracts";
@@ -2515,7 +2517,8 @@ export async function runLinkModeration(
     adminSolicitedExemption,
   });
 
-  await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", enforcement.kind, classification.category, {
+  const quietFamily = enforcement.kind === "ALLOW" ? null : quietSpamFamily(enforcement.reason, floodRepeat || classification.category === "LINK_SPAM_OR_FLOOD");
+  await logActivity(admin, panelId, community.id, enforcer.deploymentId, "link_moderation", quietFamily ? "QUIET_POLICY_CANDIDATE" : enforcement.kind, classification.category, {
     confidence: classification.confidence,
     floodRepeat,
     isAdminOrTrusted,
@@ -2553,6 +2556,18 @@ export async function runLinkModeration(
       return { handled: true, collabRoutable: false };
     }
   } else {
+    return { handled: true, collabRoutable: false };
+  }
+
+  if (quietFamily) {
+    const lastHuman = priorRoomMessages.filter(m => m.senderType === "HUMAN").at(-1);
+    const targetIsClear = !!lastHuman && lastHuman.senderPlatformId === senderPlatformId && isRecentMessage(lastHuman.createdAt, now);
+    const knownPromotionName = promotionTopic && hasKnownTopicName(promotionTopic) ? topicDisplayName(promotionTopic) : null;
+    await runQuietModeration({ admin, panelId, communityId: community.id, projectId: community.project_id ?? null, event,
+      family: quietFamily, legacyCount: effectiveWarningCount(priorState.warningCount, priorState.warningAt, now), deployment: enforcer,
+      currentTopicName: topicDisplayName(currentTopic), promotionTopicName: quietFamily === "promotion" ? knownPromotionName || community.promotion_channel_name || null : null,
+      targetIsClear, aiRouting, execute: action => executeAction(admin, chatId, action),
+      purge: () => purgeUserMessages(admin, chatId, community.id, senderPlatformId, enforcer.deploymentId, now) });
     return { handled: true, collabRoutable: false };
   }
 

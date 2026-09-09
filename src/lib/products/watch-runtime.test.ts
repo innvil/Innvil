@@ -17,7 +17,7 @@ import {
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
   resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
-  setAccountCommunityAcknowledgeAdminMod, listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName,
+  setAccountCommunityAcknowledgeAdminMod, setAccountModerationNoticeCooldown, listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration, communityCountExceeded } from "@/src/lib/moderator/plan";
@@ -2464,6 +2464,17 @@ test("setAccountCommunityAcknowledgeAdminMod rejects a community that doesn't be
   });
   const result = await setAccountCommunityAcknowledgeAdminMod(admin, "acct-1", "c1", true);
   assert.equal(result.ok, false);
+});
+
+test("quiet-window control defaults to 30, persists 60 only for owner, and rejects invalid values", async () => {
+  const admin = fakeAdmin({ projects: [STANDALONE_PROJECT], communities: [{id:"c1",project_id:"proj-1",platform:"telegram",chat_id:"-1001"}, {id:"other",project_id:"other-proj",platform:"telegram",chat_id:"-1002"}] });
+  assert.equal((await listAccountCommunities(admin,"acct-1"))[0].moderationNoticeCooldownMinutes,30);
+  assert.equal((await setAccountModerationNoticeCooldown(admin,"acct-1","c1",60)).ok,true);
+  assert.equal((await listAccountCommunities(admin,"acct-1"))[0].moderationNoticeCooldownMinutes,60);
+  assert.equal((await setAccountModerationNoticeCooldown(admin,"acct-1","other",60)).ok,false);
+  assert.equal((await setAccountModerationNoticeCooldown(admin,"acct-1","c1",0)).ok,false);
+  assert.equal((await setAccountModerationNoticeCooldown(admin,"acct-1","c1",31)).ok,false);
+  assert.equal((await setAccountModerationNoticeCooldown(admin,"stranger","c1",30)).ok,false);
 });
 
 /* --------------------------------------- community topic policies (§4/§5) ---- */

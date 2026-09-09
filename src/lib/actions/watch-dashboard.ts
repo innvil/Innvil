@@ -13,7 +13,7 @@ import { hasProductAccess, createStandaloneProject, listAccountProjects, type Ac
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import {
   createAccountWatcher, listAccountWatchers, createAccountCommunity, deployAccountWatcher,
-  setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod,
+  setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod, setAccountModerationNoticeCooldown,
   listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName, type AccountCommunityTopicRow,
   getAccountCommunityPendingReplyDelay, setAccountCommunityPendingReplyDelay,
   getAccountCommunityPromotionChannel, setAccountCommunityPromotionChannel, type PromotionChannelFallback,
@@ -191,6 +191,12 @@ export async function setCommunityAcknowledgeAdminMod(communityId: string, ackno
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in." };
   return setAccountCommunityAcknowledgeAdminMod(admin, user.id, communityId, acknowledge);
+}
+
+export async function setCommunityModerationNoticeCooldown(communityId: string, minutes: number): Promise<{ ok: true; data: null } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not signed in." };
+  return setAccountModerationNoticeCooldown(admin, user.id, communityId, minutes);
 }
 
 export async function getCommunityTopics(communityId: string): Promise<AccountCommunityTopicRow[]> {

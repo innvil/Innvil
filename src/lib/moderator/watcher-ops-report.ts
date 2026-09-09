@@ -122,6 +122,7 @@ export function moderationReportHeading(event: ModerationReportEvent): string {
 function actionLine(kind: ModerationActionKind, event: ModerationReportEvent): string | null {
   switch (kind) {
     case "warning":
+      if (event.warningLimit == null) return event.warningNumber == null ? "Public warning delivered" : `Public warning ${event.warningNumber} delivered`;
       return event.warningNumber != null && event.warningLimit != null
         ? `Warning ${event.warningNumber} of ${event.warningLimit}`
         : "Warning issued";

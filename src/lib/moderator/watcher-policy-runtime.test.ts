@@ -34,7 +34,16 @@ function database(topicPolicy = "normal", priorWarnings = 0, context: Record<str
       };
       return query;
     },
-    rpc: async (name: string) => ({ data: name === "get_telegram_bot_key" ? "test-token" : true, error: null }),
+    rpc: async (name: string, args?: Record<string, unknown>): Promise<{ data: unknown; error: unknown }> => {
+      if (name === "claim_quiet_moderation") {
+        const stage = Math.min(priorWarnings + 1, 5);
+        return { data: { claimed: true, stage, violationCount: priorWarnings + 1, action: stage === 1 ? "delete" : "mute",
+          muteMinutes: stage === 1 ? null : stage === 2 ? 10 : stage === 3 ? 30 : 60, notice: stage === 1 ? "reminder" : stage === 2 ? null : stage === 3 ? "repeat" : "final",
+          suppressionReason: stage === 2 ? "silent_second_offense" : null, priorMuteAt: null, priorPublicWarningAt: null, priorPublicWarningCount: 0, heldForFinalWarning: stage === 5 }, error: null };
+      }
+      if (name.includes("quiet_moderation")) writes.push({ table: name, value: args ?? {} });
+      return { data: name === "get_telegram_bot_key" ? "test-token" : true, error: null };
+    },
   };
   return { db, writes, touched };
 }
@@ -106,7 +115,7 @@ test("unknown role does not bypass confirmed phishing protection", async () => {
 });
 
 test("mute is attempted before warning; failed mute is not claimed, and warning stays in its topic", async () => {
-  await runFixture({ failMute: true, priorWarnings: 1 }, async ({ calls, fixture }) => {
+  await runFixture({ failMute: true, priorWarnings: 2 }, async ({ calls, fixture }) => {
     await runLinkModeration(fixture.db as never, null, { id: "community" }, "-100123", event(), [deployment], new Date());
     const muted = calls.findIndex(c => c.method === "restrictChatMember");
     const warned = calls.findIndex(c => c.method === "sendMessage");
@@ -227,18 +236,18 @@ test("queued replies recheck admin-ignore and cancel on unavailable role or miss
 test("private reports distinguish successful mute, failed mute, and failed public warning delivery", async () => {
   for (const failMute of [false, true]) {
     for (const failWarning of [false, true]) {
-      await runFixture({ priorWarnings: 1, failMute, failWarning }, async ({ fixture }) => {
+      await runFixture({ priorWarnings: 2, failMute, failWarning }, async ({ fixture }) => {
         await runLinkModeration(fixture.db as never, null, { id: "community", project_id: "project" }, "-100123", event(), [deployment], new Date());
         const report = fixture.writes.find(w => w.table === "watch_moderation_reports")?.value;
         assert.ok(report);
         assert.equal((report.action_types as string[]).includes("warning"), !failWarning);
-        assert.equal(report.warning_number, failWarning ? null : 2);
-        assert.equal(report.mute_minutes, failMute ? null : 10);
+        assert.equal(report.warning_number, failWarning ? null : 1, "Count delivered warnings, not silent offenses");
+        assert.equal(report.mute_minutes, failMute ? null : 30);
         const text = String(report.report_text);
         if (failMute) { assert.match(text, /Mute attempt failed/); assert.doesNotMatch(text, /User muted for/); }
-        else assert.match(text, /User muted for 10 minutes/);
-        if (failWarning) { assert.match(text, /Public warning delivery failed/); assert.doesNotMatch(text, /Warning 2 of/); }
-        else assert.match(text, /Warning 2 of/);
+        else assert.match(text, /User muted for 30 minutes/);
+        if (failWarning) { assert.match(text, /Public warning delivery failed/); assert.doesNotMatch(text, /Warning 3 of/); }
+        else assert.match(text, /Public warning 1 delivered/);
       });
     }
   }
@@ -256,7 +265,7 @@ test("actual pipeline deletes a different mint in Promotion despite a SAFE class
     assert.ok(calls.some(c => c.method === "deleteMessage"));
     const warning = calls.find(c => c.method === "sendMessage");
     assert.ok(warning);
-    assert.match(String(warning.body.text), /isn't our official token address/);
+    assert.match(String(warning.body.text), /keep other token contracts out/);
     assert.doesNotMatch(String(warning.body.text), /Promotion|scam|\[user\]/i);
     assert.ok(fixture.writes.some(w => JSON.stringify(w.value).includes("sourceMessageId")));
   });
