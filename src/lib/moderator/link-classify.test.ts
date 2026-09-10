@@ -412,7 +412,7 @@ test("REQUIRED (2026-09-06, explicit product decision): persona solicitation war
       assert.match(calls[0].url, /deepseek/i);
       assert.doesNotMatch(calls[0].url, /anthropic/i);
       const body = calls[0].body as { model?: string; thinking?: { type: string } };
-      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.model, "deepseek-flash");
       assert.notEqual(body.model, "claude-sonnet-5");
       assert.equal(body.thinking?.type, "disabled");
       assert.ok(text && text.length > 0);
@@ -1124,7 +1124,7 @@ test("REQUIRED (2026-09-06, explicit product decision): scam warning generation 
       assert.match(calls[0].url, /deepseek/i);
       assert.doesNotMatch(calls[0].url, /anthropic/i);
       const body = calls[0].body as { model?: string; thinking?: { type: string } };
-      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.model, "deepseek-flash");
       assert.equal(body.thinking?.type, "disabled");
     });
   });
@@ -1391,7 +1391,7 @@ test("REQUIRED (2026-09-06, explicit product decision): negative-statement warni
       assert.match(calls[0].url, /deepseek/i);
       assert.doesNotMatch(calls[0].url, /anthropic/i);
       const body = calls[0].body as { model?: string; thinking?: { type: string } };
-      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.model, "deepseek-flash");
       assert.equal(body.thinking?.type, "disabled");
     });
   });
@@ -1637,7 +1637,7 @@ test("REQUIRED (spec 34, revised 2026-09-06): normal moderation-warning realizat
       );
       assert.equal(seen.length, 3);
       for (const call of seen) {
-        assert.equal(call.model, "deepseek-v4-flash");
+        assert.equal(call.model, "deepseek-flash");
         assert.notEqual(call.model, "claude-sonnet-5");
         assert.match(call.url, /deepseek/i);
         assert.doesNotMatch(call.url, /anthropic/i);

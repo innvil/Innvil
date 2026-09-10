@@ -349,7 +349,7 @@ test("REQUIRED (2026-09-06, explicit product decision): warning generation route
       assert.match(calls[0].url, /deepseek/i);
       assert.doesNotMatch(calls[0].url, /anthropic/i);
       const body = calls[0].body as { model?: string; thinking?: { type: string } };
-      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.model, "deepseek-flash");
       assert.notEqual(body.model, "claude-sonnet-5");
       assert.equal(body.thinking?.type, "disabled");
       assert.ok(text && text.length > 0);

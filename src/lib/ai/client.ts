@@ -188,7 +188,7 @@ export function aiConfigured(): boolean {
  * openaiComplete() with no new wire code. Env:
  *   DEEPSEEK_API_KEY          required — no default, no fallback to AI_API_KEY
  *   DEEPSEEK_BASE_URL         default https://api.deepseek.com
- *   DEEPSEEK_CHATTER_MODEL    default deepseek-v4-flash (non-thinking chatter
+ *   DEEPSEEK_CHATTER_MODEL    default deepseek-flash (V4.1 Flash; non-thinking chatter
  *                             model; switching to a "pro"/reasoner model later
  *                             is a config change here, never automatic).
  */
@@ -196,7 +196,7 @@ export function deepseekChatterProvider(): { provider: AiProvider; apiKey: strin
   const key = process.env.DEEPSEEK_API_KEY?.trim().replace(/^['"]|['"]$/g, "") || undefined;
   if (!key) return null;
   const baseUrl = (process.env.DEEPSEEK_BASE_URL?.trim().replace(/\/+$/, "")) || "https://api.deepseek.com";
-  const model = process.env.DEEPSEEK_CHATTER_MODEL?.trim() || "deepseek-v4-flash";
+  const model = process.env.DEEPSEEK_CHATTER_MODEL?.trim() || "deepseek-flash";
   return { provider: "openai", apiKey: key, baseUrl, model };
 }
 
@@ -326,7 +326,7 @@ async function openaiComplete(baseUrl: string, key: string, model: string, opts:
     // DeepSeek's V4 API (the only current caller that sets disableThinking on
     // this provider path — see deepseekChatterProvider()/resolveChatterRoute())
     // defaults thinking to ENABLED and requires this explicit toggle to turn it
-    // off; the model id alone (e.g. "deepseek-v4-flash") is not sufficient.
+    // off; the model id alone (e.g. "deepseek-flash") is not sufficient.
     // Mirrors anthropicComplete()'s equivalent field below — kept here in the
     // provider layer, not in moderator code, so callers never construct
     // provider-specific request shapes themselves.

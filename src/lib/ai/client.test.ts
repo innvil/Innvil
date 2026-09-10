@@ -96,14 +96,14 @@ test("deepseekChatterProvider returns null when DEEPSEEK_API_KEY is unset -- no 
   });
 });
 
-test("deepseekChatterProvider defaults to deepseek-v4-flash and the official DeepSeek base URL", () => {
+test("deepseekChatterProvider defaults to deepseek-flash (V4.1 Flash) and the official DeepSeek base URL", () => {
   withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, () => {
     const p = deepseekChatterProvider();
     assert.ok(p);
     assert.equal(p?.provider, "openai");
     assert.equal(p?.apiKey, "sk-deepseek-test");
     assert.equal(p?.baseUrl, "https://api.deepseek.com");
-    assert.equal(p?.model, "deepseek-v4-flash");
+    assert.equal(p?.model, "deepseek-flash");
   });
 });
 

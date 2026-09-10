@@ -57,7 +57,7 @@ test("REQUIRED: routes to DeepSeek (never Sonnet 5) when no BYO routing is in ef
       const result = await generatePresenceMessage("Kwan", persona, "presence_started");
       assert.equal(calls.length, 1);
       assert.match(calls[0].url, /deepseek/i);
-      assert.equal((calls[0].body as { model?: string }).model, "deepseek-v4-flash");
+      assert.equal((calls[0].body as { model?: string }).model, "deepseek-flash");
       assert.ok(result.text.length > 0);
     });
   });

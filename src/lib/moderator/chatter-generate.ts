@@ -656,8 +656,8 @@ function resolveChatterRoute(action: ChatterGenerationAction, aiRouting?: Accoun
     ok: true,
     model: deepseek.model,
     providerOverride: { provider: deepseek.provider, apiKey: deepseek.apiKey, baseUrl: deepseek.baseUrl },
-    // DeepSeek V4 defaults thinking to ENABLED -- the model id
-    // (deepseek-v4-flash) alone does not disable it. This flag is honored by
+    // DeepSeek V4.1 Flash defaults thinking to ENABLED -- the model id
+    // (deepseek-flash) alone does not disable it. This flag is honored by
     // openaiComplete() in the provider/client layer (client.ts), which sends
     // the actual `thinking: { type: "disabled" }` request field -- kept out
     // of this file so moderator code never constructs provider-specific

@@ -376,12 +376,12 @@ test("REQUIRED: ANSWER routes to Sonnet 5 at effort medium, never DeepSeek -- ev
   });
 });
 
-test("REQUIRED: CASUAL_CHAT routes to DeepSeek v4 Flash in non-thinking mode, never Sonnet", () => {
+test("REQUIRED: CASUAL_CHAT routes to DeepSeek V4.1 Flash in non-thinking mode, never Sonnet", () => {
   withEnv({ DEEPSEEK_API_KEY: "sk-deepseek-test", DEEPSEEK_CHATTER_MODEL: undefined, DEEPSEEK_BASE_URL: undefined }, () => {
     const route = resolveChatterRoute("CASUAL_CHAT");
     assert.equal(route.ok, true);
     if (route.ok) {
-      assert.equal(route.model, "deepseek-v4-flash");
+      assert.equal(route.model, "deepseek-flash");
       assert.notEqual(route.model, "claude-sonnet-5");
       assert.equal(route.disableThinking, true);
       assert.equal(route.automation, "NATURAL_CHATTER_CASUAL");
@@ -773,7 +773,7 @@ test("REQUIRED: classifyAmbientGreeting routes to DeepSeek Flash (never Sonnet),
       assert.equal(calls.length, 1);
       assert.match(calls[0].url, /deepseek/i);
       const body = calls[0].body as { model?: string; max_tokens?: number; thinking?: { type: string } };
-      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.model, "deepseek-flash");
       assert.equal(body.thinking?.type, "disabled");
       assert.ok((body.max_tokens ?? 1024) <= 10, "classification output should be tiny, not a full reply");
       assert.equal(result.ok, true);
@@ -830,7 +830,7 @@ test("REQUIRED: classifyPitchLikelihood routes to DeepSeek Flash (never Sonnet),
       assert.equal(calls.length, 1);
       assert.match(calls[0].url, /deepseek/i);
       const body = calls[0].body as { model?: string; max_tokens?: number; thinking?: { type: string } };
-      assert.equal(body.model, "deepseek-v4-flash");
+      assert.equal(body.model, "deepseek-flash");
       assert.equal(body.thinking?.type, "disabled");
       assert.ok((body.max_tokens ?? 1024) <= 10, "classification output should be tiny, not a full reply");
       assert.equal(result.ok, true);
