@@ -5,6 +5,16 @@ third-party bot messages**, off by default. Migration
 `0133_external_bot_cleanup.sql` adds its persisted boolean. No existing community
 is automatically opted in, and rerunning the migration preserves choices.
 
+Turning the switch on first opens setup instructions; it stays off until the
+owner selects **Enable silent cleanup**. Cancel makes no server change. The
+guide explains BotFather's receiving-bot mode, admin/delete permissions for each
+active Watcher, all-third-party-post scope, delivery limitations, and how to
+check Activity without posting tests in a live community. It can be reopened
+through **View setup instructions**. Turning cleanup off needs no confirmation;
+it stops future cleanup but cannot restore deleted messages or change BotFather
+settings. The guide does not claim to verify permissions and never requests a
+bot token.
+
 When enabled, new incoming third-party bot posts are deleted without AI calls,
 warnings, mentions, strikes, mutes, kicks, bans, or private warning reports.
 This includes bot-admin credit/advertisement messages and useful third-party bot

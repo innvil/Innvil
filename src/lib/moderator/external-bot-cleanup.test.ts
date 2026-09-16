@@ -134,3 +134,23 @@ test("webhook cleanup follows the cross-watcher claim and terminates before memo
   assert.ok(claim >= 0 && branch > claim && edit > branch);
   assert.match(entry.slice(branch, edit), /runExternalBotCleanup[\s\S]*return;/);
 });
+
+test("cleanup toggle opens setup before enabling, supports cancellation and preserves saved state on failure", () => {
+  const source = readFileSync(new URL("../../components/watch/ExternalBotCleanupToggle.tsx", import.meta.url), "utf8");
+  const toggle = source.slice(source.indexOf("function toggle()"), source.indexOf("return <div"));
+  assert.match(toggle, /if \(enabled\) \{ void save\(false\); return; \}/);
+  assert.match(toggle, /setPendingEnable\(true\)/);
+  assert.match(toggle, /setShowInstructions\(true\)/);
+  assert.doesNotMatch(toggle, /save\(true\)|setCommunityRemoveExternalBotMessages/);
+  assert.match(source, /pendingEnable &&[\s\S]*onClick=\{\(\) => void save\(true\)\}/);
+  assert.match(source, /setPendingEnable\(false\); setShowInstructions\(false\); setError\(null\)/);
+  assert.match(source, /if \(result.ok\) \{ setEnabled\(next\);/);
+});
+
+test("cleanup setup explains Telegram prerequisites and limitations and remains accessible", () => {
+  const source = readFileSync(new URL("../../components/watch/ExternalBotCleanupToggle.tsx", import.meta.url), "utf8");
+  for (const text of ["Bot-to-Bot Communication Mode", "Delete messages", "each active Watcher", "All third-party bot posts", "cannot restore deleted posts", "No bot token is needed here", "View setup instructions", "https://t.me/BotFather"]) assert.ok(source.includes(text), text);
+  assert.match(source, /aria-expanded=\{showInstructions\}/);
+  assert.match(source, /aria-controls=\{instructionsId\}/);
+  assert.match(source, /headingRef.current\?\.focus\(\)/);
+});
