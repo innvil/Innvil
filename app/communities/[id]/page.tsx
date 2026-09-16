@@ -18,6 +18,7 @@ import { AUTO_POSTING_ENABLED } from "@/src/lib/moderator/plan";
 import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
 import { AcknowledgeAdminModToggle } from "@/src/components/watch/AcknowledgeAdminModToggle";
 import { ModerationNoticeCooldown } from "@/src/components/watch/ModerationNoticeCooldown";
+import { ExternalBotCleanupToggle } from "@/src/components/watch/ExternalBotCleanupToggle";
 import { CommunityTopicPolicies } from "@/src/components/watch/CommunityTopicPolicies";
 import { PendingReplyDelayControl } from "@/src/components/watch/PendingReplyDelayControl";
 import { PromotionChannelLinkControl } from "@/src/components/watch/PromotionChannelLinkControl";
@@ -237,6 +238,7 @@ export default async function CommunityDetailPage({
             </div>
             <AcknowledgeAdminModToggle communityId={community.id} acknowledgeAdminMod={community.acknowledgeAdminMod} />
             <ModerationNoticeCooldown communityId={community.id} initialMinutes={community.moderationNoticeCooldownMinutes ?? 30} />
+            {community.connectionType !== "escalation_group" && <ExternalBotCleanupToggle communityId={community.id} initialEnabled={community.removeExternalBotMessages === true} />}
             <div id={PROMOTION_TOPIC_ANCHOR_ID} className="scroll-mt-24 mt-4">
               <CommunityTopicPolicies communityId={community.id} />
               <p className="text-[11px] w-text-faint mt-1.5">{PROMOTION_TOPIC_HELPER_TEXT}</p>

@@ -17,7 +17,7 @@ import {
   communityOperationalStatus, getCommunityOperationalStats, getAccountSlotBreakdown, getAccountActivityTrend,
   getAccountPaidPlan, nextProvisioningStatusAfterConnect, resolveStandaloneModeratorSettings,
   resolveAccountEnterpriseEntitlement, resolveAccountAiRouting, applyDeploymentUsagePolicy,
-  setAccountCommunityAcknowledgeAdminMod, setAccountModerationNoticeCooldown, listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName,
+  setAccountCommunityAcknowledgeAdminMod, setAccountModerationNoticeCooldown, setAccountRemoveExternalBotMessages, listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName,
 } from "./watch-runtime";
 import { WATCH_PRODUCT_SLUG } from "./watch";
 import { hasVirtualModerator, moderatorEntitlementSource, virtualModProactiveMode, virtualModModeration, communityCountExceeded } from "@/src/lib/moderator/plan";
@@ -2478,6 +2478,24 @@ test("quiet-window control defaults to 30, persists 60 only for owner, and rejec
 });
 
 /* --------------------------------------- community topic policies (§4/§5) ---- */
+
+test("external bot cleanup defaults off, is owner-only and accepts only booleans", async () => {
+  const admin = fakeAdmin({ projects: [STANDALONE_PROJECT], communities: [
+    { id: "c1", project_id: "proj-1", platform: "telegram", chat_id: "-1001" },
+    { id: "other", project_id: "other-proj", platform: "telegram", chat_id: "-1002" },
+    { id: "ops", project_id: "proj-1", platform: "telegram", chat_id: "-1003", connection_type: "escalation_group" },
+  ] });
+  assert.equal((await listAccountCommunities(admin, "acct-1"))[0].removeExternalBotMessages, false);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "acct-1", "c1", true)).ok, true);
+  assert.equal((await listAccountCommunities(admin, "acct-1"))[0].removeExternalBotMessages, true);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "stranger", "c1", false)).ok, false);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "acct-1", "other", true)).ok, false);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "acct-1", "ops", true)).ok, false);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "acct-1", "c1", "false" as never)).ok, false);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "acct-1", "missing", true)).ok, false);
+  assert.equal((await setAccountRemoveExternalBotMessages(admin, "acct-1", "c1", false)).ok, true);
+  assert.equal((await listAccountCommunities(admin, "acct-1"))[0].removeExternalBotMessages, false);
+});
 
 test("REQUIRED: listAccountCommunityTopics lists this community's auto-discovered topics, scoped to the owning account", async () => {
   const admin = fakeAdmin({

@@ -1,4 +1,5 @@
 import "server-only";
+import { isExternalBotCleanupCandidate } from "./external-bot-cleanup";
 import { quietSpamFamily } from "./quiet-moderation";
 import { runQuietModeration } from "./quiet-moderation-runtime";
 import { ambientReactionCandidate, ambientReactionBudgetMs, AMBIENT_REACTION_EMOJIS, pickAmbientReactor } from "./ambient-reactions";
@@ -146,7 +147,7 @@ import type { ModerationViolationCategory } from "./watcher-ops-report";
  * Branches by classified sender type, each gated by its OWN capability:
  *   - INNVIL_MODERATOR -> Innvil Moderator Acknowledgement (bot-ack)
  *   - HUMAN             -> Reactive Natural Chatter
- *   - EXTERNAL_BOT      -> always ignored (spec §10)
+ *   - EXTERNAL_BOT      -> ignored, or opt-in silent cleanup; never user penalties
  * Every message is recorded into community_messages regardless of which
  * capability is active (or whether either is) — it's the bounded recent-
  * context window both features need, and recording it is cheap.
@@ -325,7 +326,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link, promotion_channel_name")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link, promotion_channel_name, remove_external_bot_messages")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -349,6 +350,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   return data as {
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
+    remove_external_bot_messages?: boolean | null;
     acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
     promotion_channel_link: string | null; promotion_channel_name: string | null;
   };
@@ -4241,6 +4243,51 @@ export async function respondAsDeployment(params: {
 
 /* ------------------------------------------------------------- entry point ---- */
 
+/** Separate from human moderation: only DELETE_MESSAGE is ever executed here.
+ * The caller supplies the existing cross-watcher message claim. Never apply
+ * role exemptions to bot admins, but fail closed on ambiguous bot identity. */
+export async function runExternalBotCleanup(
+  admin: SupabaseClient, panelId: string | null,
+  community: { id: string; remove_external_bot_messages?: boolean | null; connection_type?: string },
+  message: TelegramMessage, event: CommunityEvent, settings: unknown,
+  claimed: boolean, receivingBotId: number | null
+): Promise<void> {
+  if (community.connection_type === "escalation_group" || !hasVirtualModerator(settings)
+    || !isExternalBotCleanupCandidate({ enabled: community.remove_external_bot_messages, claimed,
+      chatType: message.chat.type, hasSenderChat: !!message.sender_chat, sender: event.sender, receivingBotId })) return;
+  // Includes paused/not-locally-deployed Innvil bots. Classification's stricter
+  // teammate trust check must not turn a paused Watcher into a deletion target.
+  const identity = await admin.from("telegram_bot_integrations").select("id")
+    .eq("telegram_bot_id", event.sender.platformUserId).limit(1);
+  if (identity.error || !Array.isArray(identity.data)) {
+    await logActivity(admin, panelId, community.id, null, "bot_message", "EXTERNAL_BOT_CLEANUP_SKIPPED", "bot_identity_unavailable", { platformMessageId: event.messageId });
+    return;
+  }
+  if (identity.data.length) return;
+  const deployments = await findChatterDeployments(admin, community.id);
+  if (!deployments.length) return;
+  if (moderatorEntitlementSource(settings) === "trial"
+    && !(await hasReactiveQuotaRemaining(admin, community.id, reactiveQuotaDay(new Date())))) return;
+  const enforcer = resolveModerationEnforcer(deployments, computeRoleAssignments(deployments, new Date()), "spam_scam");
+  let deleted = false;
+  let error: string | undefined;
+  try {
+    const result = await executeAction(admin, String(message.chat.id), {
+      kind: "DELETE_MESSAGE", targetDeploymentId: enforcer.deploymentId, targetMessageId: event.messageId,
+    });
+    deleted = result.ok;
+    error = result.error;
+  } catch { error = "Bot-message deletion could not be completed."; }
+  if (deleted) {
+    // Preserve the unique claim, without feeding removed bot ads to chatter.
+    await admin.from("community_messages").update({ text: "[Third-party bot message removed]" })
+      .eq("community_id", community.id).eq("platform_message_id", event.messageId);
+  }
+  await logActivity(admin, panelId, community.id, enforcer.deploymentId, "bot_message",
+    deleted ? "EXTERNAL_BOT_DELETED" : "EXTERNAL_BOT_DELETE_FAILED", "external_bot_cleanup_enabled",
+    { platformMessageId: event.messageId, senderPlatformId: event.sender.platformUserId, deleted, error: error ?? null });
+}
+
 /** Knowledge capture is deliberately independent of the admin-engagement
  * toggle and chatter quotas. Roles are verified against Telegram, never a
  * display name, message claim or forwarded-channel identity. */
@@ -4312,7 +4359,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // BEFORE resolveCommunity's bail-out, since its whole purpose is to
   // complete a connection for a chat that doesn't have a community row YET.
   // Never routed into moderation/chatter/bot-ack either way.
-  if (await handleStartCommand(admin, integration, message)) { timer.mark("start_command_handled"); return; }
+  if ((isAnonymousGroupAdmin || !message.from?.is_bot) && await handleStartCommand(admin, integration, message)) { timer.mark("start_command_handled"); return; }
 
   // Panel-backed: read panels.settings as before, unchanged. Standalone
   // (direct-Watch, integration.panel_id: null): synthesize the SAME
@@ -4399,6 +4446,10 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // the pipeline" from "it entered and then something went wrong downstream."
   const { claimed } = await recordCommunityMessage(admin, integration.panel_id, community.id, message, sender);
   timer.mark(claimed ? "claim_won" : "claim_lost_duplicate", { messageId: event.messageId });
+  if (sender.senderType === "EXTERNAL_BOT") {
+    await runExternalBotCleanup(admin, integration.panel_id, community, message, event, settings, claimed, integration.telegram_bot_id);
+    return; // No warnings, restrictions, AI, memory capture or bot acknowledgements.
+  }
   const isEditedMessage = !!update.edited_message || !!update.edited_channel_post;
   if (isEditedMessage) {
     await admin.from("community_messages").update({ text: event.text })
@@ -4561,7 +4612,7 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
     return;
   }
 
-  // EXTERNAL_BOT — always ignored here (spec §10).
+  // External bots already returned through the separate silent-cleanup path.
 }
 
 /* ================================================== pending-reply sweep ==========

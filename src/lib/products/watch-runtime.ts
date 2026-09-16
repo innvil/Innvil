@@ -829,6 +829,16 @@ export async function setAccountCommunityAcknowledgeAdminMod(admin: SupabaseClie
   return { ok: true, data: null };
 }
 
+export async function setAccountRemoveExternalBotMessages(admin: SupabaseClient, accountId: string, communityId: string, enabled: boolean): Promise<CreateResult<null>> {
+  if (typeof enabled !== "boolean") return { ok: false, error: "Choose on or off." };
+  const { data: projects, error: projectsError } = await admin.from("projects").select("id").eq("account_id", accountId);
+  if (projectsError || !projects?.length) return { ok: false, error: "Community not found." };
+  const { data: community, error: communityError } = await admin.from("communities").select("id, project_id, connection_type").eq("id", communityId).maybeSingle();
+  if (communityError || !community || community.connection_type === "escalation_group" || !projects.some(p => p.id === community.project_id)) return { ok: false, error: "Community not found." };
+  const { error } = await admin.from("communities").update({ remove_external_bot_messages: enabled }).eq("id", communityId).eq("project_id", community.project_id);
+  return error ? { ok: false, error: "Could not update bot-message cleanup." } : { ok: true, data: null };
+}
+
 export async function setAccountModerationNoticeCooldown(admin: SupabaseClient, accountId: string, communityId: string, minutes: number): Promise<CreateResult<null>> {
   if (minutes !== 30 && minutes !== 60) return { ok: false, error: "Choose 30 or 60 minutes." };
   const { data: projects, error: projectsError } = await admin.from("projects").select("id").eq("account_id", accountId);
@@ -1109,6 +1119,7 @@ export interface AccountCommunitySummary {
    *  selectChatterAction / community-runtime.ts's isSenderAdminOrTrusted. */
   acknowledgeAdminMod: boolean;
   moderationNoticeCooldownMinutes?: 30 | 60;
+  removeExternalBotMessages?: boolean;
   /** createdAt is additive -- purely so Watcher Role Separation (see
    *  src/lib/moderator/watcher-roles.ts) can derive the same stable,
    *  deterministic deployment ORDER for UI display (role label/chatter
@@ -1140,7 +1151,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
   // (unavoidable: it's what scopes this whole read to THIS account).
   const { data: communities } = await admin
     .from("communities")
-    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, acknowledge_admin_mod, moderation_notice_cooldown_minutes, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
+    .select("id, project_id, platform, chat_id, title, chat_type, connection_type, allow_solicitation, acknowledge_admin_mod, moderation_notice_cooldown_minutes, remove_external_bot_messages, moderator_deployments ( id, moderator_id, enabled, created_at, virtual_moderators ( id, name ) )")
     .in("project_id", projectIds)
     .order("created_at", { ascending: true });
   // `as unknown as` -- without generated Database types, supabase-js infers
@@ -1156,6 +1167,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     allow_solicitation: boolean | null;
     acknowledge_admin_mod: boolean | null;
     moderation_notice_cooldown_minutes?: number | null;
+    remove_external_bot_messages?: boolean | null;
     moderator_deployments: Array<{ id: string; moderator_id: string; enabled: boolean; created_at: string; virtual_moderators: { id: string; name: string } | null }> | null;
   }>;
   // Excludes any row deterministically known to be a private Telegram 1:1
@@ -1185,6 +1197,7 @@ export async function listAccountCommunities(admin: SupabaseClient, accountId: s
     allowSolicitation: c.allow_solicitation === true,
     acknowledgeAdminMod: c.acknowledge_admin_mod === true,
     moderationNoticeCooldownMinutes: c.moderation_notice_cooldown_minutes === 60 ? 60 as const : 30 as const,
+    removeExternalBotMessages: c.remove_external_bot_messages === true,
     watchers: (c.moderator_deployments ?? [])
       .map((d) => ({ deploymentId: d.id, watcherId: d.moderator_id, watcherName: d.virtual_moderators?.name ?? "Watcher", enabled: d.enabled, createdAt: d.created_at })),
   }));
@@ -1462,6 +1475,9 @@ export interface AccountActivityItem {
 }
 
 const DECISION_DESCRIPTIONS: Record<string, { text: string; kind: AccountActivityItem["kind"] }> = {
+  EXTERNAL_BOT_DELETED: { text: "silently removed a third-party bot message", kind: "moderation" },
+  EXTERNAL_BOT_DELETE_FAILED: { text: "could not remove a third-party bot message; check Telegram delete permissions", kind: "moderation" },
+  EXTERNAL_BOT_CLEANUP_SKIPPED: { text: "held bot-message cleanup because bot identity could not be verified", kind: "moderation" },
   QUIET_POLICY_WARNING_SENT: { text: "enforced moderation and delivered a public reminder", kind: "moderation" },
   QUIET_POLICY_SILENT: { text: "handled a policy violation without a public warning", kind: "moderation" },
   DELETE_SILENT: { text: "quietly deleted a duplicate or burst spam message", kind: "moderation" },
