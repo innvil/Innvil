@@ -13,7 +13,7 @@ import { hasProductAccess, createStandaloneProject, listAccountProjects, type Ac
 import { WATCH_PRODUCT_SLUG } from "@/src/lib/products/watch";
 import {
   createAccountWatcher, listAccountWatchers, createAccountCommunity, deployAccountWatcher,
-  setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod, setAccountModerationNoticeCooldown, setAccountRemoveExternalBotMessages,
+  setAccountCommunityAllowSolicitation, setAccountCommunityAcknowledgeAdminMod, setAccountModerationNoticeCooldown, setAccountRemoveExternalBotMessages, setAccountCommunityWelcomeNewMembers,
   listAccountCommunityTopics, setAccountCommunityTopicPolicy, setAccountCommunityTopicName, type AccountCommunityTopicRow,
   getAccountCommunityPendingReplyDelay, setAccountCommunityPendingReplyDelay,
   getAccountCommunityPromotionChannel, setAccountCommunityPromotionChannel, type PromotionChannelFallback,
@@ -197,6 +197,12 @@ export async function setCommunityRemoveExternalBotMessages(communityId: string,
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not authenticated." };
   return setAccountRemoveExternalBotMessages(admin, user.id, communityId, enabled);
+}
+
+export async function setCommunityWelcomeNewMembers(communityId: string, enabled: boolean): Promise<{ ok: true; data: null } | { ok: false; error: string }> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  return setAccountCommunityWelcomeNewMembers(admin, user.id, communityId, enabled);
 }
 
 export async function setCommunityModerationNoticeCooldown(communityId: string, minutes: number): Promise<{ ok: true; data: null } | { ok: false; error: string }> {

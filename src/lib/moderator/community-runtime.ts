@@ -8,6 +8,7 @@ import { extractTokenCandidates, compareTokenContracts } from "./token-contracts
 import { isDmNudge, isRepeatedDmNudge, isRapidMessageFlood } from "./message-repetition";
 import type { CommunitySender } from "./event-types";
 import { captureOfficialMemory, loadOfficialMemory, retryOfficialMemory } from "./official-memory-runtime";
+import { buildMemberWelcome } from "./member-welcome";
 import { warningAudience } from "./warning-presentation";
 import { conversationSilenceReason } from "./conversation-intent";
 import { inspectMessageLinks } from "./link-inspection";
@@ -235,6 +236,10 @@ export type TelegramMessage = {
   message_id: number;
   chat: TelegramChat;
   from?: TelegramUser;
+  /** Telegram service event for one or more accounts joining this chat. It is
+   * handled before ordinary moderation/chatter, never treated as a member's
+   * conversational message. */
+  new_chat_members?: TelegramUser[];
   text?: string;
   caption?: string;
   entities?: TelegramTextEntity[];
@@ -326,7 +331,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
   const chatId = String(chat.id);
   const base = admin
     .from("communities")
-    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link, promotion_channel_name, remove_external_bot_messages")
+    .select("id, bot_ack_mode, collab_contact, project_id, connection_type, allow_solicitation, acknowledge_admin_mod, pending_reply_delay_seconds, promotion_channel_link, promotion_channel_name, remove_external_bot_messages, welcome_new_members")
     .eq("platform", "telegram")
     .eq("chat_id", chatId);
   const { data, error } = await (panelId ? base.eq("panel_id", panelId) : base.is("panel_id", null)).maybeSingle();
@@ -351,6 +356,7 @@ export async function resolveCommunity(admin: SupabaseClient, panelId: string | 
     id: string; bot_ack_mode: BotAckMode; collab_contact: string | null; project_id: string | null;
     connection_type: "community" | "escalation_group"; allow_solicitation: boolean | null;
     remove_external_bot_messages?: boolean | null;
+    welcome_new_members?: boolean | null;
     acknowledge_admin_mod: boolean | null; pending_reply_delay_seconds: number | null;
     promotion_channel_link: string | null; promotion_channel_name: string | null;
   };
@@ -914,6 +920,61 @@ async function getBotTokenForIntegration(admin: SupabaseClient, integrationId: s
 async function sendPlainMessage(token: string, chatId: string | number, text: string): Promise<void> {
   const res = await telegramApiCall(token, "sendMessage", { chat_id: chatId, text });
   if (!res.ok) console.error("[telegram/setup] sendMessage failed", res.error);
+}
+
+/** Handles Telegram's new_chat_members service event. The durable insert is
+ * deliberately claimed before composing/sending: several deployed Watchers
+ * receive the same Telegram event, but exactly one is allowed to greet it.
+ * A failed claim fails closed rather than risking a welcome pile-on. */
+async function welcomeNewMembers(
+  admin: SupabaseClient,
+  integration: { id: string; virtual_moderator_id: string; telegram_bot_id: number | null },
+  community: {
+    id: string; project_id: string | null; allow_solicitation: boolean | null;
+    welcome_new_members?: boolean | null;
+  },
+  message: TelegramMessage
+): Promise<void> {
+  if (community.welcome_new_members !== true) return;
+  const members = (message.new_chat_members ?? [])
+    .filter((member) => !member.is_bot && member.id !== integration.telegram_bot_id)
+    .map((member) => ({ id: member.id, firstName: member.first_name, username: member.username }));
+  if (!members.length) return;
+
+  const token = await getBotTokenForIntegration(admin, integration.id);
+  if (!token) return;
+  const { error: claimError } = await admin.from("watch_member_welcome_events").insert({
+    community_id: community.id,
+    platform_message_id: String(message.message_id),
+    integration_id: integration.id,
+    member_ids: members.map((member) => member.id),
+  });
+  if (claimError) {
+    if (claimError.code !== "23505") {
+      console.error("[telegram/community] welcome claim failed", community.id, claimError.code);
+    }
+    return;
+  }
+
+  const [moderatorResult, project, officialMemory] = await Promise.all([
+    admin.from("virtual_moderators").select("persona").eq("id", integration.virtual_moderator_id).maybeSingle(),
+    community.project_id ? loadProjectProfileRow(admin, community.project_id) : Promise.resolve(null),
+    loadOfficialMemory(admin, community.id),
+  ]);
+  const text = buildMemberWelcome({
+    members,
+    projectName: project?.name ?? null,
+    projectOverview: project?.overview ?? null,
+    persona: normalizeModeratorPersona(moderatorResult.data?.persona),
+    allowSolicitation: community.allow_solicitation === true,
+    officialMemory,
+  });
+  const result = await telegramApiCall(token, "sendMessage", {
+    chat_id: message.chat.id,
+    text,
+    disable_web_page_preview: true,
+  });
+  if (!result.ok) console.error("[telegram/community] welcome send failed", community.id, result.error);
 }
 
 export const START_COMMAND_RE = /^\/start(?:@\w+)?(?:\s+(\S+))?\s*$/i;
@@ -4350,7 +4411,11 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   // `from` user -- "GroupAnonymousBot" -- never an absent `from`).
   const isAnonymousChannelPost = !message.from && (!!update.channel_post || !!update.edited_channel_post);
   const isAnonymousGroupAdmin = message.chat.type === "supergroup" && message.sender_chat?.id === message.chat.id;
-  if (!message.from && !isAnonymousChannelPost && !isAnonymousGroupAdmin) { timer.mark("no_message_or_sender"); return; }
+  // A new_chat_members service event may not have a useful human actor in
+  // every Telegram delivery mode. It still has the actual joined accounts,
+  // which is all the opt-in welcome flow needs; do not drop it early.
+  const isMemberJoinEvent = !!message.new_chat_members?.length;
+  if (!message.from && !isAnonymousChannelPost && !isAnonymousGroupAdmin && !isMemberJoinEvent) { timer.mark("no_message_or_sender"); return; }
 
   const integration = await resolveIntegration(admin, integrationId);
   if (!integration) { timer.mark("no_integration"); return; }
@@ -4386,6 +4451,16 @@ export async function handleCommunityUpdate(integrationId: string, update: Teleg
   if (community.connection_type === "escalation_group") {
     await handleEscalationGroupMessage(admin, { id: community.id, chatId: String(message.chat.id) }, message);
     timer.mark("escalation_group_message_handled");
+    return;
+  }
+
+  // Telegram's join service messages are never ordinary chat content. They
+  // therefore cannot trigger moderation, memories, a bot acknowledgement,
+  // or an AI reply. When the community opts in, exactly one deployed Watcher
+  // sends the deterministic persona-based welcome above.
+  if (message.new_chat_members?.length) {
+    await welcomeNewMembers(admin, integration, community, message);
+    timer.mark("new_members_service_message_handled", { memberCount: message.new_chat_members.length });
     return;
   }
 

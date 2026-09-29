@@ -19,6 +19,7 @@ import { assignWatcherRoles } from "@/src/lib/moderator/watcher-roles";
 import { DeploymentToggle } from "@/src/components/watch/DeploymentToggle";
 import { CommunitySolicitationToggle } from "@/src/components/watch/CommunitySolicitationToggle";
 import { AcknowledgeAdminModToggle } from "@/src/components/watch/AcknowledgeAdminModToggle";
+import { MemberWelcomeToggle } from "@/src/components/watch/MemberWelcomeToggle";
 import { CommunityTopicPolicies } from "@/src/components/watch/CommunityTopicPolicies";
 import { PendingReplyDelayControl } from "@/src/components/watch/PendingReplyDelayControl";
 import { PromotionChannelLinkControl } from "@/src/components/watch/PromotionChannelLinkControl";
@@ -212,6 +213,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     <CommunitySolicitationToggle communityId={c.id} allowSolicitation={c.allowSolicitation} />
                     <p className="text-[11px] w-text-faint mt-1.5">{SOLICITATION_TOGGLE_HELPER_TEXT}</p>
                     <AcknowledgeAdminModToggle communityId={c.id} acknowledgeAdminMod={c.acknowledgeAdminMod} />
+                    {c.connectionType !== "escalation_group" && <MemberWelcomeToggle communityId={c.id} initialEnabled={c.welcomeNewMembers === true} />}
                     <div className="mt-4">
                       <CommunityTopicPolicies communityId={c.id} />
                       <p className="text-[11px] w-text-faint mt-1.5">{PROMOTION_TOPIC_HELPER_TEXT}</p>
