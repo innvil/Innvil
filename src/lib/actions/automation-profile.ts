@@ -2,6 +2,7 @@
 
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
+import { loadAllDatabasePages } from "@/src/lib/supabase/paginate";
 import { hasCampaignAutomation, planTier, tierPlatforms } from "@/src/lib/plans";
 import {
   readAutomationProfile, normalizeAutomationProfile, type AutomationProfile,
@@ -50,14 +51,24 @@ export async function getAutomationProfile(panelId: string): Promise<AutomationP
   if (!c) return null;
   const allowed = tierPlatforms(planTier(c.panel.settings)); // null = all
 
-  const { data: services } = await c.admin
-    .from("services")
-    .select("id, name, platform, sell_rate, min")
-    .eq("panel_id", panelId)
-    .eq("status", "active");
+  const services = await loadAllDatabasePages<{
+    id: string;
+    name: string;
+    platform: string | null;
+    sell_rate: number;
+    min: number;
+  }>((from, to) =>
+    c.admin
+      .from("services")
+      .select("id, name, platform, sell_rate, min")
+      .eq("panel_id", panelId)
+      .eq("status", "active")
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
 
   const servicesByPlatform: Record<string, ConfigService[]> = {};
-  for (const s of (services as Array<{ id: string; name: string; platform: string | null; sell_rate: number; min: number }> | null) ?? []) {
+  for (const s of services) {
     const platform = s.platform || "other";
     if (allowed !== null && !(allowed as string[]).includes(platform)) continue;
     (servicesByPlatform[platform] ??= []).push({
@@ -82,9 +93,16 @@ export async function saveAutomationProfile(panelId: string, profile: Automation
   if (!hasCampaignAutomation(c.panel.settings)) return { ok: false, error: "The automator isn't available on this panel." };
 
   const allowed = tierPlatforms(planTier(c.panel.settings));
-  const { data: services } = await c.admin
-    .from("services").select("id").eq("panel_id", panelId).eq("status", "active");
-  const validIds = new Set(((services as Array<{ id: string }> | null) ?? []).map((s) => s.id));
+  const services = await loadAllDatabasePages<{ id: string }>((from, to) =>
+    c.admin
+      .from("services")
+      .select("id")
+      .eq("panel_id", panelId)
+      .eq("status", "active")
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
+  const validIds = new Set(services.map((s) => s.id));
 
   const clean = normalizeAutomationProfile(profile, allowed, validIds);
   const { error } = await c.admin

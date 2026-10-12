@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
+import { loadAllDatabasePages } from "@/src/lib/supabase/paginate";
 import { round4 } from "@/src/lib/money";
 import { validateOrderLink } from "@/src/lib/order-link";
 import { getProviderCredentials, addOrder, getStatus, getMultiStatus, refillOrder, cancelOrders, ProviderError } from "@/src/lib/providers";
@@ -156,15 +157,7 @@ async function addHistory(orderId: string, status: OrderStatus, note?: string) {
 
 async function handleServices(u: ApiUser) {
   const admin = createAdminClient();
-  const { data } = await admin
-    .from("services")
-    .select("id, local_id, name, type, sell_rate, min, max, provider_categories(name)")
-    .eq("panel_id", u.panelId)
-    .eq("status", "active")
-    .order("sort_order", { ascending: true })
-    .order("name", { ascending: true });
-
-  const rows = (data ?? []) as Array<{
+  const rows = await loadAllDatabasePages<{
     id: string;
     local_id: number | null;
     name: string;
@@ -173,7 +166,17 @@ async function handleServices(u: ApiUser) {
     min: number;
     max: number;
     provider_categories: Array<{ name: string | null }> | null;
-  }>;
+  }>((from, to) =>
+    admin
+      .from("services")
+      .select("id, local_id, name, type, sell_rate, min, max, provider_categories(name)")
+      .eq("panel_id", u.panelId)
+      .eq("status", "active")
+      .order("sort_order", { ascending: true })
+      .order("name", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
 
   return rows.map((r) => ({
     service: r.local_id ?? r.id,

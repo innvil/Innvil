@@ -9,6 +9,7 @@ import {
   type ProviderServiceDTO,
 } from "@/src/lib/providers";
 import { computeSellRate } from "@/src/lib/money";
+import { loadAllDatabasePages } from "@/src/lib/supabase/paginate";
 import type { ProviderRow, ServiceRow, MarkupKind, ServiceStatus } from "@/src/types/db";
 
 type Result<T = void> =
@@ -251,11 +252,15 @@ export async function fetchImportableServices(
   if (!provider) return { ok: false, error: "Provider not found" };
   try {
     const services = await providerServiceList(admin, provider);
-    const { data: existing } = await admin
-      .from("services")
-      .select("provider_service_id")
-      .eq("provider_id", providerId);
-    const importedIds = (existing ?? [])
+    const existing = await loadAllDatabasePages<{ provider_service_id: string | null }>((from, to) =>
+      admin
+        .from("services")
+        .select("provider_service_id")
+        .eq("provider_id", providerId)
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+    const importedIds = existing
       .map((r) => r.provider_service_id)
       .filter((x): x is string => Boolean(x));
     return { ok: true, data: { services, importedIds } };
@@ -294,11 +299,20 @@ export async function importServices(
   const wanted = new Set(opts.providerServiceIds.map(String));
   const chosen = catalog.filter((s) => wanted.has(String(s.service)));
 
-  const { data: existing } = await admin
-    .from("services")
-    .select("provider_service_id")
-    .eq("provider_id", providerId);
-  const already = new Set((existing ?? []).map((r) => String(r.provider_service_id)));
+  let existing: Array<{ provider_service_id: string | null }>;
+  try {
+    existing = await loadAllDatabasePages<{ provider_service_id: string | null }>((from, to) =>
+      admin
+        .from("services")
+        .select("provider_service_id")
+        .eq("provider_id", providerId)
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Failed to read imported services" };
+  }
+  const already = new Set(existing.map((r) => String(r.provider_service_id)));
 
   try {
   const platformCache = new Map<string, string>(); // label -> id
@@ -368,8 +382,13 @@ export async function importServices(
     let next = (maxRow?.local_id ?? 0) + 1;
     for (const r of rows) r.local_id = next++;
 
-    const { error } = await admin.from("services").insert(rows);
-    if (error) return { ok: false, error: error.message };
+    // Keep each write comfortably below proxy/request limits. This is a
+    // transport batch only, never a catalog cap: every selected service is
+    // inserted, including catalogs well beyond 1,000 rows.
+    for (const batch of chunkIds(rows, 250)) {
+      const { error } = await admin.from("services").insert(batch);
+      if (error) return { ok: false, error: error.message };
+    }
   }
   return { ok: true, data: { imported: rows.length, skipped } };
   } catch (e) {
@@ -447,15 +466,19 @@ export async function listCatalog(panelId: string): Promise<CatalogPlatform[]> {
   if (!user) return [];
   if (!(await ownsPanel(admin, user.id, panelId))) return [];
 
-  const [{ data: cats }, { data: svcs }, { data: panelRow }] = await Promise.all([
-    admin.from("provider_categories").select("id, name, parent_id").eq("panel_id", panelId),
-    admin.from("services").select("*").eq("panel_id", panelId).order("name", { ascending: true }),
+  const [cats, svcs, { data: panelRow }] = await Promise.all([
+    loadAllDatabasePages<{ id: string; name: string; parent_id: string | null }>((from, to) =>
+      admin.from("provider_categories").select("id, name, parent_id").eq("panel_id", panelId).order("id", { ascending: true }).range(from, to)
+    ),
+    loadAllDatabasePages<ServiceRow>((from, to) =>
+      admin.from("services").select("*").eq("panel_id", panelId).order("name", { ascending: true }).order("id", { ascending: true }).range(from, to)
+    ),
     admin.from("panels").select("settings").eq("id", panelId).maybeSingle(),
   ]);
   const platformMeta = readPlatformMeta(panelRow?.settings);
 
   const catById = new Map<string, { id: string; name: string; parent_id: string | null }>(
-    (cats ?? []).map((c) => [c.id as string, c as { id: string; name: string; parent_id: string | null }])
+    cats.map((c) => [c.id, c])
   );
 
   const platforms = new Map<string, CatalogPlatform>();
@@ -477,7 +500,7 @@ export async function listCatalog(panelId: string): Promise<CatalogPlatform[]> {
     return sub;
   };
 
-  for (const raw of (svcs as ServiceRow[]) ?? []) {
+  for (const raw of svcs) {
     const cat = raw.category_id ? catById.get(raw.category_id) : null;
     let platformNode: CatalogPlatform;
     let subName: string;
@@ -574,16 +597,25 @@ export async function syncProviderServices(
   }
   const byId = new Map(catalog.map((s) => [String(s.service), s]));
 
-  const { data: imported } = await admin
-    .from("services")
-    .select("id, provider_service_id, markup_kind, markup_value")
-    .eq("provider_id", providerId);
+  let imported: Array<{ id: string; provider_service_id: string | null; markup_kind: MarkupKind; markup_value: number }>;
+  try {
+    imported = await loadAllDatabasePages<{ id: string; provider_service_id: string | null; markup_kind: MarkupKind; markup_value: number }>((from, to) =>
+      admin
+        .from("services")
+        .select("id, provider_service_id, markup_kind, markup_value")
+        .eq("provider_id", providerId)
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Failed to read imported services" };
+  }
 
   const now = new Date().toISOString();
   let updated = 0;
   let disabled = 0;
 
-  for (const svc of imported ?? []) {
+  for (const svc of imported) {
     const dto = byId.get(String(svc.provider_service_id));
     if (!dto) {
       await admin.from("services").update({ status: "disabled", last_synced_at: now }).eq("id", svc.id);
@@ -621,14 +653,18 @@ export async function recategorizeServices(
   if (!(await ownsPanel(admin, user.id, panelId))) return { ok: false, error: "Panel not found" };
 
   try {
-  const { data: svcs } = await admin
-    .from("services")
-    .select("id, name, provider_id")
-    .eq("panel_id", panelId);
+  const svcs = await loadAllDatabasePages<{ id: string; name: string | null; provider_id: string | null }>((from, to) =>
+    admin
+      .from("services")
+      .select("id, name, provider_id")
+      .eq("panel_id", panelId)
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
 
   // Categorize EVERY service, including ones whose provider was removed
   // (provider_id null) — those otherwise get stuck "Uncategorized" forever.
-  const services = svcs ?? [];
+  const services = svcs;
   if (services.length === 0) return { ok: true, data: { updated: 0 } };
 
   // 1. Compute the target platform + sub for every service in memory.
@@ -649,13 +685,17 @@ export async function recategorizeServices(
   //    service whose provider was removed consolidates into the existing platform
   //    category instead of a null-provider duplicate, and any leftover duplicates
   //    end up empty and get cleaned up below.
-  const { data: existingCats } = await admin
-    .from("provider_categories")
-    .select("id, name, parent_id")
-    .eq("panel_id", panelId);
+  const existingCats = await loadAllDatabasePages<{ id: string; name: string; parent_id: string | null }>((from, to) =>
+    admin
+      .from("provider_categories")
+      .select("id, name, parent_id")
+      .eq("panel_id", panelId)
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
 
   const platformByName = new Map<string, string>(); // platform name -> category id
-  for (const c of existingCats ?? []) {
+  for (const c of existingCats) {
     if (c.parent_id === null) platformByName.set(c.name, c.id as string);
   }
 
@@ -673,7 +713,7 @@ export async function recategorizeServices(
   }
 
   const subByKey = new Map<string, string>(); // `${parentId}|${name}` -> category id
-  for (const c of existingCats ?? []) {
+  for (const c of existingCats) {
     if (c.parent_id !== null) subByKey.set(`${c.parent_id}|${c.name}`, c.id as string);
   }
 
@@ -720,13 +760,17 @@ export async function recategorizeServices(
   // Clean up empty categories (no services, no children), repeating so an emptied
   // parent is removed once its children are gone.
   for (let pass = 0; pass < 5; pass++) {
-    const [{ data: allCats }, { data: used }] = await Promise.all([
-      admin.from("provider_categories").select("id, parent_id").eq("panel_id", panelId),
-      admin.from("services").select("category_id").eq("panel_id", panelId),
+    const [allCats, used] = await Promise.all([
+      loadAllDatabasePages<{ id: string; parent_id: string | null }>((from, to) =>
+        admin.from("provider_categories").select("id, parent_id").eq("panel_id", panelId).order("id", { ascending: true }).range(from, to)
+      ),
+      loadAllDatabasePages<{ category_id: string | null }>((from, to) =>
+        admin.from("services").select("category_id").eq("panel_id", panelId).order("id", { ascending: true }).range(from, to)
+      ),
     ]);
-    const usedIds = new Set((used ?? []).map((r) => r.category_id).filter(Boolean));
-    const parentIds = new Set((allCats ?? []).map((c) => c.parent_id).filter(Boolean));
-    const orphans = (allCats ?? [])
+    const usedIds = new Set(used.map((r) => r.category_id).filter(Boolean));
+    const parentIds = new Set(allCats.map((c) => c.parent_id).filter(Boolean));
+    const orphans = allCats
       .filter((c) => !usedIds.has(c.id) && !parentIds.has(c.id))
       .map((c) => c.id);
     if (!orphans.length) break;
@@ -914,8 +958,10 @@ export async function deleteCategory(categoryId: string): Promise<Result<{ servi
   // Services live on the leaf categories (and sometimes the parent directly).
   const svcIds: string[] = [];
   for (const c of chunkIds(catIds)) {
-    const { data } = await admin.from("services").select("id").in("category_id", c);
-    if (data) svcIds.push(...data.map((s) => s.id as string));
+    const rows = await loadAllDatabasePages<{ id: string }>((from, to) =>
+      admin.from("services").select("id").in("category_id", c).order("id", { ascending: true }).range(from, to)
+    );
+    svcIds.push(...rows.map((s) => s.id));
   }
   let deleted = 0;
   for (const c of chunkIds(svcIds)) {

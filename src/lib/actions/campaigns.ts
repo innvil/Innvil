@@ -2,6 +2,7 @@
 
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
+import { loadAllDatabasePages } from "@/src/lib/supabase/paginate";
 import { placeOrder } from "@/src/lib/actions/orders";
 import { analyzeCampaign, parseCampaignLinks } from "@/src/lib/automation/links";
 import { hasCampaignAutomation, campaignLinkLimit, planTier, tierPlatforms } from "@/src/lib/plans";
@@ -216,20 +217,22 @@ export async function runMassOrder(input: {
   if (account.status !== "active") return { ok: false, error: "Your account can't place orders right now." };
 
   // Resolve services: accept the panel's own service number (local_id) or the uuid.
-  const { data: services } = await admin
-    .from("services")
-    .select("id, local_id, name, min, max, sell_rate")
-    .eq("panel_id", input.panelId)
-    .eq("status", "active");
-
-  const svcRows = (services as Array<{
+  const svcRows = await loadAllDatabasePages<{
     id: string;
     local_id: number | null;
     name: string;
     min: number;
     max: number;
     sell_rate: number;
-  }> | null) ?? [];
+  }>((from, to) =>
+    admin
+      .from("services")
+      .select("id, local_id, name, min, max, sell_rate")
+      .eq("panel_id", input.panelId)
+      .eq("status", "active")
+      .order("id", { ascending: true })
+      .range(from, to)
+  );
   const byId = new Map<string, (typeof svcRows)[number]>();
   const byLocal = new Map<string, (typeof svcRows)[number]>();
   for (const s of svcRows) {

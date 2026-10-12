@@ -1,6 +1,7 @@
 "use server";
 
 import { createAdminClient } from "@/src/lib/supabase/admin";
+import { loadAllDatabasePages } from "@/src/lib/supabase/paginate";
 import { customerSupportActive } from "@/src/lib/ai/addon";
 import { hasDesignTools, hasCampaignAutomation } from "@/src/lib/plans";
 import { readDashboardHome, type DashboardWidget } from "@/src/lib/dashboard-layout";
@@ -288,28 +289,36 @@ type ServiceJoin = Pick<
  *  platform-focused panel (e.g. Telegram-only) hard-filters to that platform. */
 export async function getStorefrontServices(panelId: string): Promise<StorefrontService[]> {
   const admin = createAdminClient();
-  const [{ data: services }, { data: categories }, { data: panel }] = await Promise.all([
-    admin
-      .from("services")
-      .select("id, local_id, name, platform, sell_rate, min, max, description, category_id")
-      .eq("panel_id", panelId)
-      .eq("status", "active")
-      .order("sort_order", { ascending: true })
-      .order("name", { ascending: true }),
-    admin
-      .from("provider_categories")
-      .select("id, name, parent_id")
-      .eq("panel_id", panelId),
+  const [services, categories, { data: panel }] = await Promise.all([
+    loadAllDatabasePages<ServiceJoin>((from, to) =>
+      admin
+        .from("services")
+        .select("id, local_id, name, platform, sell_rate, min, max, description, category_id")
+        .eq("panel_id", panelId)
+        .eq("status", "active")
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to)
+    ),
+    loadAllDatabasePages<{ id: string; name: string | null; parent_id: string | null }>((from, to) =>
+      admin
+        .from("provider_categories")
+        .select("id, name, parent_id")
+        .eq("panel_id", panelId)
+        .order("id", { ascending: true })
+        .range(from, to)
+    ),
     admin.from("panels").select("settings").eq("id", panelId).maybeSingle(),
   ]);
 
   const focus = readPlatformFocus(panel?.settings);
   const categoryById = new Map(
-    ((categories as Array<{ id: string; name: string | null; parent_id: string | null }> | null) ?? [])
+    categories
       .map((c) => [c.id, c])
   );
 
-  return ((services as ServiceJoin[] | null) ?? [])
+  return services
     .filter((r) => platformAllowedByFocus(focus, r.platform))
     .map((r) => ({
     id: r.id,
