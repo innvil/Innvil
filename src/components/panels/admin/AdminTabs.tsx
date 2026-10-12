@@ -1138,6 +1138,45 @@ const fmtMoney = (n: number) =>
 
 type EditForm = { name: string; description: string; markupKind: MarkupKind; markupValue: string };
 
+function ServiceGroupSelectAll({
+  serviceIds,
+  selected,
+  onToggle,
+  label,
+}: {
+  serviceIds: readonly string[];
+  selected: ReadonlySet<string>;
+  onToggle: () => void;
+  label: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const allSelected = serviceIds.length > 0 && serviceIds.every((id) => selected.has(id));
+  const partiallySelected = !allSelected && serviceIds.some((id) => selected.has(id));
+
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = partiallySelected;
+  }, [partiallySelected]);
+
+  if (serviceIds.length === 0) return null;
+
+  return (
+    <label
+      className="flex items-center gap-1.5 shrink-0 cursor-pointer select-none text-[11px] fp-text-dim hover:fp-text"
+      title={label}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <input
+        ref={inputRef}
+        type="checkbox"
+        checked={allSelected}
+        onChange={onToggle}
+        className="accent-[#C9A574]"
+      />
+      <span>All</span>
+    </label>
+  );
+}
+
 export function ServicesTab({ panelId }: { panelId: string }) {
   const realPanel = isUuid(panelId);
   const [catalog, setCatalog] = useState<CatalogPlatform[] | null>(() =>
@@ -1439,6 +1478,38 @@ export function ServicesTab({ panelId }: { panelId: string }) {
   );
   const catalogAllSelected = allServiceIds.length > 0 && allServiceIds.every((id) => sel.has(id));
   const toggleCatalogSelectAll = () => setSel(catalogAllSelected ? new Set() : new Set(allServiceIds));
+  const serviceIdsByPlatform = useMemo(() => {
+    const result = new Map<string, string[]>();
+    for (const platform of catalog ?? []) {
+      const platformKey = platform.id ?? "_" + platform.name;
+      result.set(platformKey, platform.subs.flatMap((sub) => sub.services.map((service) => service.id)));
+    }
+    return result;
+  }, [catalog]);
+  const serviceIdsBySubcategory = useMemo(() => {
+    const result = new Map<string, string[]>();
+    for (const platform of catalog ?? []) {
+      const platformKey = platform.id ?? "_" + platform.name;
+      for (const subcategory of platform.subs) {
+        result.set(
+          platformKey + "::" + (subcategory.id ?? subcategory.name),
+          subcategory.services.map((service) => service.id)
+        );
+      }
+    }
+    return result;
+  }, [catalog]);
+  const toggleServiceGroupSelection = (serviceIds: readonly string[]) => {
+    setSel((previous) => {
+      const next = new Set(previous);
+      const groupIsFullySelected = serviceIds.length > 0 && serviceIds.every((id) => next.has(id));
+      serviceIds.forEach((id) => {
+        if (groupIsFullySelected) next.delete(id);
+        else next.add(id);
+      });
+      return next;
+    });
+  };
 
   const runBulk = async (
     fn: () => Promise<{ ok: boolean; error?: string; data?: { count: number } }>,
@@ -1694,6 +1765,7 @@ export function ServicesTab({ panelId }: { panelId: string }) {
             {catalogFiltered.map((p) => {
               const pk = p.id ?? `_${p.name}`;
               const pOpen = openP.has(pk);
+              const platformServiceIds = serviceIdsByPlatform.get(pk) ?? p.subs.flatMap((sub) => sub.services.map((service) => service.id));
               return (
                 <div key={pk} className="border fp-line-soft rounded-xl overflow-hidden">
                   <div className="w-full flex items-center gap-2 px-4 py-3 fp-panel-raised">
@@ -1705,6 +1777,12 @@ export function ServicesTab({ panelId }: { panelId: string }) {
                       <span className="truncate">{p.name}</span>
                     </button>
                     <span className="fp-text-faint text-xs fp-mono shrink-0">{p.count} service{p.count === 1 ? "" : "s"}</span>
+                    <ServiceGroupSelectAll
+                      serviceIds={platformServiceIds}
+                      selected={sel}
+                      onToggle={() => toggleServiceGroupSelection(platformServiceIds)}
+                      label={"Select all " + p.name + " services (" + platformServiceIds.length + ")"}
+                    />
                     {p.platformKey && (
                       <button
                         onClick={() => setLogoEdit(logoEdit?.key === p.platformKey ? null : { key: p.platformKey!, value: p.icon ?? "" })}
@@ -1752,6 +1830,7 @@ export function ServicesTab({ panelId }: { panelId: string }) {
                         const sk = `${pk}::${sub.id ?? sub.name}`;
                         const sOpen = openS.has(sk);
                         const subIds = sub.services.map((x) => x.id);
+                        const subcategoryServiceIds = serviceIdsBySubcategory.get(sk) ?? subIds;
                         return (
                           <div key={sk} className="rounded-lg overflow-hidden">
                             <div className="flex items-center gap-2 px-2">
@@ -1762,6 +1841,12 @@ export function ServicesTab({ panelId }: { panelId: string }) {
                                 </span>
                                 <span className="fp-text-faint text-[11px] fp-mono">{sub.services.length}</span>
                               </button>
+                              <ServiceGroupSelectAll
+                                serviceIds={subcategoryServiceIds}
+                                selected={sel}
+                                onToggle={() => toggleServiceGroupSelection(subcategoryServiceIds)}
+                                label={"Select all " + sub.name + " services (" + subcategoryServiceIds.length + ")"}
+                              />
                               <button
                                 onClick={() => doDeleteCategory(sub.id, sub.name, subIds)}
                                 title="Delete this category and its services"
