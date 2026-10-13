@@ -42,7 +42,7 @@ export interface BinanceDepositVM {
   customerUsername: string | null;
   customerEmail: string | null;
   amount: number;          // requested top-up
-  payable: number | null;  // exact amount the customer was told to send (base + unique tail)
+  payable: number | null;  // exact amount the customer was told to send
   bonus: number;
   currency: string;
   status: string;          // pending | completed | rejected | approved

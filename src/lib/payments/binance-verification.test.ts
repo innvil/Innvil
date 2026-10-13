@@ -6,10 +6,10 @@ import {
   normalizeEnteredTransactionId,
   findMatchingTx,
   creditMatch,
+  payableForRequestedAmount,
   type PendingIntent,
   type BinanceTx,
 } from "./binance-match";
-import { getBinanceDepositBreakdown, addDecimalExact } from "./binance-amounts";
 import { getPayTransactions, BinanceApiError } from "./binance";
 import { collectTransactionsForWindow } from "./binance-sync";
 
@@ -18,7 +18,7 @@ function makeIntent(overrides: Partial<PendingIntent> = {}): PendingIntent {
     id: "pay_1",
     customer_id: "cust_1",
     amount: "100.0000",
-    binance_payable: "100.1234",
+    binance_payable: "100.0000",
     created_at: "2026-08-06T10:00:00.000Z",
     ...overrides,
   };
@@ -30,7 +30,7 @@ function makeTx(overrides: Partial<BinanceTx> = {}): BinanceTx {
     order_id: "446982297682452480",
     order_type: "C2C",
     transaction_time: "2026-08-06T10:06:00.000Z",
-    amount: "100.1234",
+    amount: "100.0000",
     currency: "USDT",
     receiver_binance_id: "12345678",
     ...overrides,
@@ -51,7 +51,7 @@ test("valid incoming C2C payment passes validation", () => {
 
 test("outgoing negative C2C transaction is rejected", () => {
   const fail = validateTx(
-    makeTx({ amount: "-100.1234" }),
+    makeTx({ amount: "-100.0000" }),
     makeIntent(),
     {
       expectedUid: "12345678",
@@ -75,8 +75,8 @@ test("internal transaction ids keep M_P_ prefix and case", () => {
 
 test("wrong amount returns AMOUNT_MISMATCH", () => {
   const fail = validateTx(
-    makeTx({ amount: "100.1235" }),
-    makeIntent({ binance_payable: "100.1234" }),
+    makeTx({ amount: "100.0001" }),
+    makeIntent({ binance_payable: "100.0000" }),
     {
       expectedUid: "12345678",
       requirePayableMatch: true,
@@ -159,7 +159,7 @@ test("creditMatch submits both order_id and transaction_id to the claim RPC", as
   assert.equal(out.ok, true);
   assert.equal(rpcArgs?.["p_order_id"], "446982297682452480");
   assert.equal(rpcArgs?.["p_tx_id"], "M_P_71505104267788288");
-  assert.equal(rpcArgs?.["p_credit_amount"], "100.1234");
+  assert.equal(rpcArgs?.["p_credit_amount"], "100");
   assert.equal(rpcArgs?.["p_bonus_amount"], "0");
 });
 
@@ -189,13 +189,9 @@ test("creditMatch applies tier bonus on top of exact received amount", async () 
   }
 });
 
-test("exact increment arithmetic: requested 10.000 + increment 0.001 = total 10.001", () => {
-  const breakdown = getBinanceDepositBreakdown("10.000", "10.001", 4);
-  assert.equal(breakdown.base, "10");
-  assert.equal(breakdown.increment, "0.001");
-  assert.equal(breakdown.totalToSend, "10.001");
-  assert.equal(breakdown.walletCredit, "10.001");
-  assert.equal(addDecimalExact("10.000", "0.001", 4), "10.001");
+test("requested Binance amount has no verification increment", () => {
+  assert.equal(payableForRequestedAmount(10), 10);
+  assert.equal(payableForRequestedAmount(10.1234), 10.1234);
 });
 
 test("successful payment credits the full exact Binance amount with no silent discard", async () => {
@@ -209,18 +205,17 @@ test("successful payment credits the full exact Binance amount with no silent di
 
   const out = await creditMatch(
     fakeAdmin,
-    makeIntent({ amount: "10.0000", binance_payable: "10.0010" }),
-    makeTx({ amount: "10.0010" }),
+    makeIntent({ amount: "10.0000", binance_payable: "10.0000" }),
+    makeTx({ amount: "10.0000" }),
     null
   );
 
   assert.equal(out.ok, true);
   if (out.ok) {
-    assert.equal(out.credited, 10.001);
-    assert.equal(out.received, 10.001);
+    assert.equal(out.credited, 10);
+    assert.equal(out.received, 10);
   }
-  assert.equal(rpcArgs?.["p_credit_amount"], "10.001");
-  assert.notEqual(rpcArgs?.["p_credit_amount"], "10");
+  assert.equal(rpcArgs?.["p_credit_amount"], "10");
 });
 
 test("duplicate order id is rejected by the claim core", async () => {

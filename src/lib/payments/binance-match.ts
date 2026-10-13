@@ -127,20 +127,10 @@ function decimalToNumber(input: string): number {
   return parsed;
 }
 
-/** Pick a unique payable amount = base + a tiny 0.0001-step tail, unique among the
- *  panel's still-open Binance deposits (so a payment maps to one intent by amount). */
-export async function pickPayable(admin: SupabaseClient, panelId: string, base: number): Promise<number> {
-  const { data } = await admin
-    .from("payments")
-    .select("binance_payable")
-    .eq("panel_id", panelId).eq("gateway", "binance_pay").eq("status", "pending")
-    .not("binance_payable", "is", null);
-  const taken = new Set(((data as Array<{ binance_payable: number }> | null) ?? []).map((p) => round4(Number(p.binance_payable)).toFixed(4)));
-  for (let tail = 1; tail <= 9999; tail++) {
-    const payable = round4(base + tail / 10000);
-    if (!taken.has(payable.toFixed(4))) return payable;
-  }
-  return round4(base + Math.floor(Math.random() * 9999 + 1) / 10000); // fallback (extremely unlikely)
+/** Binance Order ID + owner-history reconciliation identify a payment, so the
+ * customer sends exactly the amount they requested — never an added decimal tail. */
+export function payableForRequestedAmount(amount: number): number {
+  return round4(amount);
 }
 
 /** Validate a transaction against an intent. Returns null on a valid match, else a failure. */
@@ -173,7 +163,7 @@ export function validateTx(
   return null;
 }
 
-/** Find an unused transaction matching this intent's unique payable amount. */
+/** Find a transaction by the customer-supplied Binance Order ID. */
 export async function findMatchingTx(
   admin: SupabaseClient,
   panelId: string,
@@ -206,7 +196,7 @@ export async function creditMatch(
   _gwConfig: Record<string, string> | null,
   logContext?: CreditLogContext
 ): Promise<BinanceClaimResult> {
-  // Credit the exact Binance amount received (including the unique verification increment).
+  // Credit the exact Binance amount received.
   const receivedDecimal = asNonNegativeDecimal(tx.amount, 4);
   const received = toNumberFromDecimal(receivedDecimal);
   const discountPct = Number.isFinite(logContext?.discountPct as number) ? Number(logContext?.discountPct) : 0;

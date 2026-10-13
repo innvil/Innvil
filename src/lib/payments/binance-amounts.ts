@@ -77,30 +77,3 @@ export function toNumberFromDecimal(raw: string): number {
   }
   return n;
 }
-
-export function getBinanceDepositBreakdown(
-  baseAmount: string | number,
-  payableAmount: string | number,
-  scale = 4
-): {
-  base: string;
-  increment: string;
-  totalToSend: string;
-  walletCredit: string;
-} {
-  const baseUnits = decimalToUnits(baseAmount, scale);
-  const totalUnits = decimalToUnits(payableAmount, scale);
-  if (baseUnits < 0 || totalUnits < 0) {
-    throw new Error("Amounts must be non-negative");
-  }
-  if (totalUnits < baseUnits) {
-    throw new Error("Payable amount cannot be lower than base amount");
-  }
-  const incrementUnits = totalUnits - baseUnits;
-  return {
-    base: unitsToDecimal(baseUnits, scale, true),
-    increment: unitsToDecimal(incrementUnits, scale, true),
-    totalToSend: unitsToDecimal(totalUnits, scale, true),
-    walletCredit: unitsToDecimal(totalUnits, scale, true),
-  };
-}

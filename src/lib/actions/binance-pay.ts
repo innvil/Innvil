@@ -11,13 +11,13 @@ import { round4 } from "@/src/lib/money";
 import { resolveGatewayDiscountPct } from "@/src/lib/actions/payments";
 import {
   ACCEPTED_ASSET, EXPIRY_MINUTES, TX_COLS,
-  pickPayable, validateTx, creditMatch,
+  payableForRequestedAmount, validateTx, creditMatch,
   type PendingIntent, type BinanceTx, type BinanceClaimResult,
 } from "@/src/lib/payments/binance-match";
 
 /* =========================================================
    Binance Pay — customer deposit actions (create + confirm).
-  The customer pays a UNIQUE amount to the owner's Pay ID, then submits the Binance
+  The customer pays their requested amount to the owner's Pay ID, then submits the Binance
   C2C Order ID. We sync history, resolve the row for this panel+order_id, validate, and
   atomically credit the wallet (+ tiered bonus). Personal-account reconciliation — NOT a
   merchant checkout.
@@ -40,9 +40,9 @@ export interface BinanceDepositInfo {
   paymentId: string;
   payId: string;
   qrImage: string | null;
-  /** The requested top-up amount before unique verification increment. */
+  /** The requested top-up amount. */
   amount: number;
-  /** The EXACT amount the customer must send (base + unique tail). */
+  /** The exact requested amount the customer must send. */
   payable: number;
   asset: string; // "USDT"
   /** ISO time the deposit request expires (pay + verify within this window). */
@@ -254,7 +254,7 @@ export async function createBinanceDeposit(panelId: string, amount: number): Pro
   const min = minTopup(creds.config);
   if (amt < min) return { ok: false, error: `Minimum Binance Pay deposit is ${min.toFixed(2)} ${ACCEPTED_ASSET}.` };
 
-  const payable = await pickPayable(admin, panelId, amt);
+  const payable = payableForRequestedAmount(amt);
   const currency = readPanelCurrency(panel.settings);
   const { data: pay, error } = await admin
     .from("payments")
@@ -276,7 +276,7 @@ export async function createBinanceDeposit(panelId: string, amount: number): Pro
       expiresAt,
       instructions: [
         `Open Binance → Pay and send EXACTLY ${payable} ${ACCEPTED_ASSET} to Pay ID ${payId}.`,
-        "The exact amount is how we match your payment — send it precisely.",
+        "We verify your payment against the owner's Binance history and the Order ID you submit.",
         "Use Binance Pay — NOT an on-chain/blockchain withdrawal.",
         `Pay within ${EXPIRY_MINUTES} minutes, then paste the Binance Order ID shown in your Binance C2C payment details.`,
       ],

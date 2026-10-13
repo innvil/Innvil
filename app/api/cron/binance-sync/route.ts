@@ -4,8 +4,7 @@ import { sweepBinanceDeposits } from "@/src/lib/payments/binance-poll";
 /* =========================================================
    Binance Pay deposit poller.
    For every panel with an open Binance deposit, syncs the owner's Pay history and
-   auto-credits any deposit whose unique payable amount now matches an incoming
-   transaction — so customers are credited hands-free (no transaction id needed).
+   refreshes the history used to verify customer-submitted Binance Order IDs.
 
    Schedule via Supabase pg_cron (project convention), e.g. every minute:
 
