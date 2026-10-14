@@ -1329,6 +1329,10 @@ export function ServicesTab({ panelId }: { panelId: string }) {
       })
       .filter((p) => p.count > 0);
   }, [catalog, catalogSearch]);
+  const providerById = useMemo(
+    () => new Map(providers.map((provider) => [provider.id, provider])),
+    [providers]
+  );
   const selectableIds = filtered.filter((s) => !importedIds.has(String(s.service))).map((s) => String(s.service));
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
@@ -1858,10 +1862,38 @@ export function ServicesTab({ panelId }: { panelId: string }) {
 
                             {sOpen && (
                               <div className="pl-3">
-                                {sub.services.map((s) => (
+                                {sub.services.map((s) => {
+                                  const provider = s.providerId ? providerById.get(s.providerId) ?? null : null;
+                                  const providerName = provider?.name ?? (s.providerId ? "Provider unavailable" : "No provider linked");
+                                  return (
                                   <div key={s.id} className="border-t fp-line-soft py-2.5">
                                     {editing === s.id ? (
                                       <div className="fp-panel-raised border fp-line-soft rounded-lg p-3 space-y-3">
+                                        <div className="grid sm:grid-cols-2 gap-2 text-xs">
+                                          <div className="fp-panel border fp-line-soft rounded-lg px-3 py-2 min-w-0">
+                                            <p className="fp-text-faint text-[10px] fp-mono uppercase">Provider</p>
+                                            <p className="mt-0.5 truncate" title={providerName}>{providerName}</p>
+                                            <p className={"text-[10px] mt-0.5 " + (provider?.status === "active" ? "fp-safe" : "fp-text-faint")}>
+                                              {provider ? provider.status : s.providerId ? "No longer connected" : "Manually created"}
+                                            </p>
+                                          </div>
+                                          <div className="fp-panel border fp-line-soft rounded-lg px-3 py-2 min-w-0">
+                                            <p className="fp-text-faint text-[10px] fp-mono uppercase">Provider service</p>
+                                            <p className="mt-0.5 fp-mono">{s.providerServiceId ? "#" + s.providerServiceId : "Not linked"}</p>
+                                            <p className="fp-text-faint text-[10px] mt-0.5">Source cost {fmtMoney(s.providerRate)} / 1k</p>
+                                          </div>
+                                          <div className="fp-panel border fp-line-soft rounded-lg px-3 py-2 min-w-0">
+                                            <p className="fp-text-faint text-[10px] fp-mono uppercase">Provider endpoint</p>
+                                            <p className="mt-0.5 truncate fp-mono text-[11px]" title={provider?.api_url ?? ""}>{provider?.api_url ?? "—"}</p>
+                                          </div>
+                                          <div className="fp-panel border fp-line-soft rounded-lg px-3 py-2 min-w-0">
+                                            <p className="fp-text-faint text-[10px] fp-mono uppercase">Source limits &amp; sync</p>
+                                            <p className="mt-0.5 fp-mono">min {s.min} · max {s.max}</p>
+                                            <p className="fp-text-faint text-[10px] mt-0.5">
+                                              {s.lastSyncedAt ? "Synced " + new Date(s.lastSyncedAt).toLocaleString() : "Not synced yet"}
+                                            </p>
+                                          </div>
+                                        </div>
                                         <div>
                                           <label className="fp-text-dim text-[10px] fp-mono uppercase">Display name</label>
                                           <input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} className="w-full mt-1 fp-panel border fp-line-soft rounded-lg px-3 py-2 text-sm outline-none focus:fp-gold-border" />
@@ -1909,12 +1941,13 @@ export function ServicesTab({ panelId }: { panelId: string }) {
                                         <button onClick={() => toggleStatus(s)} aria-label="Toggle enabled" className="shrink-0">
                                           <Toggle on={s.status === "active"} />
                                         </button>
-                                        <button onClick={() => startEdit(s)} className="shrink-0 text-xs fp-text-dim hover:fp-text px-2 py-1">Edit</button>
+                                        <button onClick={() => startEdit(s)} className="shrink-0 text-xs fp-text-dim hover:fp-text px-2 py-1">Manage</button>
                                         <button onClick={() => doDelete(s)} aria-label="Delete" className="shrink-0 text-red-400 hover:text-red-300 px-1"><Trash2 size={13} /></button>
                                       </div>
                                     )}
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
