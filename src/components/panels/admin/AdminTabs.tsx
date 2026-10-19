@@ -2366,7 +2366,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
             ? "Mark Selected Orders Completed"
             : "Cancel & Refund Selected Orders"}
         message={confirmAction.kind === "bulkResend"
-          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Eligible: pending, duplicate, canceled, and refunded orders that were never sent to a provider. Failed orders require a provider authentication or balance error. Resending canceled/refunded orders re-charges the original amount and restores it if the provider rejects the resend.`
+          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Canceled/refunded orders can be intentionally re-ordered, including historical orders that retain a prior provider ID. Failed orders require a provider authentication or balance error. Resending canceled/refunded orders re-charges the original amount and restores it if the provider rejects the resend.`
           : confirmAction.kind === "bulkComplete"
             ? `Mark ${confirmAction.ids.length} selected order(s) as completed?`
             : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}

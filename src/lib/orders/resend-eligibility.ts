@@ -1,9 +1,10 @@
 import type { OrderStatus } from "@/src/types/db";
 
 /**
- * A resend can never be used to submit an order a provider has already accepted.
- * Canceled and refunded orders are safe to retry because their original charge was
- * returned to the customer's balance; retrying them must charge that amount again.
+ * Canceled and refunded orders are intentional re-orders: their original charge
+ * was returned to the customer's balance, so retrying them must charge it again.
+ * They may retain the original provider order ID in historical data, which must
+ * not prevent that explicit new order from being sent.
  */
 export function resendRequiresCustomerRecharge(status: OrderStatus): boolean {
   return status === "canceled" || status === "refunded";
@@ -30,8 +31,9 @@ export function isOrderResendEligible({
   providerErrorCategory,
   providerError,
 }: ResendEligibilityInput): boolean {
+  if (resendRequiresCustomerRecharge(status)) return true;
   if (providerOrderId) return false;
-  if (status === "pending" || status === "duplicate" || resendRequiresCustomerRecharge(status)) return true;
+  if (status === "pending" || status === "duplicate") return true;
   if (status !== "failed") return false;
 
   return (

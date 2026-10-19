@@ -5,11 +5,11 @@ import {
   resendRequiresCustomerRecharge,
 } from "./resend-eligibility";
 
-test("canceled and refunded orders can be resent only before a provider accepts them", () => {
+test("canceled and refunded orders can be intentionally re-ordered even when historical rows retain a provider ID", () => {
   assert.equal(isOrderResendEligible({ status: "canceled", providerOrderId: null }), true);
   assert.equal(isOrderResendEligible({ status: "refunded", providerOrderId: null }), true);
-  assert.equal(isOrderResendEligible({ status: "canceled", providerOrderId: "provider-123" }), false);
-  assert.equal(isOrderResendEligible({ status: "refunded", providerOrderId: "provider-123" }), false);
+  assert.equal(isOrderResendEligible({ status: "canceled", providerOrderId: "provider-123" }), true);
+  assert.equal(isOrderResendEligible({ status: "refunded", providerOrderId: "provider-123" }), true);
 });
 
 test("a resend recharges only orders whose prior charge was returned", () => {
@@ -21,6 +21,9 @@ test("a resend recharges only orders whose prior charge was returned", () => {
 });
 
 test("ordinary failed orders remain protected from duplicate provider work", () => {
+  assert.equal(isOrderResendEligible({ status: "pending", providerOrderId: "provider-123" }), false);
+  assert.equal(isOrderResendEligible({ status: "duplicate", providerOrderId: "provider-123" }), false);
+  assert.equal(isOrderResendEligible({ status: "failed", providerOrderId: "provider-123" }), false);
   assert.equal(isOrderResendEligible({ status: "failed", providerOrderId: null }), false);
   assert.equal(isOrderResendEligible({
     status: "failed",

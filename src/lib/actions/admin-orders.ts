@@ -106,8 +106,11 @@ async function submitPendingOrderToProvider(
     providerOrderId: order.provider_order_id,
     duplicateFlag: (order.provider_payload as Record<string, unknown> | null)?.duplicate ?? null,
   });
-  // Already at the provider → never resend (avoids a duplicate order).
-  if (order.provider_order_id) {
+  const isTerminalReorder = resendRequiresCustomerRecharge(order.status);
+  // A provider-bound pending/failed/duplicate order must never be sent twice.
+  // Canceled/refunded orders are an explicit paid re-order, even when legacy
+  // rows retain their previous provider order ID.
+  if (order.provider_order_id && !isTerminalReorder) {
     console.info("[dup-debug][resend:skip-already-provider-bound]", {
       orderId: order.id,
       providerOrderId: order.provider_order_id,
@@ -210,7 +213,13 @@ async function submitPendingOrderToProvider(
       provider_order_id: String(resp.order),
       status: acceptedStatus,
       // Duplicate is a local block state only. Once accepted by provider, clear it.
-      provider_response: { ...(resp as Record<string, unknown>), duplicate: false },
+      provider_response: {
+        ...(resp as Record<string, unknown>),
+        duplicate: false,
+        ...(isTerminalReorder && order.provider_order_id
+          ? { previous_provider_order_id: order.provider_order_id }
+          : {}),
+      },
     }).eq("id", order.id).select("id, status, provider_order_id, provider_response").maybeSingle();
     console.info("[dup-debug][resend:after-update]", {
       orderId: order.id,
@@ -228,7 +237,9 @@ async function submitPendingOrderToProvider(
       acceptedStatus,
       order.status === "duplicate"
         ? "Duplicate tag cleared after manual resend — accepted by provider."
-        : historyNote
+        : isTerminalReorder && order.provider_order_id
+          ? `${historyNote}; replaced prior provider order ${order.provider_order_id}.`
+          : historyNote
     );
     const { data: reloaded } = await admin
       .from("orders")
