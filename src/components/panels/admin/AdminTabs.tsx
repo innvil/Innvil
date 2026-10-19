@@ -92,6 +92,7 @@ import { THEMES } from "@/src/data/themes";
 import { DesignStudio } from "./DesignStudio";
 import { SupportInbox } from "./SupportInbox";
 import { computeSellRate, formatMoney } from "@/src/lib/money";
+import { isOrderResendEligible, resendRequiresCustomerRecharge } from "@/src/lib/orders/resend-eligibility";
 import { PlatformGlyph } from "@/src/components/customer/PlatformIcons";
 
 /* =========================================================
@@ -163,14 +164,12 @@ const ORDER_STATUS_LABEL: Record<string, string> = {
   pending: "Pending", partial: "Partial", canceled: "Canceled",
   failed: "Failed", refunded: "Refunded", duplicate: "Duplicate",
 };
-const PROVIDER_AUTH_FAILURE_RE = /provider authentication failed|invalid api|api key|unauthorized|authori[sz]ed|access denied|permission/i;
-const PROVIDER_BALANCE_FAILURE_RE = /provider balance|insufficient.*balance|balance.*insufficient|low balance|not enough balance/i;
-
 function canResendOrder(o: AdminOrderVM): boolean {
-  if (o.providerOrderId) return false;
-  if (o.status === "pending" || o.status === "duplicate") return true;
-  if (o.status !== "failed" && o.status !== "refunded") return false;
-  return PROVIDER_AUTH_FAILURE_RE.test(o.failReason ?? "") || PROVIDER_BALANCE_FAILURE_RE.test(o.failReason ?? "");
+  return isOrderResendEligible({
+    status: o.status,
+    providerOrderId: o.providerOrderId,
+    providerError: o.failReason,
+  });
 }
 
 function OrderStatusPill({ status }: { status: OrderStatus }) {
@@ -2367,7 +2366,7 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
             ? "Mark Selected Orders Completed"
             : "Cancel & Refund Selected Orders"}
         message={confirmAction.kind === "bulkResend"
-          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Eligible: pending/duplicate and failed/refunded orders caused by provider authentication or provider balance shortage.`
+          ? `Resend ${confirmAction.ids.length} selected order(s) to the provider? Eligible: pending, duplicate, canceled, and refunded orders that were never sent to a provider. Failed orders require a provider authentication or balance error. Resending canceled/refunded orders re-charges the original amount and restores it if the provider rejects the resend.`
           : confirmAction.kind === "bulkComplete"
             ? `Mark ${confirmAction.ids.length} selected order(s) as completed?`
             : `Cancel & refund ${confirmAction.ids.length} selected order(s)? Customers will be refunded automatically.`}
@@ -2638,6 +2637,9 @@ export function OrdersTab({ panelId, onManageCustomer }: { panelId: string; onMa
                                 <button disabled={busy} onClick={() => doRefund(o)} className="fp-panel border border-red-500/30 rounded px-2.5 py-1.5 text-red-400 hover:opacity-80 disabled:opacity-50">Refund only</button>
                               )}
                             </div>
+                            {canResendOrder(o) && resendRequiresCustomerRecharge(o.status) && (
+                              <p className="text-xs fp-text-dim pt-1">Resending will re-charge {fmt(o.charge)} from this customer&apos;s balance. It is restored if the provider rejects the resend.</p>
+                            )}
                           </div>
                         </td>
                       </tr>

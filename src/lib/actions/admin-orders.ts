@@ -7,6 +7,7 @@ import {
 } from "@/src/lib/providers";
 import { round4, INNVIL_COMMISSION_RATE } from "@/src/lib/money";
 import { syncPanelOrders, syncPendingOrders, syncProcessingInProgressOrders } from "@/src/lib/orders/sync";
+import { isOrderResendEligible, resendRequiresCustomerRecharge } from "@/src/lib/orders/resend-eligibility";
 import type { OrderStatus } from "@/src/types/db";
 
 /* =========================================================
@@ -39,9 +40,6 @@ type AuthorizedOrderResult =
       };
     };
 
-      const PROVIDER_AUTH_FAILURE_RE = /provider authentication failed|invalid api|api key|unauthorized|authori[sz]ed|access denied|permission/i;
-      const PROVIDER_BALANCE_FAILURE_RE = /provider balance|insufficient.*balance|balance.*insufficient|low balance|not enough balance/i;
-
 async function ownsPanel(admin: SupabaseClient, userId: string, panelId: string): Promise<boolean> {
   const { data } = await admin
     .from("panels")
@@ -66,23 +64,20 @@ async function authorizeOrder(orderId: string): Promise<AuthorizedOrderResult> {
   return { admin, order };
 }
 
-function isProviderAuthFailureResendEligible(order: {
+function isResendEligible(order: {
   status: OrderStatus;
   provider_order_id: string | null;
   provider_response: unknown;
 }): boolean {
-  if (order.provider_order_id) return false;
-  if (order.status === "pending" || order.status === "duplicate") return true;
-  if (order.status !== "failed" && order.status !== "refunded") return false;
   const response = (order.provider_response as Record<string, unknown> | null) ?? null;
   const category = typeof response?.provider_error_category === "string" ? response.provider_error_category : null;
   const errorText = typeof response?.error === "string" ? response.error : null;
-  return (
-    category === "provider_auth_error" ||
-    PROVIDER_AUTH_FAILURE_RE.test(errorText ?? "") ||
-    category === "provider_low_balance" ||
-    PROVIDER_BALANCE_FAILURE_RE.test(errorText ?? "")
-  );
+  return isOrderResendEligible({
+    status: order.status,
+    providerOrderId: order.provider_order_id,
+    providerErrorCategory: category,
+    providerError: errorText,
+  });
 }
 
 async function addHistory(admin: SupabaseClient, orderId: string, status: OrderStatus, note?: string) {
@@ -152,14 +147,15 @@ async function submitPendingOrderToProvider(
 
   const payload = (order.provider_payload as { runs?: number; interval?: number; comments?: string[] } | null) ?? {};
   const comments = Array.isArray(payload.comments) ? payload.comments : null;
-  const resendNeedsRecharge = order.status === "refunded";
+  const resendNeedsRecharge = resendRequiresCustomerRecharge(order.status);
+  const rechargedStatusLabel = order.status === "canceled" ? "canceled" : "refunded";
   const rechargeAmount = Number(order.charge ?? 0);
   if (resendNeedsRecharge) {
     if (!order.customer_id) {
-      return { ok: false, error: "This refunded order has no customer account to charge." };
+      return { ok: false, error: `This ${rechargedStatusLabel} order has no customer account to charge.` };
     }
     if (!Number.isFinite(rechargeAmount) || rechargeAmount <= 0) {
-      return { ok: false, error: "This refunded order has an invalid charge amount." };
+      return { ok: false, error: `This ${rechargedStatusLabel} order has an invalid charge amount.` };
     }
     const { error: rechargeErr } = await admin.rpc("apply_balance_change", {
       p_customer: order.customer_id,
@@ -172,7 +168,7 @@ async function submitPendingOrderToProvider(
       const insufficient = /insufficient/i.test(rechargeErr.message ?? "");
       return {
         ok: false,
-        error: insufficient ? "Customer has insufficient balance to resend this refunded order." : rechargeErr.message,
+        error: insufficient ? `Customer has insufficient balance to resend this ${rechargedStatusLabel} order.` : rechargeErr.message,
       };
     }
   }
@@ -199,7 +195,7 @@ async function submitPendingOrderToProvider(
       ...(comments && comments.length ? { comments: comments.join("\n") } : {}),
     });
     if (!("order" in resp)) {
-      await rollbackRecharge(`Refunded recharge for resent order ${order.id} (provider rejected)`);
+      await rollbackRecharge(`Restored balance after rejected resend for order ${order.id}`);
       return { ok: false, error: resp.error || "Provider rejected the order." };
     }
     const acceptedStatus: OrderStatus = "processing";
@@ -249,7 +245,7 @@ async function submitPendingOrderToProvider(
     });
     return { ok: true };
   } catch (e) {
-    await rollbackRecharge(`Refunded recharge for resent order ${order.id} (provider error)`);
+    await rollbackRecharge(`Restored balance after provider error while resending order ${order.id}`);
     console.info("[dup-debug][resend:error]", {
       orderId: order.id,
       message: e instanceof Error ? e.message : String(e),
@@ -788,8 +784,8 @@ export async function resendOrder(orderId: string): Promise<Result> {
   const r = await authorizeOrder(orderId);
   if ("error" in r) return { ok: false, error: r.error };
   const { admin, order } = r;
-  if (!isProviderAuthFailureResendEligible(order)) {
-    return { ok: false, error: "Only pending/duplicate orders or failed/refunded provider-auth or provider-balance orders can be resent." };
+  if (!isResendEligible(order)) {
+    return { ok: false, error: "Only pending, duplicate, canceled, or refunded orders can be resent; failed orders require a provider authentication or balance error." };
   }
   return submitPendingOrderToProvider(admin, order, "Resent to provider by owner");
 }
@@ -819,7 +815,7 @@ export async function bulkResendOrders(
       continue;
     }
     const { admin, order } = auth;
-    if (!isProviderAuthFailureResendEligible(order)) {
+    if (!isResendEligible(order)) {
       skipped++;
       continue;
     }
