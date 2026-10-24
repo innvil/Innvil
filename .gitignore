@@ -51,3 +51,11 @@ coverage/
 CLAUDE_PROGRESS.txt
 panel-preview.jsx
 supabase/.temp/
+
+# Internal planning / AI development notes
+CLAUDE.md
+PHASE_3_4_PLAN.md
+FUTURE_PLANS.txt
+Innvil_Expansion_Plan.md
+Telegram moderator.txt
+pr-body.md
