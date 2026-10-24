@@ -59,3 +59,9 @@ FUTURE_PLANS.txt
 Innvil_Expansion_Plan.md
 Telegram moderator.txt
 pr-body.md
+
+# Internal engineering documentation
+docs/handoff/
+docs/moderator/
+docs/superadmin/
+Innvil Telegram Mod.pdf
