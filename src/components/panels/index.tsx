@@ -38,6 +38,7 @@ import { WatchDevOpsAdmin } from "@/src/components/superadmin/WatchDevOpsAdmin";
 import { BotManagerCampaignsAdmin } from "@/src/components/superadmin/BotManagerCampaignsAdmin";
 import { TelegramLeadsAdmin } from "@/src/components/superadmin/TelegramLeadsAdmin";
 import { listBlogDraftNotices, type BlogDraftNotice } from "@/src/lib/actions/blog-admin";
+import { listPlatformSupportNotifications, type PlatformSupportNotification } from "@/src/lib/actions/platform-support";
 import { getOwnerTopupPolicy, createPlatformDeposit, type OwnerTopupPolicy } from "@/src/lib/actions/platform-payments";
 import { PANEL_ROOT_DOMAIN, panelDisplayDomain, panelStorefrontPath } from "@/src/lib/config";
 import type { Panel } from "@/src/types";
@@ -280,16 +281,19 @@ function AppSidebar({ section, setSection, isSuper }: { section: string; setSect
   );
 }
 
-function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog }: { setWorld: (w: string) => void; onOpenAccount: () => void; onOpenNav: () => void; isSuper?: boolean; onOpenBlog?: () => void }) {
+function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog, onOpenContact }: { setWorld: (w: string) => void; onOpenAccount: () => void; onOpenNav: () => void; isSuper?: boolean; onOpenBlog?: () => void; onOpenContact: () => void }) {
   const [bellOpen, setBellOpen] = useState(false);
   const [draftNotices, setDraftNotices] = useState<BlogDraftNotice[]>([]);
+  const [supportNotices, setSupportNotices] = useState<PlatformSupportNotification[]>([]);
 
   useEffect(() => {
-    if (!isSuper) return;
     let alive = true;
-    listBlogDraftNotices().then((n) => { if (alive) setDraftNotices(n); }).catch(() => {});
+    listPlatformSupportNotifications().then((n) => { if (alive) setSupportNotices(n); }).catch(() => {});
+    if (isSuper) listBlogDraftNotices().then((n) => { if (alive) setDraftNotices(n); }).catch(() => {});
     return () => { alive = false; };
   }, [isSuper]);
+
+  const noticeCount = supportNotices.length + draftNotices.length;
 
   const relTime = (iso: string) => {
     const diff = Date.now() - new Date(iso).getTime();
@@ -361,9 +365,9 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog }: 
             className={`relative p-1 rounded-lg ${bellOpen ? "fp-gold" : "fp-text-dim hover:fp-text"}`}
           >
             <Bell size={17} />
-            {draftNotices.length > 0 && (
+            {noticeCount > 0 && (
               <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full fp-gold-bg text-[#0A0B0F] text-[9px] font-bold flex items-center justify-center">
-                {draftNotices.length}
+                {noticeCount}
               </span>
             )}
           </button>
@@ -372,9 +376,23 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog }: 
               <button aria-hidden onClick={() => setBellOpen(false)} className="fixed inset-0 z-40 cursor-default" />
               <div className="absolute right-0 top-full mt-2 w-72 fp-panel border fp-line rounded-xl shadow-2xl z-50 p-4">
                 <p className="fp-text-faint text-xs fp-mono uppercase mb-2">Notifications</p>
-                {draftNotices.length > 0 ? (
+                {noticeCount > 0 ? (
                   <div className="space-y-1.5">
-                    <p className="fp-text-dim text-xs mb-1">{draftNotices.length} blog {draftNotices.length === 1 ? "draft" : "drafts"} to review</p>
+                    {supportNotices.map((n) => (
+                      <button
+                        key={`support-${n.threadId}`}
+                        onClick={() => { setBellOpen(false); onOpenContact(); }}
+                        className="w-full text-left fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 hover:fp-gold-border"
+                      >
+                        <span className="flex items-center gap-2">
+                          <MessageSquare size={13} className="fp-gold shrink-0" />
+                          <span className="text-xs truncate flex-1">{isSuper ? `New message from ${n.ownerEmail ?? "panel owner"}` : "Innvil replied"}</span>
+                        </span>
+                        <span className="block text-xs mt-0.5 truncate">{n.subject}</span>
+                        <span className="fp-text-faint text-[10px] fp-mono">{relTime(n.createdAt)} · tap to open</span>
+                      </button>
+                    ))}
+                    {draftNotices.length > 0 && <p className="fp-text-dim text-xs mb-1 pt-1">{draftNotices.length} blog {draftNotices.length === 1 ? "draft" : "drafts"} to review</p>}
                     {draftNotices.map((n) => (
                       <button
                         key={n.id}
@@ -393,7 +411,7 @@ function AppTopbar({ setWorld, onOpenAccount, onOpenNav, isSuper, onOpenBlog }: 
                   <div className="text-center py-6">
                     <CheckCircle2 size={20} className="fp-safe mx-auto mb-2" />
                     <p className="fp-text-dim text-sm">You&apos;re all caught up.</p>
-                    <p className="fp-text-faint text-xs mt-1">Order and deposit alerts will appear here.</p>
+                    <p className="fp-text-faint text-xs mt-1">Support replies and review alerts will appear here.</p>
                   </div>
                 )}
               </div>
@@ -1387,7 +1405,7 @@ export function InnvilApp({ setWorld, initialSection }: {
       )}
 
       <div className="flex-1 min-w-0">
-        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} isSuper={isSuper} onOpenBlog={() => setSection("blog")} />
+        <AppTopbar setWorld={setWorld} onOpenAccount={() => setSection("account")} onOpenNav={() => setMobileNav(true)} isSuper={isSuper} onOpenBlog={() => setSection("blog")} onOpenContact={() => setSection("contact")} />
         {section === "account" && <AccountSettings />}
         {section === "home" && <DashboardHome panels={panelList} loading={loadingPanels} syncing={syncingPanels} goPanels={goPanels} goCreate={goCreate} goOrders={() => setSection("orders")} openPanel={openPanel} />}
         {section === "panels" && <MyPanels panels={panelList} loading={loadingPanels} syncing={syncingPanels} goCreate={goCreate} openPanel={openPanel} onChanged={refreshPanels} />}

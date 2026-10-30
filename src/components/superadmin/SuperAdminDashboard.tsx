@@ -20,14 +20,12 @@ import {
 import { commissionBracketRate } from "@/src/lib/money";
 import { getLandingVideo, setLandingVideo, getSupportEmail, setSupportEmail } from "@/src/lib/actions/platform-settings";
 import {
-  listPlatformSupportMessages,
-  setPlatformSupportStatus,
   listInnvilOwnerContacts,
   sendSuperAdminOwnerMessage,
   runDraftOnboardingSweep,
-  type PlatformSupportMessage,
   type InnvilOwnerContact,
 } from "@/src/lib/actions/platform-support";
+import { PlatformSupportInbox } from "@/src/components/panels/PlatformSupportInbox";
 import { toVideoEmbed } from "@/src/lib/video";
 import {
   getPlatformPaymentsMeta, connectPlatformGateway, disconnectPlatformGateway,
@@ -672,24 +670,20 @@ function SupportTab() {
   const [savedEmail, setSavedEmail] = useState("");
   const [savingEmail, setSavingEmail] = useState(false);
   const [emailMsg, setEmailMsg] = useState<{ text: string; error?: boolean } | null>(null);
-  const [rows, setRows] = useState<PlatformSupportMessage[] | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [contacts, setContacts] = useState<InnvilOwnerContact[] | null>(null);
   const [contactId, setContactId] = useState("");
   const [outSubject, setOutSubject] = useState("");
   const [outBody, setOutBody] = useState("");
   const [outBusy, setOutBusy] = useState(false);
   const [outMsg, setOutMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  const [inboxVersion, setInboxVersion] = useState(0);
 
   const loadEmail = () => getSupportEmail().then((r) => { setEmail(r.email); setSavedEmail(r.email); }).catch(() => {});
-  const loadRows = () => listPlatformSupportMessages().then(setRows).catch(() => setRows([]));
   const loadContacts = () => listInnvilOwnerContacts().then((r) => {
     setContacts(r);
     if (!contactId && r.length > 0) setContactId(r[0].ownerId);
   }).catch(() => setContacts([]));
-  useEffect(() => { loadEmail(); loadRows(); loadContacts(); }, []);
-
-  const fmtDate = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  useEffect(() => { loadEmail(); loadContacts(); }, []);
 
   const saveEmail = async () => {
     setSavingEmail(true); setEmailMsg(null);
@@ -698,13 +692,6 @@ function SupportTab() {
     if (!res.ok) { setEmailMsg({ text: res.error, error: true }); return; }
     setSavedEmail(email.trim());
     setEmailMsg({ text: email.trim() ? "Support email saved." : "Cleared — messages fall back to super-admin account emails." });
-  };
-
-  const setStatus = async (id: string, status: "open" | "resolved") => {
-    setBusyId(id);
-    const res = await setPlatformSupportStatus(id, status);
-    setBusyId(null);
-    if (res.ok) setRows((prev) => (prev ?? []).map((r) => (r.id === id ? { ...r, status } : r)));
   };
 
   const sendOutreach = async () => {
@@ -717,9 +704,10 @@ function SupportTab() {
       setOutMsg({ text: res.error, error: true });
       return;
     }
-    setOutMsg({ text: "Message sent to customer." });
+    setOutMsg({ text: "Message sent in Innvil. Email only alerts the customer that it is waiting." });
     setOutSubject("");
     setOutBody("");
+    setInboxVersion((version) => version + 1);
   };
 
   const sendAutomated = async () => {
@@ -731,7 +719,6 @@ function SupportTab() {
     setOutMsg({ text: `Automated outreach sent: ${res.initialSent} initial, ${res.followupsSent} follow-up.` });
   };
 
-  const openCount = (rows ?? []).filter((r) => r.status !== "resolved").length;
   const selectedContact = (contacts ?? []).find((c) => c.ownerId === contactId) ?? null;
 
   return (
@@ -739,7 +726,7 @@ function SupportTab() {
       <div className="fp-panel border fp-line rounded-2xl p-5 space-y-3">
         <p className="text-sm font-medium">Support destination email</p>
         <p className="fp-text-faint text-xs">
-          Owner support messages are emailed here. Leave blank to fall back to the super-admin account email(s).
+          Email only alerts the Innvil team that a new support conversation is waiting. Leave blank to fall back to the super-admin account email(s).
         </p>
         <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="support@yourdomain.com" className={inputCls} />
         {emailMsg && (
@@ -758,7 +745,7 @@ function SupportTab() {
           <button onClick={loadContacts} className="text-xs fp-gold">Refresh list</button>
         </div>
         <p className="fp-text-faint text-xs">
-          Reach out directly to panel owners (including newly created draft-only accounts) to offer onboarding help.
+          Start an in-app conversation with panel owners (including newly created draft-only accounts) to offer onboarding help. Email only alerts them.
         </p>
         {contacts === null ? (
           <p className="fp-text-faint text-sm">Loading customers…</p>
@@ -802,42 +789,7 @@ function SupportTab() {
         )}
       </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">Owner messages {openCount > 0 && <span className="fp-gold">· {openCount} open</span>}</p>
-        <button onClick={loadRows} className="text-xs fp-gold">Refresh</button>
-      </div>
-
-      {rows === null ? (
-        <p className="fp-text-faint text-sm py-6 text-center">Loading…</p>
-      ) : rows.length === 0 ? (
-        <p className="fp-text-faint text-sm py-6 text-center">No support messages yet.</p>
-      ) : (
-        <div className="space-y-2">
-          {rows.map((m) => (
-            <div key={m.id} className="fp-panel border fp-line rounded-2xl p-4">
-              <div className="flex items-center justify-between gap-3 mb-1.5">
-                <p className="text-sm font-medium truncate">{m.subject}</p>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Pill tone={m.status === "resolved" ? "safe" : "muted"}>{m.status === "resolved" ? "Resolved" : "Open"}</Pill>
-                  <span className="fp-text-faint text-xs fp-mono">{fmtDate(m.createdAt)}</span>
-                </div>
-              </div>
-              <p className="fp-text-faint text-xs fp-mono mb-2">{m.ownerEmail ?? "unknown sender"}</p>
-              <p className="fp-text-dim text-sm leading-relaxed whitespace-pre-line mb-3">{m.body}</p>
-              <div className="flex items-center gap-2">
-                {m.ownerEmail && (
-                  <a href={`mailto:${m.ownerEmail}?subject=${encodeURIComponent("Re: " + m.subject)}`} className="text-xs fp-gold border fp-line-soft rounded-lg px-3 py-1.5">Reply by email</a>
-                )}
-                {m.status === "resolved" ? (
-                  <button onClick={() => setStatus(m.id, "open")} disabled={busyId === m.id} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-3 py-1.5 disabled:opacity-60">Reopen</button>
-                ) : (
-                  <button onClick={() => setStatus(m.id, "resolved")} disabled={busyId === m.id} className="text-xs fp-safe-soft-bg fp-safe rounded-lg px-3 py-1.5 disabled:opacity-60 flex items-center gap-1"><CheckCircle2 size={12} /> Mark resolved</button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <PlatformSupportInbox key={inboxVersion} viewer="innvil" />
     </div>
   );
 }

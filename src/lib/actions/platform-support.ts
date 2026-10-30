@@ -4,22 +4,41 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import { getAuthedAdmin } from "@/src/lib/auth";
 import { sendEmail, simpleEmail } from "@/src/lib/email/resend";
+import { supportEmailAlert, unreadStateForDirection, type SupportDirection } from "@/src/lib/platform-support/thread-state";
 
-/* Owner → Innvil support. Owners send messages to the platform; the super admin
-   reads/resolves them in /superadmin and gets an email at the configured support
-   address (platform_settings.support_email) or the super-admin account email(s). */
+/* Innvil's panel-owner support conversations. Messages live in the panel; email
+   is only a best-effort alert that a reply is waiting in Innvil. */
 
 type Result = { ok: true } | { ok: false; error: string };
 
 export interface PlatformSupportMessage {
   id: string;
-  subject: string;
   body: string;
-  status: string; // open | resolved
-  direction: "inbound" | "outbound";
-  kind: "general" | "onboarding_draft_nudge" | "onboarding_draft_followup";
+  direction: SupportDirection;
   createdAt: string;
-  ownerEmail?: string | null; // populated for the super-admin view
+}
+
+export interface PlatformSupportThread {
+  id: string;
+  subject: string;
+  status: "open" | "resolved";
+  lastDirection: "inbound" | "outbound";
+  unread: boolean;
+  lastMessageAt: string;
+  ownerEmail?: string | null;
+}
+
+export interface PlatformSupportThreadDetail {
+  thread: PlatformSupportThread;
+  messages: PlatformSupportMessage[];
+}
+
+export interface PlatformSupportNotification {
+  threadId: string;
+  subject: string;
+  direction: "inbound" | "outbound";
+  createdAt: string;
+  ownerEmail?: string | null;
 }
 
 export interface InnvilOwnerContact {
@@ -47,16 +66,7 @@ async function isSuperAdmin(): Promise<boolean> {
   return data?.role === "super_admin";
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/** Where owner support goes: the configured support_email override, else super-admin emails. */
+/** Alert recipients: configured support_email, else super-admin account emails. */
 async function resolveSupportRecipients(admin: SupabaseClient): Promise<string[]> {
   const { data: setting } = await admin
     .from("platform_settings")
@@ -81,7 +91,105 @@ async function resolveSupportRecipients(admin: SupabaseClient): Promise<string[]
   return emails;
 }
 
-/** Owner sends a support message to Innvil. Stores it + emails support (best-effort). */
+function appUrl(path = ""): string | undefined {
+  const app = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "");
+  return app ? `${app}${path}` : undefined;
+}
+
+async function notifyInnvilByEmail(admin: SupabaseClient, subject: string) {
+  const recipients = await resolveSupportRecipients(admin);
+  if (!recipients.length) return;
+  const url = appUrl("/superadmin");
+  await sendEmail({
+    to: recipients.join(","),
+    subject: `[Innvil] New support message: ${subject}`,
+    html: simpleEmail("New support message in Innvil", [supportEmailAlert("innvil")], url ? { label: "Open Innvil support", url } : undefined),
+    text: supportEmailAlert("innvil"),
+  });
+}
+
+async function notifyOwnerByEmail(ownerEmail: string | null, subject: string) {
+  if (!ownerEmail) return;
+  const url = appUrl("/");
+  await sendEmail({
+    to: ownerEmail,
+    subject: `[Innvil] New reply: ${subject}`,
+    html: simpleEmail("New reply in Innvil", [supportEmailAlert("owner")], url ? { label: "Open Innvil", url } : undefined),
+    text: supportEmailAlert("owner"),
+  });
+}
+
+function threadVm(row: Record<string, unknown>, viewer: "owner" | "innvil"): PlatformSupportThread {
+  return {
+    id: row.id as string,
+    subject: row.subject as string,
+    status: row.status === "resolved" ? "resolved" : "open",
+    lastDirection: row.last_direction === "outbound" ? "outbound" : "inbound",
+    unread: viewer === "owner" ? row.owner_unread === true : row.innvil_unread === true,
+    lastMessageAt: row.last_message_at as string,
+    ...(viewer === "innvil" ? { ownerEmail: (row.owner_email as string | null) ?? null } : {}),
+  };
+}
+
+async function threadMessages(admin: SupabaseClient, threadId: string): Promise<PlatformSupportMessage[]> {
+  const { data } = await admin
+    .from("platform_support_messages")
+    .select("id, body, direction, created_at")
+    .eq("thread_id", threadId)
+    .order("created_at", { ascending: true });
+  return ((data as Array<{ id: string; body: string; direction: string; created_at: string }> | null) ?? []).map((m) => ({
+    id: m.id,
+    body: m.body,
+    direction: m.direction === "outbound" ? "outbound" : "inbound",
+    createdAt: m.created_at,
+  }));
+}
+
+async function createThreadWithMessage(admin: SupabaseClient, params: {
+  ownerId: string;
+  ownerEmail: string | null;
+  subject: string;
+  body: string;
+  direction: SupportDirection;
+  senderId: string | null;
+  kind?: "general" | "onboarding_draft_nudge" | "onboarding_draft_followup";
+}): Promise<{ id: string } | { error: string }> {
+  const now = new Date().toISOString();
+  const { data: thread, error: threadErr } = await admin
+    .from("platform_support_threads")
+    .insert({
+      owner_id: params.ownerId,
+      owner_email: params.ownerEmail,
+      subject: params.subject,
+      status: "open",
+      owner_unread: unreadStateForDirection(params.direction).ownerUnread,
+      innvil_unread: unreadStateForDirection(params.direction).innvilUnread,
+      last_direction: params.direction,
+      last_message_at: now,
+    })
+    .select("id")
+    .maybeSingle();
+  if (threadErr || !thread) return { error: threadErr?.message ?? "Could not create the support conversation." };
+
+  const { error: messageErr } = await admin.from("platform_support_messages").insert({
+    thread_id: thread.id,
+    owner_id: params.ownerId,
+    owner_email: params.ownerEmail,
+    subject: params.subject,
+    body: params.body,
+    direction: params.direction,
+    kind: params.kind ?? "general",
+    sender_id: params.senderId,
+    status: "open",
+  });
+  if (messageErr) {
+    await admin.from("platform_support_threads").delete().eq("id", thread.id);
+    return { error: messageErr.message };
+  }
+  return { id: thread.id as string };
+}
+
+/** Owner starts a new Innvil support conversation. Email is alert-only. */
 export async function sendOwnerSupportMessage(subject: string, body: string): Promise<Result> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return { ok: false, error: "Not signed in" };
@@ -93,100 +201,156 @@ export async function sendOwnerSupportMessage(subject: string, body: string): Pr
   if (s.length > 200) return { ok: false, error: "Subject is too long (200 characters max)." };
   if (b.length > 5000) return { ok: false, error: "Message is too long (5000 characters max)." };
 
-  const { error } = await admin.from("platform_support_messages").insert({
-    owner_id: user.id,
-    owner_email: user.email ?? null,
-    subject: s,
-    body: b,
-    direction: "inbound",
-    kind: "general",
-    sender_id: user.id,
+  const created = await createThreadWithMessage(admin, {
+    ownerId: user.id, ownerEmail: user.email ?? null, subject: s, body: b,
+    direction: "inbound", senderId: user.id,
   });
-  if (error) return { ok: false, error: error.message };
+  if ("error" in created) return { ok: false, error: created.error };
 
-  // Notify support — never blocks the request.
+  // Email is an alert only; the message itself remains inside Innvil.
   try {
-    const recipients = await resolveSupportRecipients(admin);
-    if (recipients.length) {
-      await sendEmail({
-        to: recipients.join(","),
-        subject: `[Innvil support] ${s}`,
-        html: simpleEmail("New support message", [
-          `From: ${escapeHtml(user.email ?? user.id)}`,
-          `<strong>${escapeHtml(s)}</strong>`,
-          escapeHtml(b).replace(/\n/g, "<br/>"),
-        ]),
-        text: `From: ${user.email ?? user.id}\nSubject: ${s}\n\n${b}`,
-        replyTo: user.email ?? null,
-      });
-    }
+    await notifyInnvilByEmail(admin, s);
   } catch {
-    // best-effort email
+    // The in-app conversation was already stored successfully.
   }
   return { ok: true };
 }
 
-/** The signed-in owner's own support messages. */
-export async function listOwnerSupportMessages(): Promise<PlatformSupportMessage[]> {
+/** The signed-in owner's Innvil support conversations. */
+export async function listOwnerSupportMessages(): Promise<PlatformSupportThread[]> {
   const { user, admin } = await getAuthedAdmin();
   if (!user) return [];
   const { data } = await admin
-    .from("platform_support_messages")
-    .select("id, subject, body, status, created_at, direction, kind")
+    .from("platform_support_threads")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
     .eq("owner_id", user.id)
-    .order("created_at", { ascending: false })
+    .order("last_message_at", { ascending: false })
     .limit(50);
-  return ((data as Array<{ id: string; subject: string; body: string; status: string; created_at: string; direction: string | null; kind: string | null }> | null) ?? [])
-    .map((r) => ({
-      id: r.id,
-      subject: r.subject,
-      body: r.body,
-      status: r.status,
-      direction: r.direction === "outbound" ? "outbound" : "inbound",
-      kind:
-        r.kind === "onboarding_draft_nudge"
-          ? "onboarding_draft_nudge"
-          : r.kind === "onboarding_draft_followup"
-            ? "onboarding_draft_followup"
-            : "general",
-      createdAt: r.created_at,
-    }));
+  return ((data as Array<Record<string, unknown>> | null) ?? []).map((row) => threadVm(row, "owner"));
 }
 
-/** Every owner support message (super admin only). */
-export async function listPlatformSupportMessages(): Promise<PlatformSupportMessage[]> {
+/** Every Innvil support conversation (super admin only). */
+export async function listPlatformSupportMessages(): Promise<PlatformSupportThread[]> {
   if (!(await isSuperAdmin())) return [];
   const admin = createAdminClient();
   const { data } = await admin
-    .from("platform_support_messages")
-    .select("id, subject, body, status, created_at, owner_email, direction, kind")
-    .eq("direction", "inbound")
-    .order("created_at", { ascending: false })
+    .from("platform_support_threads")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .order("last_message_at", { ascending: false })
     .limit(200);
-  return ((data as Array<{ id: string; subject: string; body: string; status: string; created_at: string; owner_email: string | null; direction: string | null; kind: string | null }> | null) ?? [])
-    .map((r) => ({
-      id: r.id,
-      subject: r.subject,
-      body: r.body,
-      status: r.status,
-      direction: "inbound",
-      kind:
-        r.kind === "onboarding_draft_nudge"
-          ? "onboarding_draft_nudge"
-          : r.kind === "onboarding_draft_followup"
-            ? "onboarding_draft_followup"
-            : "general",
-      createdAt: r.created_at,
-      ownerEmail: r.owner_email,
-    }));
+  return ((data as Array<Record<string, unknown>> | null) ?? []).map((row) => threadVm(row, "innvil"));
 }
 
-/** Mark a support message open/resolved (super admin only). */
+export async function getOwnerSupportThread(threadId: string): Promise<PlatformSupportThreadDetail | null> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return null;
+  const { data } = await admin.from("platform_support_threads")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .eq("id", threadId).eq("owner_id", user.id).maybeSingle();
+  if (!data) return null;
+  await admin.from("platform_support_threads").update({ owner_unread: false }).eq("id", threadId);
+  return { thread: threadVm({ ...data, owner_unread: false }, "owner"), messages: await threadMessages(admin, threadId) };
+}
+
+export async function getPlatformSupportThread(threadId: string): Promise<PlatformSupportThreadDetail | null> {
+  if (!(await isSuperAdmin())) return null;
+  const admin = createAdminClient();
+  const { data } = await admin.from("platform_support_threads")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .eq("id", threadId).maybeSingle();
+  if (!data) return null;
+  await admin.from("platform_support_threads").update({ innvil_unread: false }).eq("id", threadId);
+  return { thread: threadVm({ ...data, innvil_unread: false }, "innvil"), messages: await threadMessages(admin, threadId) };
+}
+
+async function appendThreadMessage(admin: SupabaseClient, params: {
+  thread: { id: string; owner_id: string; owner_email: string | null; subject: string };
+  body: string;
+  direction: SupportDirection;
+  senderId: string;
+}): Promise<Result> {
+  const now = new Date().toISOString();
+  const { error } = await admin.from("platform_support_messages").insert({
+    thread_id: params.thread.id,
+    owner_id: params.thread.owner_id,
+    owner_email: params.thread.owner_email,
+    subject: params.thread.subject,
+    body: params.body,
+    direction: params.direction,
+    kind: "general",
+    sender_id: params.senderId,
+    status: "open",
+  });
+  if (error) return { ok: false, error: error.message };
+  const { error: threadErr } = await admin.from("platform_support_threads").update({
+    status: "open",
+    owner_unread: unreadStateForDirection(params.direction).ownerUnread,
+    innvil_unread: unreadStateForDirection(params.direction).innvilUnread,
+    last_direction: params.direction,
+    last_message_at: now,
+  }).eq("id", params.thread.id);
+  if (threadErr) return { ok: false, error: threadErr.message };
+  return { ok: true };
+}
+
+export async function ownerReplyToPlatformSupportThread(threadId: string, message: string): Promise<Result> {
+  const { user, admin } = await getAuthedAdmin();
+  const body = message.trim();
+  if (!user) return { ok: false, error: "Not signed in" };
+  if (!body) return { ok: false, error: "Write a reply." };
+  if (body.length > 5000) return { ok: false, error: "Message is too long (5000 characters max)." };
+  const { data: thread } = await admin.from("platform_support_threads")
+    .select("id, owner_id, owner_email, subject").eq("id", threadId).eq("owner_id", user.id).maybeSingle();
+  if (!thread) return { ok: false, error: "Conversation not found." };
+  const result = await appendThreadMessage(admin, { thread, body, direction: "inbound", senderId: user.id });
+  if (result.ok) {
+    try { await notifyInnvilByEmail(admin, thread.subject as string); } catch { /* alert-only */ }
+  }
+  return result;
+}
+
+export async function superAdminReplyToPlatformSupportThread(threadId: string, message: string): Promise<Result> {
+  const { user, admin } = await getAuthedAdmin();
+  const body = message.trim();
+  if (!user || !(await isSuperAdmin())) return { ok: false, error: "Super admin only." };
+  if (!body) return { ok: false, error: "Write a reply." };
+  if (body.length > 5000) return { ok: false, error: "Message is too long (5000 characters max)." };
+  const { data: thread } = await admin.from("platform_support_threads")
+    .select("id, owner_id, owner_email, subject").eq("id", threadId).maybeSingle();
+  if (!thread) return { ok: false, error: "Conversation not found." };
+  const result = await appendThreadMessage(admin, { thread, body, direction: "outbound", senderId: user.id });
+  if (result.ok) {
+    try { await notifyOwnerByEmail(thread.owner_email as string | null, thread.subject as string); } catch { /* alert-only */ }
+  }
+  return result;
+}
+
+/** Unread support conversations for the account that opened the bell. */
+export async function listPlatformSupportNotifications(): Promise<PlatformSupportNotification[]> {
+  const { user, admin } = await getAuthedAdmin();
+  if (!user) return [];
+  const superAdmin = await isSuperAdmin();
+  let query = admin.from("platform_support_threads")
+    .select("id, subject, owner_email, last_message_at")
+    .order("last_message_at", { ascending: false })
+    .limit(10);
+  query = superAdmin ? query.eq("innvil_unread", true) : query.eq("owner_id", user.id).eq("owner_unread", true);
+  const { data } = await query;
+  return ((data as Array<{ id: string; subject: string; owner_email: string | null; last_message_at: string }> | null) ?? []).map((row) => ({
+    threadId: row.id,
+    subject: row.subject,
+    direction: superAdmin ? "inbound" : "outbound",
+    createdAt: row.last_message_at,
+    ...(superAdmin ? { ownerEmail: row.owner_email } : {}),
+  }));
+}
+
+/** Mark a support conversation open/resolved (super admin only). */
 export async function setPlatformSupportStatus(id: string, status: "open" | "resolved"): Promise<Result> {
   if (!(await isSuperAdmin())) return { ok: false, error: "Super admin only." };
   if (status !== "open" && status !== "resolved") return { ok: false, error: "Invalid status." };
   const admin = createAdminClient();
-  const { error } = await admin.from("platform_support_messages").update({ status }).eq("id", id);
+  const { error } = await admin.from("platform_support_threads").update({ status }).eq("id", id);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
@@ -268,26 +432,15 @@ export async function sendSuperAdminOwnerMessage(ownerId: string, subject: strin
     ownerEmail = null;
   }
 
-  const { error } = await admin.from("platform_support_messages").insert({
-    owner_id: id,
-    owner_email: ownerEmail,
-    subject: s,
-    body: b,
-    direction: "outbound",
-    kind: "general",
-    sender_id: user.id,
-    status: "open",
+  const created = await createThreadWithMessage(admin, {
+    ownerId: id, ownerEmail, subject: s, body: b,
+    direction: "outbound", senderId: user.id,
   });
-  if (error) return { ok: false, error: error.message };
+  if ("error" in created) return { ok: false, error: created.error };
 
   if (ownerEmail) {
     try {
-      await sendEmail({
-        to: ownerEmail,
-        subject: `[Innvil] ${s}`,
-        html: simpleEmail("Message from Innvil", [escapeHtml(b).replace(/\n/g, "<br/>")]),
-        text: b,
-      });
+      await notifyOwnerByEmail(ownerEmail, s);
     } catch {
       // best-effort email
     }
@@ -345,16 +498,7 @@ async function listUntouchedDraftOwners(admin: SupabaseClient): Promise<OwnerDra
 }
 
 /** Delivers an automated draft-onboarding nudge/follow-up to the owner's
- *  in-app "Contact support" inbox ONLY -- per explicit product decision,
- *  this does NOT email the owner. The `platform_support_messages` insert
- *  below is the real delivery: `listOwnerSupportMessages()` (the same query
- *  behind OwnerContactSupport's "Your messages" list) reads every row for
- *  this owner_id with no `kind` filter, so an inserted row here shows up
- *  there immediately, tagged "From Innvil". Never call sendEmail() here --
- *  that's a deliberate scope boundary of THIS automated-sweep helper only;
- *  the separate manual super-admin one-off message
- *  (sendSuperAdminOwnerMessage) is an intentional human decision and keeps
- *  its own, unrelated email delivery. */
+ *  in-app Contact support inbox only. It deliberately does not send email. */
 async function sendOutreachMessage(admin: SupabaseClient, params: {
   ownerId: string;
   ownerEmail: string | null;
@@ -363,17 +507,16 @@ async function sendOutreachMessage(admin: SupabaseClient, params: {
   kind: "onboarding_draft_nudge" | "onboarding_draft_followup";
   senderId?: string | null;
 }): Promise<boolean> {
-  const { error } = await admin.from("platform_support_messages").insert({
-    owner_id: params.ownerId,
-    owner_email: params.ownerEmail,
+  const result = await createThreadWithMessage(admin, {
+    ownerId: params.ownerId,
+    ownerEmail: params.ownerEmail,
     subject: params.subject,
     body: params.body,
     direction: "outbound",
     kind: params.kind,
-    sender_id: params.senderId ?? null,
-    status: "open",
+    senderId: params.senderId ?? null,
   });
-  return !error;
+  return !("error" in result);
 }
 
 /** Automatic first-panel draft outreach — one-time onboarding nudge per owner. */
