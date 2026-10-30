@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, MessageSquare, Send } from "lucide-react";
+import { ArrowLeft, Inbox, MessageSquare, Send } from "lucide-react";
 import { Card, Pill } from "@/src/components/ui";
 import {
   getOwnerSupportThread,
@@ -14,12 +14,20 @@ import {
   type PlatformSupportThread,
   type PlatformSupportThreadDetail,
 } from "@/src/lib/actions/platform-support";
+import { innvilSupportQueue, type InnvilSupportQueue } from "@/src/lib/platform-support/thread-queues";
 
 type Viewer = "owner" | "innvil";
 
 function when(iso: string) {
   return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+const QUEUE_COPY: Record<InnvilSupportQueue, { title: string; empty: string; description: string }> = {
+  responses: { title: "Responses inbox", empty: "No owner responses need a reply.", description: "New owner messages and replies, including replies to automated welcomes." },
+  open: { title: "Open messages", empty: "No regular conversations are open.", description: "Staff-started conversations that are still being handled or awaiting the owner." },
+  automated: { title: "Automated welcomes", empty: "No automated welcomes are waiting.", description: "Draft-panel onboarding welcomes. They move to Responses inbox when an owner replies." },
+  addressed: { title: "Addressed inbox", empty: "No addressed conversations yet.", description: "Resolved conversations return here so the active queues stay clean." },
+};
 
 /** The real Innvil support surface: persisted threads and in-app replies. */
 export function PlatformSupportInbox({ viewer }: { viewer: Viewer }) {
@@ -68,7 +76,7 @@ export function PlatformSupportInbox({ viewer }: { viewer: Viewer }) {
 
   if (opened) {
     return (
-    <Card title="Innvil conversation" icon={MessageSquare} right={<div className="flex items-center gap-2"><Pill tone={opened.thread.status === "resolved" ? "safe" : "muted"}>{opened.thread.status === "resolved" ? "Resolved" : "Open"}</Pill>{viewer === "innvil" && (opened.thread.status === "resolved" ? <button onClick={() => changeStatus("open")} disabled={busy} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-2.5 py-1 disabled:opacity-60">Reopen</button> : <button onClick={() => changeStatus("resolved")} disabled={busy} className="text-xs fp-safe-soft-bg fp-safe rounded-lg px-2.5 py-1 disabled:opacity-60">Mark resolved</button>)}</div>}>
+    <Card title="Innvil conversation" icon={MessageSquare} right={<div className="flex items-center gap-2"><Pill tone={opened.thread.status === "resolved" ? "safe" : "muted"}>{opened.thread.status === "resolved" ? "Addressed" : "Open"}</Pill>{viewer === "innvil" && (opened.thread.status === "resolved" ? <button onClick={() => changeStatus("open")} disabled={busy} className="text-xs fp-text-dim border fp-line-soft rounded-lg px-2.5 py-1 disabled:opacity-60">Reopen</button> : <button onClick={() => changeStatus("resolved")} disabled={busy} className="text-xs fp-safe-soft-bg fp-safe rounded-lg px-2.5 py-1 disabled:opacity-60">Mark addressed</button>)}</div>}>
         <button onClick={() => { setOpened(null); setError(null); }} className="fp-text-faint text-xs flex items-center gap-1 mb-4 hover:fp-text"><ArrowLeft size={13} /> All conversations</button>
         <p className="fp-display text-lg">{opened.thread.subject}</p>
         {viewer === "innvil" && opened.thread.ownerEmail && <p className="fp-text-faint text-xs fp-mono mt-1">{opened.thread.ownerEmail}</p>}
@@ -95,24 +103,49 @@ export function PlatformSupportInbox({ viewer }: { viewer: Viewer }) {
     );
   }
 
+  const renderThread = (thread: PlatformSupportThread) => (
+    <button key={thread.id} onClick={() => open(thread.id)} className="w-full text-left fp-panel-raised border fp-line-soft rounded-xl px-4 py-3 hover:fp-gold-border">
+      <span className="flex items-center justify-between gap-3">
+        <span className="text-sm font-medium truncate">{thread.subject}</span>
+        <span className="flex items-center gap-2 shrink-0">
+          {thread.unread && <span className="w-2 h-2 rounded-full fp-gold-bg" aria-label="Unread" />}
+          <Pill tone={thread.status === "resolved" ? "safe" : "muted"}>{thread.status === "resolved" ? "Addressed" : "Open"}</Pill>
+        </span>
+      </span>
+      <span className="block fp-text-faint text-xs mt-1 truncate">{viewer === "innvil" ? (thread.ownerEmail ?? "panel owner") : (thread.lastDirection === "outbound" ? "Innvil replied" : "You replied")} · {when(thread.lastMessageAt)}</span>
+    </button>
+  );
+
+  const renderQueue = (queue: InnvilSupportQueue, items: PlatformSupportThread[]) => {
+    const copy = QUEUE_COPY[queue];
+    return (
+      <Card key={queue} title={`${copy.title}${items.length ? ` · ${items.length}` : ""}`} icon={queue === "responses" ? Inbox : MessageSquare}>
+        <p className="fp-text-faint text-xs mb-3">{copy.description}</p>
+        {items.length === 0 ? <p className="fp-text-faint text-sm py-2 text-center">{copy.empty}</p> : <div className="space-y-2">{items.map(renderThread)}</div>}
+      </Card>
+    );
+  };
+
+  if (viewer === "innvil" && threads !== null) {
+    const queues: Record<InnvilSupportQueue, PlatformSupportThread[]> = { responses: [], open: [], automated: [], addressed: [] };
+    for (const thread of threads) queues[innvilSupportQueue(thread)].push(thread);
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center justify-between">
+          <div><h2 className="fp-display text-xl">Panel owner conversations</h2><p className="fp-text-faint text-xs mt-1">Keep active work, automated welcomes, and addressed messages separate.</p></div>
+          <button onClick={load} className="text-xs fp-gold">Refresh</button>
+        </div>
+        {error && <p className="text-red-400 text-xs">{error}</p>}
+        {(["responses", "open", "automated", "addressed"] as InnvilSupportQueue[]).map((queue) => renderQueue(queue, queues[queue]))}
+      </div>
+    );
+  }
+
   return (
-    <Card title={viewer === "innvil" ? "Panel owner conversations" : "Your Innvil conversations"} icon={MessageSquare} right={<button onClick={load} className="text-xs fp-gold">Refresh</button>}>
+    <Card title="Your Innvil conversations" icon={MessageSquare} right={<button onClick={load} className="text-xs fp-gold">Refresh</button>}>
       {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
       {threads === null ? <p className="fp-text-faint text-sm py-4 text-center">Loading…</p> : threads.length === 0 ? <p className="fp-text-faint text-sm py-4 text-center">No conversations yet.</p> : (
-        <div className="space-y-2">
-          {threads.map((thread) => (
-            <button key={thread.id} onClick={() => open(thread.id)} className="w-full text-left fp-panel-raised border fp-line-soft rounded-xl px-4 py-3 hover:fp-gold-border">
-              <span className="flex items-center justify-between gap-3">
-                <span className="text-sm font-medium truncate">{thread.subject}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  {thread.unread && <span className="w-2 h-2 rounded-full fp-gold-bg" aria-label="Unread" />}
-                  <Pill tone={thread.status === "resolved" ? "safe" : "muted"}>{thread.status === "resolved" ? "Resolved" : "Open"}</Pill>
-                </span>
-              </span>
-              <span className="block fp-text-faint text-xs mt-1 truncate">{viewer === "innvil" ? (thread.ownerEmail ?? "panel owner") : (thread.lastDirection === "outbound" ? "Innvil replied" : "You replied")} · {when(thread.lastMessageAt)}</span>
-            </button>
-          ))}
-        </div>
+        <div className="space-y-2">{threads.map(renderThread)}</div>
       )}
     </Card>
   );

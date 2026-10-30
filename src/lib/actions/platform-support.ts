@@ -23,6 +23,7 @@ export interface PlatformSupportThread {
   subject: string;
   status: "open" | "resolved";
   lastDirection: "inbound" | "outbound";
+  originKind: "general" | "onboarding_draft_nudge" | "onboarding_draft_followup";
   unread: boolean;
   lastMessageAt: string;
   ownerEmail?: string | null;
@@ -125,6 +126,7 @@ function threadVm(row: Record<string, unknown>, viewer: "owner" | "innvil"): Pla
     subject: row.subject as string,
     status: row.status === "resolved" ? "resolved" : "open",
     lastDirection: row.last_direction === "outbound" ? "outbound" : "inbound",
+    originKind: row.origin_kind === "onboarding_draft_nudge" || row.origin_kind === "onboarding_draft_followup" ? row.origin_kind : "general",
     unread: viewer === "owner" ? row.owner_unread === true : row.innvil_unread === true,
     lastMessageAt: row.last_message_at as string,
     ...(viewer === "innvil" ? { ownerEmail: (row.owner_email as string | null) ?? null } : {}),
@@ -161,6 +163,7 @@ async function createThreadWithMessage(admin: SupabaseClient, params: {
       owner_id: params.ownerId,
       owner_email: params.ownerEmail,
       subject: params.subject,
+      origin_kind: params.kind ?? "general",
       status: "open",
       owner_unread: unreadStateForDirection(params.direction).ownerUnread,
       innvil_unread: unreadStateForDirection(params.direction).innvilUnread,
@@ -222,7 +225,7 @@ export async function listOwnerSupportMessages(): Promise<PlatformSupportThread[
   if (!user) return [];
   const { data } = await admin
     .from("platform_support_threads")
-    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction, origin_kind")
     .eq("owner_id", user.id)
     .order("last_message_at", { ascending: false })
     .limit(50);
@@ -235,7 +238,7 @@ export async function listPlatformSupportMessages(): Promise<PlatformSupportThre
   const admin = createAdminClient();
   const { data } = await admin
     .from("platform_support_threads")
-    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction, origin_kind")
     .order("last_message_at", { ascending: false })
     .limit(200);
   return ((data as Array<Record<string, unknown>> | null) ?? []).map((row) => threadVm(row, "innvil"));
@@ -245,7 +248,7 @@ export async function getOwnerSupportThread(threadId: string): Promise<PlatformS
   const { user, admin } = await getAuthedAdmin();
   if (!user) return null;
   const { data } = await admin.from("platform_support_threads")
-    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction, origin_kind")
     .eq("id", threadId).eq("owner_id", user.id).maybeSingle();
   if (!data) return null;
   await admin.from("platform_support_threads").update({ owner_unread: false }).eq("id", threadId);
@@ -256,7 +259,7 @@ export async function getPlatformSupportThread(threadId: string): Promise<Platfo
   if (!(await isSuperAdmin())) return null;
   const admin = createAdminClient();
   const { data } = await admin.from("platform_support_threads")
-    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction")
+    .select("id, subject, status, owner_unread, innvil_unread, last_message_at, owner_email, last_direction, origin_kind")
     .eq("id", threadId).maybeSingle();
   if (!data) return null;
   await admin.from("platform_support_threads").update({ innvil_unread: false }).eq("id", threadId);
