@@ -6,7 +6,7 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import { ensureProfile } from "@/src/lib/auth";
 import { isTrustedWatchHost } from "@/src/lib/config";
 import { signupProductForHost } from "@/src/lib/auth/signup-product";
-import type { UserRole } from "@/src/types/db";
+import { publicSignupProfile } from "@/src/lib/auth/signup-profile";
 
 type AuthResult =
   | { ok: true; needsConfirmation?: boolean }
@@ -68,7 +68,7 @@ export async function signInAction(
 export async function signUpAction(
   email: string,
   password: string,
-  opts?: { displayName?: string; role?: UserRole }
+  opts?: { displayName?: string }
 ): Promise<AuthResult> {
   const supabase = await createClient();
   const h = await headers();
@@ -82,7 +82,8 @@ export async function signUpAction(
 
   // If email confirmation is on, there's a user but no active session yet.
   if (data.user && data.session) {
-    await ensureProfile(data.user.id, opts?.role ?? "panel_owner", opts?.displayName);
+    const profile = publicSignupProfile(data.user.id, opts?.displayName);
+    await ensureProfile(profile.id, profile.role, profile.displayName);
     return { ok: true };
   }
   return { ok: true, needsConfirmation: true };
