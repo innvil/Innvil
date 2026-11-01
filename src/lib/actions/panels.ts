@@ -2,7 +2,6 @@
 
 import { getAuthedAdmin, recoverProfileForUser } from "@/src/lib/auth";
 import { PROFILE_SETUP_ATTENTION_MESSAGE } from "@/src/lib/auth";
-import { trustedRoleIntentFromAppMetadata } from "@/src/lib/auth/profile-recovery";
 import { sendDraftOnboardingNudge } from "@/src/lib/actions/platform-support";
 import { normalizePlatformFocus, readPlatformFocus } from "@/src/lib/platform-focus";
 import type { Panel } from "@/src/types";
@@ -61,7 +60,7 @@ export async function createPanel(input: {
   // trusted database relationships before this owner-only workflow proceeds.
   const recovery = await recoverProfileForUser(
     user.id,
-    trustedRoleIntentFromAppMetadata(user.app_metadata) ? user.app_metadata : undefined
+    user.app_metadata
   );
   if (!recovery.ok || recovery.role !== "panel_owner") {
     return { ok: false, error: PROFILE_SETUP_ATTENTION_MESSAGE };

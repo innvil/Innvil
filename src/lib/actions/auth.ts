@@ -14,7 +14,6 @@ import {
 import { isTrustedWatchHost } from "@/src/lib/config";
 import { signupProductForHost } from "@/src/lib/auth/signup-product";
 import { publicSignupOutcome } from "@/src/lib/auth/signup-profile";
-import { trustedRoleIntentFromAppMetadata } from "@/src/lib/auth/profile-recovery";
 
 type AuthResult =
   | { ok: true; needsConfirmation?: boolean }
@@ -68,9 +67,7 @@ export async function signInAction(
   if (data.user) {
     const recovery = await recoverProfileForUser(
       data.user.id,
-      trustedRoleIntentFromAppMetadata(data.user.app_metadata)
-        ? data.user.app_metadata
-        : undefined
+      data.user.app_metadata
     );
     if (!recovery.ok) return { ok: false, error: PROFILE_SETUP_ATTENTION_MESSAGE };
     return { ok: true };
@@ -98,6 +95,12 @@ export async function signUpAction(
   if (!data.user) {
     console.error("[auth] signup returned no authenticated user");
     return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
+  }
+
+  // Supabase may return an obfuscated user for a duplicate confirmed email.
+  // Never provision from that response or touch another account by ID.
+  if (!data.user.identities?.length) {
+    return { ok: true, needsConfirmation: true };
   }
 
   const outcome = publicSignupOutcome(data.user.id, Boolean(data.session), opts?.displayName);

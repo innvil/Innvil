@@ -7,11 +7,11 @@ import { createAdminClient } from "@/src/lib/supabase/admin";
 import {
   PROFILE_SETUP_RETRY_MESSAGE,
   clearProfileRoleIntent,
+  ensureNewCustomerProfile,
   recoverProfileForUser,
   setProfileRoleIntent,
-  ensureProfile,
 } from "@/src/lib/auth";
-import { trustedRoleIntentFromAppMetadata } from "@/src/lib/auth/profile-recovery";
+import { profileRoleIntentMetadata } from "@/src/lib/auth/profile-recovery";
 import { readWelcomeConfig, renderWelcome } from "@/src/lib/welcome";
 import { sendEmail } from "@/src/lib/email/resend";
 import type { CustomerAccountRow } from "@/src/types/db";
@@ -125,6 +125,9 @@ export async function customerSignUp(
     email: mail,
     password,
     email_confirm: false,
+    // This is trusted server-side registration context consumed by the Auth
+    // trigger. It is not derived from client-controlled metadata.
+    app_metadata: profileRoleIntentMetadata("customer"),
     user_metadata: { display_name: displayName ?? null },
   });
   if (error || !data.user) {
@@ -137,7 +140,7 @@ export async function customerSignUp(
   const userId = data.user.id;
   try {
     await setProfileRoleIntent(userId, data.user.app_metadata, "customer");
-    await ensureProfile(userId, "customer", displayName);
+    await ensureNewCustomerProfile(userId, displayName);
     await clearProfileRoleIntent(userId, {
       ...(data.user.app_metadata ?? {}),
       profile_role_intent: "customer",
@@ -246,9 +249,7 @@ export async function customerSignIn(
   if (data.user) {
     const recovery = await recoverProfileForUser(
       data.user.id,
-      trustedRoleIntentFromAppMetadata(data.user.app_metadata)
-        ? data.user.app_metadata
-        : undefined
+      data.user.app_metadata
     );
     if (!recovery.ok) return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
     await ensureCustomerAccount(data.user.id, panelId);

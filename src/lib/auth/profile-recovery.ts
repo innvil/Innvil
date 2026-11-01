@@ -12,11 +12,57 @@ export type ProfileRecoveryDecision =
 
 export type RecoverableProfileRole = "panel_owner" | "customer";
 
+export const PROFILE_ROLE_INTENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+export type ProfileRoleIntentInspection =
+  | { ok: true; role: RecoverableProfileRole; expiresAt: string }
+  | { ok: false; reason: "missing" | "malformed" | "expired" };
+
+/** Build a short-lived marker using only trusted server time and role input. */
+export function profileRoleIntentMetadata(
+  role: RecoverableProfileRole,
+  now = Date.now()
+): { profile_role_intent: RecoverableProfileRole; profile_role_intent_expires_at: string } {
+  return {
+    profile_role_intent: role,
+    profile_role_intent_expires_at: new Date(now + PROFILE_ROLE_INTENT_TTL_MS).toISOString(),
+  };
+}
+
+/** Identify whether app metadata contains a role-intent marker at all. */
+export function hasProfileRoleIntentMarker(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const metadata = value as Record<string, unknown>;
+  return typeof metadata.profile_role_intent === "string"
+    || typeof metadata.profile_role_intent_expires_at === "string";
+}
+
+/** Validate the server-written marker, including its expiration. */
+export function inspectProfileRoleIntent(
+  value: unknown,
+  now = Date.now()
+): ProfileRoleIntentInspection {
+  if (!hasProfileRoleIntentMarker(value)) return { ok: false, reason: "missing" };
+  if (!value || typeof value !== "object") return { ok: false, reason: "malformed" };
+
+  const metadata = value as Record<string, unknown>;
+  const role = metadata.profile_role_intent;
+  const expiresAt = metadata.profile_role_intent_expires_at;
+  if (
+    (role !== "panel_owner" && role !== "customer")
+    || typeof expiresAt !== "string"
+    || !Number.isFinite(Date.parse(expiresAt))
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (Date.parse(expiresAt) <= now) return { ok: false, reason: "expired" };
+  return { ok: true, role, expiresAt };
+}
+
 /** Read only the server-written app_metadata marker; user_metadata is ignored. */
 export function trustedRoleIntentFromAppMetadata(value: unknown): RecoverableProfileRole | null {
-  if (!value || typeof value !== "object") return null;
-  const intent = (value as { profile_role_intent?: unknown }).profile_role_intent;
-  return intent === "panel_owner" || intent === "customer" ? intent : null;
+  const inspection = inspectProfileRoleIntent(value);
+  return inspection.ok ? inspection.role : null;
 }
 
 /**

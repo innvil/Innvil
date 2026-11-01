@@ -3,8 +3,10 @@ import { createClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
 import type { ProfileRow, UserRole } from "@/src/types/db";
 import {
+  hasProfileRoleIntentMarker,
+  inspectProfileRoleIntent,
+  profileRoleIntentMetadata,
   resolveTrustedProfileRole,
-  trustedRoleIntentFromAppMetadata,
   type ProfileRecoveryDecision,
   type RecoverableProfileRole,
 } from "@/src/lib/auth/profile-recovery";
@@ -117,6 +119,55 @@ export async function ensureProfile(
   }
 }
 
+/**
+ * Provision a just-created customer account without changing any pre-existing
+ * account role. The Auth trigger may have inserted the new row with the
+ * schema's panel_owner default before this server action runs.
+ */
+export async function ensureNewCustomerProfile(
+  userId: string,
+  displayName?: string | null
+): Promise<void> {
+  const admin = createAdminClient();
+  const { data: existing, error: lookupError } = await admin
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  if (lookupError) {
+    logProfileDiagnostic("ensure_customer_profile_lookup", lookupError);
+    throw new ProfileWriteError();
+  }
+
+  if (!existing) {
+    await ensureProfile(userId, "customer", displayName);
+    return;
+  }
+
+  const existingRole = existing.role as UserRole;
+  if (existingRole === "customer") return;
+  if (existingRole !== "panel_owner") {
+    logProfileDiagnostic("ensure_customer_profile_role_conflict", { code: "ROLE_CONFLICT" });
+    throw new ProfileWriteError();
+  }
+
+  const { data: updated, error: updateError } = await admin
+    .from("profiles")
+    .update({ role: "customer" })
+    .eq("id", userId)
+    .eq("role", "panel_owner")
+    .select("role")
+    .maybeSingle();
+  if (updateError) {
+    logProfileDiagnostic("ensure_customer_profile_update", updateError);
+    throw new ProfileWriteError();
+  }
+  if (updated?.role !== "customer") {
+    logProfileDiagnostic("ensure_customer_profile_role_conflict", { code: "ROLE_CONFLICT" });
+    throw new ProfileWriteError();
+  }
+}
+
 /** Store a role intent written only by trusted server code, never by signup input. */
 export async function setProfileRoleIntent(
   userId: string,
@@ -129,7 +180,7 @@ export async function setProfileRoleIntent(
       : {};
     const admin = createAdminClient();
     const { error } = await admin.auth.admin.updateUserById(userId, {
-      app_metadata: { ...existing, profile_role_intent: role },
+      app_metadata: { ...existing, ...profileRoleIntentMetadata(role) },
     });
     if (error) {
       logProfileDiagnostic("set_profile_role_intent", error);
@@ -149,7 +200,11 @@ export async function clearProfileRoleIntent(
 ): Promise<void> {
   try {
     const next = currentAppMetadata && typeof currentAppMetadata === "object"
-      ? { ...(currentAppMetadata as Record<string, unknown>), profile_role_intent: null }
+      ? {
+          ...(currentAppMetadata as Record<string, unknown>),
+          profile_role_intent: null,
+          profile_role_intent_expires_at: null,
+        }
       : {};
     const admin = createAdminClient();
     const { error } = await admin.auth.admin.updateUserById(userId, { app_metadata: next });
@@ -173,7 +228,10 @@ export async function recoverProfileForUser(
   appMetadata?: unknown
 ): Promise<
   | { ok: true; role: UserRole; created: boolean }
-  | { ok: false; reason: "role_unverified" | "conflicting_role_evidence" | "database" }
+  | {
+      ok: false;
+      reason: "role_unverified" | "conflicting_role_evidence" | "role_intent_invalid" | "role_intent_expired" | "database";
+    }
 > {
   try {
     const admin = createAdminClient();
@@ -186,9 +244,16 @@ export async function recoverProfileForUser(
       logProfileDiagnostic("profile_recovery_lookup", profileError);
       return { ok: false, reason: "database" };
     }
-    const roleIntent = trustedRoleIntentFromAppMetadata(appMetadata);
+    const roleIntent = inspectProfileRoleIntent(appMetadata);
     if (existing) {
-      if (roleIntent) await clearProfileRoleIntent(userId, appMetadata);
+      if (hasProfileRoleIntentMarker(appMetadata)) {
+        try {
+          await clearProfileRoleIntent(userId, appMetadata);
+        } catch {
+          // The existing profile remains authoritative; cleanup can be retried.
+          console.warn("[auth] profile role marker cleanup deferred");
+        }
+      }
       return { ok: true, role: existing.role as UserRole, created: false };
     }
 
@@ -209,14 +274,22 @@ export async function recoverProfileForUser(
       isPanelMember: Boolean(memberResult.data),
     });
 
-    if (roleIntent) {
-      if (relationshipDecision.ok && relationshipDecision.role !== roleIntent) {
+    if (!roleIntent.ok && roleIntent.reason !== "missing") {
+      console.warn("[auth] profile recovery skipped", { reason: roleIntent.reason });
+      return {
+        ok: false,
+        reason: roleIntent.reason === "expired" ? "role_intent_expired" : "role_intent_invalid",
+      };
+    }
+
+    if (roleIntent.ok) {
+      if (relationshipDecision.ok && relationshipDecision.role !== roleIntent.role) {
         console.warn("[auth] profile recovery skipped", { reason: "conflicting_role_evidence" });
         return { ok: false, reason: "conflicting_role_evidence" };
       }
-      await ensureProfile(userId, roleIntent);
+      await ensureProfile(userId, roleIntent.role);
       await clearProfileRoleIntent(userId, appMetadata);
-      return { ok: true, role: roleIntent, created: true };
+      return { ok: true, role: roleIntent.role, created: true };
     }
 
     if (!relationshipDecision.ok) {
