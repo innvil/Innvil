@@ -1,6 +1,8 @@
 "use server";
 
-import { getAuthedAdmin, ensureProfile } from "@/src/lib/auth";
+import { getAuthedAdmin, recoverProfileForUser } from "@/src/lib/auth";
+import { PROFILE_SETUP_ATTENTION_MESSAGE } from "@/src/lib/auth";
+import { trustedRoleIntentFromAppMetadata } from "@/src/lib/auth/profile-recovery";
 import { sendDraftOnboardingNudge } from "@/src/lib/actions/platform-support";
 import { normalizePlatformFocus, readPlatformFocus } from "@/src/lib/platform-focus";
 import type { Panel } from "@/src/types";
@@ -55,8 +57,15 @@ export async function createPanel(input: {
   if (!/^[a-z0-9-]{3,}$/.test(subdomain))
     return { ok: false, error: "Subdomain must be 3+ chars (a–z, 0–9, hyphen)" };
 
-  // A panel owner must have a profile row (FK target); ensure it exists.
-  await ensureProfile(user.id, "panel_owner");
+  // A missing profile is not proof of panel-owner status. Recovery must use
+  // trusted database relationships before this owner-only workflow proceeds.
+  const recovery = await recoverProfileForUser(
+    user.id,
+    trustedRoleIntentFromAppMetadata(user.app_metadata) ? user.app_metadata : undefined
+  );
+  if (!recovery.ok || recovery.role !== "panel_owner") {
+    return { ok: false, error: PROFILE_SETUP_ATTENTION_MESSAGE };
+  }
 
   const focus = normalizePlatformFocus(input.platformFocus);
   const { data, error } = await admin

@@ -11,3 +11,15 @@ export function publicSignupProfile(userId: string, displayName?: string | null)
     displayName: displayName ?? null,
   } as const;
 }
+
+/** Shared result for both immediate-session and email-confirmation signup. */
+export function publicSignupOutcome(
+  userId: string,
+  hasSession: boolean,
+  displayName?: string | null
+) {
+  return {
+    profile: publicSignupProfile(userId, displayName),
+    needsConfirmation: !hasSession,
+  } as const;
+}

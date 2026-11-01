@@ -3,10 +3,18 @@
 import { headers } from "next/headers";
 import { createClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { ensureProfile } from "@/src/lib/auth";
+import {
+  PROFILE_SETUP_ATTENTION_MESSAGE,
+  PROFILE_SETUP_RETRY_MESSAGE,
+  clearProfileRoleIntent,
+  recoverProfileForUser,
+  setProfileRoleIntent,
+  ensureProfile,
+} from "@/src/lib/auth";
 import { isTrustedWatchHost } from "@/src/lib/config";
 import { signupProductForHost } from "@/src/lib/auth/signup-product";
-import { publicSignupProfile } from "@/src/lib/auth/signup-profile";
+import { publicSignupOutcome } from "@/src/lib/auth/signup-profile";
+import { trustedRoleIntentFromAppMetadata } from "@/src/lib/auth/profile-recovery";
 
 type AuthResult =
   | { ok: true; needsConfirmation?: boolean }
@@ -58,10 +66,17 @@ export async function signInAction(
   });
   if (error) return { ok: false, error: error.message };
   if (data.user) {
-    // Keep login fast; profile fallback creation can run asynchronously.
-    void ensureProfile(data.user.id).catch(() => undefined);
+    const recovery = await recoverProfileForUser(
+      data.user.id,
+      trustedRoleIntentFromAppMetadata(data.user.app_metadata)
+        ? data.user.app_metadata
+        : undefined
+    );
+    if (!recovery.ok) return { ok: false, error: PROFILE_SETUP_ATTENTION_MESSAGE };
+    return { ok: true };
   }
-  return { ok: true };
+  console.error("[auth] sign-in returned no authenticated user");
+  return { ok: false, error: PROFILE_SETUP_ATTENTION_MESSAGE };
 }
 
 /** Register a new account. Defaults to the panel_owner role for the Innvil app. */
@@ -80,13 +95,29 @@ export async function signUpAction(
   });
   if (error) return { ok: false, error: error.message };
 
-  // If email confirmation is on, there's a user but no active session yet.
-  if (data.user && data.session) {
-    const profile = publicSignupProfile(data.user.id, opts?.displayName);
-    await ensureProfile(profile.id, profile.role, profile.displayName);
-    return { ok: true };
+  if (!data.user) {
+    console.error("[auth] signup returned no authenticated user");
+    return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
   }
-  return { ok: true, needsConfirmation: true };
+
+  const outcome = publicSignupOutcome(data.user.id, Boolean(data.session), opts?.displayName);
+  try {
+    await setProfileRoleIntent(data.user.id, data.user.app_metadata, "panel_owner");
+    // This is deliberately outside the session branch: confirmed-email signup
+    // can return a user without a session, and must still get its profile.
+    await ensureProfile(
+      outcome.profile.id,
+      outcome.profile.role,
+      outcome.profile.displayName
+    );
+    await clearProfileRoleIntent(data.user.id, {
+      ...(data.user.app_metadata ?? {}),
+      profile_role_intent: outcome.profile.role,
+    });
+  } catch {
+    return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
+  }
+  return outcome.needsConfirmation ? { ok: true, needsConfirmation: true } : { ok: true };
 }
 
 /**

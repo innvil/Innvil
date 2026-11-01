@@ -4,7 +4,14 @@ import crypto from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createStorefrontClient } from "@/src/lib/supabase/server";
 import { createAdminClient } from "@/src/lib/supabase/admin";
-import { ensureProfile } from "@/src/lib/auth";
+import {
+  PROFILE_SETUP_RETRY_MESSAGE,
+  clearProfileRoleIntent,
+  recoverProfileForUser,
+  setProfileRoleIntent,
+  ensureProfile,
+} from "@/src/lib/auth";
+import { trustedRoleIntentFromAppMetadata } from "@/src/lib/auth/profile-recovery";
 import { readWelcomeConfig, renderWelcome } from "@/src/lib/welcome";
 import { sendEmail } from "@/src/lib/email/resend";
 import type { CustomerAccountRow } from "@/src/types/db";
@@ -128,7 +135,16 @@ export async function customerSignUp(
     return { ok: false, error: msg };
   }
   const userId = data.user.id;
-  await ensureProfile(userId, "customer", displayName);
+  try {
+    await setProfileRoleIntent(userId, data.user.app_metadata, "customer");
+    await ensureProfile(userId, "customer", displayName);
+    await clearProfileRoleIntent(userId, {
+      ...(data.user.app_metadata ?? {}),
+      profile_role_intent: "customer",
+    });
+  } catch {
+    return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
+  }
 
   // Store + email a branded 6-digit code (own OTP, not Supabase's confirmation email).
   const code = genOtp();
@@ -228,13 +244,17 @@ export async function customerSignIn(
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { ok: false, error: error.message };
   if (data.user) {
-    // Keep sign-in responsive; backfill records asynchronously.
-    void Promise.allSettled([
-      ensureProfile(data.user.id, "customer"),
-      ensureCustomerAccount(data.user.id, panelId),
-    ]);
+    const recovery = await recoverProfileForUser(
+      data.user.id,
+      trustedRoleIntentFromAppMetadata(data.user.app_metadata)
+        ? data.user.app_metadata
+        : undefined
+    );
+    if (!recovery.ok) return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
+    await ensureCustomerAccount(data.user.id, panelId);
+    return { ok: true };
   }
-  return { ok: true };
+  return { ok: false, error: PROFILE_SETUP_RETRY_MESSAGE };
 }
 
 export async function customerSignOut(): Promise<void> {

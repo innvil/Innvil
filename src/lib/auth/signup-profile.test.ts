@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicSignupProfile, PUBLIC_SIGNUP_ROLE } from "./signup-profile";
+import { publicSignupOutcome, publicSignupProfile, PUBLIC_SIGNUP_ROLE } from "./signup-profile";
 
 const USER_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -22,4 +22,16 @@ test("untrusted role-shaped request data cannot affect the signup payload", () =
     role: "panel_owner",
     displayName: "new-owner",
   });
+});
+
+test("immediate-session signup creates a panel_owner without confirmation", () => {
+  const result = publicSignupOutcome(USER_ID, true, "immediate");
+  assert.equal(result.needsConfirmation, false);
+  assert.equal(result.profile.role, "panel_owner");
+});
+
+test("email-confirmation signup still creates a panel_owner profile", () => {
+  const result = publicSignupOutcome(USER_ID, false, "confirm later");
+  assert.equal(result.needsConfirmation, true);
+  assert.equal(result.profile.role, "panel_owner");
 });
