@@ -16,7 +16,7 @@ const PLAN_BLURBS: Record<Plan, string> = {
   Silver: "For growing communities that need more coverage.",
   Gold: "For established projects running multiple communities.",
   Platinum: "For teams running Watch at scale.",
-  "BYO 20": "Everything included, bring your own AI provider — best value.",
+  "BYO 30": "Everything included, bring your own AI provider — best value.",
 };
 
 // Subtle rank accent per tier — never literal metallic gradients, just a
@@ -26,7 +26,7 @@ const RANK_ACCENT: Record<Plan, string> = {
   Silver: "#B8C2CC",
   Gold: "#D9B44A",
   Platinum: "#8FE3D6",
-  "BYO 20": "#A3E635",
+  "BYO 30": "#A3E635",
 };
 
 export function WatchPricingSection({ options, authenticated }: { options: WatchPlanOption[]; authenticated: boolean }) {
@@ -62,7 +62,7 @@ export function WatchPricingSection({ options, authenticated }: { options: Watch
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {options.map((opt) => {
           const plan = opt.displayName as Plan;
-          const isBest = plan === "BYO 20";
+          const isBest = plan === "BYO 30";
           return (
             <div key={opt.tier} className={`p-5 flex flex-col ${isBest ? "w-card-raised border w-teal-border" : "w-card"}`}>
               <div className="flex items-center gap-1.5 mb-3 flex-wrap">

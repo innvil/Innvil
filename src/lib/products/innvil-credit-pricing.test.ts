@@ -88,7 +88,7 @@ test("REQUIRED: annual discount is exactly 10%", () => {
   assert.equal(ANNUAL_CREDIT_DISCOUNT_BPS, 1000);
 });
 
-test("REQUIRED: all five self-serve tiers, including Bronze and BYO 20, are annual-eligible", () => {
+test("REQUIRED: all five self-serve tiers, including Bronze and BYO 30, are annual-eligible", () => {
   assert.deepEqual(ANNUAL_ELIGIBLE_TIERS.slice().sort(), ["basic", "byo20", "premium", "pro", "standard"]);
 });
 

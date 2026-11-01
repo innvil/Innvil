@@ -285,6 +285,6 @@ test("plain settings with no enterprise flag are completely unaffected by this c
   assert.equal(moderatorEntitlementSource({}), null);
 });
 
-test("REQUIRED: BYO 20's real capacity is 20 Watcher slots / 10 Communities, matching the canonical pricing table exactly", () => {
-  assert.deepEqual(CAPACITY.byo20, { maxCommunities: 10, maxActiveSlots: 20 });
+test("REQUIRED: BYO 30's real capacity is 30 Watcher slots / 15 Communities, matching the canonical pricing table exactly", () => {
+  assert.deepEqual(CAPACITY.byo20, { maxCommunities: 15, maxActiveSlots: 30 });
 });

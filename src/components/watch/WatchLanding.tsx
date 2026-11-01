@@ -47,7 +47,7 @@ import { TRIAL_DURATION_DAYS } from "@/src/lib/moderator/plan";
  * conversation/participation and project-aware answers are kept as two
  * visibly separate capabilities throughout (comparison table, pillars,
  * feature groups) rather than conflating "answers questions" with
- * "talks/participates". BYO 20 moved out of the main narrative flow and
+ * "talks/participates". BYO 30 moved out of the main narrative flow and
  * down next to pricing, where it belongs commercially. The inline FAQ
  * accordion was removed outright (real dedicated FAQ content already
  * exists in the Help Center, linked from WatchFooter) rather than kept in
@@ -753,7 +753,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
         </div>
       </section>
 
-      {/* BYO 20 moved lower, into the pricing area -- it's a self-serve
+      {/* BYO 30 moved lower, into the pricing area -- it's a self-serve
           plan promotion, not a core product differentiator, so it no
           longer competes for attention with the earlier sections that
           explain what a Watcher actually does. */}
@@ -765,7 +765,7 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
               <Star size={11} /> Best value plan
             </span>
             <h2 className="w-display text-2xl sm:text-3xl mb-3">
-              BYO 20 — everything included. Bring your own AI.
+              BYO 30 — everything included. Bring your own AI.
             </h2>
             <p className="w-text-dim text-sm leading-relaxed mb-5 max-w-md">
               One flat price for the most Watch offers as a self-serve plan. Connect your own AI provider
@@ -779,14 +779,14 @@ export function WatchLanding({ authenticated }: { authenticated: boolean }) {
               <li className="flex items-center gap-2"><Check size={15} className="w-teal shrink-0" /> Same Innvil Credit discounts as every other plan</li>
             </ul>
             <a href="#pricing" className="w-btn-primary text-sm font-semibold px-5 py-3 rounded-lg inline-flex items-center gap-1.5">
-              Get BYO 20 <ArrowRight size={14} />
+              Get BYO 30 <ArrowRight size={14} />
             </a>
             <p className="text-xs w-text-faint mt-3">
               Not the same as Enterprise BYO — this is a self-serve plan; Enterprise BYO is manually provisioned for larger, custom deployments.
             </p>
           </div>
           <div className="relative w-card p-6 text-center">
-            <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-2">BYO 20 · monthly</p>
+            <p className="text-[10px] uppercase tracking-wide w-text-faint font-semibold mb-2">BYO 30 · monthly</p>
             <p className="w-display text-4xl mb-1">
               ${byo20.price.toFixed(2)}<span className="text-base w-text-faint font-normal">/mo</span>
             </p>

@@ -27,9 +27,9 @@ test("REQUIRED: watchPlanCapacityTable's community counts match MODERATOR_COMMUN
   }
 });
 
-test("watchPlanCapacityTable has exactly the 5 self-serve tiers, Bronze through BYO 20, ascending price", () => {
+test("watchPlanCapacityTable has exactly the 5 self-serve tiers, Bronze through BYO 30, ascending price", () => {
   const table = watchPlanCapacityTable();
-  assert.deepEqual(table.map((t) => t.displayName), ["Bronze", "Silver", "Gold", "Platinum", "BYO 20"]);
+  assert.deepEqual(table.map((t) => t.displayName), ["Bronze", "Silver", "Gold", "Platinum", "BYO 30"]);
   for (let i = 1; i < table.length; i++) assert.ok(table[i].price > table[i - 1].price);
 });
 
@@ -80,10 +80,10 @@ test("every callout has a non-empty text field", () => {
   }
 });
 
-test("REQUIRED: the plan-choice step (02) names BYO 20 as a real self-serve option, not only Bronze/Silver/Gold/Platinum", () => {
+test("REQUIRED: the plan-choice step (02) names BYO 30 as a real self-serve option, not only Bronze/Silver/Gold/Platinum", () => {
   const steps = watchOnboardingSteps();
   const planStep = steps.find((s) => s.title.toLowerCase().includes("plan"));
   assert.ok(planStep);
   const allText = [planStep!.summary, ...planStep!.body, ...planStep!.callouts.map((c) => c.text)].join(" ");
-  assert.ok(allText.includes("BYO 20"), "the plan step must mention BYO 20 by name, since it's a genuine 5th self-serve tier");
+  assert.ok(allText.includes("BYO 30"), "the plan step must mention BYO 30 by name, since it's a genuine 5th self-serve tier");
 });

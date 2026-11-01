@@ -309,15 +309,15 @@ test("REQUIRED: Plans and Billing's comparison table has one row per real self-s
   assert.ok(table, "the main comparison table must exist");
   assert.deepEqual(table.headers, ["Plan", "Monthly Price", "Watcher Slots", "Communities", "AI Generations", "Best For"]);
   const names = table.rows.map((r) => r[0]);
-  assert.deepEqual(names, ["Bronze", "Silver", "Gold", "Platinum", "BYO 20"]);
+  assert.deepEqual(names, ["Bronze", "Silver", "Gold", "Platinum", "BYO 30"]);
   // Every price cell must be the real canonical price, byte-for-byte.
   for (const row of table.rows) {
     const plan = watchPlanOptions().find((p) => p.displayName === row[0])!;
     assert.equal(row[1], `$${plan.price.toFixed(2)}`);
     assert.equal(row[2], String(plan.slots));
   }
-  const byo20Row = table.rows.find((r) => r[0] === "BYO 20")!;
-  assert.equal(byo20Row[4], "BYO / provider-based", "BYO 20 must never show a fabricated numeric AI-generation pool");
+  const byo20Row = table.rows.find((r) => r[0] === "BYO 30")!;
+  assert.equal(byo20Row[4], "BYO / provider-based", "BYO 30 must never show a fabricated numeric AI-generation pool");
 });
 
 test("REQUIRED: Plans and Billing states the exact two required callouts verbatim (Escalation Groups and Watcher Records are not deployments)", () => {

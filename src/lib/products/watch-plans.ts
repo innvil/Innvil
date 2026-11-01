@@ -1,16 +1,16 @@
 /**
  * Customer-facing Innvil Watch plan display names — Bronze/Silver/Gold/
- * Platinum/BYO 20, Enterprise unchanged. This is a DISPLAY-NAME layer only:
+ * Platinum/BYO 30, Enterprise unchanged. This is a DISPLAY-NAME layer only:
  * the stable internal plan identity (`ModeratorPlanTier` — "basic"/
- * "standard"/"premium"/"pro"/"byo20") and every entitlement/pricing constant
- * in `money.ts` are completely UNCHANGED. Ownership must never key off a
+ * "standard"/"premium"/"pro"/"byo20") remains stable so existing
+ * entitlements continue to resolve. Ownership must never key off a
  * display name — this file has no bearing on entitlement resolution, it
  * only maps an internal tier to what a customer sees.
  *
  * PRICING: prices are read directly from `money.ts` (the authoritative
  * source), never duplicated here — as of the 2026-08-26 repricing:
  * Basic/Bronze $29.99, Standard/Silver $59.99, Premium/Gold $99.99,
- * Pro/Platinum $149.99, BYO 20 $169.99. An explicit, separate billing
+ * Pro/Platinum $149.99, BYO 30 $199.99. An explicit, separate billing
  * decision — see the dated changelog entry for when this was approved.
  */
 
@@ -20,14 +20,14 @@ import {
 } from "@/src/lib/money";
 import { CAPACITY, MAX_ACTIVE_DEPLOYMENTS_PER_COMMUNITY } from "@/src/lib/moderator/plan";
 
-export type WatchPlanDisplayName = "Bronze" | "Silver" | "Gold" | "Platinum" | "BYO 20" | "Enterprise";
+export type WatchPlanDisplayName = "Bronze" | "Silver" | "Gold" | "Platinum" | "BYO 30" | "Enterprise";
 
 const TIER_TO_DISPLAY: Record<ModeratorPlanTier, WatchPlanDisplayName> = {
   basic: "Bronze",
   standard: "Silver",
   premium: "Gold",
   pro: "Platinum",
-  byo20: "BYO 20",
+  byo20: "BYO 30",
 };
 
 const DISPLAY_TO_TIER: Record<Exclude<WatchPlanDisplayName, "Enterprise">, ModeratorPlanTier> = {
@@ -35,7 +35,7 @@ const DISPLAY_TO_TIER: Record<Exclude<WatchPlanDisplayName, "Enterprise">, Moder
   Silver: "standard",
   Gold: "premium",
   Platinum: "pro",
-  "BYO 20": "byo20",
+  "BYO 30": "byo20",
 };
 
 /** Stable internal tier -> the name a Watch customer actually sees. */

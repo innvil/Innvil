@@ -14,7 +14,7 @@
 
 import type { ModeratorPlanTier } from "@/src/lib/money";
 
-/** Bronze gets no Innvil Credit discount; Silver/Gold/Platinum/BYO 20 get 5%
+/** Bronze gets no Innvil Credit discount; Silver/Gold/Platinum/BYO 30 get 5%
  *  off when paying with Innvil Credit instead of a direct crypto payment. */
 export const INNVIL_CREDIT_DISCOUNT: Record<ModeratorPlanTier, number> = {
   basic: 0,

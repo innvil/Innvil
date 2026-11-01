@@ -1651,8 +1651,8 @@ test("trial and enterprise never report an active Media Moderation + add-on, eve
   assert.equal(trialCapacity?.mediaModerationUnitAllowance, null);
 });
 
-/* -------------------------------------------- BYO 20 self-serve tier (2026-08-26) ---- */
-// The 5th self-serve tier -- always BYO, fixed 10-Community cap (no
+/* -------------------------------------------- BYO 30 self-serve tier (2026-11-02) ---- */
+// The 5th self-serve tier -- always BYO, fixed 15-Community cap (no
 // expansion), and a bundled (never purchased) 3,000-unit Media Moderation
 // allowance. getAccountCapacity must never query watch_subscription_addons
 // for it (bundled, not purchased) and must never surface a fabricated
@@ -1679,11 +1679,11 @@ test("REQUIRED: a stray active Media Moderation purchase row is irrelevant for b
   assert.equal(capacity?.mediaModerationUnitAllowance, 3000, "still the fixed bundled allowance, not the addon row's own units");
 });
 
-test("REQUIRED: byo20's real fixed 20-slot / 10-community capacity, never Community-Expansion-eligible", async () => {
+test("REQUIRED: BYO 30's real fixed 30-slot / 15-community capacity, never Community-Expansion-eligible", async () => {
   const admin = fakeAdmin({ products: [WATCH_PRODUCT_ROW], product_entitlements: [ENTITLED_BYO20_CAP] });
   const capacity = await getAccountCapacity(admin, "acct-1");
-  assert.equal(capacity?.slotsTotal, 20);
-  assert.equal(capacity?.communitiesTotal, 10);
+  assert.equal(capacity?.slotsTotal, 30);
+  assert.equal(capacity?.communitiesTotal, 15);
   assert.equal(capacity?.communityExpansionEligible, false);
   assert.equal(capacity?.communityExpansionActive, false);
 });
@@ -1707,7 +1707,7 @@ test("a Community Expansion add-on row is never resolved as active for byo20, ev
   });
   const capacity = await getAccountCapacity(admin, "acct-1");
   assert.equal(capacity?.communityExpansionActive, false, "byo20 is structurally excluded from Community Expansion eligibility");
-  assert.equal(capacity?.communitiesTotal, 10, "the fixed cap is never expanded past 10 for byo20");
+  assert.equal(capacity?.communitiesTotal, 15, "the fixed cap is never expanded past 15 for BYO 30");
 });
 
 /* ---------------------------------- fresh zero-Panel account -- shell fixture ---- */

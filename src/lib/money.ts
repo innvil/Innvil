@@ -43,7 +43,7 @@ export function planPrice(tier: "pro" | "business" | "business_plus"): number {
  *  above -- Enterprise's fixed $399/$299/$499 packages are flat constants and
  *  are NOT derived from MODERATOR_PRO_PRICE, so this change doesn't move them.
  *  Repriced AGAIN 2026-08-25 (Pro/Platinum $199.00->$149.99 -- the Gold->Platinum
- *  jump was too large) alongside the new BYO 20 tier below -- a CUSTOM Managed
+ *  jump was too large) alongside the new BYO 30 tier below -- a CUSTOM Managed
  *  quote above 50 slots (moderatorEnterpriseSlotPrice) still derives its base
  *  from MODERATOR_PRO_PRICE and moves with it (see its own updated worked
  *  examples further down); the fixed Enterprise packages remain unaffected. */
@@ -51,25 +51,19 @@ export const MODERATOR_BASIC_PRICE = 29.99;
 export const MODERATOR_STANDARD_PRICE = 59.99;
 export const MODERATOR_PREMIUM_PRICE = 99.99;
 export const MODERATOR_PRO_PRICE = 149.99;
-/** BYO 20 (2026-08-25, repriced 2026-08-26) -- a 5th self-serve, checkout-
- *  purchasable tier where the customer supplies their OWN AI provider
- *  credential from day one (never Innvil's) -- 20 Watcher slots, 10
+/** BYO 30 (2026-11-02) -- the customer-facing name for the stable internal
+ *  `byo20` entitlement key. It is a 5th self-serve, checkout-purchasable tier
+ *  where the customer supplies their OWN AI provider credential from day one
+ *  (never Innvil's) -- 30 Watcher slots, 15
  *  Communities FIXED (never expandable, unlike Gold/Platinum), and 3,000
  *  Media Moderation units BUNDLED into the base price (never a separate
  *  purchase, unlike the other 4 tiers' optional Media Moderation + add-on).
  *
- *  Originally launched at $199.99 -- but that priced it ABOVE the real cost
- *  of assembling the equivalent capacity out of Platinum + Community
- *  Expansion + Media Moderation + ($149.99 + $14.99 + $24.99 = $189.97),
- *  which structurally contradicts the whole point of BYO: the customer
- *  supplies their own AI credential, so Innvil funds ZERO AI Generation
- *  pool for this tier (MODERATOR_AI_GENERATION_POOL.byo20 = 0), unlike
- *  Platinum's real, Innvil-funded 20,000/mo pool. Repriced to $169.99 --
- *  roughly $20/mo cheaper than that fully-loaded Platinum comparison, so
- *  "bring your own AI" reads as genuinely cheaper (Innvil's biggest
- *  variable cost removed), matching its "best value" flagship marketing
- *  instead of contradicting it. */
-export const MODERATOR_BYO20_PRICE = 169.99;
+ *  The stable internal key remains `byo20` so existing entitlements and
+ *  renewals are not orphaned by this product-capacity rename. */
+export const MODERATOR_BYO30_PRICE = 199.99;
+/** @deprecated Use MODERATOR_BYO30_PRICE. Kept as a source-compatibility alias. */
+export const MODERATOR_BYO20_PRICE = MODERATOR_BYO30_PRICE;
 export const MODERATOR_PLAN_PERIOD_DAYS = 30;
 
 /** Direct/resell mode ONLY (see ModeratorCommercialMode in moderator/plan.ts):
@@ -103,7 +97,7 @@ export const MODERATOR_ENTERPRISE_BAND_2_PRICE_PER_SLOT = 13;
  *  explicit entry for it -- deliberate, so nothing gets silently missed. */
 export type ModeratorPlanTier = "basic" | "standard" | "premium" | "pro" | "byo20";
 export function moderatorPlanPrice(tier: ModeratorPlanTier): number {
-  if (tier === "byo20") return MODERATOR_BYO20_PRICE;
+  if (tier === "byo20") return MODERATOR_BYO30_PRICE;
   if (tier === "pro") return MODERATOR_PRO_PRICE;
   if (tier === "premium") return MODERATOR_PREMIUM_PRICE;
   if (tier === "standard") return MODERATOR_STANDARD_PRICE;
@@ -224,12 +218,12 @@ export const MODERATOR_COMMUNITY_CAPACITY: Record<ModeratorPlanTier, ModeratorCo
   standard: { included: 2, maxWithAddons: 2 },
   premium: { included: 3, maxWithAddons: 5 },
   pro: { included: 5, maxWithAddons: 10 },
-  // byo20's 10 Communities are FIXED forever, by explicit product decision
+  // The stable byo20 key's 15 Communities are FIXED forever, by explicit product decision
   // -- included === maxWithAddons is the same hard-cap convention Basic/
   // Standard already use, which is also what correctly keeps it OUT of
   // Community Expansion eligibility (isCommunityExpansionEligibleTier only
   // reads COMMUNITY_EXPANSION_ELIGIBLE_TIERS below, never this table).
-  byo20: { included: 10, maxWithAddons: 10 },
+  byo20: { included: 15, maxWithAddons: 15 },
 };
 
 /** Additional-community pricing (non-Enterprise tiers, within maxWithAddons

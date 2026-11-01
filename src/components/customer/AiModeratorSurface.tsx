@@ -227,7 +227,7 @@ function ModeratorTelegramCard({ panelId, moderator, onChanged }: { panelId: str
 // offered/purchased through this legacy Panel-distributed reseller
 // surface. This entry exists only because Record<ModeratorPlanTier, string>
 // requires one; it is never actually looked up in practice.
-const TIER_LABELS: Record<ModeratorPlanTier, string> = { basic: "Basic", standard: "Standard", premium: "Premium", pro: "Pro", byo20: "BYO 20" };
+const TIER_LABELS: Record<ModeratorPlanTier, string> = { basic: "Basic", standard: "Standard", premium: "Premium", pro: "Pro", byo20: "BYO 30" };
 
 // Derived from the canonical source (money.ts + moderator/plan.ts) rather than
 // duplicated literals -- a pricing/capacity change only has to happen there.

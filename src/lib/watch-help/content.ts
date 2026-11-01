@@ -114,7 +114,7 @@ const BEST_FOR: Record<string, string> = {
   Silver: "Growing projects",
   Gold: "Larger operations",
   Platinum: "Multi-community teams",
-  "BYO 20": "Teams using their own AI provider",
+  "BYO 30": "Teams using their own AI provider",
 };
 
 function communitiesCell(p: (typeof plans)[number]): string {
@@ -205,7 +205,7 @@ const plansAndBillingRichBody: HelpBlock[] = [
       type: "paragraph" as const,
       text:
         p.tier === "byo20"
-          ? `BYO 20 always requires your own AI provider credential (Anthropic or an OpenAI-compatible provider) — Innvil never charges you for AI usage on top of the $${p.price.toFixed(2)}/mo plan price. ${MEDIA_MODERATION_BASE_ALLOWANCE.byo20.toLocaleString()} Media Moderation Units/mo are included automatically, with optional capacity packs available if you need more. Communities are fixed at ${p.communitiesIncluded} — already the max, with no expansion path. Best for teams that already run their own AI provider and want the most included in one flat price.`
+          ? `BYO 30 always requires your own AI provider credential (Anthropic or an OpenAI-compatible provider) — Innvil never charges you for AI usage on top of the $${p.price.toFixed(2)}/mo plan price. ${MEDIA_MODERATION_BASE_ALLOWANCE.byo20.toLocaleString()} Media Moderation Units/mo are included automatically, with optional capacity packs available if you need more. Communities are fixed at ${p.communitiesIncluded} — already the max, with no expansion path. Best for teams that already run their own AI provider and want the most included in one flat price.`
           : `${MEDIA_MODERATION_BASE_ALLOWANCE[p.tier].toLocaleString()} Media Moderation Units/mo are included on ${p.displayName} automatically — no purchase required — with optional capacity packs (see the Media Moderation article) if you need more. ${
               p.communitiesMax > p.communitiesIncluded
                 ? `Community Expansion can raise its Community allowance from ${p.communitiesIncluded} to ${p.communitiesMax} for an additional monthly fee — see the Community Expansion article.`

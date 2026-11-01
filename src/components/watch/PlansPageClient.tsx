@@ -73,7 +73,7 @@ export function PlansPageClient() {
         />
 
         <div id="paid-plans" className="w-card p-5 scroll-mt-20">
-          <SectionHeader icon={CreditCard} title="Bronze, Silver, Gold, Platinum, BYO 20" />
+          <SectionHeader icon={CreditCard} title="Bronze, Silver, Gold, Platinum, BYO 30" />
           <BillingPlanPicker
             options={options}
             currentDisplayName={capacity?.tier !== "trial" ? currentDisplayName : null}
