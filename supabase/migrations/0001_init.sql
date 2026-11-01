@@ -1,6 +1,6 @@
 -- =============================================================================
--- Veyra — Phase 3 foundation schema
--- Multi-tenant, bring-your-own-provider SMM panel maker.
+-- Innvil — Phase 3 foundation schema
+-- Multi-tenant, bring-your-own-provider SMM panel builder.
 -- Every operational row is scoped to a panel; RLS (0002_rls.sql) enforces access.
 -- Money is numeric(12,4); balances change ONLY via apply_balance_change().
 -- Provider API keys are encrypted with pgcrypto and only ever decrypted

@@ -9,6 +9,8 @@ import {
   PLATFORMS, PlatformKey, CustomerService, customerServices,
 } from "@/src/data/constants";
 import { PlatformButton } from "./PlatformIcons";
+import { formatMoney } from "@/src/lib/money";
+import { validateOrderLink } from "@/src/lib/order-link";
 
 /** Real order placement — resolves with success or an error message. */
 export interface PlaceOrderArgs {
@@ -18,6 +20,8 @@ export interface PlaceOrderArgs {
   link: string;
   runs?: number;
   interval?: number;
+  /** Custom Comments services: the list of comments (one per line). */
+  comments?: string;
 }
 export type PlaceOrderHandler = (args: PlaceOrderArgs) => Promise<{ ok: boolean; error?: string }>;
 
@@ -53,6 +57,12 @@ function matchesQuery(s: CustomerService, query: string): boolean {
     .every((token) => haystack.includes(token));
 }
 
+function matchesNumericId(id: number, numericQuery: string): boolean {
+  const sid = String(id);
+  // Numeric search is ID-only to prevent matches from text fields (e.g. "20 days").
+  return sid.startsWith(numericQuery);
+}
+
 const FAVORITES_CATEGORY = "★ Favorites";
 
 /* =========================================================
@@ -71,6 +81,7 @@ export function NewOrder({
   services = customerServices,
   onPlaceOrder,
   platformMeta,
+  currency = "USD",
 }: {
   canOrder: boolean;
   favoriteIds: number[];
@@ -83,11 +94,15 @@ export function NewOrder({
   onPlaceOrder?: PlaceOrderHandler;
   /** Per-platform label/logo overrides (for owner-added platforms). */
   platformMeta?: PlatformMeta;
+  /** Panel operating currency (ISO code) for price display. */
+  currency?: string;
 }) {
+  const money = (n: number) => formatMoney(n, currency);
   const [platform, setPlatform] = useState<PlatformKey | null>(null);
   const [category, setCategory] = useState<string | null>(null);
   const [service, setService] = useState<CustomerService | null>(null);
   const [query, setQuery] = useState("");
+  const [serviceSearch, setServiceSearch] = useState("");
   const [link, setLink] = useState("");
   const [qty, setQty] = useState<string>("");
   const [placed, setPlaced] = useState(false);
@@ -120,6 +135,7 @@ export function NewOrder({
   const [drip, setDrip] = useState(false);
   const [dripRuns, setDripRuns] = useState("5");
   const [dripInterval, setDripInterval] = useState("30");
+  const [comments, setComments] = useState("");
 
   const selectService = (s: CustomerService) => {
     setPlatform(s.platform);
@@ -130,7 +146,14 @@ export function NewOrder({
     setPlaced(false);
     setPlaceError(null);
     setDrip(false);
+    setComments("");
+    setServiceSearch("");
     setPickerOpen(false); // collapse the list to a dropdown once chosen
+  };
+
+  const clearPlacedState = () => {
+    setPlaced(false);
+    setPlaceError(null);
   };
 
   // Prefill from Quick Order / Reorder — one click to a ready form
@@ -147,14 +170,18 @@ export function NewOrder({
   const searchResults = useMemo(() => {
     const q = query.trim();
     if (!q) return [];
-    const matches = services.filter((s) => matchesQuery(s, q));
-    // Numeric query: services whose ID starts with it rank first
     if (/^\d+$/.test(q)) {
-      matches.sort(
-        (a, b) =>
-          Number(String(b.id).startsWith(q)) - Number(String(a.id).startsWith(q))
-      );
+      const matches = services.filter((s) => matchesNumericId(s.id, q));
+      matches.sort((a, b) => {
+        const aId = Number(a.id);
+        const bId = Number(b.id);
+        if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
+        return a.name.localeCompare(b.name);
+      });
+      return matches.slice(0, 8);
     }
+
+    const matches = services.filter((s) => matchesQuery(s, q));
     return matches.slice(0, 8);
   }, [query, services]);
 
@@ -182,9 +209,36 @@ export function NewOrder({
     );
   }, [platform, category, platformFavorites, services]);
 
-  const qtyNum = parseInt(qty, 10) || 0;
+  const filteredServicesInCategory = useMemo(() => {
+    const q = serviceSearch.trim();
+    if (!q) return servicesInCategory;
+    if (/^\d+$/.test(q)) {
+      const matches = servicesInCategory.filter((s) => matchesNumericId(s.id, q));
+      matches.sort((a, b) => {
+        const aId = Number(a.id);
+        const bId = Number(b.id);
+        if (Number.isFinite(aId) && Number.isFinite(bId) && aId !== bId) return aId - bId;
+        return a.name.localeCompare(b.name);
+      });
+      return matches;
+    }
+
+    const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const matches = servicesInCategory.filter((s) => {
+      const hay = [s.name, s.category, String(s.id), ...s.aliases].join(" ").toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+    return matches;
+  }, [serviceSearch, servicesInCategory]);
+
+  const isComments = !!service?.comments;
+  const commentLines = useMemo(
+    () => comments.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+    [comments]
+  );
+  const qtyNum = isComments ? commentLines.length : (parseInt(qty, 10) || 0);
   const qtyValid = service ? qtyNum >= service.min && qtyNum <= service.max : false;
-  const total = service && qtyNum > 0 ? ((qtyNum / 1000) * service.price).toFixed(2) : "0.00";
+  const total = service && qtyNum > 0 ? money((qtyNum / 1000) * service.price) : money(0);
   const isFavorite = service ? favoriteIds.includes(service.id) : false;
 
   const handlePlatform = (key: PlatformKey) => {
@@ -196,6 +250,7 @@ export function NewOrder({
     setQty("");
     setPlaced(false);
     setDrip(false);
+    setServiceSearch("");
     setPickerOpen(true);
   };
 
@@ -207,14 +262,20 @@ export function NewOrder({
     if (!service || !canSubmit || !canOrder || placing) return;
     setPlaceError(null);
     if (onPlaceOrder) {
+      const linkCheck = validateOrderLink(link);
+      if (!linkCheck.ok) {
+        setPlaceError(linkCheck.error);
+        return;
+      }
       setPlacing(true);
       const res = await onPlaceOrder({
         service,
         quantity: qtyNum,
         total,
-        link: link.trim(),
+        link: linkCheck.url,
         runs: drip ? Number(dripRuns) || undefined : undefined,
         interval: drip ? Number(dripInterval) || undefined : undefined,
+        comments: isComments ? comments : undefined,
       });
       setPlacing(false);
       if (!res.ok) { setPlaceError(res.error ?? "Could not place the order."); return; }
@@ -275,7 +336,7 @@ export function NewOrder({
             className={`${inputCls} pl-10 py-3`}
           />
           {searchResults.length > 0 && (
-            <div className="absolute top-full left-0 right-0 mt-2 fp-panel border fp-line rounded-xl shadow-2xl z-30 overflow-hidden">
+            <div className="absolute top-full left-0 right-0 mt-2 bg-[#151922] border border-[#2A3040] rounded-xl shadow-[0_18px_40px_rgba(0,0,0,0.55)] z-30 overflow-hidden backdrop-blur-0">
               {searchResults.map((s) => (
                 <button
                   key={s.id}
@@ -289,14 +350,14 @@ export function NewOrder({
                     </p>
                   </div>
                   <span className="fp-mono text-xs fp-gold shrink-0">
-                    ${s.price.toFixed(2)}/{s.unit}
+                    {money(s.price)}/{s.unit}
                   </span>
                 </button>
               ))}
             </div>
           )}
           {query.trim() && searchResults.length === 0 && (
-            <div className="absolute top-full left-0 right-0 mt-2 fp-panel border fp-line rounded-xl shadow-2xl z-30 px-4 py-4 text-sm fp-text-dim">
+            <div className="absolute top-full left-0 right-0 mt-2 bg-[#151922] border border-[#2A3040] rounded-xl shadow-[0_18px_40px_rgba(0,0,0,0.55)] z-30 px-4 py-4 text-sm fp-text-dim">
               No services match &quot;{query}&quot;. Try a platform name, category, or service ID.
             </div>
           )}
@@ -344,13 +405,26 @@ export function NewOrder({
                 </p>
               </div>
               <span className="flex items-center gap-2 shrink-0">
-                <span className="fp-mono text-sm fp-gold">${service.price.toFixed(2)}/{service.unit}</span>
+                <span className="fp-mono text-sm fp-gold">{money(service.price)}/{service.unit}</span>
                 <ChevronDown size={16} className="fp-text-faint" />
               </span>
             </button>
           ) : (
             <div className="space-y-2">
-              {servicesInCategory.map((s) => (
+              <div className="relative mb-2">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 fp-text-faint" />
+                <input
+                  value={serviceSearch}
+                  onChange={(e) => setServiceSearch(e.target.value)}
+                  placeholder="Search services in this category"
+                  className={`${inputCls} pl-9`}
+                />
+              </div>
+              {filteredServicesInCategory.length === 0 ? (
+                <p className="text-sm fp-text-faint py-3 px-1">
+                  No services match &quot;{serviceSearch}&quot; in this category.
+                </p>
+              ) : filteredServicesInCategory.map((s) => (
                 <button
                   key={s.id}
                   onClick={() => selectService(s)}
@@ -367,7 +441,7 @@ export function NewOrder({
                     </p>
                   </div>
                   <span className="fp-mono text-sm fp-gold shrink-0">
-                    ${s.price.toFixed(2)}/{s.unit}
+                    {money(s.price)}/{s.unit}
                   </span>
                 </button>
               ))}
@@ -385,11 +459,29 @@ export function NewOrder({
               <input
                 disabled={!canOrder}
                 value={link}
-                onChange={(e) => setLink(e.target.value)}
+                onChange={(e) => { setLink(e.target.value); clearPlacedState(); }}
                 placeholder="https://instagram.com/yourprofile"
                 className={inputCls}
               />
             </div>
+            {isComments ? (
+              <div>
+                <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <Hash size={11} /> Comments — one per line
+                </p>
+                <textarea
+                  disabled={!canOrder}
+                  value={comments}
+                  onChange={(e) => { setComments(e.target.value); clearPlacedState(); }}
+                  rows={6}
+                  placeholder={"Great post!\nLove this 🔥\nAmazing content"}
+                  className={`${inputCls} resize-y`}
+                />
+                <p className={`text-xs mt-1.5 ${qtyValid || commentLines.length === 0 ? "fp-text-faint" : "text-red-400"}`}>
+                  {commentLines.length} comment{commentLines.length === 1 ? "" : "s"} · {service.min.toLocaleString()}–{service.max.toLocaleString()} allowed
+                </p>
+              </div>
+            ) : (
             <div>
               <p className="fp-text-faint text-xs fp-mono uppercase tracking-wide mb-2 flex items-center gap-1.5">
                 <Hash size={11} /> Quantity
@@ -401,7 +493,7 @@ export function NewOrder({
                 min={service.min}
                 max={service.max}
                 value={qty}
-                onChange={(e) => { setQty(e.target.value); setPlaced(false); }}
+                onChange={(e) => { setQty(e.target.value); clearPlacedState(); }}
                 placeholder={`${service.min.toLocaleString()} – ${service.max.toLocaleString()}`}
                 className={`${inputCls} fp-mono`}
               />
@@ -411,6 +503,7 @@ export function NewOrder({
                 </p>
               )}
             </div>
+            )}
 
             {/* Drip feed — only for services that support it, off by default */}
             {service.drip && (
@@ -441,7 +534,7 @@ export function NewOrder({
                         inputMode="numeric"
                         min={2}
                         value={dripRuns}
-                        onChange={(e) => setDripRuns(e.target.value)}
+                        onChange={(e) => { setDripRuns(e.target.value); clearPlacedState(); }}
                         className={`${inputCls} fp-mono`}
                       />
                     </div>
@@ -453,7 +546,7 @@ export function NewOrder({
                         inputMode="numeric"
                         min={5}
                         value={dripInterval}
-                        onChange={(e) => setDripInterval(e.target.value)}
+                        onChange={(e) => { setDripInterval(e.target.value); clearPlacedState(); }}
                         className={`${inputCls} fp-mono`}
                       />
                     </div>
@@ -531,7 +624,7 @@ export function NewOrder({
               </div>
               <div className="flex justify-between text-sm mb-2">
                 <span className="fp-text-dim">Rate</span>
-                <span className="fp-mono">${service.price.toFixed(2)} / {service.unit}</span>
+                <span className="fp-mono">{money(service.price)} / {service.unit}</span>
               </div>
               {drip && (
                 <div className="flex justify-between text-sm mb-2">
@@ -545,7 +638,7 @@ export function NewOrder({
               )}
               <div className="border-t fp-line-soft pt-4 mt-4 flex justify-between items-end">
                 <span className="fp-display text-lg">Total</span>
-                <span className="fp-display text-3xl fp-gold">${total}</span>
+                <span className="fp-display text-3xl fp-gold">{total}</span>
               </div>
               <button
                 disabled={!canOrder || !canSubmit || placed || placing}
@@ -560,7 +653,7 @@ export function NewOrder({
                       ? "Orders temporarily paused"
                       : linkRequired && !link.trim()
                         ? "Enter a link to continue"
-                        : `Create order — $${total}`}
+                        : `Create order — ${total}`}
               </button>
               {placeError && (
                 <p className="text-xs text-red-400 text-center mt-3 flex items-center justify-center gap-1">

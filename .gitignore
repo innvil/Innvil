@@ -17,6 +17,10 @@ dist/
 .env.production.local
 .env*.local
 
+# Local, personal cross-check file (verbatim spec archive, never committed --
+# lives alongside .env.local at the project root, same local-only treatment)
+Memory.txt
+
 # IDE
 .idea/
 *.swp
@@ -46,4 +50,18 @@ coverage/
 # Local progress file (should not be committed)
 CLAUDE_PROGRESS.txt
 panel-preview.jsx
-.env.local
+supabase/.temp/
+
+# Internal planning / AI development notes
+CLAUDE.md
+PHASE_3_4_PLAN.md
+FUTURE_PLANS.txt
+Innvil_Expansion_Plan.md
+Telegram moderator.txt
+pr-body.md
+
+# Internal engineering documentation
+docs/handoff/
+docs/moderator/
+docs/superadmin/
+Innvil Telegram Mod.pdf

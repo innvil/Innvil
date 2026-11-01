@@ -38,6 +38,46 @@ export const GLYPH_PATHS: Record<string, string> = {
 const FALLBACK_PATH =
   "M12 2a10 10 0 100 20 10 10 0 000-20zm0 5a5 5 0 110 10 5 5 0 010-10z";
 
+export function platformBrandIconSlug(platform: string): string | null {
+  const slug = platform.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return slug && slug !== "other" ? slug : null;
+}
+
+function RemoteBrandGlyph({ slug, size }: { slug: string; size: number }) {
+  const [failed, setFailed] = React.useState(false);
+  const source = "https://cdn.jsdelivr.net/npm/simple-icons@16/icons/" + slug + ".svg";
+  React.useEffect(() => {
+    let disposed = false;
+    const image = new Image();
+    image.onerror = () => { if (!disposed) setFailed(true); };
+    image.src = source;
+    return () => { disposed = true; };
+  }, [source]);
+  if (failed) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d={FALLBACK_PATH} />
+      </svg>
+    );
+  }
+  // Pin the registry version: a provider-imported platform gets its actual
+  // brand mark without owners pasting SVG data, while UI colour still follows
+  // the current button state through the mask's currentColor.
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "block",
+        width: size,
+        height: size,
+        backgroundColor: "currentColor",
+        WebkitMask: "url(" + source + ") center / contain no-repeat",
+        mask: "url(" + source + ") center / contain no-repeat",
+      }}
+    />
+  );
+}
+
 export function PlatformGlyph({
   platform,
   size = 20,
@@ -48,7 +88,11 @@ export function PlatformGlyph({
   /** Custom monochrome path (`d`) — takes precedence over the built-in set. */
   pathOverride?: string | null;
 }) {
-  const d = (pathOverride && pathOverride.trim()) || GLYPH_PATHS[platform] || FALLBACK_PATH;
+  const d = (pathOverride && pathOverride.trim()) || GLYPH_PATHS[platform];
+  if (!d) {
+    const slug = platformBrandIconSlug(platform);
+    if (slug) return <RemoteBrandGlyph slug={slug} size={size} />;
+  }
   return (
     <svg
       width={size}
@@ -58,7 +102,7 @@ export function PlatformGlyph({
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
     >
-      <path d={d} />
+      <path d={d || FALLBACK_PATH} />
     </svg>
   );
 }

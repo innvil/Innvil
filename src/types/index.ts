@@ -18,6 +18,8 @@ export interface Panel {
   status: PanelStatus;
   ordersToday: number;
   theme: string;
+  /** Panel's Innvil commission balance (from settings.innvil_balance). Gates going live. */
+  innvilBalance?: number;
 }
 
 /** A customer row as shown in the panel owner's Customers tab. */

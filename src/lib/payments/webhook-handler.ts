@@ -24,7 +24,7 @@ export async function handleGatewayWebhook(req: Request, gateway: string): Promi
   const admin = createAdminClient();
   const { data: payment } = await admin
     .from("payments")
-    .select("id, panel_id, customer_id, amount, status, gateway")
+    .select("id, panel_id, customer_id, amount, bonus_amount, status, gateway")
     .eq("id", orderId)
     .maybeSingle();
   if (!payment || payment.gateway !== gateway) return NextResponse.json({ ok: true }, { status: 200 });
@@ -48,13 +48,13 @@ export async function handleGatewayWebhook(req: Request, gateway: string): Promi
     .update({ status: "completed" })
     .eq("id", payment.id)
     .eq("status", "pending")
-    .select("id, customer_id, amount")
+    .select("id, customer_id, amount, bonus_amount")
     .maybeSingle();
   if (!claimed) return NextResponse.json({ ok: true }, { status: 200 });
 
   const { error } = await admin.rpc("apply_balance_change", {
     p_customer: claimed.customer_id,
-    p_amount: Number(claimed.amount),
+    p_amount: Number(claimed.amount) + Number(claimed.bonus_amount ?? 0),
     p_type: "deposit",
     p_reason: `${gateway} deposit ${claimed.id}`,
   });

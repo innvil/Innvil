@@ -3,6 +3,8 @@ import type { GatewayAdapter, CatalogEntry } from "./types";
 import { cryptomusAdapter } from "./cryptomus";
 import { razorpayAdapter } from "./razorpay";
 import { stripeAdapter } from "./stripe";
+import { nowpaymentsAdapter } from "./nowpayments";
+import { binancePayAdapter } from "./binance";
 
 export * from "./types";
 
@@ -11,6 +13,8 @@ const ADAPTERS: Record<string, GatewayAdapter> = {
   cryptomus: cryptomusAdapter,
   razorpay: razorpayAdapter,
   stripe: stripeAdapter,
+  nowpayments: nowpaymentsAdapter,
+  binance_pay: binancePayAdapter,
 };
 
 export function getAdapter(id: string): GatewayAdapter | null {
@@ -23,16 +27,24 @@ export function getAdapter(id: string): GatewayAdapter | null {
  * lineup reflects the whole ecosystem (esp. India-friendly options).
  */
 export const GATEWAY_CATALOG: CatalogEntry[] = [
-  { id: "cryptomus", label: "Cryptomus", note: "Crypto · BTC, USDT & more", available: true },
-  { id: "razorpay", label: "Razorpay", note: "India · UPI, cards, netbanking", available: true },
-  { id: "stripe", label: "Stripe", note: "Global · cards, wallets (India too)", available: true },
-  { id: "paypal", label: "PayPal", note: "Global · buyer/seller protection", available: false },
-  { id: "payu", label: "PayU", note: "India · cards, UPI, EMI", available: false },
-  { id: "cashfree", label: "Cashfree", note: "India · UPI, cards, payouts", available: false },
-  { id: "paytm", label: "Paytm", note: "India · wallet, UPI, cards", available: false },
-  { id: "nowpayments", label: "NOWPayments", note: "Crypto · 300+ coins", available: false },
-  { id: "coinbase", label: "Coinbase Commerce", note: "Crypto · BTC, ETH, USDC", available: false },
+  { id: "cryptomus", label: "Cryptomus", note: "Crypto · BTC, USDT & more", category: "crypto", available: true },
+  { id: "razorpay", label: "Razorpay", note: "India · UPI, cards, netbanking", category: "card", available: true },
+  { id: "stripe", label: "Stripe", note: "Global · cards, wallets (India too)", category: "card", available: true },
+  { id: "paypal", label: "PayPal", note: "Global · buyer/seller protection", category: "ewallet", available: false },
+  { id: "payu", label: "PayU", note: "India · cards, UPI, EMI", category: "card", available: false },
+  { id: "cashfree", label: "Cashfree", note: "India · UPI, cards, payouts", category: "card", available: false },
+  { id: "paytm", label: "Paytm", note: "India · wallet, UPI, cards", category: "ewallet", available: false },
+  { id: "gcash", label: "GCash", note: "Philippines · e-wallet", category: "ewallet", available: false },
+  { id: "maya", label: "Maya", note: "Philippines · e-wallet", category: "ewallet", available: false },
+  { id: "nowpayments", label: "NOWPayments", note: "Crypto · 300+ coins", category: "crypto", available: true },
+  { id: "binance_pay", label: "Binance Pay", note: "Crypto · pay your Binance, verify by transaction id", category: "crypto", available: true },
+  { id: "coinbase", label: "Coinbase Commerce", note: "Crypto · BTC, ETH, USDC", category: "crypto", available: false },
 ];
+
+const CATALOG_BY_ID = new Map(GATEWAY_CATALOG.map((c) => [c.id, c]));
+export function catalogEntry(id: string): CatalogEntry | undefined {
+  return CATALOG_BY_ID.get(id);
+}
 
 /** Field metadata for a connectable gateway (for the owner connect form). */
 export function gatewayFields(id: string) {

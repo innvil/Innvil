@@ -1,0 +1,390 @@
+import Link from "next/link";
+import type { Metadata } from "next";
+import { LayoutGrid, ShieldCheck, Bot, MessageSquare } from "lucide-react";
+import { requireWatchPage, getWatchShellContext } from "@/src/lib/watch-page";
+import { countRecentModerationActions } from "@/src/lib/products/watch-runtime";
+import { getCommunityExpansionState } from "@/src/lib/products/watch-community-expansion";
+import { listAvailableDirectWatchGateways } from "@/src/lib/products/watch-checkout";
+import { resolveAccountBillingPeriod, getWatchAiGenerationUsage, aiGenerationPoolLimit } from "@/src/lib/products/watch-ai-usage";
+import { getWatchMediaModerationUsage } from "@/src/lib/products/watch-media-moderation-usage";
+import { getMediaModerationExpansionUnits } from "@/src/lib/products/watch-media-moderation-expansion";
+import { getByoUsageSummary } from "@/src/lib/products/watch-byo-usage";
+import { getByoUsageStatus } from "@/src/lib/products/watch-byo-usage-policy";
+import { ByoUsagePolicyCard } from "@/src/components/watch/ByoUsagePolicyCard";
+import { MediaModerationCapacityCard } from "@/src/components/watch/MediaModerationCapacityCard";
+import { reactiveQuotaDay, getCommunityReactiveQuotaUsage } from "@/src/lib/moderator/community-runtime";
+import { TRIAL_REACTIVE_DAILY_LIMIT } from "@/src/lib/moderator/plan";
+import { trialTimeRemainingLabel } from "@/src/lib/products/watch-trial-format";
+import { WatchShell } from "@/src/components/watch/WatchShell";
+import { CommunityExpansionCard } from "@/src/components/watch/CommunityExpansionCard";
+import { CapacityRow, EmptyRow, SectionHeader, StatCard } from "@/src/components/watch/WatchUI";
+import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
+import { MANAGED_ENTERPRISE_50 } from "@/src/lib/products/watch-enterprise";
+import { MODERATOR_COMMUNITY_CAPACITY, type CommunityExpansionEligibleTier, type ModeratorPlanTier } from "@/src/lib/money";
+
+export const metadata: Metadata = { title: "Usage — Innvil Watch", robots: { index: false }, icons: { icon: "/watch/app-tile.svg" } };
+
+export default async function UsagePage() {
+  const { accountId, admin } = await requireWatchPage();
+  const [shell, expansion, gateways, aiPeriod] = await Promise.all([
+    getWatchShellContext(admin, accountId),
+    getCommunityExpansionState(admin, accountId),
+    listAvailableDirectWatchGateways(),
+    resolveAccountBillingPeriod(admin, accountId),
+  ]);
+  const { capacity, communities, watchers } = shell;
+  const [actions7d, actions30d] = await Promise.all([
+    countRecentModerationActions(admin, accountId, 7, communities),
+    countRecentModerationActions(admin, accountId, 30, communities),
+  ]);
+
+  const activeWatcherCount = new Set(communities.flatMap((c) => c.watchers.filter((w) => w.enabled).map((w) => w.watcherId))).size;
+  const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
+
+  // MODERATOR_AI_GENERATION_POOL (money.ts) -- the one canonical monthly usage
+  // limit approved in the Watch plan/entitlement configuration. Only shown
+  // for a real paid (non-trial) tier with a resolvable real subscription
+  // period -- never fabricated for the trial (which has its own, separate
+  // daily reactive quota) or for an account with no trackable period (a
+  // legacy never-expiring row predating migration 0080).
+  // Managed Enterprise (2026-08-22 repricing) has its own fixed 50,000/mo
+  // AI Generation pool (MANAGED_ENTERPRISE_50.aiGenerations) -- read
+  // separately from MODERATOR_AI_GENERATION_POOL's 4 self-serve-tier values.
+  // A BYO Enterprise account (real as of migration 0092/Phase 2) is
+  // deliberately excluded from THIS pool too -- BYO's own AI provider spend
+  // isn't Innvil's pool to meter; see the real call/outcome telemetry
+  // (getByoUsageSummary) below instead.
+  // byo20 is excluded here for the same reason BYO Enterprise already is
+  // (see isEnterprise below) -- it never consumes Innvil's pooled AI
+  // Generations at all, since it always routes through the customer's own
+  // AI provider credential.
+  const paidTier: ModeratorPlanTier | null =
+    capacity && capacity.tier !== "trial" && capacity.tier !== "enterprise" && capacity.tier !== "byo20" ? capacity.tier : null;
+  const isEnterprise = capacity?.tier === "enterprise" && capacity.apiSourceMode !== "byo";
+  const aiUsageLimit = paidTier ? aiGenerationPoolLimit(paidTier) : isEnterprise ? MANAGED_ENTERPRISE_50.aiGenerations : null;
+  const aiUsageCount = (paidTier || isEnterprise) && aiPeriod ? await getWatchAiGenerationUsage(admin, accountId, aiPeriod.start) : null;
+
+  // BYO Enterprise (Phase 2, 2026-08-24) -- real, observed call/outcome
+  // telemetry (watch-byo-usage.ts), never a fabricated token/cost figure.
+  // Only queried for a BYO-flagged account, so a Managed/self-serve/trial
+  // account never pays for this extra query.
+  const byoUsage = capacity?.apiSourceMode === "byo" ? await getByoUsageSummary(admin, accountId) : null;
+  // Deployment-level attribution (Phase 4.V.1) -- resolves byoUsage's raw
+  // deployment/community ids to real, human-readable names using the SAME
+  // `communities` data already fetched above for other purposes -- no extra
+  // query, and the same lookup-map pattern getAccountSlotBreakdown's own
+  // callers already use elsewhere. A deleted deployment/community (or an
+  // event predating deployment attribution) falls back to a plain label
+  // rather than crashing or fabricating a name.
+  const watcherNameByDeployment = new Map(communities.flatMap((c) => c.watchers.map((w) => [w.deploymentId, w.watcherName] as const)));
+  const communityTitleById = new Map(communities.map((c) => [c.id, c.title ?? c.chatId] as const));
+
+  // BYO usage-policy status (Phase 4.V) -- the customer's own configured
+  // spend ceilings + real current-period usage against them. Same BYO-only
+  // gating as the telemetry query above.
+  const byoPolicies = capacity?.apiSourceMode === "byo" ? await getByoUsageStatus(admin, accountId) : null;
+
+  // Media Moderation Units -- REVISED model (2026-08-27). Every plan gets a
+  // real, unconditionally-included base allowance (capacity.mediaModerationBaseAllowance,
+  // a pure lookup already resolved by getAccountCapacity) plus any purchased
+  // expansion packs for the CURRENT period (watch-media-moderation-expansion.ts,
+  // a real, stackable, current-period top-up -- see its own doc comment).
+  // Only meaningful when a real, trackable billing period exists (mirrors
+  // aiUsageCount's own null-safety exactly).
+  const mediaBaseAllowance = capacity?.mediaModerationBaseAllowance ?? null;
+  const [mediaUsedCount, mediaExpansionUnits] = mediaBaseAllowance != null && aiPeriod
+    ? await Promise.all([
+        getWatchMediaModerationUsage(admin, accountId, aiPeriod.start),
+        getMediaModerationExpansionUnits(admin, accountId, aiPeriod.start),
+      ])
+    : [null, null];
+
+  // Trial's own real, measurable current-period consumption: the 20/day
+  // reactive-quota counter (moderator/plan.ts TRIAL_REACTIVE_DAILY_LIMIT),
+  // scoped per Community and reset per UTC calendar day (community-runtime.ts
+  // reactiveQuotaDay -- no per-community timezone field exists yet, see that
+  // function's own doc comment). This is a DAILY limit, not monthly -- the
+  // trial has no monthly/subscription-period consumption concept at all
+  // (MODERATOR_AI_GENERATION_POOL explicitly excludes trial), so it is shown
+  // under its own real "today" period rather than forced into a fabricated
+  // monthly bucket. Summed across every Community the account has (the trial
+  // is capped at 1, but this generalizes rather than assuming exactly one).
+  const isTrial = capacity?.tier === "trial";
+  const trialQuotaDay = isTrial ? reactiveQuotaDay(new Date()) : null;
+  const trialReactiveUsed =
+    isTrial && trialQuotaDay
+      ? (await Promise.all(communities.map((c) => getCommunityReactiveQuotaUsage(admin, c.id, trialQuotaDay)))).reduce((a, b) => a + b, 0)
+      : null;
+
+  return (
+    <WatchShell active="usage" capacity={shell.capacity} attentionCount={shell.attentionCount}>
+      <div className="space-y-6">
+        <div>
+          <h1 className="w-display text-xl mb-1">Usage</h1>
+          <p className="text-sm w-text-dim">What's actually being consumed, and by what.</p>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label="Watcher profiles" value={watchers.length} note="reusable identities" />
+          <StatCard
+            label="Watcher slots"
+            value={activeDeploymentCount}
+            denominator={capacity ? formatSlotLimit(capacity.slotsTotal) : undefined}
+            note={`${activeWatcherCount} unique Watcher${activeWatcherCount === 1 ? "" : "s"} deployed`}
+          />
+          <StatCard label="Communities" value={communities.length} denominator={capacity ? formatSlotLimit(capacity.communitiesTotal) : undefined} />
+          <StatCard label="Moderation actions" value={actions7d} note="last 7 days" />
+        </div>
+
+        {!capacity && (
+          <div className="w-card p-4 border w-amber-border text-sm w-text-dim">
+            No active subscription — the numbers above are real, but nothing is currently entitled to run.{" "}
+            <Link href="/plans" className="w-teal hover:underline">Choose a plan</Link>.
+          </div>
+        )}
+
+        {/* ---- Current Period Usage: real metered consumption against a canonical
+             limit, distinct from the structural resource capacity below. Paid
+             tiers show the one canonical monthly pool (MODERATOR_AI_GENERATION_POOL);
+             the Free Trial shows its own real, separately-scoped DAILY quota
+             (TRIAL_REACTIVE_DAILY_LIMIT) -- these are two different real metrics
+             with two different real periods, never forced into one fabricated
+             shape. Nothing renders here for an account with neither (no active
+             plan and no trial), since there is nothing real to meter. ---- */}
+        {((aiUsageLimit != null && aiUsageCount != null && aiPeriod) || (isTrial && trialReactiveUsed != null)) && (
+          <div>
+            <h2 className="w-display text-sm w-text-dim mb-2">Current Period Usage</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {aiUsageLimit != null && aiUsageCount != null && aiPeriod && (
+                <div className="w-card p-5">
+                  <SectionHeader icon={MessageSquare} title="AI Generations" />
+                  <div className="flex items-end justify-between gap-3 mb-2">
+                    <p className="w-display text-2xl w-text">
+                      {aiUsageCount.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {aiUsageLimit.toLocaleString()} this period</span>
+                    </p>
+                  </div>
+                  <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
+                    <div
+                      className="h-full w-teal-bg rounded-full"
+                      style={{ width: `${Math.min(100, (aiUsageCount / Math.max(1, aiUsageLimit)) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs w-text-faint">
+                    Current period {new Date(aiPeriod.start).toLocaleDateString()} – {new Date(aiPeriod.end).toLocaleDateString()}. Counts
+                    conversational replies your Watchers generate (not silence, reactions, or moderation actions) — a pooled allowance
+                    shared across every Watcher on this account, read-only and set by your plan.
+                  </p>
+                </div>
+              )}
+
+              {isTrial && trialReactiveUsed != null && (
+                <div className="w-card p-5">
+                  <SectionHeader icon={MessageSquare} title="AI Generations (today)" />
+                  <div className="flex items-end justify-between gap-3 mb-2">
+                    <p className="w-display text-2xl w-text">
+                      {trialReactiveUsed.toLocaleString()} <span className="text-sm w-text-faint font-normal">/ {TRIAL_REACTIVE_DAILY_LIMIT.toLocaleString()} today</span>
+                    </p>
+                  </div>
+                  <div className="h-1.5 rounded-full w-surface-raised overflow-hidden mb-2">
+                    <div
+                      className="h-full w-teal-bg rounded-full"
+                      style={{ width: `${Math.min(100, (trialReactiveUsed / Math.max(1, TRIAL_REACTIVE_DAILY_LIMIT)) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="text-xs w-text-faint">
+                    Resets daily (UTC). Counts conversational replies your Watcher generates during the Free Trial — a per-Community
+                    daily allowance, separate from the monthly pool paid plans use.
+                  </p>
+                </div>
+              )}
+
+              {isTrial && capacity?.trialEndsAt && (
+                <div className="w-card p-5">
+                  <SectionHeader icon={ShieldCheck} title="Free Trial period" />
+                  <p className="w-display text-lg w-teal mb-1">{trialTimeRemainingLabel(capacity.trialEndsAt)}</p>
+                  <p className="text-xs w-text-faint">
+                    {capacity.trialStartedAt ? new Date(capacity.trialStartedAt).toLocaleDateString() : "—"} – {new Date(capacity.trialEndsAt).toLocaleDateString()}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="w-card p-5">
+            <SectionHeader icon={ShieldCheck} title="Plan capacity" />
+            {capacity ? (
+              <>
+                <p className="w-display text-lg w-teal mb-1">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
+                {capacity.tier !== "trial" && capacity.paidThrough && (
+                  <p className="text-xs w-text-faint mb-3">Paid through {new Date(capacity.paidThrough).toLocaleDateString()}</p>
+                )}
+                {!(capacity.tier !== "trial" && capacity.paidThrough) && <div className="mb-3" />}
+                <div className="space-y-3">
+                  <CapacityRow label="Watcher slots" used={capacity.activeDeploymentCount} total={capacity.slotsTotal} />
+                  <CapacityRow label="Communities" used={capacity.communitiesUsed} total={capacity.communitiesTotal} />
+                </div>
+              </>
+            ) : (
+              <EmptyRow text="No active plan found." />
+            )}
+          </div>
+          <div className="w-card p-5">
+            <SectionHeader icon={LayoutGrid} title="Moderation activity" />
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between"><span className="w-text-dim">Last 7 days</span><span className="w-text font-medium">{actions7d}</span></div>
+              <div className="flex items-center justify-between"><span className="w-text-dim">Last 30 days</span><span className="w-text font-medium">{actions30d}</span></div>
+            </div>
+            <p className="text-xs w-text-faint mt-4">Counts real warn/kick/ban decisions made by your Watchers — not routine chatter or silence.</p>
+          </div>
+        </div>
+
+        {capacity && capacity.communityExpansionEligible && (
+          <CommunityExpansionCard
+            tier={capacity.tier as CommunityExpansionEligibleTier}
+            billingInterval={capacity.billingInterval}
+            active={expansion != null}
+            cancelAtPeriodEnd={expansion?.cancelAtPeriodEnd ?? false}
+            included={MODERATOR_COMMUNITY_CAPACITY[capacity.tier as CommunityExpansionEligibleTier].included}
+            max={MODERATOR_COMMUNITY_CAPACITY[capacity.tier as CommunityExpansionEligibleTier].maxWithAddons}
+            used={communities.length}
+            availableGateways={gateways}
+          />
+        )}
+
+        {/* Media Moderation -- REVISED model (2026-08-27). Every plan
+            (self-serve, byo20, and every Enterprise variant) gets a real,
+            unconditionally-included base allowance automatically; expansion
+            packs stack on top of it for the current billing period. Shown
+            whenever the account has a representable Media Moderation Units
+            concept at all (i.e. not trial, and a real trackable period
+            exists) -- mediaUsedCount/mediaExpansionUnits both resolve to a
+            real number (never null) together with mediaBaseAllowance. */}
+        {mediaBaseAllowance != null && aiPeriod && mediaUsedCount != null && mediaExpansionUnits != null && (
+          <MediaModerationCapacityCard base={mediaBaseAllowance} expansion={mediaExpansionUnits} used={mediaUsedCount} />
+        )}
+
+        {/* BYO Enterprise (Phase 2, 2026-08-24) -- real, observed call/outcome
+            counts for calls routed through this account's own stored AI
+            provider credential, never a fabricated token/cost figure. Shown
+            only for a BYO-flagged account -- byoUsage is null for everyone
+            else, and a genuine zero-calls-yet state (real, not hidden) shows
+            0/0/0 rather than being suppressed. */}
+        {capacity?.apiSourceMode === "byo" && byoUsage && (
+          <div className="w-card p-5">
+            <SectionHeader icon={Bot} title="BYO calls (last 30 days)" />
+            <p className="text-xs w-text-faint -mt-2 mb-3">
+              Real, observed calls made through your own stored AI provider credential.
+            </p>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div>
+                <p className="w-display text-xl w-text">{byoUsage.totalCalls.toLocaleString()}</p>
+                <p className="text-[11px] w-text-faint">Total calls</p>
+              </div>
+              <div>
+                <p className="w-display text-xl w-green">{byoUsage.successfulCalls.toLocaleString()}</p>
+                <p className="text-[11px] w-text-faint">Successful</p>
+              </div>
+              <div>
+                <p className="w-display text-xl w-amber">{byoUsage.failedCalls.toLocaleString()}</p>
+                <p className="text-[11px] w-text-faint">Failed</p>
+              </div>
+            </div>
+            {/* Real token/duration totals (Phase 4.V.1) -- omitted entirely
+                when nothing in the window reported usage (e.g. every call
+                predates migration 0104), never shown as a fabricated 0. */}
+            {(byoUsage.totalInputTokens != null || byoUsage.totalOutputTokens != null || byoUsage.avgDurationMs != null) && (
+              <div className="grid grid-cols-3 gap-3 mb-3 pb-3 border-b w-line-soft">
+                {byoUsage.totalInputTokens != null && (
+                  <div>
+                    <p className="w-display text-lg w-text">{byoUsage.totalInputTokens.toLocaleString()}</p>
+                    <p className="text-[11px] w-text-faint">Input tokens</p>
+                  </div>
+                )}
+                {byoUsage.totalOutputTokens != null && (
+                  <div>
+                    <p className="w-display text-lg w-text">{byoUsage.totalOutputTokens.toLocaleString()}</p>
+                    <p className="text-[11px] w-text-faint">Output tokens</p>
+                  </div>
+                )}
+                {byoUsage.avgDurationMs != null && (
+                  <div>
+                    <p className="w-display text-lg w-text">{byoUsage.avgDurationMs.toLocaleString()}ms</p>
+                    <p className="text-[11px] w-text-faint">Avg. call duration</p>
+                  </div>
+                )}
+              </div>
+            )}
+            {byoUsage.byAutomation.length > 0 ? (
+              <div className="space-y-1.5">
+                {byoUsage.byAutomation.map((a) => (
+                  <div key={a.automation} className="flex items-center justify-between text-xs">
+                    <span className="w-text-dim">{a.automation}</span>
+                    <span className="w-text-faint">{a.successful}/{a.total} succeeded</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs w-text-faint">No calls recorded yet.</p>
+            )}
+            {/* Deployment/Community-level attribution (Phase 4.V.1) -- "which
+                Watcher/Community is actually making these calls," resolved to
+                real names via the lookup maps above; omitted entirely when
+                there's nothing to attribute (e.g. only pre-attribution events
+                exist) rather than showing an empty section. */}
+            {byoUsage.byDeployment.length > 0 && (
+              <div className="mt-3 pt-3 border-t w-line-soft space-y-1.5">
+                <p className="text-[11px] uppercase tracking-wide w-text-faint font-semibold mb-1">By Watcher</p>
+                {byoUsage.byDeployment.map((d) => (
+                  <div key={d.deploymentId} className="flex items-center justify-between text-xs">
+                    <span className="w-text-dim">{watcherNameByDeployment.get(d.deploymentId) ?? "Deleted Watcher"}</span>
+                    <span className="w-text-faint">{d.successful}/{d.total} succeeded</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {byoUsage.byCommunity.length > 1 && (
+              <div className="mt-3 pt-3 border-t w-line-soft space-y-1.5">
+                <p className="text-[11px] uppercase tracking-wide w-text-faint font-semibold mb-1">By Community</p>
+                {byoUsage.byCommunity.map((c) => (
+                  <div key={c.communityId} className="flex items-center justify-between text-xs">
+                    <span className="w-text-dim">{communityTitleById.get(c.communityId) ?? "Deleted Community"}</span>
+                    <span className="w-text-faint">{c.successful}/{c.total} succeeded</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!capacity.hasByoCredential && (
+              <p className="text-xs w-amber mt-3">
+                No AI provider credential is currently stored for this account — every call will fail until one is configured.
+              </p>
+            )}
+          </div>
+        )}
+
+        {capacity?.apiSourceMode === "byo" && byoPolicies && (
+          <ByoUsagePolicyCard
+            initial={byoPolicies}
+            communities={communities.map((c) => ({ id: c.id, title: c.title ?? c.chatId }))}
+            deployments={communities.flatMap((c) =>
+              c.watchers.map((w) => ({ deploymentId: w.deploymentId, watcherName: w.watcherName, communityTitle: c.title ?? c.chatId }))
+            )}
+          />
+        )}
+
+        {/* Which Watcher/Community is actually consuming a slot is
+            operational data, not a usage/limits concept -- it now lives on
+            its own Operations -> Deployments page (app/deployments/page.tsx),
+            never duplicated here. Usage stays about consumption/limits only. */}
+        <Link href="/deployments" className="w-card p-4 flex items-center justify-between gap-3 hover:w-teal-border">
+          <div>
+            <p className="w-text text-sm font-medium">See what's actually consuming your Watcher slots</p>
+            <p className="text-xs w-text-faint mt-0.5">Real per-Watcher / per-Community deployment breakdown, in Operations → Deployments.</p>
+          </div>
+          <span className="text-xs w-teal shrink-0">Open Deployments →</span>
+        </Link>
+      </div>
+    </WatchShell>
+  );
+}

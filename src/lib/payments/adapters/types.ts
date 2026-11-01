@@ -55,10 +55,14 @@ export interface GatewayAdapter {
   verifyWebhook(ctx: WebhookContext): Promise<{ paid: boolean }>;
 }
 
+/** How a gateway is grouped in the customer's Add-Funds chooser. */
+export type PaymentCategory = "crypto" | "card" | "ewallet" | "bank";
+
 /** Catalog entry — includes gateways not yet implemented (shown as "coming soon"). */
 export interface CatalogEntry {
   id: string;
   label: string;
   note: string;
+  category: PaymentCategory;
   available: boolean; // false → visible but not yet connectable
 }

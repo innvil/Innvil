@@ -1,5 +1,5 @@
 -- =============================================================================
--- Veyra — Row Level Security
+-- Innvil — Row Level Security
 -- Access model:
 --   * super_admin  -> full access (checked via is_super_admin()).
 --   * panel_owner / staff -> rows for panels they own or are a member of

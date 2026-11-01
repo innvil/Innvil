@@ -1,0 +1,484 @@
+"use client";
+
+import React, { useState } from "react";
+import Link from "next/link";
+import { mutate } from "swr";
+import {
+  Plus, FolderKanban, Bot, Users, ShieldCheck, Radio, Activity, ArrowRight, ChevronRight, AlertTriangle, CheckCircle2,
+} from "lucide-react";
+import { createWatchProject, createWatcher } from "@/src/lib/actions/watch-dashboard";
+import { WATCH_SWR_KEYS } from "@/src/lib/watch-swr-keys";
+import type { AccountProjectRow } from "@/src/lib/products/ownership";
+import type {
+  AccountWatcherRow, AccountCommunitySummary, AccountCapacity, AccountActivityItem, AttentionItem,
+  CommunityOperationalStats,
+} from "@/src/lib/products/watch-runtime";
+import { communityOperationalStatus } from "@/src/lib/products/watch-status";
+import { watchAccessLabel, formatSlotLimit } from "@/src/lib/products/watch-plans";
+import type { WatchTrialStatus } from "@/src/lib/products/watch-trial";
+import { onboardingChecklist, type OnboardingStage } from "@/src/lib/products/watch-onboarding-state";
+import { moderatorPersonaIsAssigned } from "@/src/lib/moderator/domain";
+import { WatchShell } from "./WatchShell";
+import { WatcherConnectModal } from "./WatcherConnectModal";
+import { relTime, StatCard, SectionHeader, EmptyRow, CapacityRow, OperationalStatusBadge, SeverityTag, WatcherNamesCell, Modal } from "./WatchUI";
+
+/* ------------------------------------------------------------- overview ---- */
+
+export function WatchDashboard({
+  projects, watchers, communities, capacity, activity, moderationActionsLast7Days,
+  attentionItems = [], communityStats = {}, telegramVerified = true, trialStatus = "active", onboardingStage = "operational",
+}: {
+  projects: AccountProjectRow[];
+  watchers: AccountWatcherRow[];
+  communities: AccountCommunitySummary[];
+  capacity: AccountCapacity | null;
+  activity: AccountActivityItem[];
+  moderationActionsLast7Days: number;
+  attentionItems?: AttentionItem[];
+  communityStats?: Record<string, CommunityOperationalStats>;
+  /** Real, server-resolved Telegram PERSON identity + trial + onboarding
+   *  stage (watch-onboarding-state.ts) -- defaults here exist only so
+   *  existing call sites/tests that predate this prop don't break; the real
+   *  page (app/page.tsx) always passes the actual resolved values. */
+  telegramVerified?: boolean;
+  trialStatus?: WatchTrialStatus;
+  onboardingStage?: OnboardingStage;
+}) {
+  // `projects`/`watchers` are the SWR-driven props directly (no local
+  // mirror) -- OverviewClient re-renders this component with fresh data on
+  // every revalidation, and a `useState` mirror would only capture its
+  // INITIAL value, silently going stale the moment a background
+  // revalidation (or another mutation) brings in a genuinely different
+  // `projects`/`watchers` array. Post-mutation UI updates come from
+  // `mutate()` triggering a real revalidation, not local optimistic state.
+  const [modal, setModal] = useState<"project" | "watcher" | null>(null);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [connectingWatcher, setConnectingWatcher] = useState<AccountWatcherRow | null>(null);
+
+  // The onboarding welcome panel governs Overview until a real deployment
+  // is active -- NOT merely until any resource exists, so the guide stays
+  // visible and progresses (checkmarks accumulating) through Project ->
+  // Watcher -> Connect, matching the real account-state onboarding stage
+  // rather than disappearing the moment the FIRST resource is created.
+  const showOnboarding = onboardingStage !== "operational";
+  // Distinct Watchers with at least one enabled deployment — NOT a count of
+  // enabled deployments (a Watcher deployed to 2 communities would otherwise
+  // be double-counted here while the Watchers table below only ever lists it
+  // once, producing exactly the "Active Watchers = 4 but Watchers says none"
+  // contradiction this definition fixes). Used only for the sub-note below,
+  // never as the "Watcher slots" stat's own value -- a slot-labeled number
+  // must always mean slots (active deployments), not distinct Watchers, or
+  // it silently disagrees with Usage/Billing's own "Watcher slots" figure.
+  const activeWatcherCount = new Set(
+    communities.flatMap((c) => c.watchers.filter((w) => w.enabled).map((w) => w.watcherId))
+  ).size;
+  // Real slot usage (one active deployment = one slot), computed the exact
+  // same way regardless of whether a plan is active -- so the stat card
+  // never has to fall back to a differently-scoped number just because
+  // `capacity` is null.
+  const activeDeploymentCount = communities.flatMap((c) => c.watchers.filter((w) => w.enabled)).length;
+
+  const openModal = (kind: "project" | "watcher") => {
+    setModal(kind);
+    setName("");
+    setError(null);
+  };
+
+  const submit = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    if (modal === "project") {
+      const res = await createWatchProject(name.trim());
+      setBusy(false);
+      if (!res.ok) { setError(res.error); return; }
+      // Revalidates Overview's cached data in place (a real network round
+      // trip, resolved in the background) instead of a full page reload --
+      // the modal closes immediately and the new Project appears once the
+      // revalidation resolves, same "cache stays visible while refreshing"
+      // behavior every cache-first page now uses.
+      setModal(null);
+      await mutate(WATCH_SWR_KEYS.overview);
+    } else if (modal === "watcher") {
+      const res = await createWatcher(name.trim());
+      setBusy(false);
+      if (!res.ok) { setError(res.error); return; }
+      setModal(null);
+      // Optimistically appends the new Watcher straight into the SWR CACHE
+      // (never a separate local mirror, which would drift the moment a
+      // background revalidation replaces the `watchers` prop) -- shows up
+      // immediately, then `revalidate: true` reconciles with the server's
+      // real state right after, which is also what picks up a whole new
+      // onboarding stage (e.g. assign_moderation) while still onboarding.
+      await mutate(
+        WATCH_SWR_KEYS.overview,
+        (current) => (current ? { ...current, watchers: [...current.watchers, res.data] } : current),
+        { revalidate: true }
+      );
+    }
+  };
+
+  return (
+    <WatchShell
+      active="overview"
+      capacity={capacity}
+      attentionCount={attentionItems.length}
+      // Only offered once past onboarding -- creating a Watcher without an
+      // active trial/plan (or before Project even exists) just produces an
+      // inline rejection, a pointless dead end mid-onboarding (see
+      // OnboardingGuide, which routes each stage to its own real next step).
+      primaryAction={!showOnboarding ? { label: "Create Watcher", onClick: () => openModal("watcher") } : undefined}
+    >
+      {showOnboarding ? (
+        <OnboardingGuide
+          stage={onboardingStage}
+          trialStatus={trialStatus}
+          telegramVerified={telegramVerified}
+          hasEntitlement={capacity != null}
+          projectCount={projects.length}
+          watcherCount={watchers.length}
+          watcherPersonaAssigned={watchers.some((w) => moderatorPersonaIsAssigned(w.persona))}
+          activeDeploymentCount={activeDeploymentCount}
+          firstWatcher={watchers[0] ?? null}
+          onCreateProject={() => openModal("project")}
+          onCreateWatcher={() => openModal("watcher")}
+          onConnectWatcher={(w) => setConnectingWatcher(w)}
+        />
+      ) : (
+        <div className="space-y-8">
+          <div>
+            <h1 className="w-display text-xl mb-1">Community operations</h1>
+            <p className="text-sm w-text-dim">Monitor your Communities, Watchers, activity, and usage.</p>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard label="Needs attention" value={attentionItems.length} note={attentionItems.length === 0 ? "all clear" : undefined} />
+            <StatCard
+              label="Watcher slots"
+              value={capacity ? capacity.activeDeploymentCount : activeDeploymentCount}
+              denominator={capacity ? formatSlotLimit(capacity.slotsTotal) : undefined}
+              note={`${activeWatcherCount} Watcher${activeWatcherCount === 1 ? "" : "s"} deployed`}
+              progress={capacity ? (Number.isFinite(capacity.slotsTotal) ? (capacity.activeDeploymentCount / Math.max(1, capacity.slotsTotal)) * 100 : 4) : undefined}
+            />
+            <StatCard
+              label="Communities"
+              value={communities.length}
+              denominator={capacity ? formatSlotLimit(capacity.communitiesTotal) : undefined}
+              note={capacity ? (Number.isFinite(capacity.communitiesTotal) ? `${Math.max(0, capacity.communitiesTotal - capacity.communitiesUsed)} available` : "unlimited available") : undefined}
+              progress={capacity ? (Number.isFinite(capacity.communitiesTotal) ? (capacity.communitiesUsed / Math.max(1, capacity.communitiesTotal)) * 100 : 4) : undefined}
+            />
+            <StatCard label="Moderation actions" value={moderationActionsLast7Days} note="last 7 days" />
+          </div>
+
+          {attentionItems.length > 0 && (
+            <div className="w-card p-4 border w-amber-border">
+              <SectionHeader icon={AlertTriangle} title={`Needs attention (${attentionItems.length})`} />
+              <ul className="space-y-1">
+                {attentionItems.map((item) => (
+                  <li key={item.id}>
+                    <Link href={item.href} className="flex items-center justify-between gap-3 py-2 group">
+                      <span className="flex items-center gap-2.5 min-w-0">
+                        <SeverityTag severity={item.severity} />
+                        <span className="text-sm w-text-dim group-hover:w-text truncate">{item.text}</span>
+                      </span>
+                      <span className="text-xs w-teal shrink-0 flex items-center gap-1">{item.actionLabel} <ChevronRight size={12} /></span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-[1.8fr_1fr] gap-5">
+            <div className="w-card p-5">
+              <SectionHeader icon={Users} title="Community health" action={<Link href="/communities" className="text-xs w-teal hover:underline">View all</Link>} />
+              {communities.length === 0 ? (
+                <EmptyRow text="No Communities connected yet." />
+              ) : (
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-sm min-w-[620px]">
+                    <thead>
+                      <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
+                        <th className="font-semibold pb-2 px-1">Community</th>
+                        <th className="font-semibold pb-2 px-1">Health</th>
+                        <th className="font-semibold pb-2 px-1">Watchers</th>
+                        <th className="font-semibold pb-2 px-1">Last activity</th>
+                        <th className="font-semibold pb-2 px-1">Moderation (24h)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {communities.slice(0, 8).map((c) => {
+                        const stats = communityStats[c.id];
+                        return (
+                          <tr key={c.id} className="border-t w-line-soft">
+                            <td className="py-2.5 px-1"><Link href={`/communities/${c.id}`} className="w-text hover:w-teal">{c.title ?? c.chatId}</Link></td>
+                            <td className="py-2.5 px-1"><OperationalStatusBadge status={communityOperationalStatus(c)} /></td>
+                            <td className="py-2.5 px-1 text-xs"><WatcherNamesCell watchers={c.watchers} /></td>
+                            <td className="py-2.5 px-1 w-text-dim">{stats?.lastActivityAt ? relTime(stats.lastActivityAt) : "—"}</td>
+                            <td className="py-2.5 px-1 w-text-dim">{stats?.moderationCount24h ?? 0}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="w-card p-5">
+              <SectionHeader icon={ShieldCheck} title="Plan & capacity" action={<Link href="/plans" className="text-xs w-teal hover:underline">Manage</Link>} />
+              {capacity ? (
+                <div className="space-y-3">
+                  <p className="w-display text-lg w-teal">{watchAccessLabel(capacity.tier, { apiSourceMode: capacity.apiSourceMode ?? "managed", slots: capacity.enterpriseSlots })}</p>
+                  {capacity.tier !== "trial" && capacity.paidThrough && (
+                    <p className="text-xs w-text-faint">Paid through {new Date(capacity.paidThrough).toLocaleDateString()}</p>
+                  )}
+                  <CapacityRow label="Watcher slots" used={capacity.activeDeploymentCount} total={capacity.slotsTotal} />
+                  <CapacityRow label="Communities" used={capacity.communitiesUsed} total={capacity.communitiesTotal} />
+                  <Link href="/usage" className="text-xs w-teal hover:underline inline-block pt-1">View usage</Link>
+                </div>
+              ) : (
+                <div className="text-center py-4">
+                  <p className="text-sm w-text mb-1">No active plan</p>
+                  <p className="text-xs w-text-faint mb-4">Watch is not currently subscribed.</p>
+                  <Link href="/plans" className="w-btn-primary text-xs font-semibold px-4 py-2 rounded-lg inline-block">Choose a plan</Link>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-5">
+            <div className="w-card p-5">
+              <SectionHeader icon={Bot} title="Watchers" action={
+                <div className="flex items-center gap-3">
+                  <Link href="/watchers" className="text-xs w-teal hover:underline">View all</Link>
+                  <button onClick={() => openModal("watcher")} className="text-xs w-teal hover:underline flex items-center gap-1">
+                    <Plus size={12} /> New
+                  </button>
+                </div>
+              } />
+              {watchers.length === 0 ? (
+                <EmptyRow text="No Watchers yet." />
+              ) : (
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-sm min-w-[460px]">
+                    <thead>
+                      <tr className="text-left text-[10px] uppercase tracking-wide w-text-faint">
+                        <th className="font-semibold pb-2 px-1">Watcher</th>
+                        <th className="font-semibold pb-2 px-1">Community</th>
+                        <th className="font-semibold pb-2 px-1">Status</th>
+                        <th className="font-semibold pb-2 px-1"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {watchers.slice(0, 8).map((w) => {
+                        const deployment = communities.flatMap((c) => c.watchers.map((d) => ({ ...d, communityTitle: c.title ?? c.chatId }))).find((d) => d.watcherId === w.id);
+                        return (
+                          <tr key={w.id} className="border-t w-line-soft">
+                            <td className="py-2.5 px-1 flex items-center gap-2"><Bot size={13} className="w-teal shrink-0" /> <Link href={`/watchers/${w.id}`} className="w-text hover:w-teal">{w.name}</Link></td>
+                            <td className="py-2.5 px-1 w-text-dim">{deployment?.communityTitle ?? "Not deployed"}</td>
+                            <td className="py-2.5 px-1">{deployment ? (deployment.enabled ? <span className="text-xs w-green">Active</span> : <span className="text-xs w-text-faint">Paused</span>) : <span className="text-xs w-text-faint">Idle</span>}</td>
+                            <td className="py-2.5 px-1 text-right">
+                              {!deployment && (
+                                <button onClick={() => setConnectingWatcher(w)} className="text-xs w-teal hover:underline">
+                                  {w.provisioningStatus === "active" || w.provisioningStatus === "bot_ready" || w.provisioningStatus === "community_setup_required" ? "Connect community" : "Connect"}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="w-card p-5">
+              <SectionHeader icon={Activity} title="Recent activity" action={<Link href="/activity" className="text-xs w-teal hover:underline">View all</Link>} />
+              {activity.length === 0 ? (
+                <EmptyRow text="No activity yet — activity appears here once a Watcher is live in a community." />
+              ) : (
+                <ul className="space-y-3">
+                  {activity.map((item) => (
+                    <li key={item.id} className="flex items-start gap-2.5">
+                      <Radio size={13} className="w-teal shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-xs w-text leading-snug">
+                          {item.watcherName ? <span className="font-medium">{item.watcherName}</span> : "A Watcher"} {item.description}
+                        </p>
+                        <p className="text-[11px] w-text-faint">{item.communityTitle} · {relTime(item.createdAt)}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="w-card p-5">
+            <SectionHeader icon={FolderKanban} title="Projects" action={
+              <div className="flex items-center gap-3">
+                <Link href="/projects" className="text-xs w-teal hover:underline">View all</Link>
+                <button onClick={() => openModal("project")} className="text-xs w-teal hover:underline flex items-center gap-1">
+                  <Plus size={12} /> New
+                </button>
+              </div>
+            } />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {projects.slice(0, 6).map((p) => (
+                <Link key={p.id} href={`/projects/${p.id}`} className="w-surface-raised border w-line-soft rounded-lg px-3.5 py-2.5 flex items-center justify-between gap-2 hover:w-teal-border">
+                  <span className="text-sm w-text truncate">{p.name}</span>
+                  <ChevronRight size={14} className="w-text-faint shrink-0" />
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modal && (
+        <Modal title={modal === "project" ? "Create a Project" : "Create a Watcher"} onClose={() => setModal(null)}>
+          <p className="text-sm w-text-dim mb-3">
+            {modal === "project" ? "Give your Project a name to get started." : "Name your Watcher — you can configure its persona once it's created."}
+          </p>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            placeholder={modal === "project" ? "Project name" : "Watcher name"}
+            className="w-full w-surface-raised border w-line-soft rounded-lg px-3 py-2 text-sm w-text outline-none focus:w-teal-border mb-3"
+          />
+          {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
+          <button onClick={submit} disabled={busy || !name.trim()} className="w-btn-primary text-sm font-semibold w-full py-2.5 rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-60">
+            <Plus size={14} /> {busy ? "Creating…" : "Create"}
+          </button>
+        </Modal>
+      )}
+
+      {connectingWatcher && (
+        <WatcherConnectModal
+          watcher={connectingWatcher}
+          projects={projects}
+          onClose={() => setConnectingWatcher(null)}
+          onConnected={() => { setConnectingWatcher(null); mutate(WATCH_SWR_KEYS.overview); }}
+        />
+      )}
+    </WatchShell>
+  );
+}
+
+/**
+ * Progressive first-run onboarding panel — governed entirely by the real,
+ * server-resolved `stage` (watch-onboarding-state.ts), never a local/
+ * browser-only flag. Exactly ONE primary CTA is shown at a time, matching
+ * the stage's own real next action — never the old ambiguous
+ * "View plans / Start Free Trial" button. Checkmarks accumulate as real
+ * account state changes (Telegram verified, entitlement active, Project/
+ * Watcher/deployment created) — this panel keeps showing (with earlier
+ * steps checked off) until a real deployment goes active, at which point
+ * `WatchDashboard` stops rendering it at all in favor of the normal
+ * operational Overview.
+ */
+function OnboardingGuide({
+  stage, trialStatus, telegramVerified, hasEntitlement, projectCount, watcherCount, watcherPersonaAssigned, activeDeploymentCount,
+  firstWatcher, onCreateProject, onCreateWatcher, onConnectWatcher,
+}: {
+  stage: OnboardingStage;
+  trialStatus: WatchTrialStatus;
+  telegramVerified: boolean;
+  hasEntitlement: boolean;
+  projectCount: number;
+  watcherCount: number;
+  watcherPersonaAssigned: boolean;
+  activeDeploymentCount: number;
+  firstWatcher: AccountWatcherRow | null;
+  onCreateProject: () => void;
+  onCreateWatcher: () => void;
+  onConnectWatcher: (w: AccountWatcherRow) => void;
+}) {
+  const checklist = onboardingChecklist({ telegramVerified, hasEntitlement, projectCount, watcherCount, watcherPersonaAssigned, activeDeploymentCount });
+
+  const STAGE_COPY: Record<OnboardingStage, { title: string; body: string }> = {
+    connect_telegram: {
+      title: "First, connect your Telegram account.",
+      body: "Innvil Watch verifies your Telegram identity before anything else — this is your personal Telegram account, not a Community.",
+    },
+    try_watch: {
+      title: "Try Innvil Watch",
+      body: trialStatus === "expired"
+        ? "Your Free Trial has already been used on this account. Choose a paid plan to continue."
+        : "Start your Free Trial and deploy your first Watcher, or choose a paid plan.",
+    },
+    create_project: { title: "Create a Project", body: "A Project holds your identity and the knowledge your Watcher will answer from." },
+    create_watcher: { title: "Create a Watcher", body: "A Watcher is your AI-powered Virtual Moderator." },
+    assign_moderation: { title: "Assign a moderation persona", body: "Choose a starting persona for this Watcher — how it talks, moderates, and describes itself. Every Watcher's persona is assigned individually, never shared as a silent default." },
+    connect_watcher: { title: "Connect and deploy your Watcher", body: "Assign your Watcher to a Telegram Community — this connects its bot, verifies the Community, and deploys it in one step." },
+    operational: { title: "", body: "" },
+  };
+  const copy = STAGE_COPY[stage];
+
+  return (
+    <div className="max-w-lg mx-auto text-center py-14">
+      <div className="w-14 h-14 rounded-full w-teal-soft-bg border w-teal-border flex items-center justify-center mx-auto mb-5">
+        <Bot size={24} className="w-teal" />
+      </div>
+      <h1 className="w-display text-xl mb-2">Welcome to Innvil Watch</h1>
+      <p className="text-sm w-text-dim mb-1 w-display">{copy.title}</p>
+      <p className="text-xs w-text-faint mb-6 max-w-sm mx-auto">{copy.body}</p>
+
+      <ol className="text-left space-y-2.5 mb-7 max-w-xs mx-auto">
+        {checklist.map((item, i) => (
+          <li key={item.key} className={`flex items-center gap-3 text-sm ${item.done ? "w-text-faint" : item.key === stage ? "w-text font-medium" : "w-text-dim"}`}>
+            {item.done ? (
+              <CheckCircle2 size={18} className="w-teal shrink-0" />
+            ) : (
+              <span className={`w-6 h-6 rounded-full border flex items-center justify-center text-xs shrink-0 ${item.key === stage ? "w-teal-border w-teal-soft-bg w-teal" : "w-surface-raised w-line-soft w-text-dim"}`}>{i + 1}</span>
+            )}
+            <span className={item.done ? "line-through" : ""}>{item.label}</span>
+          </li>
+        ))}
+      </ol>
+
+      {stage === "connect_telegram" && (
+        <div className="flex flex-col items-center gap-2">
+          <Link href="/profile#connected-identities" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+            Connect Telegram <ArrowRight size={14} />
+          </Link>
+          <Link href="/support/account/connect-your-telegram-account" className="text-xs w-text-faint hover:w-text-dim">Why connect Telegram?</Link>
+        </div>
+      )}
+      {stage === "try_watch" && (
+        <div className="flex flex-col items-center gap-2">
+          <Link href="/plans" className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+            {trialStatus === "expired" ? "Choose a plan" : "Start Free Trial"} <ArrowRight size={14} />
+          </Link>
+          {trialStatus !== "expired" && <Link href="/plans" className="text-xs w-text-faint hover:w-text-dim">View paid plans instead</Link>}
+        </div>
+      )}
+      {stage === "create_project" && (
+        <button onClick={onCreateProject} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Create Project <ArrowRight size={14} />
+        </button>
+      )}
+      {stage === "create_watcher" && (
+        <button onClick={onCreateWatcher} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Create Watcher <ArrowRight size={14} />
+        </button>
+      )}
+      {stage === "assign_moderation" && firstWatcher && (
+        <Link href={`/watchers/${firstWatcher.id}?tab=persona`} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Assign moderation persona <ArrowRight size={14} />
+        </Link>
+      )}
+      {stage === "connect_watcher" && firstWatcher && (
+        <button onClick={() => onConnectWatcher(firstWatcher)} className="w-btn-primary text-sm font-semibold px-5 py-2.5 rounded-lg inline-flex items-center gap-1.5">
+          Deploy Watcher <ArrowRight size={14} />
+        </button>
+      )}
+    </div>
+  );
+}

@@ -1,20 +1,22 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   LayoutGrid, Circle, Palette, Globe, Wifi, Sliders, ShieldCheck,
   ListOrdered, Users, CreditCard, KeyRound, Lock, Bell, MessageSquare, Bot,
-  Gift, Gauge, Copy, ExternalLink, ChevronDown, LucideIcon,
+  Gift, Gauge, Copy, ExternalLink, ChevronDown, MessageCircle, Wallet, LucideIcon,
 } from "lucide-react";
 import { StatusBadge } from "@/src/components/ui";
 import { PanelStatus } from "@/src/data/constants";
 import { Panel, CustomerRow } from "@/src/types";
 import { updatePanelStatus } from "@/src/lib/actions/panels";
+import { panelStorefrontPath } from "@/src/lib/config";
 import { CustomerDrawer } from "./CustomerDrawer";
+import { OwnerAssistantTab } from "./OwnerAssistant";
 import {
   OverviewTab, StatusTab, BrandingTab, DomainTab, ProvidersTab, ServicesTab,
   FloorTab, OrdersTab, CustomersTab, PaymentsTab, CustomerApiTab,
-  RiskTab, NotificationsTab, SupportTab, AutomationTab, PromotionsTab,
+  RiskTab, NotificationsTab, SupportTab, ModeratorTab, AutomationTab, PromotionsTab,
 } from "./AdminTabs";
 
 const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
@@ -32,7 +34,9 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
   { k: "risk", label: "Risk & Security", icon: Lock },
   { k: "notifications", label: "Notifications", icon: Bell },
   { k: "support", label: "Support", icon: MessageSquare },
-  { k: "automation", label: "Automation", icon: Bot },
+  { k: "moderator", label: "Virtual Moderator", icon: Bot },
+  { k: "assistant", label: "AI Assistant", icon: MessageCircle },
+  { k: "automation", label: "Campaign Automation", icon: Bot },
   { k: "promotions", label: "Promotions", icon: Gift },
 ];
 
@@ -40,8 +44,17 @@ const TABS: Array<{ k: string; label: string; icon: LucideIcon }> = [
 const PRIMARY_TABS = TABS.slice(0, 10);
 const OVERFLOW_TABS = TABS.slice(10);
 
-export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: string) => void }) {
-  const [tab, setTab] = useState("overview");
+export function PanelAdmin({ panel, setWorld, initialTab, onTabChange, onAddFunds }: { panel: Panel; setWorld: (w: string) => void; initialTab?: string; onTabChange?: (tab: string) => void; onAddFunds?: () => void }) {
+  const readSavedTab = (panelId: string): string | null => {
+    if (typeof window === "undefined") return null;
+    const key = `innvil-admin:${panelId}:active-tab`;
+    try {
+      return window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  };
+  const [tab, setTab] = useState(() => initialTab || readSavedTab(panel.id) || "overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [panelStatus, setPanelStatus] = useState<PanelStatus>(panel.status || "live");
 
@@ -50,15 +63,33 @@ export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: st
     const prev = panelStatus;
     setPanelStatus(next);
     const res = await updatePanelStatus(panel.id, next);
-    if (!res.ok) setPanelStatus(prev);
+    if (!res.ok) { setPanelStatus(prev); return; }
+    setPanelStatus(res.status); // server may downgrade Live → Inactive (preview) when unfunded
   };
   const overflowActive = OVERFLOW_TABS.some((t) => t.k === tab);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerRow | null>(null);
-  const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  const [focusCustomerId, setFocusCustomerId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTab(initialTab || readSavedTab(panel.id) || "overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel.id, initialTab]);
+
+  useEffect(() => {
+    const key = `innvil-admin:${panel.id}:active-tab`;
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(key, tab);
+      window.localStorage.setItem(key, tab);
+    } catch {
+      // ignore storage failures
+    }
+    onTabChange?.(tab);
+  }, [panel.id, tab]);
 
   return (
     <div>
-      <div className="px-8 pt-6 pb-4 border-b fp-line-soft flex items-center justify-between flex-wrap gap-3">
+      <div className="px-4 sm:px-8 pt-6 pb-4 border-b fp-line-soft flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl fp-gold-soft-bg flex items-center justify-center">
             <Gauge size={18} className="fp-gold" />
@@ -72,8 +103,26 @@ export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: st
           <StatusBadge status={panelStatus} />
         </div>
         <div className="flex items-center gap-2">
+          {/* This panel's own Innvil balance — commission, add-ons and design purchases
+              draw from it (top-ups are per panel). */}
+          <div className="fp-panel-raised border fp-line-soft rounded-lg px-3 py-2 flex items-center gap-2">
+            <Wallet size={13} className="fp-gold" />
+            <div className="leading-none">
+              <p className="text-[10px] fp-text-faint fp-mono uppercase">Panel balance</p>
+              <p className="text-xs fp-mono mt-0.5">
+                {typeof panel.innvilBalance === "number"
+                  ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(panel.innvilBalance)
+                  : "—"}
+              </p>
+            </div>
+            {onAddFunds && (
+              <button onClick={onAddFunds} className="text-[11px] fp-gold-soft-bg fp-gold rounded-md px-2 py-1 ml-1">
+                Add funds
+              </button>
+            )}
+          </div>
           <a
-            href={`/p/${panel.subdomain}`}
+            href={panelStorefrontPath(panel.subdomain, panel.domain)}
             target="_blank"
             rel="noopener noreferrer"
             className="fp-panel-raised border fp-line-soft text-sm px-4 py-2 rounded-lg flex items-center gap-1.5 hover:fp-gold-border"
@@ -129,22 +178,32 @@ export function PanelAdmin({ panel, setWorld }: { panel: Panel; setWorld: (w: st
         </div>
       </div>
 
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {tab === "overview" && <OverviewTab panel={panel} />}
-        {tab === "status" && <StatusTab panelStatus={panelStatus} setPanelStatus={changeStatus} />}
+        {tab === "status" && <StatusTab panelId={panel.id} panelStatus={panelStatus} setPanelStatus={changeStatus} innvilBalance={panel.innvilBalance} />}
         {tab === "branding" && <BrandingTab panel={panel} />}
         {tab === "domain" && <DomainTab panel={panel} />}
         {tab === "providers" && <ProvidersTab panelId={panel.id} />}
         {tab === "services" && <ServicesTab panelId={panel.id} />}
         {tab === "floor" && <FloorTab />}
-        {tab === "orders" && <OrdersTab expandedOrder={expandedOrder} setExpandedOrder={setExpandedOrder} />}
-        {tab === "customers" && <CustomersTab panel={panel} onView={setSelectedCustomer} />}
+        {tab === "orders" && (
+          <OrdersTab
+            panelId={panel.id}
+            onManageCustomer={(customerAccountId) => {
+              setFocusCustomerId(customerAccountId);
+              setTab("customers");
+            }}
+          />
+        )}
+        {tab === "customers" && <CustomersTab panel={panel} onView={setSelectedCustomer} focusCustomerId={focusCustomerId} />}
         {tab === "payments" && <PaymentsTab panelId={panel.id} />}
-        {tab === "api" && <CustomerApiTab />}
+        {tab === "api" && <CustomerApiTab panelId={panel.id} />}
         {tab === "risk" && <RiskTab />}
-        {tab === "notifications" && <NotificationsTab />}
-        {tab === "support" && <SupportTab />}
-        {tab === "automation" && <AutomationTab />}
+        {tab === "notifications" && <NotificationsTab panelId={panel.id} />}
+        {tab === "support" && <SupportTab panelId={panel.id} />}
+        {tab === "moderator" && <ModeratorTab panelId={panel.id} panelName={panel.name} />}
+        {tab === "assistant" && <OwnerAssistantTab panelId={panel.id} panelName={panel.name} />}
+        {tab === "automation" && <AutomationTab panelId={panel.id} />}
         {tab === "promotions" && <PromotionsTab />}
       </div>
 

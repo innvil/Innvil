@@ -52,12 +52,43 @@ export interface AddOrderInput {
   /** Drip feed (optional, only for services that support it). */
   runs?: number;
   interval?: number;
+  /** Custom Comments services: newline-separated list of comments (one per line).
+   *  When present, providers use the comment count as the quantity. */
+  comments?: string;
+}
+
+export type ProviderErrorCategory =
+  | "provider_low_balance"
+  | "provider_auth_error"
+  | "provider_invalid_service"
+  | "provider_invalid_order"
+  | "provider_rate_limited"
+  | "provider_unavailable"
+  | "provider_unknown_error";
+
+interface ProviderErrorOptions {
+  httpStatus?: number;
+  providerCode?: string;
+  category?: ProviderErrorCategory;
+  retryable?: boolean;
+  safeMessage?: string;
 }
 
 /** Thrown for network failures, non-2xx responses, or unparseable bodies. */
 export class ProviderError extends Error {
-  constructor(message: string) {
+  readonly httpStatus?: number;
+  readonly providerCode?: string;
+  readonly category: ProviderErrorCategory;
+  readonly retryable: boolean;
+  readonly safeMessage: string;
+
+  constructor(message: string, opts?: ProviderErrorOptions) {
     super(message);
     this.name = "ProviderError";
+    this.httpStatus = opts?.httpStatus;
+    this.providerCode = opts?.providerCode;
+    this.category = opts?.category ?? "provider_unknown_error";
+    this.retryable = opts?.retryable ?? false;
+    this.safeMessage = opts?.safeMessage ?? message;
   }
 }

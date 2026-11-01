@@ -8,7 +8,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Veyra design tokens
+        // Innvil design tokens
         gold: {
           DEFAULT: "#C9A574",
           light: "#E9CE9A",

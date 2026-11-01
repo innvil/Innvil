@@ -1,10 +1,18 @@
 import type { Metadata } from "next";
+import type { CSSProperties } from "react";
+import { headers } from "next/headers";
 import { Lock, Wrench, FileText } from "lucide-react";
-import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms } from "@/src/lib/actions/storefront";
+import { getPublicPanel, getStorefrontServices, getStorefrontPlatforms, getPanelPaymentMethods } from "@/src/lib/actions/storefront";
 import { getCustomerAccount } from "@/src/lib/actions/customer-auth";
-import { listCustomerOrders } from "@/src/lib/actions/orders";
-import { listDeposits } from "@/src/lib/actions/payments";
+import { storefrontBase } from "@/src/lib/storefront-host";
+import { themeToDesignTokens, designToThemeVars } from "@/src/lib/design/theme-bridge";
 import type { PanelStatus } from "@/src/types/db";
+import { themeVars } from "@/src/data/themes";
+import { currencySymbol } from "@/src/lib/money";
+import { getDesignPackage } from "@/src/data/designs";
+import { editorToPackage } from "@/src/lib/design/editor";
+import { applyPlatformContent, getPlatformContentPack } from "@/src/lib/design/platform-content";
+import { DesignRenderer } from "@/src/components/design/DesignRenderer";
 import { Storefront } from "./Storefront";
 
 type Params = { params: Promise<{ subdomain: string }> };
@@ -12,10 +20,22 @@ type Params = { params: Promise<{ subdomain: string }> };
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
   const { subdomain } = await params;
   const panel = await getPublicPanel(subdomain);
-  if (!panel) return { title: "Panel not found" };
+  if (!panel) return { title: "Panel not found", robots: { index: false, follow: false } };
+  const pack = getPlatformContentPack(panel.platformFocus);
+  const title = pack ? `${panel.name} — ${pack.seo.title}` : `${panel.name} — Order social media services`;
+  const description =
+    panel.description ||
+    (pack ? pack.seo.description : `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`);
+  // Only browsable states get indexed; draft/suspended/maintenance are hidden.
+  const indexable = panel.status === "live" || panel.status === "inactive";
   return {
-    title: `${panel.name} — Order social media services`,
-    description: `Buy followers, likes, views and more on ${panel.name}. Instant delivery, one wallet, transparent pricing.`,
+    title,
+    description,
+    robots: indexable ? { index: true, follow: true } : { index: false, follow: false },
+    // White-label: OG uses the PANEL's identity, never Innvil's.
+    openGraph: { title, description, type: "website", siteName: panel.name },
+    twitter: { card: "summary_large_image", title, description },
+    ...(panel.favicon ? { icons: { icon: panel.favicon } } : {}),
   };
 }
 
@@ -46,6 +66,18 @@ function OfflineScreen({ status, name }: { status: PanelStatus; name: string }) 
   );
 }
 
+async function getApiBaseUrl(customDomain?: string | null): Promise<string> {
+  if (customDomain) return `https://${customDomain}/api/v2`;
+
+  const h = await headers();
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  if (host) return `${proto}://${host}/api/v2`;
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  return `${appUrl ?? "http://localhost:3000"}/api/v2`;
+}
+
 export default async function StorefrontPage({ params }: Params) {
   const { subdomain } = await params;
   const panel = await getPublicPanel(subdomain);
@@ -59,28 +91,108 @@ export default async function StorefrontPage({ params }: Params) {
     );
   }
 
+  const themeStyle = themeVars(panel.theme, panel.accent) as CSSProperties;
+
   if (panel.status === "draft" || panel.status === "suspended" || panel.status === "maintenance") {
-    return <OfflineScreen status={panel.status} name={panel.name} />;
+    return (
+      <div style={themeStyle}>
+        <OfflineScreen status={panel.status} name={panel.name} />
+      </div>
+    );
   }
 
-  const [services, account, platformMeta] = await Promise.all([
+  const [services, account, platformMeta, paymentMethods] = await Promise.all([
     getStorefrontServices(panel.id),
     getCustomerAccount(panel.id),
     getStorefrontPlatforms(panel.id),
+    getPanelPaymentMethods(panel.id),
   ]);
-  // Only signed-in customers have orders/deposits; skip the queries for guests.
-  const [orders, deposits] = account
-    ? await Promise.all([listCustomerOrders(panel.id), listDeposits(panel.id)])
-    : [[], []];
+  const apiBaseUrl = await getApiBaseUrl(panel.customDomain);
+
+  /* A purchased marketplace design replaces the DEFAULT GUEST LANDING only. Signed-in
+     customers always get the real dashboard, and the design's CTAs point at this
+     panel's own auth routes — never Innvil's. */
+  const designPkgRaw = panel.activeDesign
+    ? getDesignPackage(panel.activeDesign)
+    : panel.customDesign
+      ? editorToPackage(panel.customDesign, panel.name)
+      : undefined;
+  // A platform-focused panel (e.g. Telegram-only) overlays that platform's marketing
+  // copy onto the design — so even a bought design (Pulse, etc.) reads as Telegram-only.
+  const designPkg = designPkgRaw ? applyPlatformContent(designPkgRaw, panel.platformFocus) : undefined;
+  if (designPkg && !account) {
+    const base = await storefrontBase(panel.subdomain);
+    const sym = currencySymbol(panel.currency);
+    const prices = services.map((s) => s.price).filter((n) => Number.isFinite(n) && n > 0);
+    return (
+      <div style={themeStyle}>
+        <DesignRenderer
+          pkg={designPkg}
+          page="landing"
+          data={{
+            panelName: panel.name,
+            logoUrl: panel.logoUrl || undefined,
+            currencySymbol: sym,
+            services: services.slice(0, 12).map((s) => ({
+              name: s.name,
+              platform: s.platform ?? "other",
+              price: s.price.toFixed(2),
+              min: String(s.min),
+            })),
+            categories: Array.from(new Set(services.map((s) => s.category).filter((c): c is string => Boolean(c)))).slice(0, 6),
+            liveStats: {
+              services: String(services.length),
+              platforms: String(new Set(services.map((s) => s.platform).filter(Boolean)).size),
+              from: prices.length ? `${sym}${Math.min(...prices).toFixed(2)}` : undefined,
+            },
+            focusPlatform: panel.platformFocus ?? undefined,
+          }}
+          tokenOverrides={themeToDesignTokens(panel.theme, panel.accent)}
+          hrefs={{ signup: `${base}/signup`, login: `${base}/login`, services: "#services" }}
+          slots={{
+            "auth-card": (
+              <div style={{ display: "grid", gap: ".75rem", textAlign: "center" }}>
+                <p className="dz-dim" style={{ margin: 0, fontSize: ".95rem" }}>
+                  Create your account to add funds and place your first order.
+                </p>
+                <a href={`${base}/signup`} className="dz-btn dz-btn-primary" style={{ justifyContent: "center" }}>
+                  Create account
+                </a>
+                <a href={`${base}/login`} className="dz-dim" style={{ fontSize: ".85rem", textDecoration: "none" }}>
+                  Already have an account? Log in
+                </a>
+              </div>
+            ),
+          }}
+        />
+      </div>
+    );
+  }
+
+  /* A signed-in customer whose panel has an active design gets the dashboard themed from
+     the design's palette (recoloured first by any free theme), matching the landing.
+     Guests were already handled above; no design ⇒ the panel's colour theme. */
+  const dashboardStyle =
+    designPkg && account
+      ? (designToThemeVars(designPkg.tokens, themeToDesignTokens(panel.theme, panel.accent)) as CSSProperties)
+      : themeStyle;
+
+  // Default (non-design) landing: on a platform-focused panel, lead with the platform's
+  // hero copy unless the owner has set their own headline/description.
+  const focusPack = getPlatformContentPack(panel.platformFocus);
+  const heroHeadline = panel.headline || (focusPack ? focusPack.landing.headline : panel.headline);
+  const heroDescription = panel.description || (focusPack ? focusPack.landing.description : panel.description);
 
   return (
-    <Storefront
-      panel={{ id: panel.id, name: panel.name, status: panel.status }}
-      services={services}
-      initialAccount={account}
-      initialOrders={orders}
-      initialDeposits={deposits}
-      platformMeta={platformMeta}
-    />
+    <div style={dashboardStyle}>
+      <Storefront
+        panel={{ id: panel.id, subdomain: panel.subdomain, name: panel.name, status: panel.status, currency: panel.currency, logoUrl: panel.logoUrl, headline: heroHeadline, description: heroDescription, sections: panel.sections, aiSupport: panel.aiSupport, campaignAutomation: panel.campaignAutomation, dashboardLayout: panel.dashboardLayout }}
+        services={services}
+        initialAccount={account}
+        platformMeta={platformMeta}
+        paymentMethods={paymentMethods}
+        apiBaseUrl={apiBaseUrl}
+      />
+    </div>
   );
 }
